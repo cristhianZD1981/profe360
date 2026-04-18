@@ -510,16 +510,18 @@ router.get("/mi-horario", async (req, res) => {
       periodoId
     });
 
-    const docenteInfo = horarioItems[0] || {
-      UsuarioId: usuarioId,
-      DocenteNombre: req.auth?.nombre || "",
-      DocentePrimerApellido: req.auth?.primerApellido || "",
-      DocenteSegundoApellido: req.auth?.segundoApellido || "",
-      AnioLectivoId: anioLectivoId,
-      AnioNombre: "",
-      PeriodoId: periodoId,
-      PeriodoNombre: ""
-    };
+    const authAny = req.auth as any;
+
+const docenteInfo = horarioItems[0] || {
+  UsuarioId: usuarioId,
+  DocenteNombre: authAny?.nombre || "",
+  DocentePrimerApellido: authAny?.primerApellido || "",
+  DocenteSegundoApellido: authAny?.segundoApellido || "",
+  AnioLectivoId: anioLectivoId,
+  AnioNombre: "",
+  PeriodoId: periodoId,
+  PeriodoNombre: ""
+};
 
     return ok(res, buildTeacherResponse(docenteInfo, bloques, horarioItems, dias));
   } catch (error) {

@@ -2041,7 +2041,7 @@ router.post("/matriculas", async (req, res) => {
       .input("anioLectivoId", sql.Int, Number(anioLectivoId))
       .input("fechaMatricula", sql.Date, fechaMatricula || null)
       .input("observacion", sql.NVarChar, observacion || null)
-      .input("usuarioRegistroId", sql.Int, req.auth?.usuarioId || req.auth?.userId || req.auth?.id || null)
+      .input("usuarioRegistroId", sql.Int, (req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || null)
       .query(`
         INSERT INTO dbo.Matricula
         (
@@ -2275,7 +2275,7 @@ router.put("/matriculas/:id", async (req, res) => {
       .input("anioLectivoId", sql.Int, Number(anioLectivoId))
       .input("fechaMatricula", sql.Date, fechaMatricula || null)
       .input("observacion", sql.NVarChar, observacion || null)
-      .input("usuarioActualizaId", sql.Int, req.auth?.usuarioId || req.auth?.userId || req.auth?.id || null)
+      .input("usuarioActualizaId", sql.Int, (req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || null)
       .query(`
         UPDATE dbo.Matricula
         SET
@@ -5035,7 +5035,7 @@ router.post("/fechas-clase/reprogramar-desde", async (req, res) => {
       }
     };
 
-    return router.handle(
+    return (router as any).handle(
       {
         ...fakeReq,
         method: "POST",

@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const auth_middleware_1 = require("../../middlewares/auth.middleware");
+const http_1 = require("../../utils/http");
+const router = (0, express_1.Router)();
+router.use(auth_middleware_1.requireAuth);
+router.post("/correo", async (req, res) => (0, http_1.created)(res, { modo: "simulado", ...req.body, fecha: new Date().toISOString() }, "Correo simulado correctamente"));
+router.post("/whatsapp", async (req, res) => (0, http_1.created)(res, { modo: "simulado", ...req.body, fecha: new Date().toISOString() }, "WhatsApp simulado correctamente"));
+exports.default = router;
