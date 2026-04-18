@@ -1,0 +1,25 @@
+# Endpoints base
+
+- `GET /api/health`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `GET /api/dashboard/resumen`
+- `GET /api/instituciones`
+- `POST /api/instituciones`
+- `GET /api/usuarios`
+- `POST /api/usuarios`
+- `GET /api/estudiantes`
+- `POST /api/estudiantes`
+- `GET /api/asistencia/estados`
+- `GET /api/asistencia/resumen`
+- `POST /api/asistencia/registrar`
+- `GET /api/reportes/academico`
+- `GET /api/reportes/padres`
+- `GET /api/catalogos/roles`
+- `GET /api/catalogos/planes`
+- `GET /api/catalogos/canales`
+- `GET /api/pagos/suscripciones`
+- `POST /api/pagos/simular-link`
+- `POST /api/notificaciones/correo`
+- `POST /api/notificaciones/whatsapp`
+- `POST /api/archivos/subir`

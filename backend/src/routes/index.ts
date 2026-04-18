@@ -1,0 +1,36 @@
+import { Router } from "express";
+import healthRoutes from "../modules/health/health.routes";
+import authRoutes from "../modules/auth/auth.routes";
+import dashboardRoutes from "../modules/dashboard/dashboard.routes";
+import institucionesRoutes from "../modules/instituciones/instituciones.routes";
+import usuariosRoutes from "../modules/usuarios/usuarios.routes";
+import estudiantesRoutes from "../modules/estudiantes/estudiantes.routes";
+import asistenciaRoutes from "../modules/asistencia/asistencia.routes";
+import reportesRoutes from "../modules/reportes/reportes.routes";
+import catalogosRoutes from "../modules/catalogos/catalogos.routes";
+import pagosRoutes from "../modules/pagos/pagos.routes";
+import notificacionesRoutes from "../modules/notificaciones/notificaciones.routes";
+import archivosRoutes from "../modules/archivos/archivos.routes";
+import academicoRoutes from "../modules/academico/academico.routes";
+import horariosRoutes from "../modules/horarios/horarios.routes";
+import boletasRoutes from "../modules/boletas/boletas.routes";
+
+const router = Router();
+
+router.use("/health", healthRoutes);
+router.use("/auth", authRoutes);
+router.use("/dashboard", dashboardRoutes);
+router.use("/instituciones", institucionesRoutes);
+router.use("/usuarios", usuariosRoutes);
+router.use("/estudiantes", estudiantesRoutes);
+router.use("/asistencia", asistenciaRoutes);
+router.use("/reportes", reportesRoutes);
+router.use("/catalogos", catalogosRoutes);
+router.use("/pagos", pagosRoutes);
+router.use("/notificaciones", notificacionesRoutes);
+router.use("/archivos", archivosRoutes);
+router.use("/academico", academicoRoutes);
+router.use("/horarios", horariosRoutes);
+router.use("/boletas", boletasRoutes);
+
+export default router;
