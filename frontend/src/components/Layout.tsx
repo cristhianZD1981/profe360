@@ -36,7 +36,9 @@ export default function Layout() {
             <NavLink
               key={path}
               to={path}
-              className={({ isActive }) => `menu-link ${isActive ? "active" : ""}`}
+              className={({ isActive }) =>
+                `menu-link ${isActive ? "active" : ""}`
+              }
             >
               {label}
             </NavLink>

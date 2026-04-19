@@ -9,7 +9,13 @@
   --border: rgba(255,255,255,0.12);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  min-height: 100%;
+}
 
 body {
   margin: 0;
@@ -27,13 +33,12 @@ a {
   text-decoration: none;
 }
 
-button, input, select, textarea {
+button,
+input,
+select,
+textarea {
   font: inherit;
 }
-
-/* =========================
-   CONTROLES BASE
-========================= */
 
 input,
 select,
@@ -57,10 +62,6 @@ label {
   color: #f3f4f6;
 }
 
-/* =========================
-   FIX VISUAL PARA SELECTS
-========================= */
-
 select {
   appearance: none;
   -webkit-appearance: none;
@@ -69,13 +70,11 @@ select {
   color: #f8fafc;
 }
 
-/* Las opciones desplegadas suelen ocupar texto oscuro sobre fondo claro */
 select option {
   color: #111827;
   background: #ffffff;
 }
 
-/* Algunas implementaciones heredan raro dentro de cards/forms */
 .card label,
 .form label {
   color: #f3f4f6;
@@ -90,16 +89,13 @@ select option {
   color: #f8fafc;
 }
 
-/* =========================
-   TABLAS
-========================= */
-
 table {
   width: 100%;
   border-collapse: collapse;
 }
 
-th, td {
+th,
+td {
   padding: 12px;
   border-bottom: 1px solid var(--border);
   text-align: left;
@@ -108,10 +104,6 @@ th, td {
 .muted {
   color: var(--muted);
 }
-
-/* =========================
-   LAYOUT GENERAL
-========================= */
 
 .login-wrap {
   min-height: 100vh;
@@ -244,7 +236,11 @@ th, td {
   padding: 24px;
   margin-bottom: 18px;
   border-radius: 28px;
-  background: linear-gradient(135deg, rgba(22,181,217,0.2), rgba(110,219,143,0.12));
+  background: linear-gradient(
+    135deg,
+    rgba(22,181,217,0.2),
+    rgba(110,219,143,0.12)
+  );
   border: 1px solid var(--border);
 }
 
@@ -260,26 +256,6 @@ th, td {
   margin: 10px 0 0;
 }
 
-.card {
-  padding: 20px;
-  margin-bottom: 18px;
-}
-
-.two-col {
-  display: grid;
-  grid-template-columns: 380px 1fr;
-  gap: 18px;
-}
-
-.stack {
-  display: grid;
-  gap: 18px;
-}
-
-.table-wrap {
-  overflow: auto;
-}
-
 .chips {
   display: flex;
   gap: 10px;
@@ -292,10 +268,6 @@ th, td {
   background: rgba(255,255,255,0.08);
   border: 1px solid var(--border);
 }
-
-/* =========================
-   DIAS LECTIVOS
-========================= */
 
 .dia-lectivo-item {
   display: flex;
@@ -321,10 +293,6 @@ th, td {
   color: #111827;
   font-weight: 600;
 }
-
-/* =========================
-   RESPONSIVE
-========================= */
 
 @media (max-width: 980px) {
   .shell {
