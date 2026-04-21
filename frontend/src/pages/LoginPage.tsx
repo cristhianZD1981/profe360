@@ -19,6 +19,8 @@ export default function LoginPage() {
   const [confirmarClave, setConfirmarClave] = useState("");
 
   const [mostrarRecuperacion, setMostrarRecuperacion] = useState(false);
+  const [correoRecuperacion, setCorreoRecuperacion] = useState("");
+  const [loadingRecuperacion, setLoadingRecuperacion] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -51,7 +53,12 @@ export default function LoginPage() {
     setError("");
     setMensaje("");
 
-    if (!nuevaClave || nuevaClave !== confirmarClave) {
+    if (!nuevaClave || !confirmarClave) {
+      setError("Debés completar la nueva clave y su confirmación");
+      return;
+    }
+
+    if (nuevaClave !== confirmarClave) {
       setError("La nueva clave y su confirmación deben coincidir");
       return;
     }
@@ -80,29 +87,32 @@ export default function LoginPage() {
     setError("");
     setMensaje("");
 
-    if (!correo) {
-      setError("Ingresá el usuario para recuperar la clave");
+    if (!correoRecuperacion.trim()) {
+      setError("Ingresá el correo del usuario para recuperar la clave");
       return;
     }
 
+    setLoadingRecuperacion(true);
+
     try {
-      const response = await api.post("/auth/forgot-password", { correo });
-      const data = response.data?.data || {};
+      const response = await api.post("/auth/forgot-password", {
+        correo: correoRecuperacion.trim()
+      });
+
       const backendMessage =
-        response.data?.message || "Recuperación procesada";
+        response.data?.message ||
+        "Si el correo existe, se enviará un enlace de recuperación";
 
-      const extra =
-        data?.modo === "simulado" && data?.claveTemporal
-          ? ` Clave temporal simulada: ${data.claveTemporal}`
-          : "";
-
-      setMensaje(`${backendMessage}.${extra}`.trim());
+      setMensaje(backendMessage);
       setMostrarRecuperacion(false);
+      setCorreoRecuperacion("");
     } catch (err: any) {
       setError(
         err?.response?.data?.message ||
           "No se pudo procesar la recuperación"
       );
+    } finally {
+      setLoadingRecuperacion(false);
     }
   }
 
@@ -119,7 +129,7 @@ export default function LoginPage() {
             <input
               value={correo}
               onChange={(e) => setCorreo(e.target.value)}
-              placeholder="102340567@est.mep.go.cr"
+              placeholder="correo@dominio.com"
             />
           </label>
 
@@ -149,7 +159,12 @@ export default function LoginPage() {
 
           <button
             type="button"
-            onClick={() => setMostrarRecuperacion((v) => !v)}
+            onClick={() => {
+              setMostrarRecuperacion((v) => !v);
+              setError("");
+              setMensaje("");
+              setCorreoRecuperacion(correo || "");
+            }}
             style={{
               background: "transparent",
               border: 0,
@@ -168,21 +183,56 @@ export default function LoginPage() {
             style={{
               marginTop: 16,
               borderTop: "1px solid #e5e7eb",
-              paddingTop: 16
+              paddingTop: 16,
+              display: "grid",
+              gap: 12
             }}
           >
-            <p className="muted">
-              Se generará una clave temporal y se enviará al correo registrado
-              del padre, madre o encargado
+            <h3 style={{ margin: 0 }}>Recuperar clave</h3>
+
+            <p className="muted" style={{ margin: 0 }}>
+              Se enviará un enlace de recuperación al correo del usuario si la
+              cuenta existe
             </p>
 
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={handleForgotPassword}
-            >
-              Enviar recuperación
-            </button>
+            <label>
+              Correo del usuario
+              <input
+                value={correoRecuperacion}
+                onChange={(e) => setCorreoRecuperacion(e.target.value)}
+                placeholder="correo@dominio.com"
+              />
+            </label>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleForgotPassword}
+                disabled={loadingRecuperacion}
+              >
+                {loadingRecuperacion
+                  ? "Enviando..."
+                  : "Enviar enlace de recuperación"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMostrarRecuperacion(false);
+                  setCorreoRecuperacion("");
+                }}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  background: "#fff",
+                  cursor: "pointer"
+                }}
+              >
+                Cancelar
+              </button>
+            </div>
           </div>
         )}
 

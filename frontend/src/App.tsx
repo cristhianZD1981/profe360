@@ -3,6 +3,7 @@ import { AuthProvider } from "./context/auth";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import DashboardPage from "./pages/DashboardPage";
 import InstitucionesPage from "./pages/InstitucionesPage";
 import UsuariosPage from "./pages/UsuariosPage";
@@ -19,6 +20,7 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/restablecer-clave" element={<ResetPasswordPage />} />
 
         <Route
           path="/estudiantes/:id/carnet"
