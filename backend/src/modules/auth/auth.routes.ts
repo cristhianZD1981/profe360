@@ -4,12 +4,47 @@ import { getPool, sql } from "../../config/database";
 import { comparePassword, hashPassword } from "../../utils/password";
 import { badRequest, ok } from "../../utils/http";
 import { requireAuth } from "../../middlewares/auth.middleware";
+import { sendEmail } from "../../services/email.service";
 
 const router = Router();
 
 function randomTempPassword() {
   const n = Math.floor(100000 + Math.random() * 900000);
   return `Temp${n}`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildForgotPasswordHtml(params: {
+  nombreEncargado?: string | null;
+  usuario: string;
+  claveTemporal: string;
+}) {
+  const nombre =
+    params.nombreEncargado && params.nombreEncargado.trim()
+      ? escapeHtml(params.nombreEncargado.trim())
+      : "Encargado";
+  const usuario = escapeHtml(params.usuario);
+  const claveTemporal = escapeHtml(params.claveTemporal);
+
+  return `
+    <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.6;">
+      <h2 style="margin-bottom: 8px;">Recuperación de acceso - Profe360</h2>
+      <p>Hola ${nombre},</p>
+      <p>Se generó una clave temporal para ingresar a Profe360.</p>
+      <p><strong>Usuario:</strong> ${usuario}</p>
+      <p><strong>Clave temporal:</strong> ${claveTemporal}</p>
+      <p>Por seguridad, al ingresar se te solicitará cambiar la clave.</p>
+      <p style="margin-top: 24px;">Este correo es automático, por favor no responder.</p>
+    </div>
+  `;
 }
 
 async function getUserPayloadById(usuarioId: number) {
@@ -135,7 +170,11 @@ router.post("/login", async (req, res) => {
       debeCambiarPassword: !!user.DebeCambiarPassword
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET || "dev_secret_change_me", { expiresIn: "8h" });
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET || "dev_secret_change_me",
+      { expiresIn: "8h" }
+    );
 
     return ok(res, { token, user: payload });
   } catch (error) {
@@ -197,15 +236,68 @@ router.post("/forgot-password", async (req, res) => {
         WHERE UsuarioId = @usuarioId
       `);
 
-    return ok(res, {
-      enviado: true,
-      modo: "simulado",
-      correoDestino: row.CorreoEncargado || null,
-      usuario: row.Correo,
-      claveTemporal: tempPassword
-    }, row.CorreoEncargado
-      ? `Se generó una clave temporal y se envió al correo del encargado ${row.CorreoEncargado}`
-      : "Se generó una clave temporal, pero el estudiante no tiene correo de encargado registrado");
+    if (!row.CorreoEncargado) {
+      return ok(
+        res,
+        {
+          enviado: false,
+          modo: "simulado",
+          correoDestino: null,
+          usuario: row.Correo,
+          claveTemporal: tempPassword
+        },
+        "Se generó una clave temporal, pero el estudiante no tiene correo de encargado registrado"
+      );
+    }
+
+    const nombreEncargado = [
+      row.NombreEncargado || "",
+      row.PrimerApellidoEncargado || ""
+    ]
+      .join(" ")
+      .trim();
+
+    const resultadoEnvio = await sendEmail({
+      to: row.CorreoEncargado,
+      subject: "Recuperación de clave - Profe360",
+      html: buildForgotPasswordHtml({
+        nombreEncargado,
+        usuario: row.Correo,
+        claveTemporal: tempPassword
+      }),
+      text: `Recuperación de acceso - Profe360
+
+Usuario: ${row.Correo}
+Clave temporal: ${tempPassword}
+
+Al ingresar se solicitará cambiar la clave.
+Este correo es automático, por favor no responder.`
+    });
+
+    if (resultadoEnvio.modo === "simulado") {
+      return ok(
+        res,
+        {
+          enviado: true,
+          modo: "simulado",
+          correoDestino: row.CorreoEncargado,
+          usuario: row.Correo,
+          claveTemporal: tempPassword
+        },
+        `Se generó una clave temporal y el sistema quedó en modo simulado para ${row.CorreoEncargado}`
+      );
+    }
+
+    return ok(
+      res,
+      {
+        enviado: true,
+        modo: "real",
+        correoDestino: row.CorreoEncargado,
+        usuario: row.Correo
+      },
+      `Se generó una clave temporal y se envió al correo del encargado ${row.CorreoEncargado}`
+    );
   } catch (error) {
     console.error("Error en forgot-password:", error);
     return res.status(500).json({ ok: false, message: "Error interno al recuperar la clave" });
@@ -216,24 +308,55 @@ router.post("/change-password", requireAuth, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     const usuarioId = req.auth?.userId;
-    if (!usuarioId) return res.status(401).json({ ok: false, message: "No autenticado" });
-    if (!currentPassword || !newPassword) return badRequest(res, "currentPassword y newPassword son obligatorios");
+
+    if (!usuarioId) {
+      return res.status(401).json({ ok: false, message: "No autenticado" });
+    }
+
+    if (!currentPassword || !newPassword) {
+      return badRequest(res, "currentPassword y newPassword son obligatorios");
+    }
 
     const pool = await getPool();
-    const result = await pool.request().input("usuarioId", sql.Int, usuarioId).query(`SELECT TOP 1 UsuarioId, HashPassword FROM dbo.Usuario WHERE UsuarioId = @usuarioId`);
-    if (!result.recordset.length) return res.status(404).json({ ok: false, message: "Usuario no encontrado" });
+    const result = await pool.request()
+      .input("usuarioId", sql.Int, usuarioId)
+      .query(`
+        SELECT TOP 1 UsuarioId, HashPassword
+        FROM dbo.Usuario
+        WHERE UsuarioId = @usuarioId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Usuario no encontrado" });
+    }
+
     const user = result.recordset[0];
     const okPassword = await comparePassword(currentPassword, user.HashPassword);
-    if (!okPassword) return res.status(400).json({ ok: false, message: "La clave actual no es correcta" });
+
+    if (!okPassword) {
+      return res.status(400).json({ ok: false, message: "La clave actual no es correcta" });
+    }
 
     const hash = await hashPassword(newPassword);
+
     await pool.request()
       .input("usuarioId", sql.Int, usuarioId)
       .input("hashPassword", sql.NVarChar, hash)
-      .query(`UPDATE dbo.Usuario SET HashPassword = @hashPassword, DebeCambiarPassword = 0, UpdatedAt = SYSDATETIME() WHERE UsuarioId = @usuarioId`);
+      .query(`
+        UPDATE dbo.Usuario
+        SET HashPassword = @hashPassword,
+            DebeCambiarPassword = 0,
+            UpdatedAt = SYSDATETIME()
+        WHERE UsuarioId = @usuarioId
+      `);
 
     const payload = await getUserPayloadById(usuarioId);
-    const token = jwt.sign(payload, process.env.JWT_SECRET || "dev_secret_change_me", { expiresIn: "8h" });
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET || "dev_secret_change_me",
+      { expiresIn: "8h" }
+    );
+
     return ok(res, { token, user: payload }, "Clave actualizada correctamente");
   } catch (error) {
     console.error("Error en change-password:", error);
@@ -248,7 +371,10 @@ router.get("/me", requireAuth, async (req, res) => {
     }
 
     const payload = await getUserPayloadById(req.auth.userId);
-    if (!payload) return res.status(404).json({ ok: false, message: "Usuario no encontrado" });
+    if (!payload) {
+      return res.status(404).json({ ok: false, message: "Usuario no encontrado" });
+    }
+
     return ok(res, payload);
   } catch (error) {
     console.error("Error en /me:", error);

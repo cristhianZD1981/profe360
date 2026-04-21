@@ -42,6 +42,11 @@ export const env = {
     apiKey: process.env.CLOUDINARY_API_KEY || "",
     apiSecret: process.env.CLOUDINARY_API_SECRET || "",
     folder: process.env.CLOUDINARY_FOLDER || "profe360"
+  },
+  mail: {
+    resendApiKey: process.env.RESEND_API_KEY || "",
+    fromEmail: process.env.MAIL_FROM || "",
+    fromName: process.env.MAIL_FROM_NAME || "Profe360"
   }
 };
 
