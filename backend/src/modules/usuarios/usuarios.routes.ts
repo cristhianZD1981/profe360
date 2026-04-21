@@ -1,4 +1,6 @@
 import { Router } from "express";
+import multer from "multer";
+import * as XLSX from "xlsx";
 import { randomBytes, createHash } from "crypto";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
@@ -8,6 +10,8 @@ import { sendEmail } from "../../services/email.service";
 import { env } from "../../config/env";
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage() });
+
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"));
 
@@ -53,6 +57,12 @@ function normalizeCorreo(value: string) {
 
 function normalizeCedula(value: string) {
   return String(value || "").trim();
+}
+
+function toNullableString(value: any) {
+  if (value === undefined || value === null) return null;
+  const str = String(value).trim();
+  return str ? str : null;
 }
 
 function escapeHtml(value: string) {
@@ -159,6 +169,40 @@ async function createPasswordResetToken(usuarioId: number) {
   return token;
 }
 
+async function enviarCorreoBienvenida(params: {
+  correo: string;
+  nombre: string;
+  numeroCedula: string;
+}) {
+  try {
+    const envio = await sendEmail({
+      to: params.correo,
+      subject: "Bienvenido a Profe360",
+      html: buildWelcomeUserHtml({
+        nombre: params.nombre,
+        correo: params.correo,
+        numeroCedula: params.numeroCedula
+      }),
+      text: `Hola ${params.nombre}
+
+Se creó correctamente tu usuario en Profe360.
+
+Dirección: https://profe360cr.com
+Usuario: ${params.correo}
+Clave inicial: ${params.numeroCedula}
+
+Al ingresar por primera vez, el sistema te solicitará cambiar la clave.
+
+Este correo es automático, por favor no responder.`
+    });
+
+    return envio;
+  } catch (error) {
+    console.error("No se pudo enviar el correo de bienvenida:", error);
+    return null;
+  }
+}
+
 router.get("/", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
@@ -223,6 +267,351 @@ router.get("/", async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: "Error interno al listar usuarios"
+    });
+  }
+});
+
+router.get("/plantilla-excel", async (req, res) => {
+  try {
+    const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+
+    const wb = XLSX.utils.book_new();
+
+    const instrucciones = [
+      {
+        Campo: "correo",
+        Obligatorio: "Sí",
+        Descripcion: "Correo del usuario, será también el usuario para ingresar"
+      },
+      {
+        Campo: "numeroCedula",
+        Obligatorio: "Sí",
+        Descripcion: "Número de cédula del usuario, será la clave inicial"
+      },
+      {
+        Campo: "nombre",
+        Obligatorio: "Sí",
+        Descripcion: "Nombre del usuario"
+      },
+      {
+        Campo: "primerApellido",
+        Obligatorio: "No",
+        Descripcion: "Primer apellido"
+      },
+      {
+        Campo: "segundoApellido",
+        Obligatorio: "No",
+        Descripcion: "Segundo apellido"
+      },
+      {
+        Campo: "telefono",
+        Obligatorio: "No",
+        Descripcion: "Teléfono"
+      },
+      {
+        Campo: "rol",
+        Obligatorio: "Sí",
+        Descripcion: esSuperAdmin
+          ? "SUPER_ADMIN, ADMIN_INSTITUCIONAL, PROFESOR, PROFESOR_GUIA, ADMINISTRATIVO, PADRE_FAMILIA"
+          : "PROFESOR, PROFESOR_GUIA, ADMINISTRATIVO, PADRE_FAMILIA"
+      },
+      {
+        Campo: "institucionId",
+        Obligatorio: esSuperAdmin ? "Sí" : "No",
+        Descripcion: esSuperAdmin
+          ? "Solo para SUPER_ADMIN"
+          : "Se ignora para roles institucionales"
+      }
+    ];
+
+    const ejemplo = [
+      {
+        correo: "usuario1@colegio.edu",
+        numeroCedula: "123456789",
+        nombre: "María",
+        primerApellido: "Pérez",
+        segundoApellido: "Rojas",
+        telefono: "88888888",
+        rol: "PROFESOR",
+        institucionId: esSuperAdmin ? "1" : ""
+      }
+    ];
+
+    const wsInstrucciones = XLSX.utils.json_to_sheet(instrucciones);
+    const wsUsuarios = XLSX.utils.json_to_sheet(ejemplo);
+
+    XLSX.utils.book_append_sheet(wb, wsInstrucciones, "Instrucciones");
+    XLSX.utils.book_append_sheet(wb, wsUsuarios, "Usuarios");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="plantilla_usuarios.xlsx"'
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error generando plantilla de usuarios:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo generar la plantilla"
+    });
+  }
+});
+
+router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      return badRequest(res, "Debés adjuntar un archivo Excel");
+    }
+
+    const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+    const currentRoles = req.auth?.roles || [];
+    const authInstitucionId = Number(req.auth?.institucionId || 0);
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames.includes("Usuarios")
+      ? "Usuarios"
+      : workbook.SheetNames[0];
+
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<any>(sheet, { defval: "" });
+
+    if (!rows.length) {
+      return badRequest(res, "El archivo no contiene registros para importar");
+    }
+
+    const pool = await getPool();
+
+    const resultados: Array<{
+      fila: number;
+      correo: string;
+      estado: "OK" | "ERROR";
+      motivo: string;
+    }> = [];
+
+    let totalOk = 0;
+    let totalError = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const fila = i + 2;
+
+      const correo = normalizeCorreo(row.correo);
+      const numeroCedula = normalizeCedula(row.numeroCedula);
+      const nombre = String(row.nombre || "").trim();
+      const primerApellido = toNullableString(row.primerApellido);
+      const segundoApellido = toNullableString(row.segundoApellido);
+      const telefono = toNullableString(row.telefono);
+      const roleName = String(row.rol || "").trim();
+
+      const targetInstitucionId = esSuperAdmin
+        ? Number(row.institucionId || 0)
+        : authInstitucionId;
+
+      if (!correo || !numeroCedula || !nombre || !roleName) {
+        resultados.push({
+          fila,
+          correo,
+          estado: "ERROR",
+          motivo: "correo, numeroCedula, nombre y rol son obligatorios"
+        });
+        totalError++;
+        continue;
+      }
+
+      if (!validarRolesAsignables(currentRoles, [roleName])) {
+        resultados.push({
+          fila,
+          correo,
+          estado: "ERROR",
+          motivo: `No tenés permisos para asignar el rol ${roleName}`
+        });
+        totalError++;
+        continue;
+      }
+
+      if (!targetInstitucionId) {
+        resultados.push({
+          fila,
+          correo,
+          estado: "ERROR",
+          motivo: "institucionId es obligatorio para este registro"
+        });
+        totalError++;
+        continue;
+      }
+
+      try {
+        const existeCorreo = await pool.request()
+          .input("correo", sql.NVarChar, correo)
+          .query(`
+            SELECT TOP 1 UsuarioId
+            FROM dbo.Usuario
+            WHERE LOWER(Correo) = @correo
+          `);
+
+        if (existeCorreo.recordset.length > 0) {
+          resultados.push({
+            fila,
+            correo,
+            estado: "ERROR",
+            motivo: "Ya existe un usuario con ese correo"
+          });
+          totalError++;
+          continue;
+        }
+
+        const existeCedula = await pool.request()
+          .input("numeroCedula", sql.NVarChar, numeroCedula)
+          .query(`
+            SELECT TOP 1 UsuarioId
+            FROM dbo.Usuario
+            WHERE NumeroCedula = @numeroCedula
+          `);
+
+        if (existeCedula.recordset.length > 0) {
+          resultados.push({
+            fila,
+            correo,
+            estado: "ERROR",
+            motivo: "Ya existe un usuario con ese número de cédula"
+          });
+          totalError++;
+          continue;
+        }
+
+        const tx = new sql.Transaction(pool);
+        await tx.begin();
+
+        try {
+          const hash = await hashPassword(numeroCedula);
+
+          const insertUser = await new sql.Request(tx)
+            .input("institucionId", sql.Int, targetInstitucionId)
+            .input("correo", sql.NVarChar, correo)
+            .input("numeroCedula", sql.NVarChar, numeroCedula)
+            .input("hashPassword", sql.NVarChar, hash)
+            .input("nombre", sql.NVarChar, nombre)
+            .input("primerApellido", sql.NVarChar, primerApellido)
+            .input("segundoApellido", sql.NVarChar, segundoApellido)
+            .input("telefono", sql.NVarChar, telefono)
+            .query(`
+              INSERT INTO dbo.Usuario
+              (
+                InstitucionId,
+                Correo,
+                NumeroCedula,
+                HashPassword,
+                Nombre,
+                PrimerApellido,
+                SegundoApellido,
+                Telefono,
+                Activo,
+                DebeCambiarPassword
+              )
+              OUTPUT
+                INSERTED.UsuarioId,
+                INSERTED.Correo,
+                INSERTED.NumeroCedula,
+                INSERTED.Nombre,
+                INSERTED.PrimerApellido
+              VALUES
+              (
+                @institucionId,
+                @correo,
+                @numeroCedula,
+                @hashPassword,
+                @nombre,
+                @primerApellido,
+                @segundoApellido,
+                @telefono,
+                1,
+                1
+              )
+            `);
+
+          const createdUser = insertUser.recordset[0];
+
+          const insertRole = await new sql.Request(tx)
+            .input("usuarioId", sql.Int, createdUser.UsuarioId)
+            .input("roleName", sql.NVarChar, roleName)
+            .query(`
+              INSERT INTO dbo.UsuarioRol (UsuarioId, RolId, Activo)
+              OUTPUT INSERTED.UsuarioRolId
+              SELECT @usuarioId, RolId, 1
+              FROM dbo.Rol
+              WHERE Nombre = @roleName
+            `);
+
+          if (!insertRole.recordset.length) {
+            throw new Error(`El rol ${roleName} no existe`);
+          }
+
+          await tx.commit();
+
+          const nombreCompleto =
+            `${createdUser.Nombre || ""} ${createdUser.PrimerApellido || ""}`.trim() ||
+            "Usuario";
+
+          await enviarCorreoBienvenida({
+            correo: createdUser.Correo,
+            nombre: nombreCompleto,
+            numeroCedula: createdUser.NumeroCedula
+          });
+
+          resultados.push({
+            fila,
+            correo,
+            estado: "OK",
+            motivo: "Usuario importado correctamente"
+          });
+          totalOk++;
+        } catch (innerError: any) {
+          try {
+            await tx.rollback();
+          } catch {}
+
+          resultados.push({
+            fila,
+            correo,
+            estado: "ERROR",
+            motivo:
+              innerError?.message || "No se pudo importar el usuario"
+          });
+          totalError++;
+        }
+      } catch (error: any) {
+        resultados.push({
+          fila,
+          correo,
+          estado: "ERROR",
+          motivo: error?.message || "No se pudo procesar el registro"
+        });
+        totalError++;
+      }
+    }
+
+    return ok(
+      res,
+      {
+        totalRegistros: rows.length,
+        totalOk,
+        totalError,
+        resultados
+      },
+      "Importación procesada correctamente"
+    );
+  } catch (error) {
+    console.error("Error importando usuarios:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo importar el archivo Excel"
     });
   }
 });
@@ -371,40 +760,19 @@ router.post("/", async (req, res) => {
 
     let message = "Usuario creado correctamente";
 
-    try {
-      const nombreCompleto =
-        `${createdUser.Nombre || ""} ${createdUser.PrimerApellido || ""}`.trim() ||
-        "Usuario";
+    const nombreCompleto =
+      `${createdUser.Nombre || ""} ${createdUser.PrimerApellido || ""}`.trim() ||
+      "Usuario";
 
-      const envio = await sendEmail({
-        to: createdUser.Correo,
-        subject: "Bienvenido a Profe360",
-        html: buildWelcomeUserHtml({
-          nombre: nombreCompleto,
-          correo: createdUser.Correo,
-          numeroCedula: createdUser.NumeroCedula
-        }),
-        text: `Hola ${nombreCompleto}
+    const envio = await enviarCorreoBienvenida({
+      correo: createdUser.Correo,
+      nombre: nombreCompleto,
+      numeroCedula: createdUser.NumeroCedula
+    });
 
-Se creó correctamente tu usuario en Profe360.
-
-Dirección: https://profe360cr.com
-Usuario: ${createdUser.Correo}
-Clave inicial: ${createdUser.NumeroCedula}
-
-Al ingresar por primera vez, el sistema te solicitará cambiar la clave.
-
-Este correo es automático, por favor no responder.`
-      });
-
-      if (envio.modo === "simulado") {
-        message =
-          "Usuario creado correctamente. El correo quedó en modo simulado porque falta configurar Resend";
-      }
-    } catch (mailError) {
-      console.error("No se pudo enviar el correo de bienvenida:", mailError);
+    if (envio && (envio as any).modo === "simulado") {
       message =
-        "Usuario creado correctamente, pero no se pudo enviar el correo de bienvenida";
+        "Usuario creado correctamente. El correo quedó en modo simulado porque falta configurar Resend";
     }
 
     return created(res, createdUser, message);

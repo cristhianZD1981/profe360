@@ -50,7 +50,20 @@ export default function App() {
         >
           <Route index element={<DashboardPage />} />
           <Route path="instituciones" element={<InstitucionesPage />} />
-          <Route path="usuarios" element={<UsuariosPage />} />
+          <Route
+            path="usuarios"
+            element={
+              <ProtectedRoute
+                allowedRoles={[
+                  "SUPER_ADMIN",
+                  "ADMIN_INSTITUCIONAL",
+                  "ADMINISTRATIVO"
+                ]}
+              >
+                <UsuariosPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="estudiantes" element={<EstudiantesPage />} />
           <Route path="academico" element={<AcademicoPage />} />
           <Route path="horarios" element={<HorariosPage />} />

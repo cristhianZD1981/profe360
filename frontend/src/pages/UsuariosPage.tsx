@@ -8,6 +8,7 @@ type User = {
   InstitucionNombre?: string | null;
   InstitucionNombreComercial?: string | null;
   Correo: string;
+  NumeroCedula?: string | null;
   Nombre: string;
   PrimerApellido: string | null;
   SegundoApellido?: string | null;
@@ -28,10 +29,17 @@ type Institution = {
   Activo: boolean;
 };
 
+type ImportResultRow = {
+  fila: number;
+  correo: string;
+  estado: "OK" | "ERROR";
+  motivo: string;
+};
+
 const initialForm = {
   institucionId: "",
   correo: "",
-  password: "",
+  numeroCedula: "",
   nombre: "",
   primerApellido: "",
   segundoApellido: "",
@@ -78,6 +86,15 @@ export default function UsuariosPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [archivoImportacion, setArchivoImportacion] = useState<File | null>(null);
+  const [importandoExcel, setImportandoExcel] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    totalRegistros: number;
+    totalOk: number;
+    totalError: number;
+    resultados: ImportResultRow[];
+  } | null>(null);
+
   const authInfo = useMemo(() => {
     const token =
       localStorage.getItem("auth_token") ||
@@ -121,7 +138,9 @@ export default function UsuariosPage() {
       ];
 
       if (isSuperAdmin) {
-        requests.push(api.get("/instituciones", { params: { incluirInactivas: false } }));
+        requests.push(
+          api.get("/instituciones", { params: { incluirInactivas: false } })
+        );
       }
 
       const responses = await Promise.all(requests);
@@ -170,6 +189,15 @@ export default function UsuariosPage() {
     }
   }, [editingId, isSuperAdmin, userInstitucionId]);
 
+  function resetForm() {
+    setForm({
+      ...initialForm,
+      institucionId: isSuperAdmin ? "" : userInstitucionId,
+      roleNames: ["PROFESOR"]
+    });
+    setEditingId(null);
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
 
@@ -184,8 +212,9 @@ export default function UsuariosPage() {
 
     try {
       const payload: any = {
-        correo: form.correo,
-        nombre: form.nombre,
+        correo: form.correo.trim(),
+        numeroCedula: form.numeroCedula.trim(),
+        nombre: form.nombre.trim(),
         primerApellido: form.primerApellido || null,
         segundoApellido: form.segundoApellido || null,
         telefono: form.telefono || null,
@@ -193,30 +222,27 @@ export default function UsuariosPage() {
       };
 
       if (isSuperAdmin) {
-        payload.institucionId = form.institucionId ? Number(form.institucionId) : null;
+        payload.institucionId = form.institucionId
+          ? Number(form.institucionId)
+          : null;
       }
 
       if (editingId) {
         await api.put(`/usuarios/${editingId}`, payload);
         setMessage("Usuario actualizado correctamente");
       } else {
-        payload.password = form.password;
         await api.post("/usuarios", payload);
-        setMessage("Usuario creado correctamente");
+        setMessage(
+          "Usuario creado correctamente. La clave inicial es el número de cédula"
+        );
       }
 
-      setForm({
-        ...initialForm,
-        institucionId: isSuperAdmin ? "" : userInstitucionId,
-        roleNames: ["PROFESOR"]
-      });
-      setEditingId(null);
+      resetForm();
       await load(search);
     } catch (error: any) {
       console.error("Error guardando usuario:", error);
       const backendMessage =
-        error?.response?.data?.message ||
-        "No se pudo guardar el usuario";
+        error?.response?.data?.message || "No se pudo guardar el usuario";
 
       setErrorMessage(backendMessage);
     } finally {
@@ -249,7 +275,7 @@ export default function UsuariosPage() {
     setForm({
       institucionId: item.InstitucionId ? String(item.InstitucionId) : "",
       correo: item.Correo || "",
-      password: "",
+      numeroCedula: item.NumeroCedula || "",
       nombre: item.Nombre || "",
       primerApellido: item.PrimerApellido || "",
       segundoApellido: item.SegundoApellido || "",
@@ -261,12 +287,7 @@ export default function UsuariosPage() {
   }
 
   function handleCancelEdit() {
-    setEditingId(null);
-    setForm({
-      ...initialForm,
-      institucionId: isSuperAdmin ? "" : userInstitucionId,
-      roleNames: ["PROFESOR"]
-    });
+    resetForm();
     setMessage("");
     setErrorMessage("");
   }
@@ -288,12 +309,7 @@ export default function UsuariosPage() {
       setMessage("Usuario desactivado correctamente");
 
       if (editingId === id) {
-        setEditingId(null);
-        setForm({
-          ...initialForm,
-          institucionId: isSuperAdmin ? "" : userInstitucionId,
-          roleNames: ["PROFESOR"]
-        });
+        resetForm();
       }
 
       await load(search);
@@ -330,173 +346,372 @@ export default function UsuariosPage() {
     }
   }
 
+  async function handleResetPassword(item: User) {
+    if (!canManageUsers) {
+      setErrorMessage("No tenés permisos para restablecer contraseñas");
+      return;
+    }
+
+    const confirmado = window.confirm(
+      `¿Deseás enviar un enlace de restablecimiento a ${item.Correo}?`
+    );
+    if (!confirmado) return;
+
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const response = await api.post(`/usuarios/${item.UsuarioId}/restablecer-clave`);
+      setMessage(
+        response.data?.message ||
+          `Se envió el enlace de restablecimiento a ${item.Correo}`
+      );
+    } catch (error: any) {
+      console.error("Error restableciendo la clave:", error);
+      setErrorMessage(
+        error?.response?.data?.message ||
+          "No se pudo enviar el enlace de restablecimiento"
+      );
+    }
+  }
+
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
     await load(search);
   }
 
+  async function handleDescargarPlantilla() {
+    try {
+      setMessage("");
+      setErrorMessage("");
+
+      const response = await api.get("/usuarios/plantilla-excel", {
+        responseType: "blob"
+      });
+
+      const blob = new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "plantilla_usuarios.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      setMessage("Plantilla descargada correctamente");
+    } catch (error: any) {
+      console.error("Error descargando plantilla:", error);
+      setErrorMessage(
+        error?.response?.data?.message || "No se pudo descargar la plantilla"
+      );
+    }
+  }
+
+  async function handleImportarExcel(e: FormEvent) {
+    e.preventDefault();
+
+    if (!archivoImportacion) {
+      setErrorMessage("Debés seleccionar un archivo Excel");
+      return;
+    }
+
+    setImportandoExcel(true);
+    setMessage("");
+    setErrorMessage("");
+    setImportResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("archivo", archivoImportacion);
+
+      const response = await api.post("/usuarios/importar-excel", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data"
+        }
+      });
+
+      setImportResult(response.data?.data || null);
+      setMessage("Importación procesada correctamente");
+      setArchivoImportacion(null);
+      await load(search);
+    } catch (error: any) {
+      console.error("Error importando usuarios:", error);
+      setErrorMessage(
+        error?.response?.data?.message ||
+          "No se pudo importar el archivo Excel"
+      );
+    } finally {
+      setImportandoExcel(false);
+    }
+  }
+
   return (
     <div className="two-col">
-      <section className="card">
-        <h3>{editingId ? "Editar usuario" : "Crear usuario"}</h3>
+      <div style={{ display: "grid", gap: "16px" }}>
+        <section className="card">
+          <h3>{editingId ? "Editar usuario" : "Crear usuario"}</h3>
 
-        {message && (
-          <div
-            style={{
-              marginBottom: "12px",
-              padding: "10px 12px",
-              borderRadius: "10px",
-              background: "#ecfdf3",
-              color: "#166534",
-              border: "1px solid #bbf7d0"
-            }}
-          >
-            {message}
-          </div>
-        )}
+          {message && (
+            <div
+              style={{
+                marginBottom: "12px",
+                padding: "10px 12px",
+                borderRadius: "10px",
+                background: "#ecfdf3",
+                color: "#166534",
+                border: "1px solid #bbf7d0"
+              }}
+            >
+              {message}
+            </div>
+          )}
 
-        {errorMessage && (
-          <div
-            style={{
-              marginBottom: "12px",
-              padding: "10px 12px",
-              borderRadius: "10px",
-              background: "#fef2f2",
-              color: "#991b1b",
-              border: "1px solid #fecaca"
-            }}
-          >
-            {errorMessage}
-          </div>
-        )}
+          {errorMessage && (
+            <div
+              style={{
+                marginBottom: "12px",
+                padding: "10px 12px",
+                borderRadius: "10px",
+                background: "#fef2f2",
+                color: "#991b1b",
+                border: "1px solid #fecaca"
+              }}
+            >
+              {errorMessage}
+            </div>
+          )}
 
-        {canManageUsers ? (
-          <form className="form" onSubmit={handleSubmit}>
-            {isSuperAdmin && (
+          {canManageUsers ? (
+            <form className="form" onSubmit={handleSubmit}>
+              {isSuperAdmin && (
+                <label>
+                  Institución
+                  <select
+                    value={form.institucionId}
+                    onChange={(e) =>
+                      setForm({ ...form, institucionId: e.target.value })
+                    }
+                  >
+                    <option value="">Seleccione</option>
+                    {instituciones.map((inst) => (
+                      <option key={inst.InstitucionId} value={inst.InstitucionId}>
+                        {inst.NombreComercial || inst.Nombre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
               <label>
-                Institución
-                <select
-                  value={form.institucionId}
+                Correo
+                <input
+                  type="email"
+                  value={form.correo}
+                  onChange={(e) => setForm({ ...form, correo: e.target.value })}
+                />
+              </label>
+
+              <label>
+                Número de cédula
+                <input
+                  value={form.numeroCedula}
                   onChange={(e) =>
-                    setForm({ ...form, institucionId: e.target.value })
+                    setForm({ ...form, numeroCedula: e.target.value })
+                  }
+                />
+              </label>
+
+              <div
+                style={{
+                  marginTop: "-6px",
+                  marginBottom: "4px",
+                  fontSize: "13px",
+                  color: "#6b7280"
+                }}
+              >
+                La clave inicial del usuario será su número de cédula
+              </div>
+
+              <label>
+                Nombre
+                <input
+                  value={form.nombre}
+                  onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+                />
+              </label>
+
+              <label>
+                Primer apellido
+                <input
+                  value={form.primerApellido}
+                  onChange={(e) =>
+                    setForm({ ...form, primerApellido: e.target.value })
+                  }
+                />
+              </label>
+
+              <label>
+                Segundo apellido
+                <input
+                  value={form.segundoApellido}
+                  onChange={(e) =>
+                    setForm({ ...form, segundoApellido: e.target.value })
+                  }
+                />
+              </label>
+
+              <label>
+                Teléfono
+                <input
+                  value={form.telefono}
+                  onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+                />
+              </label>
+
+              <label>
+                Rol
+                <select
+                  value={form.roleNames[0]}
+                  onChange={(e) =>
+                    setForm({ ...form, roleNames: [e.target.value] })
                   }
                 >
-                  <option value="">Seleccione</option>
-                  {instituciones.map((inst) => (
-                    <option key={inst.InstitucionId} value={inst.InstitucionId}>
-                      {inst.NombreComercial || inst.Nombre}
+                  {rolesDisponibles.map((role) => (
+                    <option key={role.RolId} value={role.Nombre}>
+                      {role.Nombre}
                     </option>
                   ))}
                 </select>
               </label>
-            )}
 
-            <label>
-              Correo
-              <input
-                type="email"
-                value={form.correo}
-                onChange={(e) => setForm({ ...form, correo: e.target.value })}
-              />
-            </label>
-
-            {!editingId && (
-              <label>
-                Contraseña
-                <input
-                  type="password"
-                  value={form.password}
-                  onChange={(e) => setForm({ ...form, password: e.target.value })}
-                />
-              </label>
-            )}
-
-            <label>
-              Nombre
-              <input
-                value={form.nombre}
-                onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-              />
-            </label>
-
-            <label>
-              Primer apellido
-              <input
-                value={form.primerApellido}
-                onChange={(e) => setForm({ ...form, primerApellido: e.target.value })}
-              />
-            </label>
-
-            <label>
-              Segundo apellido
-              <input
-                value={form.segundoApellido}
-                onChange={(e) => setForm({ ...form, segundoApellido: e.target.value })}
-              />
-            </label>
-
-            <label>
-              Teléfono
-              <input
-                value={form.telefono}
-                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
-              />
-            </label>
-
-            <label>
-              Rol
-              <select
-                value={form.roleNames[0]}
-                onChange={(e) => setForm({ ...form, roleNames: [e.target.value] })}
-              >
-                {rolesDisponibles.map((role) => (
-                  <option key={role.RolId} value={role.Nombre}>
-                    {role.Nombre}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button className="primary-btn" disabled={loading}>
-                {loading
-                  ? editingId ? "Actualizando..." : "Guardando..."
-                  : editingId ? "Actualizar" : "Guardar"}
-              </button>
-
-              {editingId && (
-                <button
-                  type="button"
-                  onClick={handleCancelEdit}
-                  style={{
-                    border: "1px solid #d1d5db",
-                    borderRadius: "10px",
-                    padding: "10px 14px",
-                    background: "#fff",
-                    cursor: "pointer"
-                  }}
-                >
-                  Cancelar
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                <button className="primary-btn" disabled={loading}>
+                  {loading
+                    ? editingId
+                      ? "Actualizando..."
+                      : "Guardando..."
+                    : editingId
+                      ? "Actualizar"
+                      : "Guardar"}
                 </button>
-              )}
+
+                {editingId && (
+                  <button
+                    type="button"
+                    onClick={handleCancelEdit}
+                    style={{
+                      border: "1px solid #d1d5db",
+                      borderRadius: "10px",
+                      padding: "10px 14px",
+                      background: "#fff",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </form>
+          ) : (
+            <div style={{ color: "#6b7280" }}>
+              Este rol no tiene permisos para crear o modificar usuarios
             </div>
-          </form>
-        ) : (
-          <div style={{ color: "#6b7280" }}>
-            Este rol no tiene permisos para crear o modificar usuarios
+          )}
+        </section>
+
+        <section className="card">
+          <h3>Incluir desde lista</h3>
+          <p style={{ marginTop: 0, color: "#6b7280" }}>
+            Podés descargar una plantilla, completarla y luego importarla en Excel
+          </p>
+
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "14px" }}>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={handleDescargarPlantilla}
+            >
+              Descargar plantilla
+            </button>
           </div>
-        )}
-      </section>
+
+          <form className="form" onSubmit={handleImportarExcel}>
+            <label>
+              Archivo Excel
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) =>
+                  setArchivoImportacion(e.target.files?.[0] || null)
+                }
+              />
+            </label>
+
+            <button className="primary-btn" disabled={importandoExcel}>
+              {importandoExcel ? "Importando..." : "Importar usuarios"}
+            </button>
+          </form>
+
+          {importResult && (
+            <div style={{ marginTop: "16px", display: "grid", gap: "12px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "12px",
+                  flexWrap: "wrap",
+                  fontSize: "14px"
+                }}
+              >
+                <span><strong>Total:</strong> {importResult.totalRegistros}</span>
+                <span><strong>Correctos:</strong> {importResult.totalOk}</span>
+                <span><strong>Errores:</strong> {importResult.totalError}</span>
+              </div>
+
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fila</th>
+                      <th>Correo</th>
+                      <th>Estado</th>
+                      <th>Detalle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importResult.resultados.map((row, index) => (
+                      <tr key={`${row.fila}-${index}`}>
+                        <td>{row.fila}</td>
+                        <td>{row.correo}</td>
+                        <td>{row.estado}</td>
+                        <td>{row.motivo}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
 
       <section className="card">
         <h3>Usuarios</h3>
 
         <form
           onSubmit={handleSearch}
-          style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}
+          style={{
+            display: "flex",
+            gap: "10px",
+            marginBottom: "12px",
+            flexWrap: "wrap"
+          }}
         >
           <input
-            placeholder="Buscar por correo o nombre"
+            placeholder="Buscar por correo, nombre o cédula"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
@@ -536,6 +751,7 @@ export default function UsuariosPage() {
               <tr>
                 <th>ID</th>
                 <th>Correo</th>
+                <th>Cédula</th>
                 <th>Nombre</th>
                 <th>Institución</th>
                 <th>Roles</th>
@@ -555,6 +771,7 @@ export default function UsuariosPage() {
                   <tr key={item.UsuarioId}>
                     <td>{item.UsuarioId}</td>
                     <td>{item.Correo}</td>
+                    <td>{item.NumeroCedula || ""}</td>
                     <td>
                       {item.Nombre} {item.PrimerApellido || ""}
                     </td>
@@ -578,6 +795,23 @@ export default function UsuariosPage() {
                           >
                             Editar
                           </button>
+
+                          {item.Activo && (
+                            <button
+                              type="button"
+                              onClick={() => handleResetPassword(item)}
+                              style={{
+                                border: "1px solid #ddd6fe",
+                                background: "#f5f3ff",
+                                color: "#6d28d9",
+                                borderRadius: "8px",
+                                padding: "6px 10px",
+                                cursor: "pointer"
+                              }}
+                            >
+                              Restablecer clave
+                            </button>
+                          )}
 
                           {item.Activo ? (
                             <button
@@ -621,7 +855,7 @@ export default function UsuariosPage() {
 
               {!items.length && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: "center", padding: "16px" }}>
+                  <td colSpan={8} style={{ textAlign: "center", padding: "16px" }}>
                     No hay usuarios registrados
                   </td>
                 </tr>
