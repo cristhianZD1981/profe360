@@ -1,12 +1,53 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const multer_1 = __importDefault(require("multer"));
+const XLSX = __importStar(require("xlsx"));
 const auth_middleware_1 = require("../../middlewares/auth.middleware");
 const database_1 = require("../../config/database");
 const http_1 = require("../../utils/http");
 const password_1 = require("../../utils/password");
+const email_service_1 = require("../../services/email.service");
 const router = (0, express_1.Router)();
+const upload = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
 router.use(auth_middleware_1.requireAuth);
+router.use((0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"));
 const ROLES_PERMITIDOS_SUPER_ADMIN = [
     "SUPER_ADMIN",
     "ADMIN_INSTITUCIONAL",
@@ -35,12 +76,97 @@ function validarRolesAsignables(currentRoles, roleNames) {
     const permitidos = getRolesPermitidos(currentRoles);
     return roleNames.every((role) => permitidos.includes(String(role)));
 }
+function normalizeCorreo(value) {
+    return String(value || "").trim().toLowerCase();
+}
+function normalizeCedula(value) {
+    return String(value || "").trim();
+}
+function toNullableString(value) {
+    if (value === undefined || value === null)
+        return null;
+    const str = String(value).trim();
+    return str ? str : null;
+}
+function escapeHtml(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+function buildWelcomeUserHtml(params) {
+    const nombre = escapeHtml(params.nombre);
+    const correo = escapeHtml(params.correo);
+    const numeroCedula = escapeHtml(params.numeroCedula);
+    return `
+    <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.6;">
+      <h2 style="margin-bottom: 8px;">Bienvenido a Profe360</h2>
+      <p>Hola ${nombre},</p>
+      <p>Se creó correctamente tu usuario en la plataforma.</p>
+      <p><strong>Dirección:</strong> <a href="https://profe360cr.com">https://profe360cr.com</a></p>
+      <p><strong>Usuario:</strong> ${correo}</p>
+      <p><strong>Clave inicial:</strong> ${numeroCedula}</p>
+      <p>Al ingresar por primera vez, el sistema te solicitará cambiar la clave.</p>
+      <p style="margin-top: 24px;">Este correo es automático, por favor no responder.</p>
+    </div>
+  `;
+}
+function buildResetToCedulaHtml(params) {
+    const nombre = escapeHtml(params.nombre);
+    const correo = escapeHtml(params.correo);
+    const numeroCedula = escapeHtml(params.numeroCedula);
+    return `
+    <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.6;">
+      <h2 style="margin-bottom: 8px;">Restablecimiento de clave - Profe360</h2>
+      <p>Hola ${nombre},</p>
+      <p>Un administrador restableció la clave de tu cuenta.</p>
+      <p><strong>Dirección:</strong> <a href="https://profe360cr.com">https://profe360cr.com</a></p>
+      <p><strong>Usuario:</strong> ${correo}</p>
+      <p><strong>Clave restablecida:</strong> ${numeroCedula}</p>
+      <p>Al ingresar nuevamente, el sistema te solicitará cambiar la clave.</p>
+      <p style="margin-top: 24px;">Este correo es automático, por favor no responder.</p>
+    </div>
+  `;
+}
+async function enviarCorreoBienvenida(params) {
+    try {
+        const envio = await (0, email_service_1.sendEmail)({
+            to: params.correo,
+            subject: "Bienvenido a Profe360",
+            html: buildWelcomeUserHtml({
+                nombre: params.nombre,
+                correo: params.correo,
+                numeroCedula: params.numeroCedula
+            }),
+            text: `Hola ${params.nombre}
+
+Se creó correctamente tu usuario en Profe360.
+
+Dirección: https://profe360cr.com
+Usuario: ${params.correo}
+Clave inicial: ${params.numeroCedula}
+
+Al ingresar por primera vez, el sistema te solicitará cambiar la clave.
+
+Este correo es automático, por favor no responder.`
+        });
+        return envio;
+    }
+    catch (error) {
+        console.error("No se pudo enviar el correo de bienvenida:", error);
+        return null;
+    }
+}
 router.get("/", async (req, res) => {
     try {
         const q = String(req.query.q || "").trim();
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+        const institucionId = esSuperAdmin ? null : Number(req.auth?.institucionId || 0);
         const pool = await (0, database_1.getPool)();
         const request = pool.request()
-            .input("institucionId", database_1.sql.Int, req.auth?.institucionId ?? null)
+            .input("institucionId", database_1.sql.Int, institucionId)
             .input("q", database_1.sql.NVarChar, `%${q}%`);
         const result = await request.query(`
       SELECT
@@ -49,6 +175,7 @@ router.get("/", async (req, res) => {
         i.Nombre AS InstitucionNombre,
         i.NombreComercial AS InstitucionNombreComercial,
         u.Correo,
+        u.NumeroCedula,
         u.Nombre,
         u.PrimerApellido,
         u.SegundoApellido,
@@ -67,6 +194,7 @@ router.get("/", async (req, res) => {
         AND (
           @q = '%%'
           OR u.Correo LIKE @q
+          OR u.NumeroCedula LIKE @q
           OR u.Nombre LIKE @q
           OR u.PrimerApellido LIKE @q
           OR u.SegundoApellido LIKE @q
@@ -77,6 +205,7 @@ router.get("/", async (req, res) => {
         i.Nombre,
         i.NombreComercial,
         u.Correo,
+        u.NumeroCedula,
         u.Nombre,
         u.PrimerApellido,
         u.SegundoApellido,
@@ -94,13 +223,309 @@ router.get("/", async (req, res) => {
         });
     }
 });
-router.post("/", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+router.get("/plantilla-excel", async (req, res) => {
+    try {
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+        const wb = XLSX.utils.book_new();
+        const instrucciones = [
+            {
+                Campo: "correo",
+                Obligatorio: "Sí",
+                Descripcion: "Correo del usuario, será también el usuario para ingresar"
+            },
+            {
+                Campo: "numeroCedula",
+                Obligatorio: "Sí",
+                Descripcion: "Número de cédula del usuario, será la clave inicial"
+            },
+            {
+                Campo: "nombre",
+                Obligatorio: "Sí",
+                Descripcion: "Nombre del usuario"
+            },
+            {
+                Campo: "primerApellido",
+                Obligatorio: "No",
+                Descripcion: "Primer apellido"
+            },
+            {
+                Campo: "segundoApellido",
+                Obligatorio: "No",
+                Descripcion: "Segundo apellido"
+            },
+            {
+                Campo: "telefono",
+                Obligatorio: "No",
+                Descripcion: "Teléfono"
+            },
+            {
+                Campo: "rol",
+                Obligatorio: "Sí",
+                Descripcion: esSuperAdmin
+                    ? "SUPER_ADMIN, ADMIN_INSTITUCIONAL, PROFESOR, PROFESOR_GUIA, ADMINISTRATIVO, PADRE_FAMILIA"
+                    : "PROFESOR, PROFESOR_GUIA, ADMINISTRATIVO, PADRE_FAMILIA"
+            },
+            {
+                Campo: "institucionId",
+                Obligatorio: esSuperAdmin ? "Sí" : "No",
+                Descripcion: esSuperAdmin
+                    ? "Solo para SUPER_ADMIN"
+                    : "Se ignora para roles institucionales"
+            }
+        ];
+        const ejemplo = [
+            {
+                correo: "usuario1@colegio.edu",
+                numeroCedula: "123456789",
+                nombre: "María",
+                primerApellido: "Pérez",
+                segundoApellido: "Rojas",
+                telefono: "88888888",
+                rol: "PROFESOR",
+                institucionId: esSuperAdmin ? "1" : ""
+            }
+        ];
+        const wsInstrucciones = XLSX.utils.json_to_sheet(instrucciones);
+        const wsUsuarios = XLSX.utils.json_to_sheet(ejemplo);
+        XLSX.utils.book_append_sheet(wb, wsInstrucciones, "Instrucciones");
+        XLSX.utils.book_append_sheet(wb, wsUsuarios, "Usuarios");
+        const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+        res.setHeader("Content-Disposition", 'attachment; filename="plantilla_usuarios.xlsx"');
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        return res.send(buffer);
+    }
+    catch (error) {
+        console.error("Error generando plantilla de usuarios:", error);
+        return res.status(500).json({
+            ok: false,
+            message: "No se pudo generar la plantilla"
+        });
+    }
+});
+router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
+    try {
+        if (!req.file?.buffer) {
+            return (0, http_1.badRequest)(res, "Debés adjuntar un archivo Excel");
+        }
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+        const currentRoles = req.auth?.roles || [];
+        const authInstitucionId = Number(req.auth?.institucionId || 0);
+        const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+        const sheetName = workbook.SheetNames.includes("Usuarios")
+            ? "Usuarios"
+            : workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        if (!rows.length) {
+            return (0, http_1.badRequest)(res, "El archivo no contiene registros para importar");
+        }
+        const pool = await (0, database_1.getPool)();
+        const resultados = [];
+        let totalOk = 0;
+        let totalError = 0;
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const fila = i + 2;
+            const correo = normalizeCorreo(row.correo);
+            const numeroCedula = normalizeCedula(row.numeroCedula);
+            const nombre = String(row.nombre || "").trim();
+            const primerApellido = toNullableString(row.primerApellido);
+            const segundoApellido = toNullableString(row.segundoApellido);
+            const telefono = toNullableString(row.telefono);
+            const roleName = String(row.rol || "").trim();
+            const targetInstitucionId = esSuperAdmin
+                ? Number(row.institucionId || 0)
+                : authInstitucionId;
+            if (!correo || !numeroCedula || !nombre || !roleName) {
+                resultados.push({
+                    fila,
+                    correo,
+                    estado: "ERROR",
+                    motivo: "correo, numeroCedula, nombre y rol son obligatorios"
+                });
+                totalError++;
+                continue;
+            }
+            if (!validarRolesAsignables(currentRoles, [roleName])) {
+                resultados.push({
+                    fila,
+                    correo,
+                    estado: "ERROR",
+                    motivo: `No tenés permisos para asignar el rol ${roleName}`
+                });
+                totalError++;
+                continue;
+            }
+            if (!targetInstitucionId) {
+                resultados.push({
+                    fila,
+                    correo,
+                    estado: "ERROR",
+                    motivo: "institucionId es obligatorio para este registro"
+                });
+                totalError++;
+                continue;
+            }
+            try {
+                const existeCorreo = await pool.request()
+                    .input("correo", database_1.sql.NVarChar, correo)
+                    .query(`
+            SELECT TOP 1 UsuarioId
+            FROM dbo.Usuario
+            WHERE LOWER(Correo) = @correo
+          `);
+                if (existeCorreo.recordset.length > 0) {
+                    resultados.push({
+                        fila,
+                        correo,
+                        estado: "ERROR",
+                        motivo: "Ya existe un usuario con ese correo"
+                    });
+                    totalError++;
+                    continue;
+                }
+                const existeCedula = await pool.request()
+                    .input("numeroCedula", database_1.sql.NVarChar, numeroCedula)
+                    .query(`
+            SELECT TOP 1 UsuarioId
+            FROM dbo.Usuario
+            WHERE NumeroCedula = @numeroCedula
+          `);
+                if (existeCedula.recordset.length > 0) {
+                    resultados.push({
+                        fila,
+                        correo,
+                        estado: "ERROR",
+                        motivo: "Ya existe un usuario con ese número de cédula"
+                    });
+                    totalError++;
+                    continue;
+                }
+                const tx = new database_1.sql.Transaction(pool);
+                await tx.begin();
+                try {
+                    const hash = await (0, password_1.hashPassword)(numeroCedula);
+                    const insertUser = await new database_1.sql.Request(tx)
+                        .input("institucionId", database_1.sql.Int, targetInstitucionId)
+                        .input("correo", database_1.sql.NVarChar, correo)
+                        .input("numeroCedula", database_1.sql.NVarChar, numeroCedula)
+                        .input("hashPassword", database_1.sql.NVarChar, hash)
+                        .input("nombre", database_1.sql.NVarChar, nombre)
+                        .input("primerApellido", database_1.sql.NVarChar, primerApellido)
+                        .input("segundoApellido", database_1.sql.NVarChar, segundoApellido)
+                        .input("telefono", database_1.sql.NVarChar, telefono)
+                        .query(`
+              INSERT INTO dbo.Usuario
+              (
+                InstitucionId,
+                Correo,
+                NumeroCedula,
+                HashPassword,
+                Nombre,
+                PrimerApellido,
+                SegundoApellido,
+                Telefono,
+                Activo,
+                DebeCambiarPassword
+              )
+              OUTPUT
+                INSERTED.UsuarioId,
+                INSERTED.Correo,
+                INSERTED.NumeroCedula,
+                INSERTED.Nombre,
+                INSERTED.PrimerApellido
+              VALUES
+              (
+                @institucionId,
+                @correo,
+                @numeroCedula,
+                @hashPassword,
+                @nombre,
+                @primerApellido,
+                @segundoApellido,
+                @telefono,
+                1,
+                1
+              )
+            `);
+                    const createdUser = insertUser.recordset[0];
+                    const insertRole = await new database_1.sql.Request(tx)
+                        .input("usuarioId", database_1.sql.Int, createdUser.UsuarioId)
+                        .input("roleName", database_1.sql.NVarChar, roleName)
+                        .query(`
+              INSERT INTO dbo.UsuarioRol (UsuarioId, RolId, Activo)
+              OUTPUT INSERTED.UsuarioRolId
+              SELECT @usuarioId, RolId, 1
+              FROM dbo.Rol
+              WHERE Nombre = @roleName
+            `);
+                    if (!insertRole.recordset.length) {
+                        throw new Error(`El rol ${roleName} no existe`);
+                    }
+                    await tx.commit();
+                    const nombreCompleto = `${createdUser.Nombre || ""} ${createdUser.PrimerApellido || ""}`.trim() ||
+                        "Usuario";
+                    await enviarCorreoBienvenida({
+                        correo: createdUser.Correo,
+                        nombre: nombreCompleto,
+                        numeroCedula: createdUser.NumeroCedula
+                    });
+                    resultados.push({
+                        fila,
+                        correo,
+                        estado: "OK",
+                        motivo: "Usuario importado correctamente"
+                    });
+                    totalOk++;
+                }
+                catch (innerError) {
+                    try {
+                        await tx.rollback();
+                    }
+                    catch { }
+                    resultados.push({
+                        fila,
+                        correo,
+                        estado: "ERROR",
+                        motivo: innerError?.message || "No se pudo importar el usuario"
+                    });
+                    totalError++;
+                }
+            }
+            catch (error) {
+                resultados.push({
+                    fila,
+                    correo,
+                    estado: "ERROR",
+                    motivo: error?.message || "No se pudo procesar el registro"
+                });
+                totalError++;
+            }
+        }
+        return (0, http_1.ok)(res, {
+            totalRegistros: rows.length,
+            totalOk,
+            totalError,
+            resultados
+        }, "Importación procesada correctamente");
+    }
+    catch (error) {
+        console.error("Error importando usuarios:", error);
+        return res.status(500).json({
+            ok: false,
+            message: "No se pudo importar el archivo Excel"
+        });
+    }
+});
+router.post("/", async (req, res) => {
     const txPool = await (0, database_1.getPool)();
     const tx = new database_1.sql.Transaction(txPool);
     try {
-        const { correo, password, nombre, primerApellido, segundoApellido, telefono, institucionId, roleNames = [] } = req.body;
-        if (!correo || !password || !nombre) {
-            return (0, http_1.badRequest)(res, "correo, password y nombre son obligatorios");
+        const { correo, numeroCedula, nombre, primerApellido, segundoApellido, telefono, institucionId, roleNames = [] } = req.body;
+        const correoNormalizado = normalizeCorreo(correo);
+        const numeroCedulaNormalizado = normalizeCedula(numeroCedula);
+        if (!correoNormalizado || !numeroCedulaNormalizado || !nombre) {
+            return (0, http_1.badRequest)(res, "correo, numeroCedula y nombre son obligatorios");
         }
         if (!Array.isArray(roleNames) || roleNames.length === 0) {
             return (0, http_1.badRequest)(res, "Debe seleccionar al menos un rol");
@@ -111,76 +536,114 @@ router.post("/", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTI
                 message: "No tenés permisos para asignar uno o más de los roles seleccionados"
             });
         }
-        const targetInstitucionId = req.auth?.roles.includes("SUPER_ADMIN")
+        const targetInstitucionId = (req.auth?.roles || []).includes("SUPER_ADMIN")
             ? Number(institucionId || req.auth?.institucionId || 0)
             : Number(req.auth?.institucionId || 0);
         if (!targetInstitucionId) {
             return (0, http_1.badRequest)(res, "institucionId es obligatorio");
         }
         const pool = await (0, database_1.getPool)();
-        const existe = await pool.request()
-            .input("correo", database_1.sql.NVarChar, correo)
+        const existeCorreo = await pool.request()
+            .input("correo", database_1.sql.NVarChar, correoNormalizado)
             .query(`
-          SELECT TOP 1 UsuarioId
-          FROM dbo.Usuario
-          WHERE Correo = @correo
-        `);
-        if (existe.recordset.length > 0) {
+        SELECT TOP 1 UsuarioId
+        FROM dbo.Usuario
+        WHERE LOWER(Correo) = @correo
+      `);
+        if (existeCorreo.recordset.length > 0) {
             return res.status(409).json({
                 ok: false,
                 code: "USUARIO_DUPLICADO",
                 message: "Ya existe un usuario con ese correo"
             });
         }
+        const existeCedula = await pool.request()
+            .input("numeroCedula", database_1.sql.NVarChar, numeroCedulaNormalizado)
+            .query(`
+        SELECT TOP 1 UsuarioId
+        FROM dbo.Usuario
+        WHERE NumeroCedula = @numeroCedula
+      `);
+        if (existeCedula.recordset.length > 0) {
+            return res.status(409).json({
+                ok: false,
+                code: "CEDULA_DUPLICADA",
+                message: "Ya existe un usuario con ese número de cédula"
+            });
+        }
         await tx.begin();
-        const hash = await (0, password_1.hashPassword)(password);
+        const hash = await (0, password_1.hashPassword)(numeroCedulaNormalizado);
         const insertUser = await new database_1.sql.Request(tx)
             .input("institucionId", database_1.sql.Int, targetInstitucionId)
-            .input("correo", database_1.sql.NVarChar, correo)
+            .input("correo", database_1.sql.NVarChar, correoNormalizado)
+            .input("numeroCedula", database_1.sql.NVarChar, numeroCedulaNormalizado)
             .input("hashPassword", database_1.sql.NVarChar, hash)
             .input("nombre", database_1.sql.NVarChar, nombre)
             .input("primerApellido", database_1.sql.NVarChar, primerApellido || null)
             .input("segundoApellido", database_1.sql.NVarChar, segundoApellido || null)
             .input("telefono", database_1.sql.NVarChar, telefono || null)
             .query(`
-          INSERT INTO dbo.Usuario
-          (
-            InstitucionId,
-            Correo,
-            HashPassword,
-            Nombre,
-            PrimerApellido,
-            SegundoApellido,
-            Telefono,
-            Activo
-          )
-          OUTPUT INSERTED.UsuarioId, INSERTED.InstitucionId, INSERTED.Correo, INSERTED.Nombre, INSERTED.PrimerApellido, INSERTED.Activo
-          VALUES
-          (
-            @institucionId,
-            @correo,
-            @hashPassword,
-            @nombre,
-            @primerApellido,
-            @segundoApellido,
-            @telefono,
-            1
-          )
-        `);
+        INSERT INTO dbo.Usuario
+        (
+          InstitucionId,
+          Correo,
+          NumeroCedula,
+          HashPassword,
+          Nombre,
+          PrimerApellido,
+          SegundoApellido,
+          Telefono,
+          Activo,
+          DebeCambiarPassword
+        )
+        OUTPUT
+          INSERTED.UsuarioId,
+          INSERTED.InstitucionId,
+          INSERTED.Correo,
+          INSERTED.NumeroCedula,
+          INSERTED.Nombre,
+          INSERTED.PrimerApellido,
+          INSERTED.Activo
+        VALUES
+        (
+          @institucionId,
+          @correo,
+          @numeroCedula,
+          @hashPassword,
+          @nombre,
+          @primerApellido,
+          @segundoApellido,
+          @telefono,
+          1,
+          1
+        )
+      `);
         const createdUser = insertUser.recordset[0];
         for (const roleName of roleNames) {
             await new database_1.sql.Request(tx)
                 .input("usuarioId", database_1.sql.Int, createdUser.UsuarioId)
                 .input("roleName", database_1.sql.NVarChar, String(roleName))
                 .query(`
-            INSERT INTO dbo.UsuarioRol (UsuarioId, RolId, Activo)
-            SELECT @usuarioId, RolId, 1
-            FROM dbo.Rol
-            WHERE Nombre = @roleName
-          `);
+          INSERT INTO dbo.UsuarioRol (UsuarioId, RolId, Activo)
+          SELECT @usuarioId, RolId, 1
+          FROM dbo.Rol
+          WHERE Nombre = @roleName
+        `);
         }
         await tx.commit();
-        return (0, http_1.created)(res, createdUser, "Usuario creado correctamente");
+        let message = "Usuario creado correctamente";
+        const nombreCompleto = `${createdUser.Nombre || ""} ${createdUser.PrimerApellido || ""}`.trim() ||
+            "Usuario";
+        const envio = await enviarCorreoBienvenida({
+            correo: createdUser.Correo,
+            nombre: nombreCompleto,
+            numeroCedula: createdUser.NumeroCedula
+        });
+        if (envio && envio.modo === "simulado") {
+            message =
+                "Usuario creado correctamente. El correo quedó en modo simulado porque falta configurar Resend";
+        }
+        return (0, http_1.created)(res, createdUser, message);
     }
     catch (error) {
         try {
@@ -194,7 +657,7 @@ router.post("/", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTI
             return res.status(409).json({
                 ok: false,
                 code: "USUARIO_DUPLICADO",
-                message: "Ya existe un usuario con ese correo"
+                message: "Ya existe un usuario con ese correo o número de cédula"
             });
         }
         return res.status(500).json({
@@ -203,17 +666,19 @@ router.post("/", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTI
         });
     }
 });
-router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+router.put("/:id", async (req, res) => {
     const txPool = await (0, database_1.getPool)();
     const tx = new database_1.sql.Transaction(txPool);
     try {
         const id = Number(req.params.id);
-        const { correo, nombre, primerApellido, segundoApellido, telefono, roleNames = [], institucionId } = req.body;
+        const { correo, numeroCedula, nombre, primerApellido, segundoApellido, telefono, roleNames = [], institucionId } = req.body;
+        const correoNormalizado = normalizeCorreo(correo);
+        const numeroCedulaNormalizado = normalizeCedula(numeroCedula);
         if (!id) {
             return (0, http_1.badRequest)(res, "Id inválido");
         }
-        if (!correo || !nombre) {
-            return (0, http_1.badRequest)(res, "correo y nombre son obligatorios");
+        if (!correoNormalizado || !numeroCedulaNormalizado || !nombre) {
+            return (0, http_1.badRequest)(res, "correo, numeroCedula y nombre son obligatorios");
         }
         if (!Array.isArray(roleNames) || roleNames.length === 0) {
             return (0, http_1.badRequest)(res, "Debe seleccionar al menos un rol");
@@ -224,7 +689,7 @@ router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INS
                 message: "No tenés permisos para asignar uno o más de los roles seleccionados"
             });
         }
-        const esSuperAdmin = req.auth?.roles.includes("SUPER_ADMIN");
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
         const targetInstitucionId = esSuperAdmin
             ? Number(institucionId || req.auth?.institucionId || 0)
             : Number(req.auth?.institucionId || 0);
@@ -232,20 +697,36 @@ router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INS
             return (0, http_1.badRequest)(res, "institucionId es obligatorio");
         }
         const pool = await (0, database_1.getPool)();
-        const existe = await pool.request()
-            .input("correo", database_1.sql.NVarChar, correo)
+        const existeCorreo = await pool.request()
+            .input("correo", database_1.sql.NVarChar, correoNormalizado)
             .input("id", database_1.sql.Int, id)
             .query(`
-          SELECT TOP 1 UsuarioId
-          FROM dbo.Usuario
-          WHERE Correo = @correo
-            AND UsuarioId <> @id
-        `);
-        if (existe.recordset.length > 0) {
+        SELECT TOP 1 UsuarioId
+        FROM dbo.Usuario
+        WHERE LOWER(Correo) = @correo
+          AND UsuarioId <> @id
+      `);
+        if (existeCorreo.recordset.length > 0) {
             return res.status(409).json({
                 ok: false,
                 code: "USUARIO_DUPLICADO",
                 message: "Ya existe otro usuario con ese correo"
+            });
+        }
+        const existeCedula = await pool.request()
+            .input("numeroCedula", database_1.sql.NVarChar, numeroCedulaNormalizado)
+            .input("id", database_1.sql.Int, id)
+            .query(`
+        SELECT TOP 1 UsuarioId
+        FROM dbo.Usuario
+        WHERE NumeroCedula = @numeroCedula
+          AND UsuarioId <> @id
+      `);
+        if (existeCedula.recordset.length > 0) {
+            return res.status(409).json({
+                ok: false,
+                code: "CEDULA_DUPLICADA",
+                message: "Ya existe otro usuario con ese número de cédula"
             });
         }
         await tx.begin();
@@ -253,25 +734,34 @@ router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INS
             .input("id", database_1.sql.Int, id)
             .input("institucionFiltro", database_1.sql.Int, esSuperAdmin ? null : targetInstitucionId)
             .input("institucionId", database_1.sql.Int, targetInstitucionId)
-            .input("correo", database_1.sql.NVarChar, correo)
+            .input("correo", database_1.sql.NVarChar, correoNormalizado)
+            .input("numeroCedula", database_1.sql.NVarChar, numeroCedulaNormalizado)
             .input("nombre", database_1.sql.NVarChar, nombre)
             .input("primerApellido", database_1.sql.NVarChar, primerApellido || null)
             .input("segundoApellido", database_1.sql.NVarChar, segundoApellido || null)
             .input("telefono", database_1.sql.NVarChar, telefono || null)
             .query(`
-          UPDATE dbo.Usuario
-          SET
-            InstitucionId = @institucionId,
-            Correo = @correo,
-            Nombre = @nombre,
-            PrimerApellido = @primerApellido,
-            SegundoApellido = @segundoApellido,
-            Telefono = @telefono,
-            UpdatedAt = SYSDATETIME()
-          OUTPUT INSERTED.UsuarioId, INSERTED.InstitucionId, INSERTED.Correo, INSERTED.Nombre, INSERTED.PrimerApellido, INSERTED.Activo
-          WHERE UsuarioId = @id
-            AND (@institucionFiltro IS NULL OR InstitucionId = @institucionFiltro)
-        `);
+        UPDATE dbo.Usuario
+        SET
+          InstitucionId = @institucionId,
+          Correo = @correo,
+          NumeroCedula = @numeroCedula,
+          Nombre = @nombre,
+          PrimerApellido = @primerApellido,
+          SegundoApellido = @segundoApellido,
+          Telefono = @telefono,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT
+          INSERTED.UsuarioId,
+          INSERTED.InstitucionId,
+          INSERTED.Correo,
+          INSERTED.NumeroCedula,
+          INSERTED.Nombre,
+          INSERTED.PrimerApellido,
+          INSERTED.Activo
+        WHERE UsuarioId = @id
+          AND (@institucionFiltro IS NULL OR InstitucionId = @institucionFiltro)
+      `);
         if (!updateResult.recordset.length) {
             await tx.rollback();
             return res.status(404).json({
@@ -282,19 +772,19 @@ router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INS
         await new database_1.sql.Request(tx)
             .input("usuarioId", database_1.sql.Int, id)
             .query(`
-          DELETE FROM dbo.UsuarioRol
-          WHERE UsuarioId = @usuarioId
-        `);
+        DELETE FROM dbo.UsuarioRol
+        WHERE UsuarioId = @usuarioId
+      `);
         for (const roleName of roleNames) {
             await new database_1.sql.Request(tx)
                 .input("usuarioId", database_1.sql.Int, id)
                 .input("roleName", database_1.sql.NVarChar, String(roleName))
                 .query(`
-            INSERT INTO dbo.UsuarioRol (UsuarioId, RolId, Activo)
-            SELECT @usuarioId, RolId, 1
-            FROM dbo.Rol
-            WHERE Nombre = @roleName
-          `);
+          INSERT INTO dbo.UsuarioRol (UsuarioId, RolId, Activo)
+          SELECT @usuarioId, RolId, 1
+          FROM dbo.Rol
+          WHERE Nombre = @roleName
+        `);
         }
         await tx.commit();
         return (0, http_1.ok)(res, updateResult.recordset[0], "Usuario actualizado correctamente");
@@ -311,7 +801,7 @@ router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INS
             return res.status(409).json({
                 ok: false,
                 code: "USUARIO_DUPLICADO",
-                message: "Ya existe otro usuario con ese correo"
+                message: "Ya existe otro usuario con ese correo o número de cédula"
             });
         }
         return res.status(500).json({
@@ -320,64 +810,259 @@ router.put("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INS
         });
     }
 });
-router.delete("/:id", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+router.post("/:id/restablecer-clave", async (req, res) => {
     try {
         const id = Number(req.params.id);
         if (!id) {
             return (0, http_1.badRequest)(res, "Id inválido");
         }
-        const esSuperAdmin = req.auth?.roles.includes("SUPER_ADMIN");
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
         const institucionId = Number(req.auth?.institucionId || 0);
         const pool = await (0, database_1.getPool)();
         const result = await pool.request()
             .input("id", database_1.sql.Int, id)
             .input("institucionId", database_1.sql.Int, esSuperAdmin ? null : institucionId)
             .query(`
-          UPDATE dbo.Usuario
-          SET
-            Activo = 0,
-            UpdatedAt = SYSDATETIME()
-          OUTPUT INSERTED.UsuarioId
-          WHERE UsuarioId = @id
-            AND (@institucionId IS NULL OR InstitucionId = @institucionId)
-        `);
+        SELECT TOP 1
+          u.UsuarioId,
+          u.Correo,
+          u.NumeroCedula,
+          u.Nombre,
+          u.PrimerApellido,
+          u.Activo
+        FROM dbo.Usuario u
+        WHERE u.UsuarioId = @id
+          AND (@institucionId IS NULL OR u.InstitucionId = @institucionId)
+      `);
         if (!result.recordset.length) {
             return res.status(404).json({
                 ok: false,
                 message: "Usuario no encontrado"
             });
         }
-        return (0, http_1.ok)(res, { UsuarioId: id }, "Usuario desactivado correctamente");
+        const user = result.recordset[0];
+        if (!user.Activo) {
+            return res.status(400).json({
+                ok: false,
+                message: "No se puede restablecer la clave de un usuario inactivo"
+            });
+        }
+        if (!user.Correo || !user.NumeroCedula) {
+            return res.status(400).json({
+                ok: false,
+                message: "El usuario debe tener correo y número de cédula para restablecer la clave"
+            });
+        }
+        const hash = await (0, password_1.hashPassword)(String(user.NumeroCedula).trim());
+        await pool.request()
+            .input("id", database_1.sql.Int, id)
+            .input("institucionId", database_1.sql.Int, esSuperAdmin ? null : institucionId)
+            .input("hashPassword", database_1.sql.NVarChar, hash)
+            .query(`
+        UPDATE dbo.Usuario
+        SET
+          HashPassword = @hashPassword,
+          DebeCambiarPassword = 1,
+          UpdatedAt = SYSDATETIME()
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+        const nombre = `${user.Nombre || ""} ${user.PrimerApellido || ""}`.trim() || "Usuario";
+        await (0, email_service_1.sendEmail)({
+            to: user.Correo,
+            subject: "Restablecimiento de clave - Profe360",
+            html: buildResetToCedulaHtml({
+                nombre,
+                correo: user.Correo,
+                numeroCedula: String(user.NumeroCedula).trim()
+            }),
+            text: `Hola ${nombre}
+
+Un administrador restableció la clave de tu cuenta en Profe360.
+
+Dirección: https://profe360cr.com
+Usuario: ${user.Correo}
+Clave restablecida: ${String(user.NumeroCedula).trim()}
+
+Al ingresar nuevamente, el sistema te solicitará cambiar la clave.
+
+Este correo es automático, por favor no responder.`
+        });
+        return (0, http_1.ok)(res, {
+            enviado: true,
+            usuarioId: user.UsuarioId,
+            correo: user.Correo
+        }, `La clave fue restablecida a la cédula y se notificó a ${user.Correo}`);
     }
     catch (error) {
-        console.error("Error al desactivar usuario:", error);
+        console.error("Error al restablecer la clave del usuario:", error);
         return res.status(500).json({
             ok: false,
-            message: "Error interno al desactivar usuario"
+            message: "Error interno al restablecer la clave del usuario"
         });
     }
 });
-router.patch("/:id/reactivar", (0, auth_middleware_1.requireRoles)("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+router.patch("/:id/inactivar", async (req, res) => {
     try {
         const id = Number(req.params.id);
         if (!id) {
             return (0, http_1.badRequest)(res, "Id inválido");
         }
-        const esSuperAdmin = req.auth?.roles.includes("SUPER_ADMIN");
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
         const institucionId = Number(req.auth?.institucionId || 0);
         const pool = await (0, database_1.getPool)();
         const result = await pool.request()
             .input("id", database_1.sql.Int, id)
             .input("institucionId", database_1.sql.Int, esSuperAdmin ? null : institucionId)
             .query(`
-          UPDATE dbo.Usuario
-          SET
-            Activo = 1,
-            UpdatedAt = SYSDATETIME()
-          OUTPUT INSERTED.UsuarioId
-          WHERE UsuarioId = @id
-            AND (@institucionId IS NULL OR InstitucionId = @institucionId)
-        `);
+        UPDATE dbo.Usuario
+        SET
+          Activo = 0,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.UsuarioId
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+        if (!result.recordset.length) {
+            return res.status(404).json({
+                ok: false,
+                message: "Usuario no encontrado"
+            });
+        }
+        return (0, http_1.ok)(res, { UsuarioId: id }, "Usuario inactivado correctamente");
+    }
+    catch (error) {
+        console.error("Error al inactivar usuario:", error);
+        return res.status(500).json({
+            ok: false,
+            message: "Error interno al inactivar usuario"
+        });
+    }
+});
+router.delete("/:id", async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!id) {
+            return (0, http_1.badRequest)(res, "Id inválido");
+        }
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+        const institucionId = Number(req.auth?.institucionId || 0);
+        const pool = await (0, database_1.getPool)();
+        const result = await pool.request()
+            .input("id", database_1.sql.Int, id)
+            .input("institucionId", database_1.sql.Int, esSuperAdmin ? null : institucionId)
+            .query(`
+        UPDATE dbo.Usuario
+        SET
+          Activo = 0,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.UsuarioId
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+        if (!result.recordset.length) {
+            return res.status(404).json({
+                ok: false,
+                message: "Usuario no encontrado"
+            });
+        }
+        return (0, http_1.ok)(res, { UsuarioId: id }, "Usuario inactivado correctamente");
+    }
+    catch (error) {
+        console.error("Error al inactivar usuario:", error);
+        return res.status(500).json({
+            ok: false,
+            message: "Error interno al inactivar usuario"
+        });
+    }
+});
+router.delete("/:id/eliminar", async (req, res) => {
+    const txPool = await (0, database_1.getPool)();
+    const tx = new database_1.sql.Transaction(txPool);
+    try {
+        const id = Number(req.params.id);
+        if (!id) {
+            return (0, http_1.badRequest)(res, "Id inválido");
+        }
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+        const institucionId = Number(req.auth?.institucionId || 0);
+        await tx.begin();
+        const exists = await new database_1.sql.Request(tx)
+            .input("id", database_1.sql.Int, id)
+            .input("institucionId", database_1.sql.Int, esSuperAdmin ? null : institucionId)
+            .query(`
+        SELECT TOP 1 UsuarioId
+        FROM dbo.Usuario
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+        if (!exists.recordset.length) {
+            await tx.rollback();
+            return res.status(404).json({
+                ok: false,
+                message: "Usuario no encontrado"
+            });
+        }
+        await new database_1.sql.Request(tx)
+            .input("id", database_1.sql.Int, id)
+            .query(`
+        DELETE FROM dbo.UsuarioResetPasswordToken
+        WHERE UsuarioId = @id
+      `);
+        await new database_1.sql.Request(tx)
+            .input("id", database_1.sql.Int, id)
+            .query(`
+        DELETE FROM dbo.UsuarioRol
+        WHERE UsuarioId = @id
+      `);
+        await new database_1.sql.Request(tx)
+            .input("id", database_1.sql.Int, id)
+            .query(`
+        DELETE FROM dbo.Usuario
+        WHERE UsuarioId = @id
+      `);
+        await tx.commit();
+        return (0, http_1.ok)(res, { UsuarioId: id }, "Usuario eliminado correctamente");
+    }
+    catch (error) {
+        try {
+            await tx.rollback();
+        }
+        catch { }
+        console.error("Error eliminando usuario:", error);
+        if (error?.number === 547) {
+            return res.status(400).json({
+                ok: false,
+                message: "No se puede eliminar el usuario porque tiene información relacionada en el sistema"
+            });
+        }
+        return res.status(500).json({
+            ok: false,
+            message: "Error interno al eliminar el usuario"
+        });
+    }
+});
+router.patch("/:id/reactivar", async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!id) {
+            return (0, http_1.badRequest)(res, "Id inválido");
+        }
+        const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+        const institucionId = Number(req.auth?.institucionId || 0);
+        const pool = await (0, database_1.getPool)();
+        const result = await pool.request()
+            .input("id", database_1.sql.Int, id)
+            .input("institucionId", database_1.sql.Int, esSuperAdmin ? null : institucionId)
+            .query(`
+        UPDATE dbo.Usuario
+        SET
+          Activo = 1,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.UsuarioId
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
         if (!result.recordset.length) {
             return res.status(404).json({
                 ok: false,

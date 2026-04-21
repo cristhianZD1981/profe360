@@ -12,9 +12,22 @@ function required(name, fallback) {
         throw new Error(`Falta la variable de entorno ${name}`);
     return value;
 }
+function parseFrontendUrls() {
+    const urls = [
+        process.env.FRONTEND_URL,
+        ...(process.env.FRONTEND_URLS || "")
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+    ]
+        .filter(Boolean)
+        .map((url) => String(url).replace(/\/+$/, ""));
+    return Array.from(new Set(urls));
+}
 exports.env = {
     port: Number(process.env.PORT || 3001),
     frontendUrl: process.env.FRONTEND_URL || "http://localhost:5173",
+    frontendUrls: parseFrontendUrls(),
     db: {
         server: required("DB_SERVER"),
         port: Number(process.env.DB_PORT || 1433),
@@ -31,6 +44,11 @@ exports.env = {
         apiKey: process.env.CLOUDINARY_API_KEY || "",
         apiSecret: process.env.CLOUDINARY_API_SECRET || "",
         folder: process.env.CLOUDINARY_FOLDER || "profe360"
+    },
+    mail: {
+        resendApiKey: process.env.RESEND_API_KEY || "",
+        fromEmail: process.env.MAIL_FROM || "",
+        fromName: process.env.MAIL_FROM_NAME || "Profe360"
     }
 };
 process.env.DATABASE_URL = `sqlserver://${exports.env.db.user}:${encodeURIComponent(exports.env.db.password)}@${exports.env.db.server}:${exports.env.db.port};database=${exports.env.db.database};encrypt=${exports.env.db.encrypt};trustServerCertificate=${exports.env.db.trustServerCertificate}`;

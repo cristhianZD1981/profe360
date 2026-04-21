@@ -1,13 +1,11 @@
 import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { randomBytes, createHash } from "crypto";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
 import { hashPassword } from "../../utils/password";
 import { sendEmail } from "../../services/email.service";
-import { env } from "../../config/env";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -74,15 +72,6 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
-function hashResetToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function buildResetLink(token: string) {
-  const baseUrl = String(env.frontendUrl || "https://profe360cr.com").replace(/\/+$/, "");
-  return `${baseUrl}/restablecer-clave?token=${encodeURIComponent(token)}`;
-}
-
 function buildWelcomeUserHtml(params: {
   nombre: string;
   correo: string;
@@ -106,67 +95,27 @@ function buildWelcomeUserHtml(params: {
   `;
 }
 
-function buildAdminResetHtml(params: {
+function buildResetToCedulaHtml(params: {
   nombre: string;
   correo: string;
-  link: string;
+  numeroCedula: string;
 }) {
   const nombre = escapeHtml(params.nombre);
   const correo = escapeHtml(params.correo);
-  const link = escapeHtml(params.link);
+  const numeroCedula = escapeHtml(params.numeroCedula);
 
   return `
     <div style="font-family: Arial, Helvetica, sans-serif; color: #111827; line-height: 1.6;">
       <h2 style="margin-bottom: 8px;">Restablecimiento de clave - Profe360</h2>
       <p>Hola ${nombre},</p>
-      <p>Un administrador generó un enlace para restablecer la clave de tu cuenta.</p>
+      <p>Un administrador restableció la clave de tu cuenta.</p>
+      <p><strong>Dirección:</strong> <a href="https://profe360cr.com">https://profe360cr.com</a></p>
       <p><strong>Usuario:</strong> ${correo}</p>
-      <p>
-        <a href="${link}" style="display:inline-block;padding:10px 16px;background:#16b5d9;color:#04111f;border-radius:8px;text-decoration:none;font-weight:700;">
-          Restablecer clave
-        </a>
-      </p>
-      <p>En la pantalla se te pedirá tu correo, tu número de cédula y la nueva clave.</p>
+      <p><strong>Clave restablecida:</strong> ${numeroCedula}</p>
+      <p>Al ingresar nuevamente, el sistema te solicitará cambiar la clave.</p>
       <p style="margin-top: 24px;">Este correo es automático, por favor no responder.</p>
     </div>
   `;
-}
-
-async function createPasswordResetToken(usuarioId: number) {
-  const pool = await getPool();
-  const token = randomBytes(32).toString("hex");
-  const tokenHash = hashResetToken(token);
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60);
-
-  await pool.request()
-    .input("usuarioId", sql.Int, usuarioId)
-    .query(`
-      UPDATE dbo.UsuarioResetPasswordToken
-      SET UsedAt = SYSDATETIME()
-      WHERE UsuarioId = @usuarioId
-        AND UsedAt IS NULL
-    `);
-
-  await pool.request()
-    .input("usuarioId", sql.Int, usuarioId)
-    .input("tokenHash", sql.NVarChar, tokenHash)
-    .input("expiresAt", sql.DateTime2, expiresAt)
-    .query(`
-      INSERT INTO dbo.UsuarioResetPasswordToken
-      (
-        UsuarioId,
-        TokenHash,
-        ExpiresAt
-      )
-      VALUES
-      (
-        @usuarioId,
-        @tokenHash,
-        @expiresAt
-      )
-    `);
-
-  return token;
 }
 
 async function enviarCorreoBienvenida(params: {
@@ -1026,26 +975,41 @@ router.post("/:id/restablecer-clave", async (req, res) => {
       });
     }
 
-    const token = await createPasswordResetToken(user.UsuarioId);
-    const link = buildResetLink(token);
+    const hash = await hashPassword(String(user.NumeroCedula).trim());
+
+    await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, esSuperAdmin ? null : institucionId)
+      .input("hashPassword", sql.NVarChar, hash)
+      .query(`
+        UPDATE dbo.Usuario
+        SET
+          HashPassword = @hashPassword,
+          DebeCambiarPassword = 1,
+          UpdatedAt = SYSDATETIME()
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+
     const nombre = `${user.Nombre || ""} ${user.PrimerApellido || ""}`.trim() || "Usuario";
 
     await sendEmail({
       to: user.Correo,
       subject: "Restablecimiento de clave - Profe360",
-      html: buildAdminResetHtml({
+      html: buildResetToCedulaHtml({
         nombre,
         correo: user.Correo,
-        link
+        numeroCedula: String(user.NumeroCedula).trim()
       }),
       text: `Hola ${nombre}
 
-Un administrador generó un enlace para restablecer la clave de tu cuenta en Profe360.
+Un administrador restableció la clave de tu cuenta en Profe360.
 
+Dirección: https://profe360cr.com
 Usuario: ${user.Correo}
-Enlace: ${link}
+Clave restablecida: ${String(user.NumeroCedula).trim()}
 
-En la pantalla se te pedirá tu correo, tu número de cédula y la nueva clave.
+Al ingresar nuevamente, el sistema te solicitará cambiar la clave.
 
 Este correo es automático, por favor no responder.`
     });
@@ -1057,13 +1021,56 @@ Este correo es automático, por favor no responder.`
         usuarioId: user.UsuarioId,
         correo: user.Correo
       },
-      `Se envió el enlace de restablecimiento a ${user.Correo}`
+      `La clave fue restablecida a la cédula y se notificó a ${user.Correo}`
     );
   } catch (error) {
     console.error("Error al restablecer la clave del usuario:", error);
     return res.status(500).json({
       ok: false,
       message: "Error interno al restablecer la clave del usuario"
+    });
+  }
+});
+
+router.patch("/:id/inactivar", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!id) {
+      return badRequest(res, "Id inválido");
+    }
+
+    const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+    const institucionId = Number(req.auth?.institucionId || 0);
+
+    const pool = await getPool();
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, esSuperAdmin ? null : institucionId)
+      .query(`
+        UPDATE dbo.Usuario
+        SET
+          Activo = 0,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.UsuarioId
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({
+        ok: false,
+        message: "Usuario no encontrado"
+      });
+    }
+
+    return ok(res, { UsuarioId: id }, "Usuario inactivado correctamente");
+  } catch (error) {
+    console.error("Error al inactivar usuario:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "Error interno al inactivar usuario"
     });
   }
 });
@@ -1101,12 +1108,92 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    return ok(res, { UsuarioId: id }, "Usuario desactivado correctamente");
+    return ok(res, { UsuarioId: id }, "Usuario inactivado correctamente");
   } catch (error) {
-    console.error("Error al desactivar usuario:", error);
+    console.error("Error al inactivar usuario:", error);
     return res.status(500).json({
       ok: false,
-      message: "Error interno al desactivar usuario"
+      message: "Error interno al inactivar usuario"
+    });
+  }
+});
+
+router.delete("/:id/eliminar", async (req, res) => {
+  const txPool = await getPool();
+  const tx = new sql.Transaction(txPool);
+
+  try {
+    const id = Number(req.params.id);
+
+    if (!id) {
+      return badRequest(res, "Id inválido");
+    }
+
+    const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
+    const institucionId = Number(req.auth?.institucionId || 0);
+
+    await tx.begin();
+
+    const exists = await new sql.Request(tx)
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, esSuperAdmin ? null : institucionId)
+      .query(`
+        SELECT TOP 1 UsuarioId
+        FROM dbo.Usuario
+        WHERE UsuarioId = @id
+          AND (@institucionId IS NULL OR InstitucionId = @institucionId)
+      `);
+
+    if (!exists.recordset.length) {
+      await tx.rollback();
+      return res.status(404).json({
+        ok: false,
+        message: "Usuario no encontrado"
+      });
+    }
+
+    await new sql.Request(tx)
+      .input("id", sql.Int, id)
+      .query(`
+        DELETE FROM dbo.UsuarioResetPasswordToken
+        WHERE UsuarioId = @id
+      `);
+
+    await new sql.Request(tx)
+      .input("id", sql.Int, id)
+      .query(`
+        DELETE FROM dbo.UsuarioRol
+        WHERE UsuarioId = @id
+      `);
+
+    await new sql.Request(tx)
+      .input("id", sql.Int, id)
+      .query(`
+        DELETE FROM dbo.Usuario
+        WHERE UsuarioId = @id
+      `);
+
+    await tx.commit();
+
+    return ok(res, { UsuarioId: id }, "Usuario eliminado correctamente");
+  } catch (error: any) {
+    try {
+      await tx.rollback();
+    } catch {}
+
+    console.error("Error eliminando usuario:", error);
+
+    if (error?.number === 547) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "No se puede eliminar el usuario porque tiene información relacionada en el sistema"
+      });
+    }
+
+    return res.status(500).json({
+      ok: false,
+      message: "Error interno al eliminar el usuario"
     });
   }
 });

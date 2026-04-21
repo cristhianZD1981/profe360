@@ -292,21 +292,21 @@ export default function UsuariosPage() {
     setErrorMessage("");
   }
 
-  async function handleDelete(id: number) {
+  async function handleInactivate(id: number) {
     if (!canManageUsers) {
-      setErrorMessage("No tenés permisos para desactivar usuarios");
+      setErrorMessage("No tenés permisos para inactivar usuarios");
       return;
     }
 
-    const confirmado = window.confirm("¿Deseás desactivar este usuario?");
+    const confirmado = window.confirm("¿Deseás inactivar este usuario?");
     if (!confirmado) return;
 
     setMessage("");
     setErrorMessage("");
 
     try {
-      await api.delete(`/usuarios/${id}`);
-      setMessage("Usuario desactivado correctamente");
+      await api.patch(`/usuarios/${id}/inactivar`);
+      setMessage("Usuario inactivado correctamente");
 
       if (editingId === id) {
         resetForm();
@@ -314,10 +314,43 @@ export default function UsuariosPage() {
 
       await load(search);
     } catch (error: any) {
-      console.error("Error desactivando usuario:", error);
+      console.error("Error inactivando usuario:", error);
       const backendMessage =
         error?.response?.data?.message ||
-        "No se pudo desactivar el usuario";
+        "No se pudo inactivar el usuario";
+
+      setErrorMessage(backendMessage);
+    }
+  }
+
+  async function handleDeletePermanent(id: number) {
+    if (!canManageUsers) {
+      setErrorMessage("No tenés permisos para eliminar usuarios");
+      return;
+    }
+
+    const confirmado = window.confirm(
+      "¿Deseás eliminar este usuario definitivamente?\n\nEsta acción no se puede deshacer"
+    );
+    if (!confirmado) return;
+
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      await api.delete(`/usuarios/${id}/eliminar`);
+      setMessage("Usuario eliminado correctamente");
+
+      if (editingId === id) {
+        resetForm();
+      }
+
+      await load(search);
+    } catch (error: any) {
+      console.error("Error eliminando usuario:", error);
+      const backendMessage =
+        error?.response?.data?.message ||
+        "No se pudo eliminar el usuario";
 
       setErrorMessage(backendMessage);
     }
@@ -353,7 +386,7 @@ export default function UsuariosPage() {
     }
 
     const confirmado = window.confirm(
-      `¿Deseás enviar un enlace de restablecimiento a ${item.Correo}?`
+      `¿Deseás restablecer la clave de ${item.Correo} a su número de cédula?\n\nEl sistema enviará un correo al usuario`
     );
     if (!confirmado) return;
 
@@ -364,13 +397,13 @@ export default function UsuariosPage() {
       const response = await api.post(`/usuarios/${item.UsuarioId}/restablecer-clave`);
       setMessage(
         response.data?.message ||
-          `Se envió el enlace de restablecimiento a ${item.Correo}`
+          `La clave fue restablecida y se notificó a ${item.Correo}`
       );
     } catch (error: any) {
       console.error("Error restableciendo la clave:", error);
       setErrorMessage(
         error?.response?.data?.message ||
-          "No se pudo enviar el enlace de restablecimiento"
+          "No se pudo restablecer la clave"
       );
     }
   }
@@ -530,7 +563,7 @@ export default function UsuariosPage() {
                   marginTop: "-6px",
                   marginBottom: "4px",
                   fontSize: "13px",
-                  color: "#6b7280"
+                  color: "#cbd5e1"
                 }}
               >
                 La clave inicial del usuario será su número de cédula
@@ -608,7 +641,8 @@ export default function UsuariosPage() {
                       borderRadius: "10px",
                       padding: "10px 14px",
                       background: "#fff",
-                      cursor: "pointer"
+                      cursor: "pointer",
+                      color: "#111827"
                     }}
                   >
                     Cancelar
@@ -625,7 +659,7 @@ export default function UsuariosPage() {
 
         <section className="card">
           <h3>Incluir desde lista</h3>
-          <p style={{ marginTop: 0, color: "#6b7280" }}>
+          <p style={{ marginTop: 0, color: "#cbd5e1" }}>
             Podés descargar una plantilla, completarla y luego importarla en Excel
           </p>
 
@@ -738,7 +772,8 @@ export default function UsuariosPage() {
               borderRadius: "10px",
               padding: "10px 14px",
               background: "#fff",
-              cursor: "pointer"
+              cursor: "pointer",
+              color: "#111827"
             }}
           >
             Limpiar
@@ -816,17 +851,17 @@ export default function UsuariosPage() {
                           {item.Activo ? (
                             <button
                               type="button"
-                              onClick={() => handleDelete(item.UsuarioId)}
+                              onClick={() => handleInactivate(item.UsuarioId)}
                               style={{
-                                border: "1px solid #fecaca",
-                                background: "#fef2f2",
-                                color: "#b91c1c",
+                                border: "1px solid #fde68a",
+                                background: "#fffbeb",
+                                color: "#92400e",
                                 borderRadius: "8px",
                                 padding: "6px 10px",
                                 cursor: "pointer"
                               }}
                             >
-                              Desactivar
+                              Inactivar
                             </button>
                           ) : (
                             <button
@@ -844,6 +879,21 @@ export default function UsuariosPage() {
                               Reactivar
                             </button>
                           )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePermanent(item.UsuarioId)}
+                            style={{
+                              border: "1px solid #fecaca",
+                              background: "#fef2f2",
+                              color: "#b91c1c",
+                              borderRadius: "8px",
+                              padding: "6px 10px",
+                              cursor: "pointer"
+                            }}
+                          >
+                            Eliminar
+                          </button>
                         </div>
                       ) : (
                         <span style={{ color: "#6b7280" }}>Solo lectura</span>

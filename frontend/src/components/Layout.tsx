@@ -95,6 +95,22 @@ export default function Layout() {
     }
   }
 
+  const modalLabelStyle: React.CSSProperties = {
+    display: "block",
+    color: "#111827",
+    fontWeight: 600
+  };
+
+  const modalInputStyle: React.CSSProperties = {
+    width: "100%",
+    marginTop: "6px",
+    background: "#ffffff",
+    color: "#111827",
+    border: "1px solid #d1d5db",
+    borderRadius: "12px",
+    padding: "12px 14px"
+  };
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -193,17 +209,18 @@ export default function Layout() {
             style={{
               width: "100%",
               maxWidth: "460px",
-              background: "#fff",
+              background: "#ffffff",
               borderRadius: "18px",
               padding: "20px",
               boxShadow: "0 20px 40px rgba(0,0,0,0.18)",
               display: "grid",
-              gap: "14px"
+              gap: "14px",
+              color: "#111827"
             }}
           >
             <div>
-              <h3 style={{ margin: 0 }}>Cambiar clave</h3>
-              <p style={{ margin: "6px 0 0", color: "#6b7280" }}>
+              <h3 style={{ margin: 0, color: "#111827" }}>Cambiar clave</h3>
+              <p style={{ margin: "6px 0 0", color: "#4b5563" }}>
                 Al guardar, el sistema enviará un correo de confirmación a tu cuenta
               </p>
             </div>
@@ -236,31 +253,38 @@ export default function Layout() {
               </div>
             ) : null}
 
-            <form className="form" onSubmit={handleChangePassword}>
-              <label>
+            <form
+              className="form"
+              onSubmit={handleChangePassword}
+              style={{ gap: "14px" }}
+            >
+              <label style={modalLabelStyle}>
                 Clave actual
                 <input
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
+                  style={modalInputStyle}
                 />
               </label>
 
-              <label>
+              <label style={modalLabelStyle}>
                 Nueva clave
                 <input
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
+                  style={modalInputStyle}
                 />
               </label>
 
-              <label>
+              <label style={modalLabelStyle}>
                 Confirmar nueva clave
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
+                  style={modalInputStyle}
                 />
               </label>
 
@@ -284,7 +308,8 @@ export default function Layout() {
                     borderRadius: "10px",
                     padding: "10px 14px",
                     background: "#fff",
-                    cursor: "pointer"
+                    cursor: "pointer",
+                    color: "#111827"
                   }}
                 >
                   Cancelar
