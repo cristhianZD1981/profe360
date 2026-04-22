@@ -19,7 +19,6 @@ export default function LoginPage() {
   const [confirmarClave, setConfirmarClave] = useState("");
 
   const [mostrarRecuperacion, setMostrarRecuperacion] = useState(false);
-  const [correoRecuperacion, setCorreoRecuperacion] = useState("");
   const [loadingRecuperacion, setLoadingRecuperacion] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
@@ -87,8 +86,10 @@ export default function LoginPage() {
     setError("");
     setMensaje("");
 
-    if (!correoRecuperacion.trim()) {
-      setError("Ingresá el correo del usuario para recuperar la clave");
+    const correoRecuperacion = correo.trim();
+
+    if (!correoRecuperacion) {
+      setError("Primero debés indicar el correo del usuario");
       return;
     }
 
@@ -96,7 +97,7 @@ export default function LoginPage() {
 
     try {
       const response = await api.post("/auth/forgot-password", {
-        correo: correoRecuperacion.trim()
+        correo: correoRecuperacion
       });
 
       const backendMessage =
@@ -105,7 +106,6 @@ export default function LoginPage() {
 
       setMensaje(backendMessage);
       setMostrarRecuperacion(false);
-      setCorreoRecuperacion("");
     } catch (err: any) {
       setError(
         err?.response?.data?.message ||
@@ -163,7 +163,6 @@ export default function LoginPage() {
               setMostrarRecuperacion((v) => !v);
               setError("");
               setMensaje("");
-              setCorreoRecuperacion(correo || "");
             }}
             style={{
               background: "transparent",
@@ -198,9 +197,15 @@ export default function LoginPage() {
             <label>
               Correo del usuario
               <input
-                value={correoRecuperacion}
-                onChange={(e) => setCorreoRecuperacion(e.target.value)}
-                placeholder="correo@dominio.com"
+                value={correo}
+                readOnly
+                disabled
+                style={{
+                  background: "#f3f4f6",
+                  color: "#374151",
+                  cursor: "not-allowed",
+                  opacity: 1
+                }}
               />
             </label>
 
@@ -209,7 +214,7 @@ export default function LoginPage() {
                 type="button"
                 className="primary-btn"
                 onClick={handleForgotPassword}
-                disabled={loadingRecuperacion}
+                disabled={loadingRecuperacion || !correo.trim()}
               >
                 {loadingRecuperacion
                   ? "Enviando..."
@@ -220,14 +225,14 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => {
                   setMostrarRecuperacion(false);
-                  setCorreoRecuperacion("");
                 }}
                 style={{
                   border: "1px solid #d1d5db",
                   borderRadius: 10,
                   padding: "10px 14px",
                   background: "#fff",
-                  cursor: "pointer"
+                  cursor: "pointer",
+                  color: "#111827"
                 }}
               >
                 Cancelar
@@ -289,7 +294,8 @@ export default function LoginPage() {
                   borderRadius: 10,
                   padding: "10px 14px",
                   background: "#fff",
-                  cursor: "pointer"
+                  cursor: "pointer",
+                  color: "#111827"
                 }}
               >
                 Cancelar
