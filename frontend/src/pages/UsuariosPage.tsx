@@ -85,6 +85,7 @@ export default function UsuariosPage() {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isFormExpanded, setIsFormExpanded] = useState(false);
 
   const [archivoImportacion, setArchivoImportacion] = useState<File | null>(null);
   const [importandoExcel, setImportandoExcel] = useState(false);
@@ -198,6 +199,14 @@ export default function UsuariosPage() {
     setEditingId(null);
   }
 
+  function openCreateForm() {
+    resetForm();
+    setMessage("");
+    setErrorMessage("");
+    setIsFormExpanded(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
 
@@ -238,6 +247,7 @@ export default function UsuariosPage() {
       }
 
       resetForm();
+      setIsFormExpanded(false);
       await load(search);
     } catch (error: any) {
       console.error("Error guardando usuario:", error);
@@ -282,6 +292,7 @@ export default function UsuariosPage() {
       telefono: item.Telefono || "",
       roleNames: [roleSeguro]
     });
+    setIsFormExpanded(true);
 
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -290,6 +301,7 @@ export default function UsuariosPage() {
     resetForm();
     setMessage("");
     setErrorMessage("");
+    setIsFormExpanded(false);
   }
 
   async function handleInactivate(id: number) {
@@ -310,6 +322,7 @@ export default function UsuariosPage() {
 
       if (editingId === id) {
         resetForm();
+        setIsFormExpanded(false);
       }
 
       await load(search);
@@ -343,6 +356,7 @@ export default function UsuariosPage() {
 
       if (editingId === id) {
         resetForm();
+        setIsFormExpanded(false);
       }
 
       await load(search);
@@ -486,7 +500,37 @@ export default function UsuariosPage() {
     <div className="two-col">
       <div style={{ display: "grid", gap: "16px" }}>
         <section className="card">
-          <h3>{editingId ? "Editar usuario" : "Crear usuario"}</h3>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "12px",
+              flexWrap: "wrap",
+              marginBottom: "12px"
+            }}
+          >
+            <div>
+              <h3 style={{ margin: 0 }}>
+                {editingId ? "Editar usuario" : "Usuarios"}
+              </h3>
+              <p style={{ margin: "6px 0 0", color: "#cbd5e1" }}>
+                {isFormExpanded
+                  ? "Completá los datos y guardá los cambios"
+                  : "El formulario se muestra solo cuando agregás o editás un registro"}
+              </p>
+            </div>
+
+            {canManageUsers && !isFormExpanded && (
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={openCreateForm}
+              >
+                Agregar usuario
+              </button>
+            )}
+          </div>
 
           {message && (
             <div
@@ -519,120 +563,120 @@ export default function UsuariosPage() {
           )}
 
           {canManageUsers ? (
-            <form className="form" onSubmit={handleSubmit}>
-              {isSuperAdmin && (
+            isFormExpanded ? (
+              <form className="form" onSubmit={handleSubmit}>
+                {isSuperAdmin && (
+                  <label>
+                    Institución
+                    <select
+                      value={form.institucionId}
+                      onChange={(e) =>
+                        setForm({ ...form, institucionId: e.target.value })
+                      }
+                    >
+                      <option value="">Seleccione</option>
+                      {instituciones.map((inst) => (
+                        <option key={inst.InstitucionId} value={inst.InstitucionId}>
+                          {inst.NombreComercial || inst.Nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
                 <label>
-                  Institución
-                  <select
-                    value={form.institucionId}
+                  Correo
+                  <input
+                    type="email"
+                    value={form.correo}
+                    onChange={(e) => setForm({ ...form, correo: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Número de cédula
+                  <input
+                    value={form.numeroCedula}
                     onChange={(e) =>
-                      setForm({ ...form, institucionId: e.target.value })
+                      setForm({ ...form, numeroCedula: e.target.value })
+                    }
+                  />
+                </label>
+
+                <div
+                  style={{
+                    marginTop: "-6px",
+                    marginBottom: "4px",
+                    fontSize: "13px",
+                    color: "#cbd5e1"
+                  }}
+                >
+                  La clave inicial del usuario será su número de cédula
+                </div>
+
+                <label>
+                  Nombre
+                  <input
+                    value={form.nombre}
+                    onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Primer apellido
+                  <input
+                    value={form.primerApellido}
+                    onChange={(e) =>
+                      setForm({ ...form, primerApellido: e.target.value })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Segundo apellido
+                  <input
+                    value={form.segundoApellido}
+                    onChange={(e) =>
+                      setForm({ ...form, segundoApellido: e.target.value })
+                    }
+                  />
+                </label>
+
+                <label>
+                  Teléfono
+                  <input
+                    value={form.telefono}
+                    onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Rol
+                  <select
+                    value={form.roleNames[0]}
+                    onChange={(e) =>
+                      setForm({ ...form, roleNames: [e.target.value] })
                     }
                   >
-                    <option value="">Seleccione</option>
-                    {instituciones.map((inst) => (
-                      <option key={inst.InstitucionId} value={inst.InstitucionId}>
-                        {inst.NombreComercial || inst.Nombre}
+                    {rolesDisponibles.map((role) => (
+                      <option key={role.RolId} value={role.Nombre}>
+                        {role.Nombre}
                       </option>
                     ))}
                   </select>
                 </label>
-              )}
 
-              <label>
-                Correo
-                <input
-                  type="email"
-                  value={form.correo}
-                  onChange={(e) => setForm({ ...form, correo: e.target.value })}
-                />
-              </label>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button className="primary-btn" disabled={loading}>
+                    {loading
+                      ? editingId
+                        ? "Actualizando..."
+                        : "Guardando..."
+                      : editingId
+                        ? "Actualizar"
+                        : "Guardar"}
+                  </button>
 
-              <label>
-                Número de cédula
-                <input
-                  value={form.numeroCedula}
-                  onChange={(e) =>
-                    setForm({ ...form, numeroCedula: e.target.value })
-                  }
-                />
-              </label>
-
-              <div
-                style={{
-                  marginTop: "-6px",
-                  marginBottom: "4px",
-                  fontSize: "13px",
-                  color: "#cbd5e1"
-                }}
-              >
-                La clave inicial del usuario será su número de cédula
-              </div>
-
-              <label>
-                Nombre
-                <input
-                  value={form.nombre}
-                  onChange={(e) => setForm({ ...form, nombre: e.target.value })}
-                />
-              </label>
-
-              <label>
-                Primer apellido
-                <input
-                  value={form.primerApellido}
-                  onChange={(e) =>
-                    setForm({ ...form, primerApellido: e.target.value })
-                  }
-                />
-              </label>
-
-              <label>
-                Segundo apellido
-                <input
-                  value={form.segundoApellido}
-                  onChange={(e) =>
-                    setForm({ ...form, segundoApellido: e.target.value })
-                  }
-                />
-              </label>
-
-              <label>
-                Teléfono
-                <input
-                  value={form.telefono}
-                  onChange={(e) => setForm({ ...form, telefono: e.target.value })}
-                />
-              </label>
-
-              <label>
-                Rol
-                <select
-                  value={form.roleNames[0]}
-                  onChange={(e) =>
-                    setForm({ ...form, roleNames: [e.target.value] })
-                  }
-                >
-                  {rolesDisponibles.map((role) => (
-                    <option key={role.RolId} value={role.Nombre}>
-                      {role.Nombre}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                <button className="primary-btn" disabled={loading}>
-                  {loading
-                    ? editingId
-                      ? "Actualizando..."
-                      : "Guardando..."
-                    : editingId
-                      ? "Actualizar"
-                      : "Guardar"}
-                </button>
-
-                {editingId && (
                   <button
                     type="button"
                     onClick={handleCancelEdit}
@@ -647,9 +691,20 @@ export default function UsuariosPage() {
                   >
                     Cancelar
                   </button>
-                )}
+                </div>
+              </form>
+            ) : (
+              <div
+                style={{
+                  border: "1px dashed rgba(255,255,255,0.18)",
+                  borderRadius: "12px",
+                  padding: "14px",
+                  color: "#cbd5e1"
+                }}
+              >
+                El formulario está minimizado para que la pantalla no se abra ocupando mucho espacio.
               </div>
-            </form>
+            )
           ) : (
             <div style={{ color: "#6b7280" }}>
               Este rol no tiene permisos para crear o modificar usuarios
