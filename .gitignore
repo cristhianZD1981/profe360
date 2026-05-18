@@ -1,0 +1,14 @@
+﻿**/node_modules/
+**/*.log
+**/dist/
+**/.env
+**/*.tsbuildinfo
+
+backend/.env
+
+# Local Netlify folder
+.netlify
+
+backend/.env
+
+backend/.env

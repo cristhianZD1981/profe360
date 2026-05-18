@@ -13,7 +13,9 @@
   box-sizing: border-box;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   min-height: 100%;
 }
 
@@ -147,8 +149,12 @@ td {
 
 .primary-btn {
   background: linear-gradient(90deg, var(--primary), var(--accent));
-  color: #04111f;
+  color: #04111f !important;
   font-weight: 700;
+}
+
+.primary-btn * {
+  color: #04111f !important;
 }
 
 .ghost-btn {
@@ -161,6 +167,80 @@ td {
   background: rgba(239,68,68,0.18);
   border: 1px solid rgba(239,68,68,0.45);
   border-radius: 12px;
+}
+
+.processing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(22,181,217,0.38);
+  border-radius: 14px;
+  background: rgba(22,181,217,0.12);
+  color: #e0f7ff;
+}
+
+.processing-indicator strong,
+.processing-indicator span {
+  display: block;
+}
+
+.processing-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.processing-indicator span {
+  margin-top: 3px;
+  color: #c7d2fe;
+  font-size: 0.92rem;
+}
+
+.processing-spinner {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 3px solid rgba(224,247,255,0.32);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: processing-spin 0.85s linear infinite;
+}
+
+@keyframes processing-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.processing-progress-track {
+  width: 100%;
+  height: 12px;
+  margin: 10px 0 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+
+.processing-progress-bar {
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  transition: width 0.25s ease;
+}
+
+.processing-progress-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.processing-progress-meta span {
+  margin-top: 0;
+  color: #e0f7ff;
+  font-weight: 700;
 }
 
 .shell {
@@ -213,6 +293,97 @@ td {
 .menu-link.active,
 .menu-link:hover {
   background: rgba(255,255,255,0.08);
+}
+
+
+.menu-item-block {
+  display: grid;
+  gap: 6px;
+}
+
+.menu-link.inactive {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+.menu-link.inactive:hover {
+  background: transparent;
+}
+
+.submenu {
+  display: grid;
+  gap: 6px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255,255,255,0.12);
+}
+
+.submenu-link {
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 0.92rem;
+}
+
+.option-card {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.option-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+}
+
+.option-card-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: grayscale(1);
+}
+
+.option-card-disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.option-card-status {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.param-top-nav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.param-top-link {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: #dbeafe;
+  font-weight: 600;
+}
+
+.param-top-link.active,
+.param-top-link:hover {
+  background: rgba(255,255,255,0.14);
+}
+
+.param-top-link.inactive {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(1);
 }
 
 .content {
@@ -294,6 +465,178 @@ td {
   font-weight: 600;
 }
 
+/* =========================================================
+   FIX REAL PARA GESTIÓN DEL PROFE
+   Corrige texto blanco sobre tarjetas blancas
+   ========================================================= */
+
+.card div[style*="background: #ffffff"],
+.card div[style*="background:#ffffff"],
+.card div[style*="background: rgb(255, 255, 255)"],
+.card div[style*="background: #fff"],
+.card div[style*="background:#fff"],
+.card div[style*="background: white"],
+.card div[style*="background:white"],
+.card div[style*="background: #f8fafc"],
+.card div[style*="background:#f8fafc"] {
+  color: #0f172a !important;
+}
+
+.card div[style*="background: #ffffff"] *,
+.card div[style*="background:#ffffff"] *,
+.card div[style*="background: rgb(255, 255, 255)"] *,
+.card div[style*="background: #fff"] *,
+.card div[style*="background:#fff"] *,
+.card div[style*="background: white"] *,
+.card div[style*="background:white"] *,
+.card div[style*="background: #f8fafc"] *,
+.card div[style*="background:#f8fafc"] * {
+  color: #0f172a !important;
+}
+
+.card button[style*="background: #ffffff"],
+.card button[style*="background:#ffffff"],
+.card button[style*="background: rgb(255, 255, 255)"],
+.card button[style*="background: #fff"],
+.card button[style*="background:#fff"],
+.card button[style*="background: white"],
+.card button[style*="background:white"] {
+  color: #0f172a !important;
+}
+
+.card button[style*="background: #ffffff"] *,
+.card button[style*="background:#ffffff"] *,
+.card button[style*="background: rgb(255, 255, 255)"] *,
+.card button[style*="background: #fff"] *,
+.card button[style*="background:#fff"] *,
+.card button[style*="background: white"] *,
+.card button[style*="background:white"] * {
+  color: #0f172a !important;
+}
+
+button[style*="background: #ffffff"],
+button[style*="background:#ffffff"],
+button[style*="background: rgb(255, 255, 255)"],
+button[style*="background: #fff"],
+button[style*="background:#fff"],
+button[style*="background: white"],
+button[style*="background:white"] {
+  color: #0f172a !important;
+}
+
+button[style*="background: #ffffff"] *,
+button[style*="background:#ffffff"] *,
+button[style*="background: rgb(255, 255, 255)"] *,
+button[style*="background: #fff"] *,
+button[style*="background:#fff"] *,
+button[style*="background: white"] *,
+button[style*="background:white"] * {
+  color: #0f172a !important;
+}
+
+.card div[style*="background: #ffffff"] input,
+.card div[style*="background:#ffffff"] input,
+.card div[style*="background: rgb(255, 255, 255)"] input,
+.card div[style*="background: #fff"] input,
+.card div[style*="background:#fff"] input,
+.card div[style*="background: #f8fafc"] input,
+.card div[style*="background:#f8fafc"] input,
+.card div[style*="background: #ffffff"] select,
+.card div[style*="background:#ffffff"] select,
+.card div[style*="background: rgb(255, 255, 255)"] select,
+.card div[style*="background: #fff"] select,
+.card div[style*="background:#fff"] select,
+.card div[style*="background: #f8fafc"] select,
+.card div[style*="background:#f8fafc"] select,
+.card div[style*="background: #ffffff"] textarea,
+.card div[style*="background:#ffffff"] textarea,
+.card div[style*="background: rgb(255, 255, 255)"] textarea,
+.card div[style*="background: #fff"] textarea,
+.card div[style*="background:#fff"] textarea,
+.card div[style*="background: #f8fafc"] textarea,
+.card div[style*="background:#f8fafc"] textarea {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+.card div[style*="background: #ffffff"] input::placeholder,
+.card div[style*="background:#ffffff"] input::placeholder,
+.card div[style*="background: rgb(255, 255, 255)"] input::placeholder,
+.card div[style*="background: #fff"] input::placeholder,
+.card div[style*="background:#fff"] input::placeholder,
+.card div[style*="background: #f8fafc"] input::placeholder,
+.card div[style*="background:#f8fafc"] input::placeholder,
+.card div[style*="background: #ffffff"] textarea::placeholder,
+.card div[style*="background:#ffffff"] textarea::placeholder,
+.card div[style*="background: rgb(255, 255, 255)"] textarea::placeholder,
+.card div[style*="background: #fff"] textarea::placeholder,
+.card div[style*="background:#fff"] textarea::placeholder,
+.card div[style*="background: #f8fafc"] textarea::placeholder,
+.card div[style*="background:#f8fafc"] textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1 !important;
+}
+
+.card > form input,
+.card > form select,
+.card > form textarea {
+  background: rgba(255,255,255,0.06);
+  color: #f8fafc;
+  border: 1px solid var(--border);
+}
+
+table,
+table th,
+table td,
+table th *,
+table td * {
+  color: #e5edf8;
+}
+
+table input {
+  background: #122033 !important;
+  color: #f8fafc !important;
+  border: 1px solid #94a3b8 !important;
+}
+
+div[style*="background: #ffffff"] input,
+div[style*="background:#ffffff"] input,
+div[style*="background: rgb(255, 255, 255)"] input,
+div[style*="background: #fff"] input,
+div[style*="background:#fff"] input,
+div[style*="background: #f8fafc"] input,
+div[style*="background:#f8fafc"] input {
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+div[style*="background: #ffffff"] select,
+div[style*="background:#ffffff"] select,
+div[style*="background: rgb(255, 255, 255)"] select,
+div[style*="background: #fff"] select,
+div[style*="background:#fff"] select,
+div[style*="background: #f8fafc"] select,
+div[style*="background:#f8fafc"] select {
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+div[style*="background: #ffffff"] textarea,
+div[style*="background:#ffffff"] textarea,
+div[style*="background: rgb(255, 255, 255)"] textarea,
+div[style*="background: #fff"] textarea,
+div[style*="background:#fff"] textarea,
+div[style*="background: #f8fafc"] textarea,
+div[style*="background:#f8fafc"] textarea {
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
 @media (max-width: 980px) {
   .shell {
     grid-template-columns: 1fr;
@@ -306,6 +649,18 @@ td {
 
   .grid.cards,
   .two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .grid-3 {
     grid-template-columns: 1fr;
   }
 }

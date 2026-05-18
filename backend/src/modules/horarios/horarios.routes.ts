@@ -413,7 +413,7 @@ async function getGrupoPorEstudiante(params: {
 }
 
 function formatTeacherName(item: any) {
-  return [item.DocenteNombre, item.DocentePrimerApellido, item.DocenteSegundoApellido]
+  return [item.DocentePrimerApellido, item.DocenteSegundoApellido, item.DocenteNombre]
     .filter(Boolean)
     .join(" ")
     .trim();
@@ -472,7 +472,7 @@ function buildTeacherResponse(
     encabezado: {
       usuarioId: Number(docenteInfo?.UsuarioId || 0),
       docente:
-        [docenteInfo?.DocenteNombre, docenteInfo?.DocentePrimerApellido, docenteInfo?.DocenteSegundoApellido]
+        [docenteInfo?.DocentePrimerApellido, docenteInfo?.DocenteSegundoApellido, docenteInfo?.DocenteNombre]
           .filter(Boolean)
           .join(" ")
           .trim(),
@@ -764,7 +764,7 @@ router.get("/estudiante/:estudianteId", async (req, res) => {
       estudiante: {
         estudianteId: estudianteGrupo.EstudianteId,
         identificacion: estudianteGrupo.Identificacion,
-        nombre: [estudianteGrupo.Nombre, estudianteGrupo.PrimerApellido, estudianteGrupo.SegundoApellido]
+        nombre: [estudianteGrupo.PrimerApellido, estudianteGrupo.SegundoApellido, estudianteGrupo.Nombre]
           .filter(Boolean)
           .join(" ")
           .trim()
@@ -903,7 +903,7 @@ router.get("/busqueda", async (req, res) => {
           estudiante: {
             estudianteId: estudianteGrupo.EstudianteId,
             identificacion: estudianteGrupo.Identificacion,
-            nombre: [estudianteGrupo.Nombre, estudianteGrupo.PrimerApellido, estudianteGrupo.SegundoApellido]
+            nombre: [estudianteGrupo.PrimerApellido, estudianteGrupo.SegundoApellido, estudianteGrupo.Nombre]
               .filter(Boolean)
               .join(" ")
               .trim()
@@ -956,8 +956,9 @@ router.get("/busqueda", async (req, res) => {
               OR e.PrimerApellido LIKE @alumno
               OR e.SegundoApellido LIKE @alumno
               OR (e.Nombre + ' ' + ISNULL(e.PrimerApellido, '') + ' ' + ISNULL(e.SegundoApellido, '')) LIKE @alumno
+              OR (ISNULL(e.PrimerApellido, '') + ' ' + ISNULL(e.SegundoApellido, '') + ' ' + e.Nombre) LIKE @alumno
             )
-          ORDER BY e.Nombre, e.PrimerApellido, e.SegundoApellido
+          ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
         `);
 
       return ok(res, {
@@ -988,8 +989,9 @@ router.get("/busqueda", async (req, res) => {
               OR u.PrimerApellido LIKE @profesor
               OR u.SegundoApellido LIKE @profesor
               OR (u.Nombre + ' ' + ISNULL(u.PrimerApellido, '') + ' ' + ISNULL(u.SegundoApellido, '')) LIKE @profesor
+              OR (ISNULL(u.PrimerApellido, '') + ' ' + ISNULL(u.SegundoApellido, '') + ' ' + u.Nombre) LIKE @profesor
             )
-          ORDER BY u.Nombre, u.PrimerApellido, u.SegundoApellido
+          ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre
         `);
 
       return ok(res, {

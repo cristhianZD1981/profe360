@@ -33,7 +33,16 @@ export const env = {
     password: required("DB_PASSWORD"),
     encrypt: String(process.env.DB_ENCRYPT) === "true",
     trustServerCertificate:
-      String(process.env.DB_TRUST_SERVER_CERTIFICATE) !== "false"
+      String(process.env.DB_TRUST_SERVER_CERTIFICATE) !== "false",
+    poolMax: Number(process.env.DB_POOL_MAX || 10),
+    poolMin: Number(process.env.DB_POOL_MIN || 0),
+    poolIdleTimeoutMs: Number(process.env.DB_POOL_IDLE_TIMEOUT_MS || 30000),
+    poolAcquireTimeoutMs: Number(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS || 30000),
+    poolCreateTimeoutMs: Number(process.env.DB_POOL_CREATE_TIMEOUT_MS || 30000),
+    connectionTimeoutMs: Number(process.env.DB_CONNECTION_TIMEOUT_MS || 30000),
+    requestTimeoutMs: Number(process.env.DB_REQUEST_TIMEOUT_MS || 60000),
+    connectRetries: Number(process.env.DB_CONNECT_RETRIES || 4),
+    connectRetryDelayMs: Number(process.env.DB_CONNECT_RETRY_DELAY_MS || 1500)
   },
   jwtSecret: required("JWT_SECRET"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",

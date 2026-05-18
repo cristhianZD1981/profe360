@@ -1,9 +1,12 @@
 import { Router } from "express";
+import multer from "multer";
+import * as XLSX from "xlsx";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"));
 
@@ -97,7 +100,7 @@ async function getDocentesCatalogo(pool: any, institucionId: number) {
         u.Nombre,
         u.PrimerApellido,
         u.SegundoApellido
-      ORDER BY u.Nombre, u.PrimerApellido, u.SegundoApellido
+      ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre
     `);
 }
 
@@ -113,6 +116,76 @@ async function getConfiguracionCorreoEstudiante(pool: any, institucionId: number
   return { dominio: String(result.recordset[0]?.DominioCorreoEstudiantil || "@est.mep.go.cr") };
 }
 
+async function ensureMensajesSeguimientoTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.MensajeSeguimiento', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.MensajeSeguimiento (
+        MensajeSeguimientoId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        InstitucionId INT NOT NULL,
+        TipoUso NVARCHAR(30) NOT NULL,
+        ValorNivel INT NULL,
+        Titulo NVARCHAR(200) NULL,
+        Cuerpo NVARCHAR(MAX) NOT NULL,
+        Activo BIT NOT NULL CONSTRAINT DF_MensajeSeguimiento_Activo DEFAULT(1),
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_MensajeSeguimiento_CreatedAt DEFAULT(SYSDATETIME()),
+        UpdatedAt DATETIME2 NULL
+      );
+      CREATE INDEX IX_MensajeSeguimiento_InstitucionTipo
+        ON dbo.MensajeSeguimiento (InstitucionId, TipoUso, ValorNivel, Activo);
+    END
+  `);
+}
+
+async function ensureCorreoNotificacionConfigTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.CorreoNotificacionConfig', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.CorreoNotificacionConfig (
+        CorreoNotificacionConfigId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        InstitucionId INT NOT NULL,
+        TipoUso NVARCHAR(30) NOT NULL,
+        FromEmail NVARCHAR(320) NULL,
+        ParaModo NVARCHAR(30) NOT NULL CONSTRAINT DF_CorreoNotificacionConfig_ParaModo DEFAULT(N'ALUMNO'),
+        CcModo NVARCHAR(30) NOT NULL CONSTRAINT DF_CorreoNotificacionConfig_CcModo DEFAULT(N'PROFESOR'),
+        AsuntoTemplate NVARCHAR(300) NULL,
+        CuerpoTemplate NVARCHAR(MAX) NULL,
+        Activo BIT NOT NULL CONSTRAINT DF_CorreoNotificacionConfig_Activo DEFAULT(1),
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_CorreoNotificacionConfig_CreatedAt DEFAULT(SYSDATETIME()),
+        UpdatedAt DATETIME2 NULL
+      );
+      CREATE UNIQUE INDEX UX_CorreoNotificacionConfig_InstitucionTipo
+        ON dbo.CorreoNotificacionConfig (InstitucionId, TipoUso);
+    END
+  `);
+}
+
+async function ensureBoletaConductaConfigTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.BoletaConductaConfig', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.BoletaConductaConfig (
+        InstitucionId INT NOT NULL PRIMARY KEY,
+        SiguienteNumero INT NOT NULL CONSTRAINT DF_BoletaConductaConfig_SiguienteNumero DEFAULT(1),
+        UpdatedAt DATETIME2 NULL
+      );
+    END
+  `);
+}
+
+function normalizeTipoUsoMensaje(value: any) {
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (["COTIDIANO", "TAREA", "ASISTENCIA", "EXAMEN"].includes(raw)) return raw;
+  return "";
+}
+
+function isValorNivelPermitido(tipoUso: string, valorNivel: number | null) {
+  if (valorNivel === null) return true;
+  if (tipoUso === "ASISTENCIA") return [1, 2].includes(Number(valorNivel));
+  if (tipoUso === "TAREA") return [0, 1, 2, 3].includes(Number(valorNivel));
+  return [1, 2, 3].includes(Number(valorNivel));
+}
+
 /* =========================================================
    CATALOGOS
    ========================================================= */
@@ -123,7 +196,7 @@ router.get("/catalogos", async (req, res) => {
 
     const pool = await getPool();
 
-    const [anios, estudiantes, grupos, periodos, materias, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
+    const [anios, estudiantes, grupos, periodos, materias, especialidades, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
       pool.request()
         .input("institucionId", sql.Int, institucionId)
         .query(`
@@ -152,7 +225,7 @@ router.get("/catalogos", async (req, res) => {
           FROM dbo.Estudiante
           WHERE InstitucionId = @institucionId
             AND Activo = 1
-          ORDER BY Nombre, PrimerApellido, SegundoApellido
+          ORDER BY PrimerApellido, SegundoApellido, Nombre
         `),
 
       pool.request()
@@ -210,6 +283,45 @@ router.get("/catalogos", async (req, res) => {
           WHERE InstitucionId = @institucionId
             AND Activa = 1
           ORDER BY Nombre
+        `),
+
+      pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .query(`
+          SELECT
+            EspecialidadId,
+            InstitucionId,
+            Descripcion,
+            PermiteMultiplesPorSeccion,
+            Activo,
+            CreatedAt,
+            UpdatedAt
+          FROM dbo.Especialidad
+          WHERE InstitucionId = @institucionId
+            AND Activo = 1
+          ORDER BY Descripcion
+        `),
+
+      pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .query(`
+          SELECT
+            RutaTransporteId,
+            InstitucionId,
+            Descripcion,
+            Responsable,
+            LugarInicio,
+            LugarFin,
+            CapacidadEstudiantes,
+            HoraInicio,
+            HoraFin,
+            Activo,
+            CreatedAt,
+            UpdatedAt
+          FROM dbo.RutaTransporte
+          WHERE InstitucionId = @institucionId
+            AND Activo = 1
+          ORDER BY Descripcion
         `),
 
       getDocentesCatalogo(pool, institucionId),
@@ -272,6 +384,8 @@ router.get("/catalogos", async (req, res) => {
       grupos: grupos.recordset,
       periodos: periodos.recordset,
       materias: materias.recordset,
+      especialidades: especialidades.recordset,
+      rutasTransporte: rutasTransporte.recordset,
       docentes: docentes.recordset,
       bloquesHorarios: bloques.recordset,
       feriados: feriados.recordset,
@@ -321,6 +435,774 @@ router.put("/configuracion-correo-estudiante", async (req, res) => {
   } catch (error) {
     console.error("Error al actualizar configuración de correo estudiantil:", error);
     return res.status(500).json({ ok: false, message: "Error interno al actualizar la configuración de correo" });
+  }
+});
+
+router.get("/boleta-conducta-config", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const pool = await getPool();
+    await ensureBoletaConductaConfigTable(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        IF NOT EXISTS (SELECT 1 FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId)
+        BEGIN
+          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero)
+          VALUES (@institucionId, 1)
+        END
+        SELECT TOP 1 SiguienteNumero
+        FROM dbo.BoletaConductaConfig
+        WHERE InstitucionId = @institucionId
+      `);
+    return ok(res, { siguienteNumero: Number(result.recordset[0]?.SiguienteNumero || 1) });
+  } catch (error) {
+    console.error("Error cargando configuración de boleta de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la configuración de boleta de conducta" });
+  }
+});
+
+router.put("/boleta-conducta-config", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const siguienteNumero = Number(req.body?.siguienteNumero || 0);
+    if (!Number.isInteger(siguienteNumero) || siguienteNumero <= 0) {
+      return badRequest(res, "El consecutivo inicial debe ser un número entero mayor a 0");
+    }
+    const pool = await getPool();
+    await ensureBoletaConductaConfigTable(pool);
+    await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("siguienteNumero", sql.Int, siguienteNumero)
+      .query(`
+        IF EXISTS (SELECT 1 FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId)
+        BEGIN
+          UPDATE dbo.BoletaConductaConfig
+          SET SiguienteNumero = @siguienteNumero,
+              UpdatedAt = SYSDATETIME()
+          WHERE InstitucionId = @institucionId
+        END
+        ELSE
+        BEGIN
+          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero, UpdatedAt)
+          VALUES (@institucionId, @siguienteNumero, SYSDATETIME())
+        END
+      `);
+    return ok(res, { siguienteNumero }, "Consecutivo de boleta de conducta actualizado correctamente");
+  } catch (error) {
+    console.error("Error actualizando configuración de boleta de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la configuración de boleta de conducta" });
+  }
+});
+
+router.get("/configuracion-correo-notificaciones", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const pool = await getPool();
+    await ensureCorreoNotificacionConfigTable(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TipoUso, FromEmail, ParaModo, CcModo, AsuntoTemplate, CuerpoTemplate, Activo
+        FROM dbo.CorreoNotificacionConfig
+        WHERE InstitucionId = @institucionId
+          AND Activo = 1
+      `);
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error cargando configuración de correos de notificación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la configuración de correos" });
+  }
+});
+
+router.put("/configuracion-correo-notificaciones/:tipoUso", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const tipoUso = normalizeTipoUsoMensaje(req.params.tipoUso);
+    if (!tipoUso) return badRequest(res, "Tipo inválido");
+    const fromEmail = String(req.body?.fromEmail || "").trim() || null;
+    const paraModo = String(req.body?.paraModo || "ALUMNO").trim().toUpperCase();
+    const ccModo = String(req.body?.ccModo || "PROFESOR").trim().toUpperCase();
+    const asuntoTemplate = String(req.body?.asuntoTemplate || "").trim() || null;
+    const cuerpoTemplate = String(req.body?.cuerpoTemplate || "").trim() || null;
+
+    const pool = await getPool();
+    await ensureCorreoNotificacionConfigTable(pool);
+    await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoUso", sql.NVarChar(30), tipoUso)
+      .input("fromEmail", sql.NVarChar(320), fromEmail)
+      .input("paraModo", sql.NVarChar(30), paraModo)
+      .input("ccModo", sql.NVarChar(30), ccModo)
+      .input("asuntoTemplate", sql.NVarChar(300), asuntoTemplate)
+      .input("cuerpoTemplate", sql.NVarChar(sql.MAX), cuerpoTemplate)
+      .query(`
+        MERGE dbo.CorreoNotificacionConfig AS target
+        USING (SELECT @institucionId AS InstitucionId, @tipoUso AS TipoUso) AS source
+          ON target.InstitucionId = source.InstitucionId AND target.TipoUso = source.TipoUso
+        WHEN MATCHED THEN
+          UPDATE SET FromEmail=@fromEmail, ParaModo=@paraModo, CcModo=@ccModo, AsuntoTemplate=@asuntoTemplate, CuerpoTemplate=@cuerpoTemplate, Activo=1, UpdatedAt=SYSDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (InstitucionId, TipoUso, FromEmail, ParaModo, CcModo, AsuntoTemplate, CuerpoTemplate, Activo)
+          VALUES (@institucionId, @tipoUso, @fromEmail, @paraModo, @ccModo, @asuntoTemplate, @cuerpoTemplate, 1);
+      `);
+    return ok(res, null, "Configuración de correo actualizada correctamente");
+  } catch (error) {
+    console.error("Error actualizando configuración de correos:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la configuración de correos" });
+  }
+});
+
+router.get("/mensajes-seguimiento", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const pool = await getPool();
+    await ensureMensajesSeguimientoTable(pool);
+    const incluirInactivos = String(req.query.incluirInactivos || "false") === "true";
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT
+          MensajeSeguimientoId,
+          InstitucionId,
+          TipoUso,
+          ValorNivel,
+          Titulo,
+          Cuerpo,
+          Activo,
+          CreatedAt,
+          UpdatedAt
+        FROM dbo.MensajeSeguimiento
+        WHERE InstitucionId = @institucionId
+          ${incluirInactivos ? "" : "AND Activo = 1"}
+        ORDER BY TipoUso, CASE WHEN ValorNivel IS NULL THEN 99 ELSE ValorNivel END, MensajeSeguimientoId DESC
+      `);
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error listando mensajes de seguimiento:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar los mensajes" });
+  }
+});
+
+router.post("/mensajes-seguimiento", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const tipoUso = normalizeTipoUsoMensaje(req.body.tipoUso);
+    const valorNivelRaw = req.body.valorNivel;
+    const valorNivel = valorNivelRaw === null || valorNivelRaw === undefined || String(valorNivelRaw).trim() === ""
+      ? null
+      : Number(valorNivelRaw);
+    const titulo = String(req.body.titulo || "").trim() || null;
+    const cuerpo = String(req.body.cuerpo || "").trim();
+
+    if (!tipoUso) return badRequest(res, "Tipo de mensaje inválido");
+    if (!isValorNivelPermitido(tipoUso, valorNivel)) {
+      return badRequest(res, tipoUso === "ASISTENCIA"
+        ? "Para asistencia el nivel debe ser Ausencia (1) o Tardía (2)"
+        : (tipoUso === "TAREA"
+          ? "Para tareas el nivel debe ser 0 (No entregado), 1, 2 o 3"
+          : "El nivel debe ser 1, 2 o 3"));
+    }
+    if (!cuerpo) return badRequest(res, "El cuerpo del mensaje es obligatorio");
+
+    const pool = await getPool();
+    await ensureMensajesSeguimientoTable(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoUso", sql.NVarChar(30), tipoUso)
+      .input("valorNivel", sql.Int, valorNivel)
+      .input("titulo", sql.NVarChar(200), titulo)
+      .input("cuerpo", sql.NVarChar(sql.MAX), cuerpo)
+      .query(`
+        INSERT INTO dbo.MensajeSeguimiento
+          (InstitucionId, TipoUso, ValorNivel, Titulo, Cuerpo, Activo)
+        OUTPUT INSERTED.*
+        VALUES
+          (@institucionId, @tipoUso, @valorNivel, @titulo, @cuerpo, 1)
+      `);
+    return created(res, result.recordset[0], "Mensaje creado correctamente");
+  } catch (error) {
+    console.error("Error creando mensaje de seguimiento:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo crear el mensaje" });
+  }
+});
+
+router.put("/mensajes-seguimiento/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return badRequest(res, "Id inválido");
+
+    const tipoUso = normalizeTipoUsoMensaje(req.body.tipoUso);
+    const valorNivelRaw = req.body.valorNivel;
+    const valorNivel = valorNivelRaw === null || valorNivelRaw === undefined || String(valorNivelRaw).trim() === ""
+      ? null
+      : Number(valorNivelRaw);
+    const titulo = String(req.body.titulo || "").trim() || null;
+    const cuerpo = String(req.body.cuerpo || "").trim();
+    const activo = req.body.activo === undefined ? true : Boolean(req.body.activo);
+
+    if (!tipoUso) return badRequest(res, "Tipo de mensaje inválido");
+    if (!isValorNivelPermitido(tipoUso, valorNivel)) {
+      return badRequest(res, tipoUso === "ASISTENCIA"
+        ? "Para asistencia el nivel debe ser Ausencia (1) o Tardía (2)"
+        : (tipoUso === "TAREA"
+          ? "Para tareas el nivel debe ser 0 (No entregado), 1, 2 o 3"
+          : "El nivel debe ser 1, 2 o 3"));
+    }
+    if (!cuerpo) return badRequest(res, "El cuerpo del mensaje es obligatorio");
+
+    const pool = await getPool();
+    await ensureMensajesSeguimientoTable(pool);
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoUso", sql.NVarChar(30), tipoUso)
+      .input("valorNivel", sql.Int, valorNivel)
+      .input("titulo", sql.NVarChar(200), titulo)
+      .input("cuerpo", sql.NVarChar(sql.MAX), cuerpo)
+      .input("activo", sql.Bit, activo)
+      .query(`
+        UPDATE dbo.MensajeSeguimiento
+        SET TipoUso = @tipoUso,
+            ValorNivel = @valorNivel,
+            Titulo = @titulo,
+            Cuerpo = @cuerpo,
+            Activo = @activo,
+            UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE MensajeSeguimientoId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset[0]) return res.status(404).json({ ok: false, message: "Mensaje no encontrado" });
+    return ok(res, result.recordset[0], "Mensaje actualizado correctamente");
+  } catch (error) {
+    console.error("Error actualizando mensaje de seguimiento:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar el mensaje" });
+  }
+});
+
+router.delete("/mensajes-seguimiento/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return badRequest(res, "Id inválido");
+    const pool = await getPool();
+    await ensureMensajesSeguimientoTable(pool);
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.MensajeSeguimiento
+        SET Activo = 0,
+            UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.MensajeSeguimientoId
+        WHERE MensajeSeguimientoId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset[0]) return res.status(404).json({ ok: false, message: "Mensaje no encontrado" });
+    return ok(res, null, "Mensaje eliminado correctamente");
+  } catch (error) {
+    console.error("Error eliminando mensaje de seguimiento:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar el mensaje" });
+  }
+});
+
+
+/* =========================================================
+   ESPECIALIDADES
+   ========================================================= */
+router.get("/especialidades", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const q = String(req.query.q || "").trim();
+    const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
+
+    const pool = await getPool();
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("incluirInactivas", sql.Bit, incluirInactivas)
+      .query(`
+        SELECT
+          EspecialidadId,
+          InstitucionId,
+          Descripcion,
+          PermiteMultiplesPorSeccion,
+          Activo,
+          CreatedAt,
+          UpdatedAt
+        FROM dbo.Especialidad
+        WHERE InstitucionId = @institucionId
+          AND (@incluirInactivas = 1 OR Activo = 1)
+          AND (@q = '%%' OR Descripcion LIKE @q)
+        ORDER BY Descripcion
+      `);
+
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error al listar especialidades:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al listar especialidades" });
+  }
+});
+
+router.post("/especialidades", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const descripcion = String(req.body?.descripcion || "").trim();
+    const permiteMultiplesPorSeccion = !!req.body?.permiteMultiplesPorSeccion;
+
+    if (!descripcion) {
+      return badRequest(res, "descripcion es obligatoria");
+    }
+
+    const pool = await getPool();
+
+    const duplicada = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 EspecialidadId, Activo
+        FROM dbo.Especialidad
+        WHERE InstitucionId = @institucionId
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+
+    if (duplicada.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe una especialidad con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .input("permiteMultiplesPorSeccion", sql.Bit, permiteMultiplesPorSeccion)
+      .query(`
+        INSERT INTO dbo.Especialidad
+        (
+          InstitucionId,
+          Descripcion,
+          PermiteMultiplesPorSeccion,
+          Activo,
+          CreatedAt
+        )
+        OUTPUT INSERTED.*
+        VALUES
+        (
+          @institucionId,
+          @descripcion,
+          @permiteMultiplesPorSeccion,
+          1,
+          SYSDATETIME()
+        )
+      `);
+
+    return created(res, result.recordset[0], "Especialidad creada correctamente");
+  } catch (error) {
+    console.error("Error al crear especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al crear especialidad" });
+  }
+});
+
+router.put("/especialidades/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    const descripcion = String(req.body?.descripcion || "").trim();
+    const permiteMultiplesPorSeccion = !!req.body?.permiteMultiplesPorSeccion;
+
+    if (!isValidNonNegativeId(id)) {
+      return badRequest(res, "Id inválido");
+    }
+
+    if (!descripcion) {
+      return badRequest(res, "descripcion es obligatoria");
+    }
+
+    const pool = await getPool();
+
+    const duplicada = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 EspecialidadId
+        FROM dbo.Especialidad
+        WHERE InstitucionId = @institucionId
+          AND EspecialidadId <> @id
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+
+    if (duplicada.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe otra especialidad con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .input("permiteMultiplesPorSeccion", sql.Bit, permiteMultiplesPorSeccion)
+      .query(`
+        UPDATE dbo.Especialidad
+        SET
+          Descripcion = @descripcion,
+          PermiteMultiplesPorSeccion = @permiteMultiplesPorSeccion,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE EspecialidadId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Especialidad no encontrada" });
+    }
+
+    return ok(res, result.recordset[0], "Especialidad actualizada correctamente");
+  } catch (error) {
+    console.error("Error al actualizar especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al actualizar especialidad" });
+  }
+});
+
+router.delete("/especialidades/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) {
+      return badRequest(res, "Id inválido");
+    }
+
+    const pool = await getPool();
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.Especialidad
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.EspecialidadId
+        WHERE EspecialidadId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Especialidad no encontrada" });
+    }
+
+    return ok(res, { EspecialidadId: id }, "Especialidad desactivada correctamente");
+  } catch (error) {
+    console.error("Error al desactivar especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al desactivar especialidad" });
+  }
+});
+
+router.patch("/especialidades/:id/reactivar", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) {
+      return badRequest(res, "Id inválido");
+    }
+
+    const pool = await getPool();
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.Especialidad
+        SET Activo = 1, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE EspecialidadId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Especialidad no encontrada" });
+    }
+
+    return ok(res, result.recordset[0], "Especialidad reactivada correctamente");
+  } catch (error) {
+    console.error("Error al reactivar especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al reactivar especialidad" });
+  }
+});
+
+
+/* =========================================================
+   RUTAS DE TRANSPORTE
+   ========================================================= */
+router.get("/rutas-transporte", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const q = String(req.query.q || "").trim();
+    const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("incluirInactivas", sql.Bit, incluirInactivas)
+      .query(`
+        SELECT
+          RutaTransporteId,
+          InstitucionId,
+          Descripcion,
+          Responsable,
+          LugarInicio,
+          LugarFin,
+          CapacidadEstudiantes,
+          HoraInicio,
+          HoraFin,
+          Activo,
+          CreatedAt,
+          UpdatedAt
+        FROM dbo.RutaTransporte
+        WHERE InstitucionId = @institucionId
+          AND (@incluirInactivas = 1 OR Activo = 1)
+          AND (
+            @q = '%%'
+            OR Descripcion LIKE @q
+            OR Responsable LIKE @q
+            OR LugarInicio LIKE @q
+            OR LugarFin LIKE @q
+          )
+        ORDER BY Descripcion
+      `);
+
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error al listar rutas de transporte:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al listar rutas de transporte" });
+  }
+});
+
+router.post("/rutas-transporte", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const descripcion = String(req.body?.descripcion || "").trim();
+    const responsable = String(req.body?.responsable || "").trim();
+    const lugarInicio = String(req.body?.lugarInicio || "").trim();
+    const lugarFin = String(req.body?.lugarFin || "").trim();
+    const capacidadEstudiantes = req.body?.capacidadEstudiantes ? Number(req.body.capacidadEstudiantes) : null;
+    const horaInicio = req.body?.horaInicio || null;
+    const horaFin = req.body?.horaFin || null;
+
+    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+
+    const pool = await getPool();
+    const duplicada = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 RutaTransporteId
+        FROM dbo.RutaTransporte
+        WHERE InstitucionId = @institucionId
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+
+    if (duplicada.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe una ruta con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .input("responsable", sql.NVarChar, responsable || null)
+      .input("lugarInicio", sql.NVarChar, lugarInicio || null)
+      .input("lugarFin", sql.NVarChar, lugarFin || null)
+      .input("capacidadEstudiantes", sql.Int, capacidadEstudiantes)
+      .input("horaInicio", sql.NVarChar, horaInicio)
+      .input("horaFin", sql.NVarChar, horaFin)
+      .query(`
+        INSERT INTO dbo.RutaTransporte
+        (
+          InstitucionId,
+          Descripcion,
+          Responsable,
+          LugarInicio,
+          LugarFin,
+          CapacidadEstudiantes,
+          HoraInicio,
+          HoraFin,
+          Activo,
+          CreatedAt
+        )
+        OUTPUT INSERTED.*
+        VALUES
+        (
+          @institucionId,
+          @descripcion,
+          @responsable,
+          @lugarInicio,
+          @lugarFin,
+          @capacidadEstudiantes,
+          @horaInicio,
+          @horaFin,
+          1,
+          SYSDATETIME()
+        )
+      `);
+
+    return created(res, result.recordset[0], "Ruta de transporte creada correctamente");
+  } catch (error) {
+    console.error("Error al crear ruta de transporte:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al crear ruta de transporte" });
+  }
+});
+
+router.put("/rutas-transporte/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    const descripcion = String(req.body?.descripcion || "").trim();
+    const responsable = String(req.body?.responsable || "").trim();
+    const lugarInicio = String(req.body?.lugarInicio || "").trim();
+    const lugarFin = String(req.body?.lugarFin || "").trim();
+    const capacidadEstudiantes = req.body?.capacidadEstudiantes ? Number(req.body.capacidadEstudiantes) : null;
+    const horaInicio = req.body?.horaInicio || null;
+    const horaFin = req.body?.horaFin || null;
+
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+
+    const pool = await getPool();
+    const duplicada = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 RutaTransporteId
+        FROM dbo.RutaTransporte
+        WHERE InstitucionId = @institucionId
+          AND RutaTransporteId <> @id
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+
+    if (duplicada.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe otra ruta con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .input("responsable", sql.NVarChar, responsable || null)
+      .input("lugarInicio", sql.NVarChar, lugarInicio || null)
+      .input("lugarFin", sql.NVarChar, lugarFin || null)
+      .input("capacidadEstudiantes", sql.Int, capacidadEstudiantes)
+      .input("horaInicio", sql.NVarChar, horaInicio)
+      .input("horaFin", sql.NVarChar, horaFin)
+      .query(`
+        UPDATE dbo.RutaTransporte
+        SET
+          Descripcion = @descripcion,
+          Responsable = @responsable,
+          LugarInicio = @lugarInicio,
+          LugarFin = @lugarFin,
+          CapacidadEstudiantes = @capacidadEstudiantes,
+          HoraInicio = @horaInicio,
+          HoraFin = @horaFin,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE RutaTransporteId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Ruta de transporte no encontrada" });
+    }
+
+    return ok(res, result.recordset[0], "Ruta de transporte actualizada correctamente");
+  } catch (error) {
+    console.error("Error al actualizar ruta de transporte:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al actualizar ruta de transporte" });
+  }
+});
+
+router.delete("/rutas-transporte/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.RutaTransporte
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.RutaTransporteId
+        WHERE RutaTransporteId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Ruta de transporte no encontrada" });
+    }
+
+    return ok(res, { RutaTransporteId: id }, "Ruta de transporte desactivada correctamente");
+  } catch (error) {
+    console.error("Error al desactivar ruta de transporte:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al desactivar ruta de transporte" });
+  }
+});
+
+router.patch("/rutas-transporte/:id/reactivar", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.RutaTransporte
+        SET Activo = 1, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE RutaTransporteId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Ruta de transporte no encontrada" });
+    }
+
+    return ok(res, result.recordset[0], "Ruta de transporte reactivada correctamente");
+  } catch (error) {
+    console.error("Error al reactivar ruta de transporte:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al reactivar ruta de transporte" });
   }
 });
 
@@ -1615,6 +2497,34 @@ async function getGrupoInfoParaMatricula(params: {
   return result.recordset[0] || null;
 }
 
+
+async function getEspecialidadInfoParaMatricula(params: {
+  pool: any;
+  institucionId: number;
+  especialidadId?: number | null;
+}) {
+  const { pool, institucionId, especialidadId } = params;
+
+  if (!especialidadId) return null;
+
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("especialidadId", sql.Int, especialidadId)
+    .query(`
+      SELECT TOP 1
+        EspecialidadId,
+        Descripcion,
+        PermiteMultiplesPorSeccion,
+        Activo
+      FROM dbo.Especialidad
+      WHERE EspecialidadId = @especialidadId
+        AND InstitucionId = @institucionId
+        AND Activo = 1
+    `);
+
+  return result.recordset[0] || null;
+}
+
 async function getUltimaMatriculaHistorica(params: {
   pool: any;
   institucionId: number;
@@ -1723,6 +2633,698 @@ function validarProgresionAcademica(params: {
   };
 }
 
+type MatriculaImportPayload = {
+  fila: number;
+  cedula: string;
+  seccion: string;
+  fechaMatricula?: string | null;
+  tipoMatricula?: string | null;
+  observacion?: string | null;
+  esRepitente: boolean;
+  permiteExcepcionProgresion: boolean;
+  justificacionExcepcion?: string | null;
+};
+
+type MatriculaImportResultRow = {
+  fila: number;
+  cedula: string;
+  seccion: string;
+  estudiante?: string | null;
+  grupo?: string | null;
+  matriculaId?: number | null;
+  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  motivo: string;
+};
+
+type MatriculaImportJobStatus = "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+
+type MatriculaImportJob = {
+  id: string;
+  institucionId: number;
+  usuarioId: number | null;
+  anioLectivoId: number;
+  status: MatriculaImportJobStatus;
+  totalRegistros: number;
+  procesados: number;
+  totalOk: number;
+  totalError: number;
+  totalCreados: number;
+  totalReactivados: number;
+  totalOmitidos: number;
+  resultados: MatriculaImportResultRow[];
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+const matriculaImportJobs = new Map<string, MatriculaImportJob>();
+const MATRICULA_IMPORT_JOB_TTL_MS = 30 * 60 * 1000;
+
+function normalizeImportHeader(value: any) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s_.-]+/g, "");
+}
+
+function getImportValue(row: any, aliases: string[]) {
+  const normalizedAliases = aliases.map(normalizeImportHeader);
+  const entry = Object.entries(row || {}).find(([key]) =>
+    normalizedAliases.includes(normalizeImportHeader(key))
+  );
+  return entry ? entry[1] : "";
+}
+
+function toImportString(value: any) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function toNullableImportString(value: any) {
+  const text = toImportString(value);
+  return text || null;
+}
+
+function toImportBoolean(value: any) {
+  if (typeof value === "boolean") return value;
+  const text = String(value || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return ["si", "s", "true", "1", "x", "yes"].includes(text);
+}
+
+function cleanupMatriculaImportJobs() {
+  const now = Date.now();
+  for (const [id, job] of matriculaImportJobs.entries()) {
+    if (now - job.updatedAt > MATRICULA_IMPORT_JOB_TTL_MS) {
+      matriculaImportJobs.delete(id);
+    }
+  }
+}
+
+function createMatriculaImportJob(params: {
+  institucionId: number;
+  usuarioId: number | null;
+  anioLectivoId: number;
+  totalRegistros: number;
+}) {
+  cleanupMatriculaImportJobs();
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const job: MatriculaImportJob = {
+    id,
+    institucionId: params.institucionId,
+    usuarioId: params.usuarioId,
+    anioLectivoId: params.anioLectivoId,
+    status: "PENDIENTE",
+    totalRegistros: params.totalRegistros,
+    procesados: 0,
+    totalOk: 0,
+    totalError: 0,
+    totalCreados: 0,
+    totalReactivados: 0,
+    totalOmitidos: 0,
+    resultados: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  matriculaImportJobs.set(id, job);
+  return job;
+}
+
+function updateMatriculaImportJobTotals(job: MatriculaImportJob) {
+  job.procesados = job.resultados.length;
+  job.totalCreados = job.resultados.filter((item) => item.estado === "CREADO").length;
+  job.totalReactivados = job.resultados.filter((item) => item.estado === "REACTIVADO").length;
+  job.totalOmitidos = job.resultados.filter((item) => item.estado === "OMITIDO").length;
+  job.totalError = job.resultados.filter((item) => item.estado === "ERROR").length;
+  job.totalOk = job.totalCreados + job.totalReactivados;
+  job.updatedAt = Date.now();
+}
+
+function serializeMatriculaImportJob(job: MatriculaImportJob) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    totalRegistros: job.totalRegistros,
+    procesados: job.procesados,
+    totalOk: job.totalOk,
+    totalError: job.totalError,
+    totalCreados: job.totalCreados,
+    totalReactivados: job.totalReactivados,
+    totalOmitidos: job.totalOmitidos,
+    porcentaje: job.totalRegistros ? Math.round((job.procesados / job.totalRegistros) * 100) : 0,
+    error: job.error || null,
+    resultados: job.status === "COMPLETADO" || job.status === "ERROR"
+      ? job.resultados
+      : job.resultados.slice(-20)
+  };
+}
+
+function buildMatriculaImportResult(totalRegistros: number, resultados: MatriculaImportResultRow[]) {
+  const totalCreados = resultados.filter((item) => item.estado === "CREADO").length;
+  const totalReactivados = resultados.filter((item) => item.estado === "REACTIVADO").length;
+  const totalOmitidos = resultados.filter((item) => item.estado === "OMITIDO").length;
+  const totalError = resultados.filter((item) => item.estado === "ERROR").length;
+
+  return {
+    totalRegistros,
+    totalOk: totalCreados + totalReactivados,
+    totalError,
+    totalCreados,
+    totalReactivados,
+    totalOmitidos,
+    resultados
+  };
+}
+
+function parseMatriculaImportRowsFromFile(file?: Express.Multer.File): MatriculaImportPayload[] {
+  if (!file?.buffer) {
+    const error: any = new Error("Debes adjuntar un archivo Excel");
+    error.status = 400;
+    throw error;
+  }
+
+  const workbook = XLSX.read(file.buffer, { type: "buffer" });
+  const sheetName = workbook.SheetNames.includes("Matriculas")
+    ? "Matriculas"
+    : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<any>(sheet, { defval: "" });
+
+  if (!rows.length) {
+    const error: any = new Error("El archivo no contiene registros para importar");
+    error.status = 400;
+    throw error;
+  }
+
+  return rows.map((row, index) => ({
+    fila: index + 2,
+    cedula: toImportString(getImportValue(row, [
+      "cedula",
+      "cedula alumno",
+      "cedula estudiante",
+      "identificacion",
+      "identificacion alumno",
+      "identificacion estudiante"
+    ])),
+    seccion: toImportString(getImportValue(row, [
+      "seccion",
+      "grupo",
+      "grupo nombre",
+      "nombre grupo"
+    ])),
+    fechaMatricula: toNullableImportString(getImportValue(row, ["fecha matricula", "fecha"])),
+    tipoMatricula: toNullableImportString(getImportValue(row, ["tipo matricula", "tipo"])),
+    observacion: toNullableImportString(getImportValue(row, ["observacion", "observaciones"])),
+    esRepitente: toImportBoolean(getImportValue(row, ["repitente", "es repitente"])),
+    permiteExcepcionProgresion: toImportBoolean(getImportValue(row, [
+      "excepcion progresion",
+      "permite excepcion progresion",
+      "permitir excepcion"
+    ])),
+    justificacionExcepcion: toNullableImportString(getImportValue(row, [
+      "justificacion excepcion",
+      "justificacion"
+    ]))
+  }));
+}
+
+async function findEstudianteParaMatricula(pool: any, institucionId: number, cedula: string) {
+  const cedulaLimpia = cedula.replace(/[\s-]/g, "");
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("cedula", sql.NVarChar, cedula)
+    .input("cedulaLimpia", sql.NVarChar, cedulaLimpia)
+    .query(`
+      SELECT TOP 1
+        EstudianteId,
+        Identificacion,
+        Nombre,
+        PrimerApellido,
+        SegundoApellido,
+        Activo
+      FROM dbo.Estudiante
+      WHERE InstitucionId = @institucionId
+        AND (
+          LTRIM(RTRIM(Identificacion)) = @cedula
+          OR REPLACE(REPLACE(LTRIM(RTRIM(Identificacion)), N'-', N''), N' ', N'') = @cedulaLimpia
+        )
+      ORDER BY Activo DESC, EstudianteId DESC
+    `);
+
+  return result.recordset[0] || null;
+}
+
+async function findGrupoPorSeccionParaMatricula(params: {
+  pool: any;
+  institucionId: number;
+  anioLectivoId: number;
+  seccion: string;
+}) {
+  const { pool, institucionId, anioLectivoId, seccion } = params;
+
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anioLectivoId)
+    .input("seccion", sql.NVarChar, seccion)
+    .query(`
+      SELECT TOP 1
+        g.GrupoId,
+        g.Nombre AS GrupoNombre,
+        g.Nivel AS GrupoNivel,
+        g.NivelAcademico,
+        g.Especialidad,
+        g.AnioLectivoId
+      FROM dbo.Grupo g
+      WHERE g.InstitucionId = @institucionId
+        AND g.AnioLectivoId = @anioLectivoId
+        AND g.Activo = 1
+        AND (
+          UPPER(LTRIM(RTRIM(g.Nombre))) = UPPER(LTRIM(RTRIM(@seccion)))
+          OR UPPER(REPLACE(LTRIM(RTRIM(g.Nombre)), N' ', N'')) = UPPER(REPLACE(LTRIM(RTRIM(@seccion)), N' ', N''))
+          OR UPPER(LTRIM(RTRIM(ISNULL(g.Nivel, N'')))) = UPPER(LTRIM(RTRIM(@seccion)))
+        )
+      ORDER BY g.GrupoId
+    `);
+
+  return result.recordset[0] || null;
+}
+
+function getEstudianteNombre(row: any) {
+  return [
+    row?.Nombre,
+    row?.PrimerApellido,
+    row?.SegundoApellido
+  ].filter(Boolean).join(" ").trim();
+}
+
+async function upsertDetalleMatriculaImportada(params: {
+  transaction: any;
+  matriculaId: number;
+  grupoInfo: any;
+  payload: MatriculaImportPayload;
+}) {
+  const { transaction, matriculaId, grupoInfo, payload } = params;
+
+  const existeDetalle = await transaction.request()
+    .input("matriculaId", sql.Int, matriculaId)
+    .query(`
+      SELECT TOP 1 MatriculaDetalleId
+      FROM dbo.MatriculaDetalle
+      WHERE MatriculaId = @matriculaId
+    `);
+
+  const request = transaction.request()
+    .input("matriculaId", sql.Int, matriculaId)
+    .input("tipoMatricula", sql.NVarChar, payload.tipoMatricula || "Importacion")
+    .input("nivelAcademico", sql.TinyInt, Number(grupoInfo.NivelAcademico || 0) || null)
+    .input("especialidadId", sql.Int, null)
+    .input("especialidad", sql.NVarChar, grupoInfo.Especialidad || null)
+    .input("seccionTexto", sql.NVarChar, grupoInfo.GrupoNombre || payload.seccion || null)
+    .input("rutaTransporte", sql.NVarChar, null)
+    .input("esRepitente", sql.Bit, !!payload.esRepitente)
+    .input("permiteExcepcionProgresion", sql.Bit, !!payload.permiteExcepcionProgresion)
+    .input("justificacionExcepcion", sql.NVarChar, payload.justificacionExcepcion || null)
+    .input("correoEnvioBoleta", sql.NVarChar, null)
+    .input("observacionesDetalle", sql.NVarChar, payload.observacion || null);
+
+  if (existeDetalle.recordset.length > 0) {
+    await request.query(`
+      UPDATE dbo.MatriculaDetalle
+      SET
+        TipoMatricula = @tipoMatricula,
+        NivelAcademico = @nivelAcademico,
+        EspecialidadId = @especialidadId,
+        Especialidad = @especialidad,
+        SeccionTexto = @seccionTexto,
+        RutaTransporte = @rutaTransporte,
+        EsRepitente = @esRepitente,
+        PermiteExcepcionProgresion = @permiteExcepcionProgresion,
+        JustificacionExcepcion = @justificacionExcepcion,
+        CorreoEnvioBoleta = @correoEnvioBoleta,
+        Observaciones = @observacionesDetalle,
+        UpdatedAt = SYSDATETIME()
+      WHERE MatriculaId = @matriculaId
+    `);
+    return;
+  }
+
+  await request.query(`
+    INSERT INTO dbo.MatriculaDetalle
+    (
+      MatriculaId,
+      TipoMatricula,
+      NivelAcademico,
+      EspecialidadId,
+      Especialidad,
+      SeccionTexto,
+      RutaTransporte,
+      EsRepitente,
+      PermiteExcepcionProgresion,
+      JustificacionExcepcion,
+      CorreoEnvioBoleta,
+      Observaciones,
+      CreatedAt
+    )
+    VALUES
+    (
+      @matriculaId,
+      @tipoMatricula,
+      @nivelAcademico,
+      @especialidadId,
+      @especialidad,
+      @seccionTexto,
+      @rutaTransporte,
+      @esRepitente,
+      @permiteExcepcionProgresion,
+      @justificacionExcepcion,
+      @correoEnvioBoleta,
+      @observacionesDetalle,
+      SYSDATETIME()
+    )
+  `);
+}
+
+async function procesarMatriculaImportada(params: {
+  pool: any;
+  institucionId: number;
+  usuarioId: number | null;
+  anioLectivoId: number;
+  estudiante: any;
+  grupoInfo: any;
+  payload: MatriculaImportPayload;
+}): Promise<MatriculaImportResultRow> {
+  const { pool, institucionId, usuarioId, anioLectivoId, estudiante, grupoInfo, payload } = params;
+  const transaction = new sql.Transaction(pool);
+  let started = false;
+
+  try {
+    await transaction.begin();
+    started = true;
+
+    const activaMismoAnio = await transaction.request()
+      .input("estudianteId", sql.Int, Number(estudiante.EstudianteId))
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .query(`
+        SELECT TOP 1
+          m.MatriculaId,
+          m.GrupoId,
+          g.Nombre AS GrupoNombre
+        FROM dbo.Matricula m
+        LEFT JOIN dbo.Grupo g
+          ON g.GrupoId = m.GrupoId
+        WHERE m.EstudianteId = @estudianteId
+          AND m.AnioLectivoId = @anioLectivoId
+          AND m.Estado = N'Activa'
+        ORDER BY m.MatriculaId DESC
+      `);
+
+    if (activaMismoAnio.recordset.length > 0) {
+      const activa = activaMismoAnio.recordset[0];
+      await transaction.rollback();
+      started = false;
+
+      return {
+        fila: payload.fila,
+        cedula: payload.cedula,
+        seccion: payload.seccion,
+        estudiante: getEstudianteNombre(estudiante),
+        grupo: activa.GrupoNombre || null,
+        matriculaId: activa.MatriculaId,
+        estado: "OMITIDO",
+        motivo: Number(activa.GrupoId) === Number(grupoInfo.GrupoId)
+          ? "El estudiante ya tiene matricula activa en esta seccion"
+          : `El estudiante ya tiene matricula activa en el anio lectivo (${activa.GrupoNombre || "otro grupo"})`
+      };
+    }
+
+    const duplicada = await transaction.request()
+      .input("estudianteId", sql.Int, Number(estudiante.EstudianteId))
+      .input("grupoId", sql.Int, Number(grupoInfo.GrupoId))
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .query(`
+        SELECT TOP 1 MatriculaId, Estado
+        FROM dbo.Matricula
+        WHERE EstudianteId = @estudianteId
+          AND GrupoId = @grupoId
+          AND AnioLectivoId = @anioLectivoId
+        ORDER BY MatriculaId DESC
+      `);
+
+    const ultimaMatricula = await getUltimaMatriculaHistorica({
+      pool: transaction,
+      institucionId,
+      estudianteId: Number(estudiante.EstudianteId),
+      anioLectivoIdActual: anioLectivoId
+    });
+
+    const resultadoValidacion = validarProgresionAcademica({
+      nivelAnterior: ultimaMatricula?.NivelAcademico ?? null,
+      nivelNuevo: Number(grupoInfo.NivelAcademico || 0) || null,
+      esRepitente: !!payload.esRepitente,
+      permiteExcepcionProgresion: !!payload.permiteExcepcionProgresion,
+      justificacionExcepcion: payload.justificacionExcepcion || null
+    });
+
+    if (!resultadoValidacion.permitido) {
+      await transaction.rollback();
+      started = false;
+      return {
+        fila: payload.fila,
+        cedula: payload.cedula,
+        seccion: payload.seccion,
+        estudiante: getEstudianteNombre(estudiante),
+        grupo: grupoInfo.GrupoNombre || null,
+        matriculaId: null,
+        estado: "ERROR",
+        motivo: resultadoValidacion.message || "No cumple la progresion academica"
+      };
+    }
+
+    if (duplicada.recordset.length > 0) {
+      const existente = duplicada.recordset[0];
+
+      if (existente.Estado === "Activa") {
+        await transaction.rollback();
+        started = false;
+        return {
+          fila: payload.fila,
+          cedula: payload.cedula,
+          seccion: payload.seccion,
+          estudiante: getEstudianteNombre(estudiante),
+          grupo: grupoInfo.GrupoNombre || null,
+          matriculaId: existente.MatriculaId,
+          estado: "OMITIDO",
+          motivo: "Ya existe una matricula activa para esta seccion"
+        };
+      }
+
+      await transaction.request()
+        .input("matriculaId", sql.Int, existente.MatriculaId)
+        .input("fechaMatricula", sql.Date, payload.fechaMatricula || null)
+        .input("observacion", sql.NVarChar, payload.observacion || null)
+        .input("usuarioActualizaId", sql.Int, usuarioId)
+        .query(`
+          UPDATE dbo.Matricula
+          SET
+            Estado = N'Activa',
+            FechaMatricula = ISNULL(@fechaMatricula, FechaMatricula),
+            Observacion = @observacion,
+            UsuarioActualizaId = @usuarioActualizaId,
+            UpdatedAt = SYSDATETIME()
+          WHERE MatriculaId = @matriculaId
+        `);
+
+      await upsertDetalleMatriculaImportada({
+        transaction,
+        matriculaId: existente.MatriculaId,
+        grupoInfo,
+        payload
+      });
+
+      await transaction.commit();
+      started = false;
+
+      return {
+        fila: payload.fila,
+        cedula: payload.cedula,
+        seccion: payload.seccion,
+        estudiante: getEstudianteNombre(estudiante),
+        grupo: grupoInfo.GrupoNombre || null,
+        matriculaId: existente.MatriculaId,
+        estado: "REACTIVADO",
+        motivo: "Matricula inactiva reactivada y actualizada"
+      };
+    }
+
+    const insertMatricula = await transaction.request()
+      .input("estudianteId", sql.Int, Number(estudiante.EstudianteId))
+      .input("grupoId", sql.Int, Number(grupoInfo.GrupoId))
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("fechaMatricula", sql.Date, payload.fechaMatricula || null)
+      .input("observacion", sql.NVarChar, payload.observacion || null)
+      .input("usuarioRegistroId", sql.Int, usuarioId)
+      .query(`
+        INSERT INTO dbo.Matricula
+        (
+          EstudianteId,
+          GrupoId,
+          AnioLectivoId,
+          Estado,
+          FechaMatricula,
+          Observacion,
+          UsuarioRegistroId,
+          CreatedAt
+        )
+        OUTPUT INSERTED.MatriculaId
+        VALUES
+        (
+          @estudianteId,
+          @grupoId,
+          @anioLectivoId,
+          N'Activa',
+          ISNULL(@fechaMatricula, CAST(GETDATE() AS DATE)),
+          @observacion,
+          @usuarioRegistroId,
+          SYSDATETIME()
+        )
+      `);
+
+    const matriculaId = Number(insertMatricula.recordset[0].MatriculaId);
+    await upsertDetalleMatriculaImportada({
+      transaction,
+      matriculaId,
+      grupoInfo,
+      payload
+    });
+
+    await transaction.commit();
+    started = false;
+
+    return {
+      fila: payload.fila,
+      cedula: payload.cedula,
+      seccion: payload.seccion,
+      estudiante: getEstudianteNombre(estudiante),
+      grupo: grupoInfo.GrupoNombre || null,
+      matriculaId,
+      estado: "CREADO",
+      motivo: "Matricula creada correctamente"
+    };
+  } catch (error) {
+    if (started) {
+      try {
+        await transaction.rollback();
+      } catch {}
+    }
+    throw error;
+  }
+}
+
+async function processMatriculaImportRows(params: {
+  rows: MatriculaImportPayload[];
+  institucionId: number;
+  usuarioId: number | null;
+  anioLectivoId: number;
+  job?: MatriculaImportJob;
+}) {
+  const { rows, institucionId, usuarioId, anioLectivoId, job } = params;
+  const pool = await getPool();
+  const resultados: MatriculaImportResultRow[] = [];
+
+  if (job) {
+    job.status = "PROCESANDO";
+    job.updatedAt = Date.now();
+  }
+
+  for (const payload of rows) {
+    let resultado: MatriculaImportResultRow;
+
+    try {
+      if (!payload.cedula || !payload.seccion) {
+        resultado = {
+          fila: payload.fila,
+          cedula: payload.cedula,
+          seccion: payload.seccion,
+          estado: "ERROR",
+          motivo: "La cedula y la seccion son obligatorias"
+        };
+      } else {
+        const estudiante = await findEstudianteParaMatricula(pool, institucionId, payload.cedula);
+        if (!estudiante) {
+          resultado = {
+            fila: payload.fila,
+            cedula: payload.cedula,
+            seccion: payload.seccion,
+            estado: "ERROR",
+            motivo: "No existe un estudiante con esa cedula en la institucion"
+          };
+        } else if (!estudiante.Activo) {
+          resultado = {
+            fila: payload.fila,
+            cedula: payload.cedula,
+            seccion: payload.seccion,
+            estudiante: getEstudianteNombre(estudiante),
+            estado: "ERROR",
+            motivo: "El estudiante existe, pero esta inactivo"
+          };
+        } else {
+          const grupoInfo = await findGrupoPorSeccionParaMatricula({
+            pool,
+            institucionId,
+            anioLectivoId,
+            seccion: payload.seccion
+          });
+
+          if (!grupoInfo) {
+            resultado = {
+              fila: payload.fila,
+              cedula: payload.cedula,
+              seccion: payload.seccion,
+              estudiante: getEstudianteNombre(estudiante),
+              estado: "ERROR",
+              motivo: "No existe un grupo activo con esa seccion para el anio lectivo seleccionado"
+            };
+          } else {
+            resultado = await procesarMatriculaImportada({
+              pool,
+              institucionId,
+              usuarioId,
+              anioLectivoId,
+              estudiante,
+              grupoInfo,
+              payload
+            });
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error("Error procesando fila de importacion de matriculas:", error);
+      resultado = {
+        fila: payload.fila,
+        cedula: payload.cedula,
+        seccion: payload.seccion,
+        estado: "ERROR",
+        motivo: error?.message || "No se pudo procesar la fila"
+      };
+    }
+
+    resultados.push(resultado);
+
+    if (job) {
+      job.resultados.push(resultado);
+      updateMatriculaImportJobTotals(job);
+    }
+  }
+
+  if (job) {
+    job.status = "COMPLETADO";
+    updateMatriculaImportJobTotals(job);
+  }
+
+  return buildMatriculaImportResult(rows.length, resultados);
+}
+
 /* =========================================================
    MATRICULAS
    ========================================================= */
@@ -1754,7 +3356,10 @@ router.get("/matriculas", async (req, res) => {
           md.MatriculaDetalleId,
           md.TipoMatricula,
           md.NivelAcademico,
+          md.EspecialidadId,
           md.Especialidad,
+          esp.Descripcion AS EspecialidadDescripcion,
+          esp.PermiteMultiplesPorSeccion,
           md.SeccionTexto,
           md.RutaTransporte,
           md.EsRepitente,
@@ -1780,6 +3385,8 @@ router.get("/matriculas", async (req, res) => {
           ON a.AnioLectivoId = m.AnioLectivoId
         LEFT JOIN dbo.MatriculaDetalle md
           ON md.MatriculaId = m.MatriculaId
+        LEFT JOIN dbo.Especialidad esp
+          ON esp.EspecialidadId = md.EspecialidadId
         WHERE e.InstitucionId = @institucionId
           AND (@incluirInactivas = 1 OR m.Estado = N'Activa')
           AND (
@@ -1792,8 +3399,9 @@ router.get("/matriculas", async (req, res) => {
             OR a.Nombre LIKE @q
             OR md.TipoMatricula LIKE @q
             OR md.Especialidad LIKE @q
+            OR esp.Descripcion LIKE @q
           )
-        ORDER BY m.MatriculaId DESC
+        ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, m.MatriculaId
       `);
 
     return ok(res, result.recordset);
@@ -1802,6 +3410,290 @@ router.get("/matriculas", async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: "Error interno al listar matrículas"
+    });
+  }
+});
+
+router.get("/matriculas/plantilla-excel", async (_req, res) => {
+  try {
+    const wb = XLSX.utils.book_new();
+    const instrucciones = [
+      { Campo: "cedula", Obligatorio: "Si", Descripcion: "Cedula o identificacion del estudiante ya registrado" },
+      { Campo: "seccion", Obligatorio: "Si", Descripcion: "Nombre de la seccion/grupo activo en el anio lectivo seleccionado" },
+      { Campo: "fecha matricula", Obligatorio: "No", Descripcion: "Fecha en formato AAAA-MM-DD. Si se deja vacia se usa la fecha actual" },
+      { Campo: "tipo matricula", Obligatorio: "No", Descripcion: "Ejemplo: Regular" },
+      { Campo: "observacion", Obligatorio: "No", Descripcion: "Observacion general de la matricula" },
+      { Campo: "repitente", Obligatorio: "No", Descripcion: "Indicar Si/No cuando aplica" },
+      { Campo: "excepcion progresion", Obligatorio: "No", Descripcion: "Indicar Si/No si se autoriza excepcion de progresion" },
+      { Campo: "justificacion excepcion", Obligatorio: "No", Descripcion: "Justificacion cuando se usa excepcion de progresion" }
+    ];
+    const ejemplo = [
+      {
+        cedula: "401230125",
+        seccion: "12-1",
+        "fecha matricula": "",
+        "tipo matricula": "Regular",
+        observacion: "",
+        repitente: "No",
+        "excepcion progresion": "No",
+        "justificacion excepcion": ""
+      }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(instrucciones), "Instrucciones");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ejemplo), "Matriculas");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", 'attachment; filename="plantilla_importacion_matriculas.xlsx"');
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error generando plantilla de matriculas:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo generar la plantilla de matriculas"
+    });
+  }
+});
+
+router.post("/matriculas/importar-excel/iniciar", upload.single("archivo"), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const anioLectivoId = Number(req.body?.anioLectivoId);
+    if (!Number.isInteger(anioLectivoId) || anioLectivoId <= 0) {
+      return badRequest(res, "Debes seleccionar el anio lectivo para la importacion");
+    }
+
+    const rows = parseMatriculaImportRowsFromFile(req.file);
+    const usuarioId = (req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || null;
+    const job = createMatriculaImportJob({
+      institucionId,
+      usuarioId,
+      anioLectivoId,
+      totalRegistros: rows.length
+    });
+
+    setImmediate(() => {
+      processMatriculaImportRows({
+        rows,
+        institucionId,
+        usuarioId,
+        anioLectivoId,
+        job
+      }).catch((error) => {
+        console.error("Error procesando importacion de matriculas:", error);
+        job.status = "ERROR";
+        job.error = error?.message || "No se pudo procesar el archivo Excel";
+        job.updatedAt = Date.now();
+      });
+    });
+
+    return ok(res, serializeMatriculaImportJob(job), "Importacion de matriculas iniciada");
+  } catch (error: any) {
+    if (error?.status === 400) return badRequest(res, error.message);
+
+    console.error("Error iniciando importacion de matriculas:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo iniciar la importacion de matriculas"
+    });
+  }
+});
+
+router.get("/matriculas/importar-excel/progreso/:jobId", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    cleanupMatriculaImportJobs();
+    const job = matriculaImportJobs.get(String(req.params.jobId || ""));
+
+    if (!job || job.institucionId !== institucionId) {
+      return res.status(404).json({
+        ok: false,
+        message: "No se encontro la importacion solicitada"
+      });
+    }
+
+    return ok(res, serializeMatriculaImportJob(job));
+  } catch (error) {
+    console.error("Error consultando progreso de importacion de matriculas:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo consultar el progreso de la importacion"
+    });
+  }
+});
+
+router.get("/matriculas/importar-excel/resumen/:jobId/excel", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    cleanupMatriculaImportJobs();
+    const job = matriculaImportJobs.get(String(req.params.jobId || ""));
+
+    if (!job || job.institucionId !== institucionId) {
+      return res.status(404).json({
+        ok: false,
+        message: "No se encontro la importacion solicitada"
+      });
+    }
+
+    const wb = XLSX.utils.book_new();
+    const resumen = [
+      { Concepto: "Total registros", Valor: job.totalRegistros },
+      { Concepto: "Procesados", Valor: job.procesados },
+      { Concepto: "Creados", Valor: job.totalCreados },
+      { Concepto: "Reactivados y actualizados", Valor: job.totalReactivados },
+      { Concepto: "Omitidos por existir activos", Valor: job.totalOmitidos },
+      { Concepto: "Errores", Valor: job.totalError },
+      { Concepto: "Estado", Valor: job.status }
+    ];
+    const detalle = job.resultados.map((item) => ({
+      Fila: item.fila,
+      Cedula: item.cedula,
+      Seccion: item.seccion,
+      Estudiante: item.estudiante || "",
+      Grupo: item.grupo || "",
+      MatriculaId: item.matriculaId || "",
+      Estado: item.estado,
+      Motivo: item.motivo
+    }));
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), "Resumen");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), "Detalle");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", `attachment; filename="resumen_importacion_matriculas_${job.id}.xlsx"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error exportando resumen de importacion de matriculas:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo exportar el resumen de importacion"
+    });
+  }
+});
+
+router.post("/matriculas/importar-excel", upload.single("archivo"), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const anioLectivoId = Number(req.body?.anioLectivoId);
+    if (!Number.isInteger(anioLectivoId) || anioLectivoId <= 0) {
+      return badRequest(res, "Debes seleccionar el anio lectivo para la importacion");
+    }
+
+    const rows = parseMatriculaImportRowsFromFile(req.file);
+    const pool = await getPool();
+    const usuarioId = (req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || null;
+    const resultados: MatriculaImportResultRow[] = [];
+
+    for (const payload of rows) {
+      try {
+        if (!payload.cedula || !payload.seccion) {
+          resultados.push({
+            fila: payload.fila,
+            cedula: payload.cedula,
+            seccion: payload.seccion,
+            estado: "ERROR",
+            motivo: "La cedula y la seccion son obligatorias"
+          });
+          continue;
+        }
+
+        const estudiante = await findEstudianteParaMatricula(pool, institucionId, payload.cedula);
+        if (!estudiante) {
+          resultados.push({
+            fila: payload.fila,
+            cedula: payload.cedula,
+            seccion: payload.seccion,
+            estado: "ERROR",
+            motivo: "No existe un estudiante con esa cedula en la institucion"
+          });
+          continue;
+        }
+
+        if (!estudiante.Activo) {
+          resultados.push({
+            fila: payload.fila,
+            cedula: payload.cedula,
+            seccion: payload.seccion,
+            estudiante: getEstudianteNombre(estudiante),
+            estado: "ERROR",
+            motivo: "El estudiante existe, pero esta inactivo"
+          });
+          continue;
+        }
+
+        const grupoInfo = await findGrupoPorSeccionParaMatricula({
+          pool,
+          institucionId,
+          anioLectivoId,
+          seccion: payload.seccion
+        });
+
+        if (!grupoInfo) {
+          resultados.push({
+            fila: payload.fila,
+            cedula: payload.cedula,
+            seccion: payload.seccion,
+            estudiante: getEstudianteNombre(estudiante),
+            estado: "ERROR",
+            motivo: "No existe un grupo activo con esa seccion para el anio lectivo seleccionado"
+          });
+          continue;
+        }
+
+        const resultado = await procesarMatriculaImportada({
+          pool,
+          institucionId,
+          usuarioId,
+          anioLectivoId,
+          estudiante,
+          grupoInfo,
+          payload
+        });
+
+        resultados.push(resultado);
+      } catch (error: any) {
+        console.error("Error procesando fila de importacion de matriculas:", error);
+        resultados.push({
+          fila: payload.fila,
+          cedula: payload.cedula,
+          seccion: payload.seccion,
+          estado: "ERROR",
+          motivo: error?.message || "No se pudo procesar la fila"
+        });
+      }
+    }
+
+    const totalCreados = resultados.filter((item) => item.estado === "CREADO").length;
+    const totalReactivados = resultados.filter((item) => item.estado === "REACTIVADO").length;
+    const totalOmitidos = resultados.filter((item) => item.estado === "OMITIDO").length;
+    const totalError = resultados.filter((item) => item.estado === "ERROR").length;
+
+    return ok(res, {
+      totalRegistros: rows.length,
+      totalOk: totalCreados + totalReactivados,
+      totalError,
+      totalCreados,
+      totalReactivados,
+      totalOmitidos,
+      resultados
+    }, "Importacion de matriculas procesada correctamente");
+  } catch (error: any) {
+    if (error?.status === 400) return badRequest(res, error.message);
+
+    console.error("Error importando matriculas:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo importar el archivo de matriculas"
     });
   }
 });
@@ -1833,7 +3725,10 @@ router.get("/matriculas/:id/detalle", async (req, res) => {
           md.MatriculaDetalleId,
           md.TipoMatricula,
           md.NivelAcademico,
+          md.EspecialidadId,
           md.Especialidad,
+          esp.Descripcion AS EspecialidadDescripcion,
+          esp.PermiteMultiplesPorSeccion,
           md.SeccionTexto,
           md.RutaTransporte,
           md.EsRepitente,
@@ -1893,6 +3788,8 @@ router.get("/matriculas/:id/detalle", async (req, res) => {
           ON g.GrupoId = m.GrupoId
         LEFT JOIN dbo.MatriculaDetalle md
           ON md.MatriculaId = m.MatriculaId
+        LEFT JOIN dbo.Especialidad esp
+          ON esp.EspecialidadId = md.EspecialidadId
         WHERE e.InstitucionId = @institucionId
           AND m.EstudianteId = @estudianteId
         ORDER BY m.AnioLectivoId DESC, m.MatriculaId DESC
@@ -1927,6 +3824,7 @@ router.post("/matriculas", async (req, res) => {
       observacion,
       tipoMatricula,
       nivelAcademico,
+      especialidadId,
       especialidad,
       seccionTexto,
       rutaTransporte,
@@ -2011,6 +3909,21 @@ router.post("/matriculas", async (req, res) => {
       });
     }
 
+    const especialidadInfo = await getEspecialidadInfoParaMatricula({
+      pool: transaction,
+      institucionId,
+      especialidadId: especialidadId ? Number(especialidadId) : null
+    });
+
+    if (especialidadId && !especialidadInfo) {
+      await transaction.rollback();
+      return res.status(404).json({
+        ok: false,
+        code: "ESPECIALIDAD_NO_VALIDA",
+        message: "La especialidad no existe, está inactiva o no pertenece a la institución"
+      });
+    }
+
     const ultimaMatricula = await getUltimaMatriculaHistorica({
       pool: transaction,
       institucionId,
@@ -2074,7 +3987,8 @@ router.post("/matriculas", async (req, res) => {
       .input("matriculaId", sql.Int, matricula.MatriculaId)
       .input("tipoMatricula", sql.NVarChar, tipoMatricula || null)
       .input("nivelAcademico", sql.TinyInt, Number(grupoInfo.NivelAcademico || nivelAcademico || 0) || null)
-      .input("especialidad", sql.NVarChar, especialidad || grupoInfo.Especialidad || null)
+      .input("especialidadId", sql.Int, especialidadInfo?.EspecialidadId || null)
+      .input("especialidad", sql.NVarChar, especialidadInfo?.Descripcion || especialidad || grupoInfo.Especialidad || null)
       .input("seccionTexto", sql.NVarChar, seccionTexto || grupoInfo.GrupoNombre || null)
       .input("rutaTransporte", sql.NVarChar, rutaTransporte || null)
       .input("esRepitente", sql.Bit, !!esRepitente)
@@ -2162,6 +4076,7 @@ router.put("/matriculas/:id", async (req, res) => {
       observacion,
       tipoMatricula,
       nivelAcademico,
+      especialidadId,
       especialidad,
       seccionTexto,
       rutaTransporte,
@@ -2243,6 +4158,21 @@ router.put("/matriculas/:id", async (req, res) => {
       });
     }
 
+    const especialidadInfo = await getEspecialidadInfoParaMatricula({
+      pool: transaction,
+      institucionId,
+      especialidadId: especialidadId ? Number(especialidadId) : null
+    });
+
+    if (especialidadId && !especialidadInfo) {
+      await transaction.rollback();
+      return res.status(404).json({
+        ok: false,
+        code: "ESPECIALIDAD_NO_VALIDA",
+        message: "La especialidad no existe, está inactiva o no pertenece a la institución"
+      });
+    }
+
     const ultimaMatricula = await getUltimaMatriculaHistorica({
       pool: transaction,
       institucionId,
@@ -2312,6 +4242,10 @@ router.put("/matriculas/:id", async (req, res) => {
         WHERE MatriculaId = @matriculaId
       `);
 
+    const especialidadIdSql = especialidadInfo?.EspecialidadId
+      ? Number(especialidadInfo.EspecialidadId)
+      : null;
+
     if (existeDetalle.recordset.length > 0) {
       await transaction.request()
         .input("matriculaId", sql.Int, id)
@@ -2330,6 +4264,7 @@ router.put("/matriculas/:id", async (req, res) => {
           SET
             TipoMatricula = @tipoMatricula,
             NivelAcademico = @nivelAcademico,
+            EspecialidadId = ${especialidadIdSql === null ? "NULL" : especialidadIdSql},
             Especialidad = @especialidad,
             SeccionTexto = @seccionTexto,
             RutaTransporte = @rutaTransporte,
@@ -2360,6 +4295,7 @@ router.put("/matriculas/:id", async (req, res) => {
             MatriculaId,
             TipoMatricula,
             NivelAcademico,
+            EspecialidadId,
             Especialidad,
             SeccionTexto,
             RutaTransporte,
@@ -2375,6 +4311,7 @@ router.put("/matriculas/:id", async (req, res) => {
             @matriculaId,
             @tipoMatricula,
             @nivelAcademico,
+            ${especialidadIdSql === null ? "NULL" : especialidadIdSql},
             @especialidad,
             @seccionTexto,
             @rutaTransporte,
@@ -2855,7 +4792,7 @@ router.get("/asignaciones-docentes", async (req, res) => {
             OR ISNULL(m.Nombre, '') LIKE @q
             OR ad.TipoAsignacion LIKE @q
           )
-        ORDER BY ad.AsignacionDocenteId DESC
+        ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre, ad.AsignacionDocenteId
       `);
 
     return ok(res, result.recordset);
@@ -5050,6 +6987,885 @@ router.post("/fechas-clase/reprogramar-desde", async (req, res) => {
       ok: false,
       message: "Error interno al reprogramar fechas de clase"
     });
+  }
+});
+
+type AcademicoBulkImportKind =
+  | "grupos"
+  | "materias"
+  | "asignaciones-docentes"
+  | "grupos-materia"
+  | "horarios-grupo"
+  | "feriados";
+
+type AcademicoBulkImportResultRow = {
+  fila: number;
+  referencia: string;
+  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  motivo: string;
+};
+
+type AcademicoBulkImportJob = {
+  id: string;
+  kind: AcademicoBulkImportKind;
+  institucionId: number;
+  status: "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+  totalRegistros: number;
+  procesados: number;
+  totalOk: number;
+  totalError: number;
+  totalCreados: number;
+  totalReactivados: number;
+  totalOmitidos: number;
+  resultados: AcademicoBulkImportResultRow[];
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+const academicoBulkImportJobs = new Map<string, AcademicoBulkImportJob>();
+const ACADEMICO_BULK_IMPORT_JOB_TTL_MS = 30 * 60 * 1000;
+
+const ACADEMICO_BULK_IMPORT_TEMPLATES: Record<AcademicoBulkImportKind, {
+  label: string;
+  sheetName: string;
+  filename: string;
+  instrucciones: Record<string, string>[];
+  ejemplo: Record<string, any>[];
+}> = {
+  grupos: {
+    label: "grupos",
+    sheetName: "Grupos",
+    filename: "plantilla_importacion_grupos.xlsx",
+    instrucciones: [
+      { Campo: "anio lectivo", Obligatorio: "Si", Descripcion: "Nombre o ID del año lectivo" },
+      { Campo: "nombre", Obligatorio: "Si", Descripcion: "Nombre de la sección o grupo. Ejemplo: 7-1" },
+      { Campo: "nivel", Obligatorio: "No", Descripcion: "Nivel académico. Ejemplo: Séptimo" },
+      { Campo: "jornada", Obligatorio: "No", Descripcion: "Jornada. Ejemplo: Diurna" }
+    ],
+    ejemplo: [{ "anio lectivo": "2026", nombre: "7-1", nivel: "Séptimo", jornada: "Diurna" }]
+  },
+  materias: {
+    label: "materias",
+    sheetName: "Materias",
+    filename: "plantilla_importacion_materias.xlsx",
+    instrucciones: [
+      { Campo: "codigo", Obligatorio: "No", Descripcion: "Código de la materia" },
+      { Campo: "nombre", Obligatorio: "Si", Descripcion: "Nombre de la materia" },
+      { Campo: "descripcion", Obligatorio: "No", Descripcion: "Descripción de la materia" }
+    ],
+    ejemplo: [{ codigo: "MAT", nombre: "Matemáticas", descripcion: "Matemáticas" }]
+  },
+  "asignaciones-docentes": {
+    label: "asignaciones docentes",
+    sheetName: "Asignaciones",
+    filename: "plantilla_importacion_asignaciones_docentes.xlsx",
+    instrucciones: [
+      { Campo: "correo docente", Obligatorio: "Si", Descripcion: "Correo o ID del docente" },
+      { Campo: "anio lectivo", Obligatorio: "Si", Descripcion: "Nombre o ID del año lectivo" },
+      { Campo: "grupo", Obligatorio: "Si", Descripcion: "Nombre o ID del grupo" },
+      { Campo: "materia", Obligatorio: "No", Descripcion: "Nombre, código o ID de materia" },
+      { Campo: "periodo", Obligatorio: "No", Descripcion: "Nombre o ID del período" },
+      { Campo: "tipo asignacion", Obligatorio: "Si", Descripcion: "Ejemplo: PROFESOR_MATERIA o PROFESOR_GUIA" }
+    ],
+    ejemplo: [{ "correo docente": "docente@colegio.com", "anio lectivo": "2026", grupo: "7-1", materia: "Matemáticas", periodo: "I Periodo", "tipo asignacion": "PROFESOR_MATERIA" }]
+  },
+  "grupos-materia": {
+    label: "materias por grupo",
+    sheetName: "MateriasGrupo",
+    filename: "plantilla_importacion_materias_por_grupo.xlsx",
+    instrucciones: [
+      { Campo: "grupo", Obligatorio: "Si", Descripcion: "Nombre o ID del grupo" },
+      { Campo: "materia", Obligatorio: "Si", Descripcion: "Nombre, código o ID de materia" },
+      { Campo: "periodo", Obligatorio: "No", Descripcion: "Nombre o ID del período" }
+    ],
+    ejemplo: [{ grupo: "7-1", materia: "Matemáticas", periodo: "I Periodo" }]
+  },
+  "horarios-grupo": {
+    label: "horarios de clase",
+    sheetName: "Horarios",
+    filename: "plantilla_importacion_horarios_clase.xlsx",
+    instrucciones: [
+      { Campo: "grupo", Obligatorio: "Si", Descripcion: "Nombre o ID del grupo" },
+      { Campo: "materia", Obligatorio: "Si", Descripcion: "Nombre, código o ID de materia" },
+      { Campo: "periodo", Obligatorio: "No", Descripcion: "Nombre o ID del período" },
+      { Campo: "bloque", Obligatorio: "Si", Descripcion: "Nombre o ID del bloque horario" },
+      { Campo: "dia", Obligatorio: "Si", Descripcion: "Lunes, Martes, Miércoles, Jueves, Viernes, Sábado o Domingo" }
+    ],
+    ejemplo: [{ grupo: "7-1", materia: "Matemáticas", periodo: "I Periodo", bloque: "Lección 1", dia: "Lunes" }]
+  },
+  feriados: {
+    label: "feriados",
+    sheetName: "Feriados",
+    filename: "plantilla_importacion_feriados.xlsx",
+    instrucciones: [
+      { Campo: "fecha", Obligatorio: "Si", Descripcion: "Fecha en formato AAAA-MM-DD" },
+      { Campo: "nombre", Obligatorio: "Si", Descripcion: "Nombre del feriado" },
+      { Campo: "descripcion", Obligatorio: "No", Descripcion: "Descripción del feriado" }
+    ],
+    ejemplo: [{ fecha: "2026-09-15", nombre: "Día de la Independencia", descripcion: "" }]
+  }
+};
+
+function cleanupAcademicoBulkImportJobs() {
+  const now = Date.now();
+  for (const [id, job] of academicoBulkImportJobs.entries()) {
+    if (now - job.updatedAt > ACADEMICO_BULK_IMPORT_JOB_TTL_MS) {
+      academicoBulkImportJobs.delete(id);
+    }
+  }
+}
+
+function createAcademicoBulkImportJob(kind: AcademicoBulkImportKind, institucionId: number, totalRegistros: number) {
+  cleanupAcademicoBulkImportJobs();
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const job: AcademicoBulkImportJob = {
+    id,
+    kind,
+    institucionId,
+    status: "PENDIENTE",
+    totalRegistros,
+    procesados: 0,
+    totalOk: 0,
+    totalError: 0,
+    totalCreados: 0,
+    totalReactivados: 0,
+    totalOmitidos: 0,
+    resultados: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  academicoBulkImportJobs.set(id, job);
+  return job;
+}
+
+function updateAcademicoBulkImportJobTotals(job: AcademicoBulkImportJob) {
+  job.procesados = job.resultados.length;
+  job.totalCreados = job.resultados.filter((item) => item.estado === "CREADO").length;
+  job.totalReactivados = job.resultados.filter((item) => item.estado === "REACTIVADO").length;
+  job.totalOmitidos = job.resultados.filter((item) => item.estado === "OMITIDO").length;
+  job.totalError = job.resultados.filter((item) => item.estado === "ERROR").length;
+  job.totalOk = job.totalCreados + job.totalReactivados;
+  job.updatedAt = Date.now();
+}
+
+function serializeAcademicoBulkImportJob(job: AcademicoBulkImportJob) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    totalRegistros: job.totalRegistros,
+    procesados: job.procesados,
+    totalOk: job.totalOk,
+    totalError: job.totalError,
+    totalCreados: job.totalCreados,
+    totalReactivados: job.totalReactivados,
+    totalOmitidos: job.totalOmitidos,
+    porcentaje: job.totalRegistros ? Math.round((job.procesados / job.totalRegistros) * 100) : 0,
+    error: job.error || null,
+    resultados: job.status === "COMPLETADO" || job.status === "ERROR"
+      ? job.resultados
+      : job.resultados.slice(-20)
+  };
+}
+
+function parseAcademicoBulkImportRows(file: Express.Multer.File | undefined, kind: AcademicoBulkImportKind) {
+  if (!file?.buffer) {
+    const error: any = new Error("Debes adjuntar un archivo Excel");
+    error.status = 400;
+    throw error;
+  }
+
+  const template = ACADEMICO_BULK_IMPORT_TEMPLATES[kind];
+  const workbook = XLSX.read(file.buffer, { type: "buffer" });
+  const sheetName = workbook.SheetNames.includes(template.sheetName) ? template.sheetName : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<any>(sheet, { defval: "" });
+
+  if (!rows.length) {
+    const error: any = new Error("El archivo no contiene registros para importar");
+    error.status = 400;
+    throw error;
+  }
+
+  return rows;
+}
+
+function toPositiveImportId(value: any) {
+  const text = toImportString(value);
+  if (!/^\d+$/.test(text)) return null;
+  const parsed = Number(text);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function toImportDateString(value: any) {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (!parsed) return "";
+    return `${String(parsed.y).padStart(4, "0")}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const text = toImportString(value);
+  const match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (match) {
+    return `${match[1]}-${String(Number(match[2])).padStart(2, "0")}-${String(Number(match[3])).padStart(2, "0")}`;
+  }
+  return text;
+}
+
+function getRowText(row: any, aliases: string[]) {
+  return toImportString(getImportValue(row, aliases));
+}
+
+async function resolveAnioLectivoImport(pool: any, institucionId: number, row: any) {
+  const id = toPositiveImportId(getImportValue(row, ["anioLectivoId", "anio lectivo id", "año lectivo id"]));
+  const nombre = getRowText(row, ["anio lectivo", "año lectivo", "anio", "año"]);
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("id", sql.Int, id)
+    .input("nombre", sql.NVarChar, nombre)
+    .query(`
+      SELECT TOP 1 AnioLectivoId, Nombre
+      FROM dbo.AnioLectivo
+      WHERE InstitucionId = @institucionId
+        AND Activo = 1
+        AND (
+          (@id IS NOT NULL AND AnioLectivoId = @id)
+          OR (@nombre <> N'' AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(LTRIM(RTRIM(@nombre))))
+        )
+      ORDER BY AnioLectivoId DESC
+    `);
+  return result.recordset[0] || null;
+}
+
+async function resolveGrupoImport(pool: any, institucionId: number, row: any, anioLectivoId?: number | null) {
+  const id = toPositiveImportId(getImportValue(row, ["grupoId", "grupo id"]));
+  const nombre = getRowText(row, ["grupo", "seccion", "sección", "nombre grupo"]);
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("id", sql.Int, id)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("anioLectivoId", sql.Int, anioLectivoId || null)
+    .query(`
+      SELECT TOP 1 GrupoId, Nombre, AnioLectivoId
+      FROM dbo.Grupo
+      WHERE InstitucionId = @institucionId
+        AND Activo = 1
+        AND (@anioLectivoId IS NULL OR AnioLectivoId = @anioLectivoId)
+        AND (
+          (@id IS NOT NULL AND GrupoId = @id)
+          OR (@nombre <> N'' AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(LTRIM(RTRIM(@nombre))))
+        )
+      ORDER BY GrupoId DESC
+    `);
+  return result.recordset[0] || null;
+}
+
+async function resolveMateriaImport(pool: any, institucionId: number, row: any) {
+  const id = toPositiveImportId(getImportValue(row, ["materiaId", "materia id"]));
+  const value = getRowText(row, ["materia", "nombre materia", "codigo materia", "código materia", "codigo"]);
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("id", sql.Int, id)
+    .input("value", sql.NVarChar, value)
+    .query(`
+      SELECT TOP 1 MateriaId, Nombre, Codigo
+      FROM dbo.Materia
+      WHERE InstitucionId = @institucionId
+        AND Activa = 1
+        AND (
+          (@id IS NOT NULL AND MateriaId = @id)
+          OR (@value <> N'' AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(LTRIM(RTRIM(@value))))
+          OR (@value <> N'' AND UPPER(LTRIM(RTRIM(ISNULL(Codigo, N'')))) = UPPER(LTRIM(RTRIM(@value))))
+        )
+      ORDER BY MateriaId DESC
+    `);
+  return result.recordset[0] || null;
+}
+
+async function resolvePeriodoImport(pool: any, institucionId: number, row: any, anioLectivoId?: number | null) {
+  const id = toPositiveImportId(getImportValue(row, ["periodoId", "periodo id"]));
+  const nombre = getRowText(row, ["periodo", "período", "nombre periodo", "nombre período"]);
+  if (!id && !nombre) return null;
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("id", sql.Int, id)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("anioLectivoId", sql.Int, anioLectivoId || null)
+    .query(`
+      SELECT TOP 1 p.PeriodoId, p.Nombre, p.AnioLectivoId
+      FROM dbo.Periodo p
+      INNER JOIN dbo.AnioLectivo a
+        ON a.AnioLectivoId = p.AnioLectivoId
+      WHERE a.InstitucionId = @institucionId
+        AND p.Activo = 1
+        AND (@anioLectivoId IS NULL OR p.AnioLectivoId = @anioLectivoId)
+        AND (
+          (@id IS NOT NULL AND p.PeriodoId = @id)
+          OR (@nombre <> N'' AND UPPER(LTRIM(RTRIM(p.Nombre))) = UPPER(LTRIM(RTRIM(@nombre))))
+        )
+      ORDER BY p.PeriodoId DESC
+    `);
+  return result.recordset[0] || null;
+}
+
+async function resolveDocenteImport(pool: any, institucionId: number, row: any) {
+  const id = toPositiveImportId(getImportValue(row, ["usuarioId", "docenteId", "docente id"]));
+  const value = getRowText(row, ["correo docente", "docente", "correo", "email docente"]);
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("id", sql.Int, id)
+    .input("value", sql.NVarChar, value)
+    .query(`
+      SELECT TOP 1 u.UsuarioId, u.Correo, u.Nombre, u.PrimerApellido, u.SegundoApellido
+      FROM dbo.Usuario u
+      WHERE u.InstitucionId = @institucionId
+        AND u.Activo = 1
+        AND EXISTS (
+          SELECT 1
+          FROM dbo.UsuarioRol ur
+          INNER JOIN dbo.Rol r
+            ON r.RolId = ur.RolId
+          WHERE ur.UsuarioId = u.UsuarioId
+            AND ur.Activo = 1
+            AND r.Nombre IN (N'PROFESOR', N'PROFESOR_GUIA')
+        )
+        AND (
+          (@id IS NOT NULL AND u.UsuarioId = @id)
+          OR (@value <> N'' AND UPPER(LTRIM(RTRIM(u.Correo))) = UPPER(LTRIM(RTRIM(@value))))
+          OR (@value <> N'' AND UPPER(LTRIM(RTRIM(CONCAT(u.Nombre, N' ', ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N''))))) = UPPER(LTRIM(RTRIM(@value))))
+          OR (@value <> N'' AND UPPER(LTRIM(RTRIM(CONCAT(ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N''), N' ', u.Nombre)))) = UPPER(LTRIM(RTRIM(@value))))
+        )
+      ORDER BY u.UsuarioId DESC
+    `);
+  return result.recordset[0] || null;
+}
+
+async function resolveBloqueImport(pool: any, institucionId: number, row: any) {
+  const id = toPositiveImportId(getImportValue(row, ["bloqueHorarioId", "bloque horario id", "bloqueId", "bloque id"]));
+  const value = getRowText(row, ["bloque", "bloque horario", "nombre bloque"]);
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("id", sql.Int, id)
+    .input("value", sql.NVarChar, value)
+    .query(`
+      SELECT TOP 1 BloqueHorarioId, Nombre
+      FROM dbo.BloqueHorario
+      WHERE InstitucionId = @institucionId
+        AND (
+          (@id IS NOT NULL AND BloqueHorarioId = @id)
+          OR (@value <> N'' AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(LTRIM(RTRIM(@value))))
+        )
+      ORDER BY OrdenVisual, BloqueHorarioId
+    `);
+  return result.recordset[0] || null;
+}
+
+function resolveDiaSemanaImport(row: any) {
+  const value = getImportValue(row, ["dia", "día", "dia semana", "día semana", "diaSemana"]);
+  const id = toPositiveImportId(value);
+  if (id && id >= 1 && id <= 7) return id;
+  const normalized = normalizeImportHeader(value);
+  const map: Record<string, number> = {
+    domingo: 1,
+    lunes: 2,
+    martes: 3,
+    miercoles: 4,
+    jueves: 5,
+    viernes: 6,
+    sabado: 7
+  };
+  return map[normalized] || null;
+}
+
+async function resolveGrupoMateriaImport(pool: any, institucionId: number, row: any) {
+  const id = toPositiveImportId(getImportValue(row, ["grupoMateriaId", "grupo materia id"]));
+  if (id) {
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TOP 1 gm.GrupoMateriaId, g.Nombre AS GrupoNombre, m.Nombre AS MateriaNombre
+        FROM dbo.GrupoMateria gm
+        INNER JOIN dbo.Grupo g ON g.GrupoId = gm.GrupoId
+        INNER JOIN dbo.Materia m ON m.MateriaId = gm.MateriaId
+        WHERE gm.GrupoMateriaId = @id
+          AND gm.Activo = 1
+          AND g.InstitucionId = @institucionId
+      `);
+    return result.recordset[0] || null;
+  }
+
+  const grupo = await resolveGrupoImport(pool, institucionId, row, null);
+  if (!grupo) return null;
+  const materia = await resolveMateriaImport(pool, institucionId, row);
+  if (!materia) return null;
+  const periodo = await resolvePeriodoImport(pool, institucionId, row, grupo.AnioLectivoId);
+
+  const result = await pool.request()
+    .input("grupoId", sql.Int, grupo.GrupoId)
+    .input("materiaId", sql.Int, materia.MateriaId)
+    .input("periodoId", sql.Int, periodo?.PeriodoId || null)
+    .query(`
+      SELECT TOP 1 gm.GrupoMateriaId, g.Nombre AS GrupoNombre, m.Nombre AS MateriaNombre
+      FROM dbo.GrupoMateria gm
+      INNER JOIN dbo.Grupo g ON g.GrupoId = gm.GrupoId
+      INNER JOIN dbo.Materia m ON m.MateriaId = gm.MateriaId
+      WHERE gm.GrupoId = @grupoId
+        AND gm.MateriaId = @materiaId
+        AND ISNULL(gm.PeriodoId, 0) = ISNULL(@periodoId, 0)
+        AND gm.Activo = 1
+    `);
+  return result.recordset[0] || null;
+}
+
+async function processGrupoImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const anio = await resolveAnioLectivoImport(pool, institucionId, row);
+  const nombre = getRowText(row, ["nombre", "grupo", "seccion", "sección"]);
+  const referencia = nombre || `Fila ${fila}`;
+  if (!anio || !nombre) return { fila, referencia, estado: "ERROR", motivo: "anio lectivo y nombre son obligatorios" };
+
+  const nivel = toNullableImportString(getImportValue(row, ["nivel"]));
+  const jornada = toNullableImportString(getImportValue(row, ["jornada"]));
+  const existente = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anio.AnioLectivoId)
+    .input("nombre", sql.NVarChar, nombre)
+    .query(`
+      SELECT TOP 1 GrupoId, Activo
+      FROM dbo.Grupo
+      WHERE InstitucionId = @institucionId
+        AND AnioLectivoId = @anioLectivoId
+        AND Nombre = @nombre
+    `);
+
+  if (existente.recordset.length) {
+    const current = existente.recordset[0];
+    if (current.Activo) return { fila, referencia, estado: "OMITIDO", motivo: "El grupo ya existe activo" };
+    await pool.request()
+      .input("id", sql.Int, current.GrupoId)
+      .input("nivel", sql.NVarChar, nivel)
+      .input("jornada", sql.NVarChar, jornada)
+      .query(`
+        UPDATE dbo.Grupo
+        SET Nivel = @nivel, Jornada = @jornada, Activo = 1, UpdatedAt = SYSDATETIME()
+        WHERE GrupoId = @id
+      `);
+    return { fila, referencia, estado: "REACTIVADO", motivo: "Grupo inactivo reactivado y actualizado" };
+  }
+
+  await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anio.AnioLectivoId)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("nivel", sql.NVarChar, nivel)
+    .input("jornada", sql.NVarChar, jornada)
+    .query(`
+      INSERT INTO dbo.Grupo (InstitucionId, SedeId, AnioLectivoId, Nombre, Nivel, Jornada, Activo, CreatedAt)
+      VALUES (@institucionId, NULL, @anioLectivoId, @nombre, @nivel, @jornada, 1, SYSDATETIME())
+    `);
+  return { fila, referencia, estado: "CREADO", motivo: "Grupo creado correctamente" };
+}
+
+async function processMateriaImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const codigo = toNullableImportString(getImportValue(row, ["codigo", "código"]));
+  const nombre = getRowText(row, ["nombre", "materia"]);
+  const descripcion = toNullableImportString(getImportValue(row, ["descripcion", "descripción"]));
+  const referencia = nombre || codigo || `Fila ${fila}`;
+  if (!nombre) return { fila, referencia, estado: "ERROR", motivo: "nombre es obligatorio" };
+
+  const existente = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("codigo", sql.NVarChar, codigo)
+    .query(`
+      SELECT TOP 1 MateriaId, Activa
+      FROM dbo.Materia
+      WHERE InstitucionId = @institucionId
+        AND (Nombre = @nombre OR (@codigo IS NOT NULL AND Codigo = @codigo))
+    `);
+
+  if (existente.recordset.length) {
+    const current = existente.recordset[0];
+    if (current.Activa) return { fila, referencia, estado: "OMITIDO", motivo: "La materia ya existe activa" };
+    await pool.request()
+      .input("id", sql.Int, current.MateriaId)
+      .input("codigo", sql.NVarChar, codigo)
+      .input("nombre", sql.NVarChar, nombre)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        UPDATE dbo.Materia
+        SET Codigo = @codigo, Nombre = @nombre, Descripcion = @descripcion, Activa = 1, UpdatedAt = SYSDATETIME()
+        WHERE MateriaId = @id
+      `);
+    return { fila, referencia, estado: "REACTIVADO", motivo: "Materia inactiva reactivada y actualizada" };
+  }
+
+  await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("codigo", sql.NVarChar, codigo)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("descripcion", sql.NVarChar, descripcion)
+    .query(`
+      INSERT INTO dbo.Materia (InstitucionId, Codigo, Nombre, Descripcion, Activa, CreatedAt)
+      VALUES (@institucionId, @codigo, @nombre, @descripcion, 1, SYSDATETIME())
+    `);
+  return { fila, referencia, estado: "CREADO", motivo: "Materia creada correctamente" };
+}
+
+async function processAsignacionImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const docente = await resolveDocenteImport(pool, institucionId, row);
+  const anio = await resolveAnioLectivoImport(pool, institucionId, row);
+  const grupo = anio ? await resolveGrupoImport(pool, institucionId, row, anio.AnioLectivoId) : null;
+  const materia = getRowText(row, ["materia", "nombre materia", "codigo materia", "código materia", "codigo"])
+    ? await resolveMateriaImport(pool, institucionId, row)
+    : null;
+  const periodo = anio ? await resolvePeriodoImport(pool, institucionId, row, anio.AnioLectivoId) : null;
+  const tipoAsignacion = getRowText(row, ["tipo asignacion", "tipo asignación", "tipoAsignacion"]) || "PROFESOR_MATERIA";
+  const referencia = `${docente?.Correo || getRowText(row, ["correo docente", "docente"]) || "Docente"} / ${grupo?.Nombre || getRowText(row, ["grupo"]) || "Grupo"}`;
+
+  if (!docente || !anio || !grupo || !tipoAsignacion) {
+    return { fila, referencia, estado: "ERROR", motivo: "correo docente, anio lectivo, grupo y tipo asignacion son obligatorios y deben existir activos" };
+  }
+
+  const existente = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("usuarioId", sql.Int, docente.UsuarioId)
+    .input("grupoId", sql.Int, grupo.GrupoId)
+    .input("materiaId", sql.Int, materia?.MateriaId || null)
+    .input("anioLectivoId", sql.Int, anio.AnioLectivoId)
+    .input("periodoId", sql.Int, periodo?.PeriodoId || null)
+    .input("tipoAsignacion", sql.NVarChar, tipoAsignacion)
+    .query(`
+      SELECT TOP 1 AsignacionDocenteId, Activo
+      FROM dbo.AsignacionDocente
+      WHERE InstitucionId = @institucionId
+        AND UsuarioId = @usuarioId
+        AND GrupoId = @grupoId
+        AND AnioLectivoId = @anioLectivoId
+        AND TipoAsignacion = @tipoAsignacion
+        AND ISNULL(MateriaId, 0) = ISNULL(@materiaId, 0)
+        AND ISNULL(PeriodoId, 0) = ISNULL(@periodoId, 0)
+    `);
+
+  if (existente.recordset.length) {
+    const current = existente.recordset[0];
+    if (current.Activo) return { fila, referencia, estado: "OMITIDO", motivo: "La asignacion docente ya existe activa" };
+    await pool.request()
+      .input("id", sql.Int, current.AsignacionDocenteId)
+      .query(`UPDATE dbo.AsignacionDocente SET Activo = 1, UpdatedAt = SYSDATETIME() WHERE AsignacionDocenteId = @id`);
+    return { fila, referencia, estado: "REACTIVADO", motivo: "Asignacion docente inactiva reactivada" };
+  }
+
+  await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("usuarioId", sql.Int, docente.UsuarioId)
+    .input("grupoId", sql.Int, grupo.GrupoId)
+    .input("materiaId", sql.Int, materia?.MateriaId || null)
+    .input("anioLectivoId", sql.Int, anio.AnioLectivoId)
+    .input("periodoId", sql.Int, periodo?.PeriodoId || null)
+    .input("tipoAsignacion", sql.NVarChar, tipoAsignacion)
+    .query(`
+      INSERT INTO dbo.AsignacionDocente (InstitucionId, UsuarioId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, TipoAsignacion, Activo, CreatedAt)
+      VALUES (@institucionId, @usuarioId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @tipoAsignacion, 1, SYSDATETIME())
+    `);
+  return { fila, referencia, estado: "CREADO", motivo: "Asignacion docente creada correctamente" };
+}
+
+async function processGrupoMateriaImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const grupo = await resolveGrupoImport(pool, institucionId, row, null);
+  const materia = await resolveMateriaImport(pool, institucionId, row);
+  const periodo = grupo ? await resolvePeriodoImport(pool, institucionId, row, grupo.AnioLectivoId) : null;
+  const referencia = `${grupo?.Nombre || getRowText(row, ["grupo"]) || "Grupo"} / ${materia?.Nombre || getRowText(row, ["materia"]) || "Materia"}`;
+
+  if (!grupo || !materia) return { fila, referencia, estado: "ERROR", motivo: "grupo y materia son obligatorios y deben existir activos" };
+
+  const existente = await pool.request()
+    .input("grupoId", sql.Int, grupo.GrupoId)
+    .input("materiaId", sql.Int, materia.MateriaId)
+    .input("periodoId", sql.Int, periodo?.PeriodoId || null)
+    .query(`
+      SELECT TOP 1 GrupoMateriaId, Activo
+      FROM dbo.GrupoMateria
+      WHERE GrupoId = @grupoId
+        AND MateriaId = @materiaId
+        AND ISNULL(PeriodoId, 0) = ISNULL(@periodoId, 0)
+    `);
+
+  if (existente.recordset.length) {
+    const current = existente.recordset[0];
+    if (current.Activo) return { fila, referencia, estado: "OMITIDO", motivo: "La materia por grupo ya existe activa" };
+    await pool.request()
+      .input("id", sql.Int, current.GrupoMateriaId)
+      .query(`UPDATE dbo.GrupoMateria SET Activo = 1, UpdatedAt = SYSDATETIME() WHERE GrupoMateriaId = @id`);
+    return { fila, referencia, estado: "REACTIVADO", motivo: "Materia por grupo inactiva reactivada" };
+  }
+
+  await pool.request()
+    .input("grupoId", sql.Int, grupo.GrupoId)
+    .input("materiaId", sql.Int, materia.MateriaId)
+    .input("periodoId", sql.Int, periodo?.PeriodoId || null)
+    .query(`
+      INSERT INTO dbo.GrupoMateria (GrupoId, MateriaId, PeriodoId, Activo, CreatedAt)
+      VALUES (@grupoId, @materiaId, @periodoId, 1, SYSDATETIME())
+    `);
+  return { fila, referencia, estado: "CREADO", motivo: "Materia por grupo creada correctamente" };
+}
+
+async function processHorarioImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const grupoMateria = await resolveGrupoMateriaImport(pool, institucionId, row);
+  const bloque = await resolveBloqueImport(pool, institucionId, row);
+  const diaSemana = resolveDiaSemanaImport(row);
+  const referencia = `${grupoMateria?.GrupoNombre || getRowText(row, ["grupo"]) || "Grupo"} / ${grupoMateria?.MateriaNombre || getRowText(row, ["materia"]) || "Materia"} / ${bloque?.Nombre || getRowText(row, ["bloque"]) || "Bloque"}`;
+
+  if (!grupoMateria || !bloque || !diaSemana) {
+    return { fila, referencia, estado: "ERROR", motivo: "grupo, materia, bloque y dia son obligatorios y deben existir activos" };
+  }
+
+  const existente = await pool.request()
+    .input("grupoMateriaId", sql.Int, grupoMateria.GrupoMateriaId)
+    .input("bloqueHorarioId", sql.Int, bloque.BloqueHorarioId)
+    .input("diaSemana", sql.Int, diaSemana)
+    .query(`
+      SELECT TOP 1 HorarioGrupoId, Activo
+      FROM dbo.HorarioGrupo
+      WHERE GrupoMateriaId = @grupoMateriaId
+        AND BloqueHorarioId = @bloqueHorarioId
+        AND DiaSemana = @diaSemana
+    `);
+
+  if (existente.recordset.length) {
+    const current = existente.recordset[0];
+    if (current.Activo) return { fila, referencia, estado: "OMITIDO", motivo: "El horario ya existe activo" };
+    await pool.request()
+      .input("id", sql.Int, current.HorarioGrupoId)
+      .query(`UPDATE dbo.HorarioGrupo SET Activo = 1, UpdatedAt = SYSDATETIME() WHERE HorarioGrupoId = @id`);
+    return { fila, referencia, estado: "REACTIVADO", motivo: "Horario inactivo reactivado" };
+  }
+
+  await pool.request()
+    .input("grupoMateriaId", sql.Int, grupoMateria.GrupoMateriaId)
+    .input("bloqueHorarioId", sql.Int, bloque.BloqueHorarioId)
+    .input("diaSemana", sql.Int, diaSemana)
+    .query(`
+      INSERT INTO dbo.HorarioGrupo (GrupoMateriaId, BloqueHorarioId, DiaSemana, Activo, CreatedAt)
+      VALUES (@grupoMateriaId, @bloqueHorarioId, @diaSemana, 1, SYSDATETIME())
+    `);
+  return { fila, referencia, estado: "CREADO", motivo: "Horario creado correctamente" };
+}
+
+async function processFeriadoImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const fecha = toImportDateString(getImportValue(row, ["fecha"]));
+  const nombre = getRowText(row, ["nombre", "feriado"]);
+  const descripcion = toNullableImportString(getImportValue(row, ["descripcion", "descripción"]));
+  const referencia = fecha || nombre || `Fila ${fila}`;
+  if (!fecha || !nombre) return { fila, referencia, estado: "ERROR", motivo: "fecha y nombre son obligatorios" };
+
+  const existente = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("fecha", sql.Date, fecha)
+    .query(`
+      SELECT TOP 1 FeriadoId, Activo
+      FROM dbo.FeriadoInstitucional
+      WHERE InstitucionId = @institucionId
+        AND Fecha = @fecha
+    `);
+
+  if (existente.recordset.length) {
+    const current = existente.recordset[0];
+    if (current.Activo) return { fila, referencia, estado: "OMITIDO", motivo: "El feriado ya existe activo para esa fecha" };
+    await pool.request()
+      .input("id", sql.Int, current.FeriadoId)
+      .input("nombre", sql.NVarChar, nombre)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        UPDATE dbo.FeriadoInstitucional
+        SET Nombre = @nombre, Descripcion = @descripcion, Activo = 1, UpdatedAt = SYSDATETIME()
+        WHERE FeriadoId = @id
+      `);
+    return { fila, referencia, estado: "REACTIVADO", motivo: "Feriado inactivo reactivado y actualizado" };
+  }
+
+  await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("fecha", sql.Date, fecha)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("descripcion", sql.NVarChar, descripcion)
+    .query(`
+      INSERT INTO dbo.FeriadoInstitucional (InstitucionId, Fecha, Nombre, Descripcion, Activo, CreatedAt)
+      VALUES (@institucionId, @fecha, @nombre, @descripcion, 1, SYSDATETIME())
+    `);
+  return { fila, referencia, estado: "CREADO", motivo: "Feriado creado correctamente" };
+}
+
+async function processAcademicoBulkImportRow(kind: AcademicoBulkImportKind, pool: any, institucionId: number, row: any, fila: number) {
+  if (kind === "grupos") return processGrupoImportRow(pool, institucionId, row, fila);
+  if (kind === "materias") return processMateriaImportRow(pool, institucionId, row, fila);
+  if (kind === "asignaciones-docentes") return processAsignacionImportRow(pool, institucionId, row, fila);
+  if (kind === "grupos-materia") return processGrupoMateriaImportRow(pool, institucionId, row, fila);
+  if (kind === "horarios-grupo") return processHorarioImportRow(pool, institucionId, row, fila);
+  return processFeriadoImportRow(pool, institucionId, row, fila);
+}
+
+async function processAcademicoBulkImportRows(params: {
+  kind: AcademicoBulkImportKind;
+  rows: any[];
+  institucionId: number;
+  job: AcademicoBulkImportJob;
+}) {
+  const { kind, rows, institucionId, job } = params;
+  const pool = await getPool();
+
+  job.status = "PROCESANDO";
+  job.updatedAt = Date.now();
+
+  for (let index = 0; index < rows.length; index += 1) {
+    let resultado: AcademicoBulkImportResultRow;
+    try {
+      resultado = await processAcademicoBulkImportRow(kind, pool, institucionId, rows[index], index + 2);
+    } catch (error: any) {
+      console.error(`Error procesando fila de importacion academica (${kind}):`, error);
+      resultado = {
+        fila: index + 2,
+        referencia: `Fila ${index + 2}`,
+        estado: "ERROR",
+        motivo: error?.message || "No se pudo procesar la fila"
+      };
+    }
+
+    job.resultados.push(resultado);
+    updateAcademicoBulkImportJobTotals(job);
+  }
+
+  job.status = "COMPLETADO";
+  updateAcademicoBulkImportJobTotals(job);
+}
+
+function isAcademicoBulkImportKind(value: any): value is AcademicoBulkImportKind {
+  return Object.prototype.hasOwnProperty.call(ACADEMICO_BULK_IMPORT_TEMPLATES, String(value || ""));
+}
+
+router.get("/importaciones/:kind/plantilla-excel", async (req, res) => {
+  try {
+    const kind = String(req.params.kind || "") as AcademicoBulkImportKind;
+    if (!isAcademicoBulkImportKind(kind)) {
+      return badRequest(res, "Tipo de importacion no valido");
+    }
+
+    const template = ACADEMICO_BULK_IMPORT_TEMPLATES[kind];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(template.instrucciones), "Instrucciones");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(template.ejemplo), template.sheetName);
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", `attachment; filename="${template.filename}"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error generando plantilla de importacion academica:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo generar la plantilla" });
+  }
+});
+
+router.post("/importaciones/:kind/iniciar", upload.single("archivo"), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const kind = String(req.params.kind || "") as AcademicoBulkImportKind;
+    if (!isAcademicoBulkImportKind(kind)) {
+      return badRequest(res, "Tipo de importacion no valido");
+    }
+
+    const rows = parseAcademicoBulkImportRows(req.file, kind);
+    const job = createAcademicoBulkImportJob(kind, institucionId, rows.length);
+
+    setImmediate(() => {
+      processAcademicoBulkImportRows({ kind, rows, institucionId, job }).catch((error) => {
+        console.error("Error procesando importacion academica:", error);
+        job.status = "ERROR";
+        job.error = error?.message || "No se pudo procesar el archivo Excel";
+        job.updatedAt = Date.now();
+      });
+    });
+
+    return ok(res, serializeAcademicoBulkImportJob(job), "Importacion iniciada");
+  } catch (error: any) {
+    if (error?.status === 400) return badRequest(res, error.message);
+    console.error("Error iniciando importacion academica:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo iniciar la importacion" });
+  }
+});
+
+router.get("/importaciones/:kind/progreso/:jobId", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const kind = String(req.params.kind || "") as AcademicoBulkImportKind;
+    if (!isAcademicoBulkImportKind(kind)) {
+      return badRequest(res, "Tipo de importacion no valido");
+    }
+
+    cleanupAcademicoBulkImportJobs();
+    const job = academicoBulkImportJobs.get(String(req.params.jobId || ""));
+    if (!job || job.kind !== kind || job.institucionId !== institucionId) {
+      return res.status(404).json({ ok: false, message: "No se encontro la importacion solicitada" });
+    }
+
+    return ok(res, serializeAcademicoBulkImportJob(job));
+  } catch (error) {
+    console.error("Error consultando progreso de importacion academica:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar el progreso de la importacion" });
+  }
+});
+
+router.get("/importaciones/:kind/resumen/:jobId/excel", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const kind = String(req.params.kind || "") as AcademicoBulkImportKind;
+    if (!isAcademicoBulkImportKind(kind)) {
+      return badRequest(res, "Tipo de importacion no valido");
+    }
+
+    cleanupAcademicoBulkImportJobs();
+    const job = academicoBulkImportJobs.get(String(req.params.jobId || ""));
+    if (!job || job.kind !== kind || job.institucionId !== institucionId) {
+      return res.status(404).json({ ok: false, message: "No se encontro la importacion solicitada" });
+    }
+
+    const template = ACADEMICO_BULK_IMPORT_TEMPLATES[kind];
+    const wb = XLSX.utils.book_new();
+    const resumen = [
+      { Concepto: "Total registros", Valor: job.totalRegistros },
+      { Concepto: "Procesados", Valor: job.procesados },
+      { Concepto: "Creados", Valor: job.totalCreados },
+      { Concepto: "Reactivados y actualizados", Valor: job.totalReactivados },
+      { Concepto: "Omitidos por existir activos", Valor: job.totalOmitidos },
+      { Concepto: "Errores", Valor: job.totalError },
+      { Concepto: "Estado", Valor: job.status }
+    ];
+    const detalle = job.resultados.map((item) => ({
+      Fila: item.fila,
+      Referencia: item.referencia,
+      Estado: item.estado,
+      Motivo: item.motivo
+    }));
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), "Resumen");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), "Detalle");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", `attachment; filename="resumen_${template.filename}"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error exportando resumen de importacion academica:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo exportar el resumen de importacion" });
   }
 });
 

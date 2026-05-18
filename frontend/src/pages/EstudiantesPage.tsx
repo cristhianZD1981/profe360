@@ -1,4 +1,5 @@
-import { FormEvent, useMemo, useState, useEffect } from "react";
+﻿import { FormEvent, useMemo, useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 
@@ -12,6 +13,8 @@ type Student = {
   Sexo: string | null;
   Correo: string | null;
   Telefono: string | null;
+  TipoEstudianteId?: number | null;
+  TipoEstudianteDescripcion?: string | null;
   FotoUrl: string | null;
   CodigoCarnet: string | null;
   QrContenido: string | null;
@@ -19,7 +22,10 @@ type Student = {
   Adecuacion: string | null;
   Discapacidad: string | null;
   Enfermedad: string | null;
+  RutaTransporteId?: number | null;
+  RutaTransporteDescripcion?: string | null;
   RutaTransporteHabitual: string | null;
+  AutorizaWhatsAppEncargado?: boolean | null;
   ObservacionMedica: string | null;
   Activo?: boolean;
 };
@@ -64,12 +70,84 @@ type StudentDetalleResponse = {
   encargados: DetalleEncargado[];
 };
 
+type StudentType = {
+  TipoEstudianteId: number;
+  Descripcion: string;
+  Activo: boolean;
+};
+
+type RutaTransporte = {
+  RutaTransporteId: number;
+  Descripcion: string;
+  Responsable?: string | null;
+  LugarInicio?: string | null;
+  LugarFin?: string | null;
+  CapacidadEstudiantes?: number | null;
+  HoraInicio?: string | null;
+  HoraFin?: string | null;
+  Activo: boolean;
+};
+
 type ImportResultRow = {
   fila: number;
   identificacion: string;
-  estado: "OK" | "ERROR";
+  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
   motivo: string;
 };
+
+type ImportProgress = {
+  jobId: string;
+  status: "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+  totalRegistros: number;
+  procesados: number;
+  totalOk: number;
+  totalError: number;
+  totalCreados: number;
+  totalReactivados: number;
+  totalOmitidos: number;
+  porcentaje: number;
+  error?: string | null;
+  resultados: ImportResultRow[];
+};
+
+type DashboardBucket = {
+  Label?: string | null;
+  label?: string | null;
+  Total?: number | null;
+  total?: number | null;
+};
+
+type StudentDashboard = {
+  totalActivos: number;
+  totalInactivos: number;
+  totalGeneral: number;
+  totalMatriculados: number;
+  porGrupo: DashboardBucket[];
+  porSeccion: DashboardBucket[];
+  porGenero: DashboardBucket[];
+  porEspecialidad: DashboardBucket[];
+  porNacionalidad: DashboardBucket[];
+  porTipo: DashboardBucket[];
+  otros: DashboardBucket[];
+};
+
+type BoletaConductaContexto = {
+  fecha: string;
+  estudianteId: number;
+  estudianteNombre: string;
+  seccion: string;
+  siguienteNumero: number;
+  funcionarioNombre: string;
+  institucion?: {
+    Nombre?: string | null;
+    NombreComercial?: string | null;
+    NombreOficialBoleta?: string | null;
+    RegionalEducativa?: string | null;
+    CircuitoEducativo?: string | null;
+  };
+};
+
+const STUDENTS_PAGE_SIZE = 100;
 
 const emptyEncargado = (
   tipo: "MADRE" | "PADRE" | "ENCARGADO"
@@ -97,6 +175,9 @@ const initialForm = {
   fechaNacimiento: "",
   correo: "",
   telefono: "",
+  tipoEstudianteId: "",
+  rutaTransporteId: "",
+  autorizaWhatsAppEncargado: false,
   sexo: "",
   fotoUrl: "",
   nacionalidad: "",
@@ -112,7 +193,7 @@ function getStudentFullName(item: {
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
 }) {
-  return [item.Nombre, item.PrimerApellido || "", item.SegundoApellido || ""]
+  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -199,17 +280,25 @@ function DetailCardStable({ title, encargado }: { title: string; encargado: Deta
 
 export default function EstudiantesPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   const [items, setItems] = useState<Student[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
+  const [isFormExpanded, setIsFormExpanded] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [lastSearch, setLastSearch] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [reactivableId, setReactivableId] = useState<number | null>(null);
   const [incluirInactivos, setIncluirInactivos] = useState(false);
+  const [loadingListado, setLoadingListado] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [dashboard, setDashboard] = useState<StudentDashboard | null>(null);
+  const [loadingDashboard, setLoadingDashboard] = useState(false);
 
   const [form, setForm] = useState(initialForm);
   const [madreForm, setMadreForm] = useState<EncargadoForm>(
@@ -229,20 +318,39 @@ export default function EstudiantesPage() {
 
   const [archivoImportacion, setArchivoImportacion] = useState<File | null>(null);
   const [importandoExcel, setImportandoExcel] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [importResult, setImportResult] = useState<{
     totalRegistros: number;
     totalOk: number;
     totalError: number;
+    totalCreados?: number;
+    totalReactivados?: number;
+    totalOmitidos?: number;
     resultados: ImportResultRow[];
   } | null>(null);
 
   const [dominioCorreoEstudiante, setDominioCorreoEstudiante] = useState("@est.mep.go.cr");
+  const [studentTypes, setStudentTypes] = useState<StudentType[]>([]);
+  const [rutasTransporte, setRutasTransporte] = useState<RutaTransporte[]>([]);
+  const [boletaConductaOpen, setBoletaConductaOpen] = useState(false);
+  const [boletaConductaLoading, setBoletaConductaLoading] = useState(false);
+  const [boletaConductaSaving, setBoletaConductaSaving] = useState(false);
+  const [boletaConductaItem, setBoletaConductaItem] = useState<Student | null>(null);
+  const [boletaConductaContexto, setBoletaConductaContexto] = useState<BoletaConductaContexto | null>(null);
+  const [boletaConductaDetalleHechos, setBoletaConductaDetalleHechos] = useState("");
+  const [boletaConductaLugar, setBoletaConductaLugar] = useState("");
 
   const roles = user?.roles || [];
   const canManageStudents =
     roles.includes("SUPER_ADMIN") ||
     roles.includes("ADMIN_INSTITUCIONAL") ||
     roles.includes("ADMINISTRATIVO");
+  const canImportStudents = canManageStudents;
+  const isProfesorRole = roles.includes("PROFESOR");
+  const canAccessStudentMatricula =
+    canManageStudents ||
+    isProfesorRole ||
+    roles.includes("PROFESOR_GUIA");
 
   const detalleMadre = useMemo(
     () => detalleEncargados.find((x) => x.TipoEncargado === "MADRE") || null,
@@ -257,28 +365,94 @@ export default function EstudiantesPage() {
     [detalleEncargados]
   );
 
-  async function load(query = "", verInactivos = incluirInactivos) {
+
+
+  function clearStudentResults() {
+    setItems([]);
+    setTotalItems(0);
+    setPage(1);
+    setLastSearch("");
+    setDetalleVisibleId(null);
+    setDetalleEstudiante(null);
+    setDetalleEncargados([]);
+  }
+
+  async function loadDashboard() {
+    setLoadingDashboard(true);
+    try {
+      const response = await api.get("/estudiantes/dashboard");
+      setDashboard(response.data?.data || null);
+    } catch (error) {
+      console.error("Error cargando dashboard de estudiantes:", error);
+    } finally {
+      setLoadingDashboard(false);
+    }
+  }
+
+  async function load(query = "", verInactivos = incluirInactivos, nextPage = page) {
+    const cleanQuery = String(query || "").trim();
+    if (!cleanQuery) {
+      clearStudentResults();
+      return;
+    }
+
+    setLoadingListado(true);
     try {
       const response = await api.get("/estudiantes", {
         params: {
-          q: query,
-          incluirInactivos: verInactivos
+          q: cleanQuery,
+          incluirInactivos: verInactivos,
+          page: nextPage,
+          pageSize: STUDENTS_PAGE_SIZE
         }
       });
-      setItems(response.data.data ?? []);
+      const data = response.data.data ?? [];
+      if (Array.isArray(data)) {
+        setItems(data);
+        setTotalItems(data.length);
+        setPage(nextPage);
+      } else {
+        setItems(data.items ?? []);
+        setTotalItems(Number(data.total || 0));
+        setPage(Number(data.page || nextPage));
+      }
+      setLastSearch(cleanQuery);
     } catch (error) {
       console.error("Error cargando estudiantes:", error);
       setErrorMessage("No se pudo cargar el listado de estudiantes");
+    } finally {
+      setLoadingListado(false);
     }
   }
 
   useEffect(() => {
-    load("", incluirInactivos);
+    loadDashboard();
+
     api.get("/academico/configuracion-correo-estudiante").then((response) => {
       const data = response.data?.data || {};
       setDominioCorreoEstudiante(String(data?.dominio || "@est.mep.go.cr"));
     }).catch(() => {});
+
+    api.get("/academico/tipos-estudiante", { params: { incluirInactivos: false } }).then((response) => {
+      setStudentTypes(response.data?.data ?? []);
+    }).catch(() => {});
+
+    api.get("/academico/rutas-transporte", { params: { incluirInactivas: false } }).then((response) => {
+      setRutasTransporte(response.data?.data ?? []);
+    }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!importandoExcel) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [importandoExcel]);
 
   useEffect(() => {
     const limpio = String(form.identificacion || "").replace(/\s+/g, "").trim();
@@ -300,6 +474,83 @@ export default function EstudiantesPage() {
     setMessage("");
     setErrorMessage("");
   }
+
+  function openCreateForm() {
+    resetAllForms();
+    clearMessages();
+    setIsFormExpanded(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function handleGoToMatricula(item: Student) {
+    clearMessages();
+    navigate("/matricula", {
+      state: {
+        openTab: "matriculas",
+        matriculaPrefill: {
+          estudianteId: item.EstudianteId,
+          fechaMatricula: new Date().toISOString().slice(0, 10),
+          rutaTransporte: item.RutaTransporteDescripcion || item.RutaTransporteHabitual || "",
+          correoEnvioBoleta: item.Correo || ""
+        }
+      }
+    });
+  }
+
+  async function handleOpenBoletaConducta(item: Student) {
+    clearMessages();
+    setBoletaConductaItem(item);
+    setBoletaConductaOpen(true);
+    setBoletaConductaDetalleHechos("");
+    setBoletaConductaLugar("");
+    setBoletaConductaLoading(true);
+    try {
+      const response = await api.get(`/boletas/conducta/contexto/${item.EstudianteId}`);
+      setBoletaConductaContexto(response.data?.data || null);
+    } catch (error: any) {
+      console.error("Error cargando contexto de boleta de conducta:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar el contexto de la boleta de conducta");
+      setBoletaConductaOpen(false);
+      setBoletaConductaItem(null);
+      setBoletaConductaContexto(null);
+    } finally {
+      setBoletaConductaLoading(false);
+    }
+  }
+
+  async function handleGuardarBoletaConducta() {
+    if (!boletaConductaItem) return;
+    if (!boletaConductaDetalleHechos.trim()) {
+      setErrorMessage("Debés indicar el detalle de los hechos");
+      return;
+    }
+    if (!boletaConductaLugar.trim()) {
+      setErrorMessage("Debés indicar el lugar del acontecimiento");
+      return;
+    }
+    clearMessages();
+    setBoletaConductaSaving(true);
+    try {
+      const response = await api.post("/boletas/conducta", {
+        estudianteId: boletaConductaItem.EstudianteId,
+        detalleHechos: boletaConductaDetalleHechos,
+        lugarAcontecimiento: boletaConductaLugar
+      });
+      const boletaConductaId = Number(response.data?.data?.boletaConductaId || 0);
+      if (!boletaConductaId) throw new Error("No se recibió el id de la boleta");
+      setMessage("Boleta de conducta generada correctamente");
+      setBoletaConductaOpen(false);
+      setBoletaConductaItem(null);
+      setBoletaConductaContexto(null);
+      window.open(`/boletas/conducta/${boletaConductaId}`, "_blank");
+    } catch (error: any) {
+      console.error("Error generando boleta de conducta:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo generar la boleta de conducta");
+    } finally {
+      setBoletaConductaSaving(false);
+    }
+  }
+
 
   async function handlePhotoUpload(file: File) {
     if (!canManageStudents) {
@@ -379,6 +630,9 @@ export default function EstudiantesPage() {
         fechaNacimiento: form.fechaNacimiento || null,
         correo: form.correo || null,
         telefono: form.telefono || null,
+        tipoEstudianteId: form.tipoEstudianteId ? Number(form.tipoEstudianteId) : null,
+        rutaTransporteId: form.rutaTransporteId ? Number(form.rutaTransporteId) : null,
+        autorizaWhatsAppEncargado: !!form.autorizaWhatsAppEncargado,
         sexo: form.sexo || null,
         fotoUrl: form.fotoUrl || null,
         nacionalidad: form.nacionalidad || null,
@@ -399,6 +653,8 @@ export default function EstudiantesPage() {
       }
 
       resetAllForms();
+      setIsFormExpanded(false);
+      await loadDashboard();
       await load(search, incluirInactivos);
     } catch (error: any) {
       console.error("Error guardando estudiante:", error);
@@ -447,6 +703,9 @@ export default function EstudiantesPage() {
           : "",
         correo: estudiante?.Correo || "",
         telefono: estudiante?.Telefono || "",
+        tipoEstudianteId: estudiante?.TipoEstudianteId ? String(estudiante.TipoEstudianteId) : "",
+        rutaTransporteId: estudiante?.RutaTransporteId ? String(estudiante.RutaTransporteId) : "",
+        autorizaWhatsAppEncargado: !!estudiante?.AutorizaWhatsAppEncargado,
         sexo: estudiante?.Sexo || "",
         fotoUrl: estudiante?.FotoUrl || "",
         nacionalidad: estudiante?.Nacionalidad || "",
@@ -521,6 +780,7 @@ export default function EstudiantesPage() {
           : emptyEncargado("ENCARGADO")
       );
 
+      setIsFormExpanded(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error: any) {
       console.error("Error cargando detalle del estudiante:", error);
@@ -536,15 +796,16 @@ export default function EstudiantesPage() {
   function handleCancelEdit() {
     resetAllForms();
     clearMessages();
+    setIsFormExpanded(false);
   }
 
   async function handleDelete(id: number) {
     if (!canManageStudents) {
-      setErrorMessage("No tenés permisos para desactivar estudiantes");
+      setErrorMessage("No tenés permisos para eliminar estudiantes");
       return;
     }
 
-    const confirmado = window.confirm("¿Deseás desactivar este estudiante?");
+    const confirmado = window.confirm("¿Deseás eliminar este estudiante? El registro quedará inactivo y podrés reactivarlo si lo necesités.");
     if (!confirmado) return;
 
     clearMessages();
@@ -552,10 +813,11 @@ export default function EstudiantesPage() {
 
     try {
       await api.delete(`/estudiantes/${id}`);
-      setMessage("Estudiante desactivado correctamente");
+      setMessage("Estudiante eliminado correctamente");
 
       if (editingId === id) {
         resetAllForms();
+        setIsFormExpanded(false);
       }
 
       if (detalleVisibleId === id) {
@@ -564,11 +826,12 @@ export default function EstudiantesPage() {
         setDetalleEncargados([]);
       }
 
+      await loadDashboard();
       await load(search, incluirInactivos);
     } catch (error: any) {
       console.error("Error desactivando estudiante:", error);
       setErrorMessage(
-        error?.response?.data?.message || "No se pudo desactivar el estudiante"
+        error?.response?.data?.message || "No se pudo eliminar el estudiante"
       );
     }
   }
@@ -588,6 +851,8 @@ export default function EstudiantesPage() {
       await api.patch(`/estudiantes/${finalId}/reactivar`);
       setMessage("Estudiante reactivado correctamente");
       resetAllForms();
+      setIsFormExpanded(false);
+      await loadDashboard();
       await load(search, incluirInactivos);
     } catch (error: any) {
       console.error("Error reactivando estudiante:", error);
@@ -599,7 +864,14 @@ export default function EstudiantesPage() {
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
-    await load(search, incluirInactivos);
+    const cleanQuery = String(search || "").trim();
+    if (!cleanQuery) {
+      clearStudentResults();
+      setMessage("Digite un valor de busqueda para consultar estudiantes.");
+      return;
+    }
+
+    await load(cleanQuery, incluirInactivos, 1);
   }
 
   async function handleVerDetalle(item: Student) {
@@ -670,28 +942,89 @@ export default function EstudiantesPage() {
     setImportandoExcel(true);
     clearMessages();
     setImportResult(null);
+    setImportProgress(null);
 
     try {
       const formData = new FormData();
       formData.append("archivo", archivoImportacion);
 
-      const response = await api.post("/estudiantes/importar-excel", formData, {
+      const response = await api.post("/estudiantes/importar-excel/iniciar", formData, {
         headers: {
           "Content-Type": "multipart/form-data"
         }
       });
 
-      setImportResult(response.data?.data || null);
+      const initialProgress: ImportProgress = response.data?.data;
+      const jobId = initialProgress?.jobId;
+
+      if (!jobId) {
+        throw new Error("No se recibio el identificador de la importacion");
+      }
+
+      setImportProgress(initialProgress);
+
+      let finalProgress = initialProgress;
+      while (!["COMPLETADO", "ERROR"].includes(finalProgress.status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        const progressResponse = await api.get(`/estudiantes/importar-excel/progreso/${jobId}`);
+        finalProgress = progressResponse.data?.data;
+        setImportProgress(finalProgress);
+      }
+
+      if (finalProgress.status === "ERROR") {
+        throw new Error(finalProgress.error || "No se pudo procesar la importacion");
+      }
+
+      setImportResult({
+        totalRegistros: finalProgress.totalRegistros,
+        totalOk: finalProgress.totalOk,
+        totalError: finalProgress.totalError,
+        totalCreados: finalProgress.totalCreados,
+        totalReactivados: finalProgress.totalReactivados,
+        totalOmitidos: finalProgress.totalOmitidos,
+        resultados: finalProgress.resultados || []
+      });
       setMessage("Importación procesada correctamente");
       setArchivoImportacion(null);
+      await loadDashboard();
       await load(search, incluirInactivos);
     } catch (error: any) {
       console.error("Error importando Excel:", error);
       setErrorMessage(
-        error?.response?.data?.message || "No se pudo importar el archivo Excel"
+        error?.response?.data?.message || error?.message || "No se pudo importar el archivo Excel"
       );
     } finally {
       setImportandoExcel(false);
+    }
+  }
+
+  async function handleDescargarResumenImportacion() {
+    const jobId = importProgress?.jobId;
+    if (!jobId) {
+      setErrorMessage("No hay un resumen de importacion disponible para exportar");
+      return;
+    }
+
+    try {
+      clearMessages();
+      const response = await api.get(`/estudiantes/importar-excel/resumen/${jobId}/excel`, {
+        responseType: "blob"
+      });
+
+      const blob = new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "resumen_importacion_estudiantes.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error("Error descargando resumen de importacion:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo exportar el resumen de importacion");
     }
   }
 
@@ -869,10 +1202,70 @@ export default function EstudiantesPage() {
     );
   }
 
+  function getBucketLabel(item: DashboardBucket) {
+    return String(item.Label ?? item.label ?? "Sin dato").trim() || "Sin dato";
+  }
+
+  function getBucketTotal(item: DashboardBucket) {
+    return Number(item.Total ?? item.total ?? 0);
+  }
+
+  function DashboardSummaryList({ title, data }: { title: string; data?: DashboardBucket[] }) {
+    const rows = (data || []).filter((item) => getBucketTotal(item) > 0);
+
+    return (
+      <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", padding: "12px", background: "rgba(255,255,255,0.03)", display: "grid", gap: "8px", minHeight: "120px" }}>
+        <strong>{title}</strong>
+        {rows.length ? rows.slice(0, 6).map((item, index) => (
+          <div key={`${title}-${getBucketLabel(item)}-${index}`} style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", fontSize: "13px" }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{getBucketLabel(item)}</span>
+            <span style={{ fontWeight: 900 }}>{getBucketTotal(item)}</span>
+          </div>
+        )) : (
+          <span style={{ color: "#94a3b8", fontWeight: 700 }}>Sin datos</span>
+        )}
+      </div>
+    );
+  }
+
+  const totalPages = Math.max(1, Math.ceil(totalItems / STUDENTS_PAGE_SIZE));
+  const pageStart = totalItems ? (page - 1) * STUDENTS_PAGE_SIZE + 1 : 0;
+  const pageEnd = totalItems ? Math.min(totalItems, pageStart + items.length - 1) : 0;
+  const studentsTableColSpan = 12;
+
   return (
     <div className="two-col">
       <section className="card">
-        <h3>{editingId ? "Editar estudiante" : "Registrar estudiante"}</h3>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "12px",
+            flexWrap: "wrap",
+            marginBottom: "12px"
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>
+              {isFormExpanded
+                ? editingId
+                  ? "Editar estudiante"
+                  : "Registrar estudiante"
+                : "Estudiantes"}
+            </h3>
+          </div>
+
+          {canManageStudents && !isFormExpanded && (
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={openCreateForm}
+            >
+              Agregar estudiante
+            </button>
+          )}
+        </div>
 
         {message && (
           <div
@@ -923,7 +1316,8 @@ export default function EstudiantesPage() {
         )}
 
         {canManageStudents ? (
-          <form className="form" onSubmit={handleSubmit}>
+          isFormExpanded ? (
+            <form className="form" onSubmit={handleSubmit}>
             <SectionTitle>Datos del estudiante</SectionTitle>
 
             <label>
@@ -1016,6 +1410,58 @@ export default function EstudiantesPage() {
                 value={form.telefono}
                 onChange={(e) => setForm({ ...form, telefono: e.target.value })}
               />
+            </label>
+
+            <label>
+              Tipo de estudiante
+              <select
+                value={form.tipoEstudianteId}
+                onChange={(e) => setForm({ ...form, tipoEstudianteId: e.target.value })}
+              >
+                <option value="">Seleccione</option>
+                {studentTypes.filter((item) => item.Activo).map((item) => (
+                  <option key={item.TipoEstudianteId} value={item.TipoEstudianteId}>
+                    {item.Descripcion}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Ruta
+              <select
+                value={form.rutaTransporteId}
+                onChange={(e) => {
+                  const rutaId = e.target.value;
+                  const ruta = rutasTransporte.find((item) => String(item.RutaTransporteId) === String(rutaId));
+                  setForm({
+                    ...form,
+                    rutaTransporteId: rutaId,
+                    rutaTransporteHabitual: ruta?.Descripcion || ""
+                  });
+                }}
+              >
+                <option value="">Seleccione</option>
+                {rutasTransporte.filter((item) => item.Activo).map((item) => (
+                  <option key={item.RutaTransporteId} value={item.RutaTransporteId}>
+                    {item.Descripcion}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+              <input
+                type="checkbox"
+                checked={!!form.autorizaWhatsAppEncargado}
+                onChange={(e) => setForm({ ...form, autorizaWhatsAppEncargado: e.target.checked })}
+              />
+              <span>
+                Padre, madre o encargado autoriza recibir información por WhatsApp
+                <small style={{ display: "block", opacity: 0.75 }}>
+                  Marcar Sí cuando exista visto bueno para enviar información institucional por WhatsApp.
+                </small>
+              </span>
             </label>
 
             <label>
@@ -1159,33 +1605,61 @@ export default function EstudiantesPage() {
                     : "Guardar"}
               </button>
 
-              {editingId && (
-                <button
-                  type="button"
-                  onClick={handleCancelEdit}
-                  style={{
-                    border: "1px solid #d1d5db",
-                    borderRadius: "10px",
-                    padding: "10px 14px",
-                    background: "#fff",
-                    cursor: "pointer"
-                  }}
-                >
-                  Cancelar
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "10px",
+                  padding: "10px 14px",
+                  background: "#fff",
+                  cursor: "pointer"
+                }}
+              >
+                Cancelar
+              </button>
             </div>
           </form>
+          ) : null
         ) : (
           <div style={{ color: "#6b7280" }}>
-            Este rol solo puede consultar estudiantes y ver carnets
+            Este rol puede consultar estudiantes, ver carnets y generar boletas
           </div>
         )}
       </section>
 
       <section className="card">
-        <h3>Listado de estudiantes</h3>
+        <h3>Busqueda de estudiantes</h3>
 
+        <div style={{ display: "grid", gap: "12px", marginBottom: "14px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px" }}>
+            {[
+              { label: "Activos", value: dashboard?.totalActivos ?? 0 },
+              { label: "Inactivos", value: dashboard?.totalInactivos ?? 0 },
+              { label: "Total general", value: dashboard?.totalGeneral ?? 0 },
+              { label: "Matriculados", value: dashboard?.totalMatriculados ?? 0 }
+            ].map((item) => (
+              <div key={item.label} style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", padding: "12px", background: "rgba(255,255,255,0.04)" }}>
+                <div style={{ color: "#cbd5e1", fontSize: "12px", fontWeight: 800 }}>{item.label}</div>
+                <div style={{ fontSize: "26px", fontWeight: 900, color: "#ffffff" }}>
+                  {loadingDashboard ? "..." : item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px" }}>
+            <DashboardSummaryList title="Por grupo" data={dashboard?.porGrupo} />
+            <DashboardSummaryList title="Por seccion" data={dashboard?.porSeccion} />
+            <DashboardSummaryList title="Por genero" data={dashboard?.porGenero} />
+            <DashboardSummaryList title="Por especialidad" data={dashboard?.porEspecialidad} />
+            <DashboardSummaryList title="Por nacionalidad" data={dashboard?.porNacionalidad} />
+            <DashboardSummaryList title="Por tipo" data={dashboard?.porTipo} />
+            <DashboardSummaryList title="Otros" data={dashboard?.otros} />
+          </div>
+        </div>
+
+        {canImportStudents && (
         <div
           style={{
             border: "1px solid rgba(255,255,255,0.12)",
@@ -1202,6 +1676,7 @@ export default function EstudiantesPage() {
               type="button"
               className="primary-btn"
               onClick={handleDescargarPlantilla}
+              disabled={importandoExcel}
             >
               Descargar plantilla
             </button>
@@ -1209,11 +1684,13 @@ export default function EstudiantesPage() {
 
           <form
             onSubmit={handleImportarExcel}
+            aria-busy={importandoExcel}
             style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}
           >
             <input
               type="file"
               accept=".xlsx,.xls"
+              disabled={importandoExcel}
               onChange={(e) => setArchivoImportacion(e.target.files?.[0] || null)}
             />
 
@@ -1226,11 +1703,50 @@ export default function EstudiantesPage() {
             </button>
           </form>
 
+          {importandoExcel && (
+            <div className="processing-indicator" role="status" aria-live="polite">
+              <span className="processing-spinner" aria-hidden="true" />
+              <div className="processing-body">
+                <strong>Procesando importacion de estudiantes</strong>
+                <span>
+                  {importProgress
+                    ? `${importProgress.procesados} de ${importProgress.totalRegistros} filas procesadas`
+                    : "Preparando archivo..."}
+                </span>
+                <div className="processing-progress-track" aria-label="Progreso de importacion">
+                  <div
+                    className="processing-progress-bar"
+                    style={{ width: `${Math.max(0, Math.min(100, importProgress?.porcentaje || 0))}%` }}
+                  />
+                </div>
+                <div className="processing-progress-meta">
+                  <span>{importProgress?.porcentaje || 0}%</span>
+                  <span>Creados: {importProgress?.totalCreados || 0}</span>
+                  <span>Reactivados: {importProgress?.totalReactivados || 0}</span>
+                  <span>Omitidos: {importProgress?.totalOmitidos || 0}</span>
+                  <span>Errores: {importProgress?.totalError || 0}</span>
+                </div>
+                <span>No refresques ni cierres esta pantalla hasta que aparezca el resultado.</span>
+              </div>
+            </div>
+          )}
+
           {importResult && (
             <div style={{ marginTop: "14px" }}>
               <div><strong>Total registros:</strong> {importResult.totalRegistros}</div>
-              <div><strong>Correctos:</strong> {importResult.totalOk}</div>
+              <div><strong>Creados:</strong> {importResult.totalCreados || 0}</div>
+              <div><strong>Reactivados y actualizados:</strong> {importResult.totalReactivados || 0}</div>
+              <div><strong>Omitidos por existir activos:</strong> {importResult.totalOmitidos || 0}</div>
               <div><strong>Con error:</strong> {importResult.totalError}</div>
+
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleDescargarResumenImportacion}
+                style={{ marginTop: "12px" }}
+              >
+                Exportar resumen a Excel
+              </button>
 
               <div className="table-wrap" style={{ marginTop: "12px" }}>
                 <table>
@@ -1257,6 +1773,7 @@ export default function EstudiantesPage() {
             </div>
           )}
         </div>
+        )}
 
         <form
           onSubmit={handleSearch}
@@ -1268,9 +1785,13 @@ export default function EstudiantesPage() {
           }}
         >
           <input
-            placeholder="Buscar por identificación o nombre"
+            placeholder="Buscar por identificacion, nombre, nacionalidad, tipo o ruta"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              const nextValue = e.target.value;
+              setSearch(nextValue);
+              if (!nextValue.trim()) clearStudentResults();
+            }}
             style={{
               flex: 1,
               minWidth: "240px",
@@ -1288,7 +1809,7 @@ export default function EstudiantesPage() {
             type="button"
             onClick={() => {
               setSearch("");
-              load("", incluirInactivos);
+              clearStudentResults();
             }}
             style={{
               border: "1px solid #d1d5db",
@@ -1313,10 +1834,54 @@ export default function EstudiantesPage() {
           <input
             type="checkbox"
             checked={incluirInactivos}
-            onChange={(e) => setIncluirInactivos(e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setIncluirInactivos(checked);
+              const queryToReload = lastSearch || search.trim();
+              if (queryToReload) {
+                load(queryToReload, checked, 1);
+              } else {
+                clearStudentResults();
+              }
+            }}
           />
           Incluir estudiantes inactivos
         </label>
+
+        {!lastSearch ? (
+          <div style={{ padding: "14px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.03)", color: "#cbd5e1", fontWeight: 800 }}>
+            Digite un valor de busqueda para mostrar estudiantes. El listado completo se reserva para reportes.
+          </div>
+        ) : (
+          <>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+          <div style={{ color: "#cbd5e1", fontWeight: 700 }}>
+            {loadingListado
+              ? "Cargando estudiantes..."
+              : `Mostrando ${pageStart}-${pageEnd} de ${totalItems} estudiantes`}
+          </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <button
+              type="button"
+              disabled={loadingListado || page <= 1}
+              onClick={() => load(lastSearch, incluirInactivos, page - 1)}
+              style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "8px 12px", background: "#fff", cursor: page <= 1 ? "not-allowed" : "pointer" }}
+            >
+              Anterior
+            </button>
+            <span style={{ color: "#cbd5e1", fontWeight: 800 }}>
+              Página {page} de {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={loadingListado || page >= totalPages}
+              onClick={() => load(lastSearch, incluirInactivos, page + 1)}
+              style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "8px 12px", background: "#fff", cursor: page >= totalPages ? "not-allowed" : "pointer" }}
+            >
+              Siguiente
+            </button>
+          </div>
+        </div>
 
         <div className="table-wrap">
           <table>
@@ -1329,6 +1894,9 @@ export default function EstudiantesPage() {
                 <th>Nacionalidad</th>
                 <th>Correo</th>
                 <th>Teléfono</th>
+                <th>Tipo</th>
+                <th>Ruta</th>
+                <th>VB WhatsApp</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
@@ -1360,6 +1928,9 @@ export default function EstudiantesPage() {
                     <td>{item.Nacionalidad ?? ""}</td>
                     <td>{item.Correo ?? ""}</td>
                     <td>{item.Telefono ?? ""}</td>
+                    <td>{item.TipoEstudianteDescripcion ?? ""}</td>
+                    <td>{item.RutaTransporteDescripcion ?? item.RutaTransporteHabitual ?? ""}</td>
+                    <td>{item.AutorizaWhatsAppEncargado ? "Sí" : "No"}</td>
                     <td>{item.Activo ? "Activo" : "Inactivo"}</td>
                     <td>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -1377,6 +1948,23 @@ export default function EstudiantesPage() {
                         >
                           {detalleVisibleId === item.EstudianteId ? "Ocultar detalle" : "Ver detalle"}
                         </button>
+
+                        {canAccessStudentMatricula && item.Activo && (
+                          <button
+                            type="button"
+                            onClick={() => (isProfesorRole ? handleOpenBoletaConducta(item) : handleGoToMatricula(item))}
+                            style={{
+                              border: "1px solid #bbf7d0",
+                              background: "#ecfdf3",
+                              color: "#166534",
+                              borderRadius: "8px",
+                              padding: "6px 10px",
+                              cursor: "pointer"
+                            }}
+                          >
+                            {isProfesorRole ? "Generar Boleta" : "Matrícula"}
+                          </button>
+                        )}
 
                         {canManageStudents && (
                           <button
@@ -1425,7 +2013,7 @@ export default function EstudiantesPage() {
                               cursor: "pointer"
                             }}
                           >
-                            Desactivar
+                            Eliminar
                           </button>
                         )}
 
@@ -1451,7 +2039,7 @@ export default function EstudiantesPage() {
 
                   {detalleVisibleId === item.EstudianteId && (
                     <tr>
-                      <td colSpan={9} style={{ padding: "14px" }}>
+                      <td colSpan={studentsTableColSpan} style={{ padding: "14px" }}>
                         {detalleCargandoId === item.EstudianteId ? (
                           <div>Cargando detalle...</div>
                         ) : detalleEstudiante ? (
@@ -1473,10 +2061,12 @@ export default function EstudiantesPage() {
                               <div><strong>Fecha nacimiento:</strong> {formatDate(detalleEstudiante.FechaNacimiento)}</div>
                               <div><strong>Sexo:</strong> {detalleEstudiante.Sexo || ""}</div>
                               <div><strong>Nacionalidad:</strong> {detalleEstudiante.Nacionalidad || ""}</div>
+                              <div><strong>Tipo de estudiante:</strong> {detalleEstudiante.TipoEstudianteDescripcion || ""}</div>
                               <div><strong>Adecuación:</strong> {detalleEstudiante.Adecuacion || ""}</div>
                               <div><strong>Discapacidad:</strong> {detalleEstudiante.Discapacidad || ""}</div>
                               <div><strong>Enfermedad:</strong> {detalleEstudiante.Enfermedad || ""}</div>
-                              <div><strong>Ruta transporte:</strong> {detalleEstudiante.RutaTransporteHabitual || ""}</div>
+                              <div><strong>Ruta transporte:</strong> {detalleEstudiante.RutaTransporteDescripcion || detalleEstudiante.RutaTransporteHabitual || ""}</div>
+                              <div><strong>VB WhatsApp encargado:</strong> {detalleEstudiante.AutorizaWhatsAppEncargado ? "Sí" : "No"}</div>
                               <div><strong>Observación médica:</strong> {detalleEstudiante.ObservacionMedica || ""}</div>
                               <div><strong>Correo:</strong> {detalleEstudiante.Correo || ""}</div>
                               <div><strong>Teléfono:</strong> {detalleEstudiante.Telefono || ""}</div>
@@ -1508,15 +2098,57 @@ export default function EstudiantesPage() {
 
               {!items.length && (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>
-                    No hay estudiantes registrados
+                  <td colSpan={studentsTableColSpan} style={{ textAlign: "center", padding: "16px" }}>
+                    No hay estudiantes que coincidan con la busqueda
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+          </>
+        )}
+
+        {boletaConductaOpen && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 50, display: "grid", placeItems: "center", padding: "18px" }}>
+            <div style={{ width: "min(880px, 100%)", maxHeight: "92vh", overflow: "auto", background: "#ffffff", borderRadius: "16px", border: "1px solid #cbd5e1", padding: "16px", display: "grid", gap: "12px" }}>
+              <h3 style={{ margin: 0, color: "#0f172a" }}>Generar Boleta de Reporte de Conducta</h3>
+              {boletaConductaLoading ? (
+                <div>Cargando contexto...</div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+                    <label>Fecha<input value={String(boletaConductaContexto?.fecha || "").slice(0, 10)} readOnly /></label>
+                    <label>N° (consecutivo)<input value={String(boletaConductaContexto?.siguienteNumero || "")} readOnly /></label>
+                    <label>Estudiante<input value={boletaConductaContexto?.estudianteNombre || getStudentFullName(boletaConductaItem || { Nombre: "", PrimerApellido: "", SegundoApellido: "" })} readOnly /></label>
+                    <label>Sección<input value={boletaConductaContexto?.seccion || ""} readOnly /></label>
+                    <label>Persona funcionaria<input value={boletaConductaContexto?.funcionarioNombre || ""} readOnly /></label>
+                    <label>Colegio<input value={boletaConductaContexto?.institucion?.NombreOficialBoleta || boletaConductaContexto?.institucion?.NombreComercial || boletaConductaContexto?.institucion?.Nombre || ""} readOnly /></label>
+                  </div>
+                  <label>Detalle de los hechos
+                    <textarea rows={6} value={boletaConductaDetalleHechos} onChange={(e) => setBoletaConductaDetalleHechos(e.target.value)} placeholder="Describí el hecho reportado..." />
+                  </label>
+                  <label>Lugar del acontecimiento
+                    <input value={boletaConductaLugar} onChange={(e) => setBoletaConductaLugar(e.target.value)} placeholder="Ejemplo: Aula 8-3, cancha, pasillo..." />
+                  </label>
+                  <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => { setBoletaConductaOpen(false); setBoletaConductaItem(null); setBoletaConductaContexto(null); }} style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                      Cancelar
+                    </button>
+                    <button type="button" className="primary-btn" disabled={boletaConductaSaving} onClick={handleGuardarBoletaConducta}>
+                      {boletaConductaSaving ? "Generando..." : "Generar e imprimir boleta"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );
 }
+
+
+
+

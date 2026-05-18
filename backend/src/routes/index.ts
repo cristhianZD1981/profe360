@@ -14,6 +14,12 @@ import archivosRoutes from "../modules/archivos/archivos.routes";
 import academicoRoutes from "../modules/academico/academico.routes";
 import horariosRoutes from "../modules/horarios/horarios.routes";
 import boletasRoutes from "../modules/boletas/boletas.routes";
+import evaluacionRoutes from "../modules/evaluacion/evaluacion.routes";
+import gestionProfeRoutes from "../modules/gestion-profe/gestion-profe.routes";
+import planeamientoIARoutes from "../modules/planeamiento-ia/planeamiento-ia.routes";
+import plantillaIARoutes from "../modules/planeamiento-ia/plantilla-ia.routes";
+import eval360Routes from "../modules/eval360/eval360.routes";
+import seguimientoEvaluacionRoutes from "../modules/seguimiento-evaluacion/seguimiento-evaluacion.routes";
 
 const router = Router();
 
@@ -32,5 +38,11 @@ router.use("/archivos", archivosRoutes);
 router.use("/academico", academicoRoutes);
 router.use("/horarios", horariosRoutes);
 router.use("/boletas", boletasRoutes);
+router.use("/evaluacion", evaluacionRoutes);
+router.use("/gestion-profe", gestionProfeRoutes);
+router.use("/planeamiento-ia", planeamientoIARoutes);
+router.use("/ia", plantillaIARoutes);
+router.use("/eval360", eval360Routes);
+router.use("/seguimiento-evaluacion", seguimientoEvaluacionRoutes);
 
 export default router;

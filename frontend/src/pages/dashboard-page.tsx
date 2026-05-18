@@ -1,4 +1,4 @@
-export function DashboardPage() {
+﻿export function DashboardPage() {
   return (
     <div style={{ padding: 24 }}>
       <h1>Dashboard</h1>
@@ -12,3 +12,6 @@ export function DashboardPage() {
     </div>
   );
 }
+
+
+

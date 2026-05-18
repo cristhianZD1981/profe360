@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import api from "../lib/http";
 
@@ -9,23 +9,80 @@ type MenuItem = {
   allowedRoles?: string[];
 };
 
+const ADMINISTRATIVO_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO"
+];
+
+const PROFESOR_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO",
+  "PROFESOR",
+  "PROFESOR_GUIA"
+];
+
+const PARAMETRIZACIONES_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO",
+  "PROFESOR",
+  "PROFESOR_GUIA"
+];
+
 const items: MenuItem[] = [
   { label: "Dashboard", path: "/" },
-  { label: "Instituciones", path: "/instituciones" },
+  {
+    label: "Instituciones",
+    path: "/instituciones",
+    allowedRoles: ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"]
+  },
+  {
+    label: "Administrativo",
+    path: "/administrativo",
+    allowedRoles: ADMINISTRATIVO_ROLES
+  },
   {
     label: "Usuarios",
     path: "/usuarios",
-    allowedRoles: ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"]
+    allowedRoles: ADMINISTRATIVO_ROLES
   },
   { label: "Estudiantes", path: "/estudiantes" },
-  { label: "Académico", path: "/academico" },
-  { label: "Horarios", path: "/horarios" },
-  { label: "Asistencia", path: "/asistencia" },
+  {
+    label: "Matrícula",
+    path: "/matricula",
+    allowedRoles: ADMINISTRATIVO_ROLES
+  },
+  {
+    label: "Parametrizaciones",
+    path: "/parametrizaciones",
+    allowedRoles: PARAMETRIZACIONES_ROLES
+  },
+  {
+    label: "Gestión del Profe",
+    path: "/gestion-profe",
+    allowedRoles: PROFESOR_ROLES
+  },
   { label: "Reportes", path: "/reportes" }
 ];
 
+function normalizeRole(role: string) {
+  return role.trim().toUpperCase();
+}
+
+function hasAccess(item: MenuItem, roles: string[]) {
+  if (!item.allowedRoles?.length) return true;
+
+  const normalizedRoles = roles.map(normalizeRole);
+  const allowedRoles = item.allowedRoles.map(normalizeRole);
+
+  return allowedRoles.some((role) => normalizedRoles.includes(role));
+}
+
 export default function Layout() {
   const { user, logout, setUser } = useAuth();
+  const location = useLocation();
 
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -40,13 +97,32 @@ export default function Layout() {
     user?.institucionNombre ||
     "Sin institución";
 
-  const visibleItems = useMemo(() => {
-    const roles = user?.roles || [];
-    return items.filter((item) => {
-      if (!item.allowedRoles?.length) return true;
-      return item.allowedRoles.some((role) => roles.includes(role));
-    });
-  }, [user?.roles]);
+  const roles = useMemo(() => user?.roles || [], [user?.roles]);
+
+  function renderMenuItem(item: MenuItem) {
+    const allowed = hasAccess(item, roles);
+
+    const linkClassName = ({ isActive }: { isActive: boolean }) =>
+      `menu-link ${isActive ? "active" : ""}`;
+
+    return (
+      <div key={item.path} className="menu-item-block">
+        {allowed ? (
+          <NavLink to={item.path} className={linkClassName} end={item.path === "/"}>
+            {item.label}
+          </NavLink>
+        ) : (
+          <span
+            className="menu-link inactive"
+            title="No tenés acceso con el rol actual"
+            aria-disabled="true"
+          >
+            {item.label}
+          </span>
+        )}
+      </div>
+    );
+  }
 
   async function handleChangePassword(e: FormEvent) {
     e.preventDefault();
@@ -123,17 +199,7 @@ export default function Layout() {
         </div>
 
         <nav className="menu">
-          {visibleItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) =>
-                `menu-link ${isActive ? "active" : ""}`
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          {items.map((item) => renderMenuItem(item))}
         </nav>
       </aside>
 

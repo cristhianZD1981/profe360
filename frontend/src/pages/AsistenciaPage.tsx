@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 
 type AnioLectivo = {
@@ -139,7 +139,7 @@ function fullName(item: {
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
 }) {
-  return [item.Nombre, item.PrimerApellido || "", item.SegundoApellido || ""]
+  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -564,7 +564,7 @@ export default function AsistenciaPage() {
             </label>
 
             <label>
-              Búsqueda
+              Bésqueda
               <input
                 value={filters.q}
                 onChange={(e) =>
@@ -878,3 +878,6 @@ export default function AsistenciaPage() {
     </div>
   );
 }
+
+
+

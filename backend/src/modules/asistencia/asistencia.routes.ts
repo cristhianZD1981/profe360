@@ -147,7 +147,7 @@ async function getMatriculadosActivosByClase(
         AND m.AnioLectivoId = @anioLectivoId
         AND m.Estado = N'Activa'
         AND e.Activo = 1
-      ORDER BY e.Nombre, e.PrimerApellido, e.SegundoApellido
+      ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
     `);
 
   return result.recordset;
@@ -458,7 +458,7 @@ router.get("/fechas-clase/:id/estudiantes", async (req, res) => {
           AND m.AnioLectivoId = @anioLectivoId
           AND m.Estado = N'Activa'
           AND e.Activo = 1
-        ORDER BY e.Nombre, e.PrimerApellido, e.SegundoApellido
+        ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
       `);
 
     return ok(res, {
@@ -697,7 +697,7 @@ router.get("/sesiones/:id", async (req, res) => {
         INNER JOIN dbo.EstadoAsistencia ea
           ON ea.EstadoAsistenciaId = da.EstadoAsistenciaId
         WHERE da.AsistenciaSesionId = @id
-        ORDER BY e.Nombre, e.PrimerApellido, e.SegundoApellido
+        ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
       `);
 
     return ok(res, {

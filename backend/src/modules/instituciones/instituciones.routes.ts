@@ -34,6 +34,8 @@ router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (req, 
           CorreoPrincipal,
           TelefonoPrincipal,
           Direccion,
+          CodigoPresupuestario,
+          DireccionExacta,
           LogoUrl,
           MembreteUrl,
           NombreOficialBoleta,
@@ -50,6 +52,8 @@ router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (req, 
             OR NombreComercial LIKE @q
             OR CorreoPrincipal LIKE @q
             OR CedulaJuridica LIKE @q
+            OR CodigoPresupuestario LIKE @q
+            OR DireccionExacta LIKE @q
             OR NombreOficialBoleta LIKE @q
             OR RegionalEducativa LIKE @q
             OR CircuitoEducativo LIKE @q
@@ -77,6 +81,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       correoPrincipal,
       telefonoPrincipal,
       direccion,
+      codigoPresupuestario,
+      direccionExacta,
       logoUrl,
       membreteUrl,
       nombreOficialBoleta,
@@ -113,7 +119,9 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       .input("cedulaJuridica", sql.NVarChar, cedulaJuridica || null)
       .input("correoPrincipal", sql.NVarChar, correoPrincipal || null)
       .input("telefonoPrincipal", sql.NVarChar, telefonoPrincipal || null)
-      .input("direccion", sql.NVarChar, direccion || null)
+       .input("direccion", sql.NVarChar, direccion || null)
+      .input("codigoPresupuestario", sql.NVarChar, codigoPresupuestario || null)
+      .input("direccionExacta", sql.NVarChar, direccionExacta || null)
       .input("logoUrl", sql.NVarChar, logoUrl || null)
       .input("membreteUrl", sql.NVarChar, membreteUrl || null)
       .input("nombreOficialBoleta", sql.NVarChar, nombreOficialBoleta || null)
@@ -129,6 +137,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
           CorreoPrincipal,
           TelefonoPrincipal,
           Direccion,
+          CodigoPresupuestario,
+          DireccionExacta,
           LogoUrl,
           MembreteUrl,
           NombreOficialBoleta,
@@ -147,6 +157,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
           @correoPrincipal,
           @telefonoPrincipal,
           @direccion,
+          @codigoPresupuestario,
+          @direccionExacta,
           @logoUrl,
           @membreteUrl,
           @nombreOficialBoleta,
@@ -187,6 +199,8 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
       correoPrincipal,
       telefonoPrincipal,
       direccion,
+      codigoPresupuestario,
+      direccionExacta,
       logoUrl,
       membreteUrl,
       nombreOficialBoleta,
@@ -239,7 +253,9 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
       .input("cedulaJuridica", sql.NVarChar, cedulaJuridica || null)
       .input("correoPrincipal", sql.NVarChar, correoPrincipal || null)
       .input("telefonoPrincipal", sql.NVarChar, telefonoPrincipal || null)
-      .input("direccion", sql.NVarChar, direccion || null)
+       .input("direccion", sql.NVarChar, direccion || null)
+      .input("codigoPresupuestario", sql.NVarChar, codigoPresupuestario || null)
+      .input("direccionExacta", sql.NVarChar, direccionExacta || null)
       .input("logoUrl", sql.NVarChar, logoUrl || null)
       .input("membreteUrl", sql.NVarChar, membreteUrl || null)
       .input("nombreOficialBoleta", sql.NVarChar, nombreOficialBoleta || null)
@@ -255,6 +271,8 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
           CorreoPrincipal = @correoPrincipal,
           TelefonoPrincipal = @telefonoPrincipal,
           Direccion = @direccion,
+          CodigoPresupuestario = @codigoPresupuestario,
+          DireccionExacta = @direccionExacta,
           LogoUrl = @logoUrl,
           MembreteUrl = @membreteUrl,
           NombreOficialBoleta = @nombreOficialBoleta,

@@ -1,5 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import api from "../lib/http";
+import EvaluacionParametrizacionPage from "./EvaluacionParametrizacionPage";
+import HabilidadesPlaneamientoAcademicoPage from "./HabilidadesPlaneamientoAcademicoPage";
 
 type AnioLectivo = {
   AnioLectivoId: number;
@@ -59,7 +62,10 @@ type Matricula = {
   MatriculaDetalleId?: number | null;
   TipoMatricula?: string | null;
   NivelAcademico?: number | null;
+  EspecialidadId?: number | null;
   Especialidad?: string | null;
+  EspecialidadDescripcion?: string | null;
+  PermiteMultiplesPorSeccion?: boolean;
   SeccionTexto?: string | null;
   RutaTransporte?: string | null;
   EsRepitente?: boolean;
@@ -71,12 +77,95 @@ type Matricula = {
   GrupoEspecialidad?: string | null;
 };
 
+type MatriculaImportResultRow = {
+  fila: number;
+  cedula: string;
+  seccion: string;
+  estudiante?: string | null;
+  grupo?: string | null;
+  matriculaId?: number | null;
+  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  motivo: string;
+};
+
+type MatriculaImportResult = {
+  totalRegistros: number;
+  totalOk: number;
+  totalError: number;
+  totalCreados: number;
+  totalReactivados: number;
+  totalOmitidos: number;
+  resultados: MatriculaImportResultRow[];
+};
+
+type MatriculaImportProgress = MatriculaImportResult & {
+  jobId: string;
+  status: "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+  procesados: number;
+  porcentaje: number;
+  error?: string | null;
+};
+
+type AcademicoBulkImportKey =
+  | "grupos"
+  | "materias"
+  | "asignaciones-docentes"
+  | "grupos-materia"
+  | "horarios-grupo"
+  | "feriados";
+
+type AcademicoBulkImportRow = {
+  fila: number;
+  referencia: string;
+  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  motivo: string;
+};
+
+type AcademicoBulkImportResult = {
+  totalRegistros: number;
+  totalOk: number;
+  totalError: number;
+  totalCreados: number;
+  totalReactivados: number;
+  totalOmitidos: number;
+  resultados: AcademicoBulkImportRow[];
+};
+
+type AcademicoBulkImportProgress = AcademicoBulkImportResult & {
+  jobId: string;
+  status: "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+  procesados: number;
+  porcentaje: number;
+  error?: string | null;
+};
+
 type Materia = {
   MateriaId: number;
   InstitucionId?: number;
   Codigo: string | null;
   Nombre: string;
   Descripcion: string | null;
+  Activo: boolean;
+};
+
+type Especialidad = {
+  EspecialidadId: number;
+  InstitucionId?: number;
+  Descripcion: string;
+  PermiteMultiplesPorSeccion: boolean;
+  Activo: boolean;
+};
+
+type RutaTransporte = {
+  RutaTransporteId: number;
+  InstitucionId?: number;
+  Descripcion: string;
+  Responsable: string | null;
+  LugarInicio: string | null;
+  LugarFin: string | null;
+  CapacidadEstudiantes: number | null;
+  HoraInicio: string | null;
+  HoraFin: string | null;
   Activo: boolean;
 };
 
@@ -184,6 +273,15 @@ type FechaClase = {
   DiaSemana: number | null;
 };
 
+type MensajeSeguimiento = {
+  MensajeSeguimientoId: number;
+  TipoUso: "COTIDIANO" | "TAREA" | "ASISTENCIA" | "EXAMEN";
+  ValorNivel: number | null;
+  Titulo: string | null;
+  Cuerpo: string;
+  Activo: boolean;
+};
+
 const initialAnioForm = {
   nombre: "",
   fechaInicio: "",
@@ -213,6 +311,7 @@ const initialMatriculaForm = {
   observacion: "",
   tipoMatricula: "",
   nivelAcademico: "",
+  especialidadId: "",
   especialidad: "",
   seccionTexto: "",
   rutaTransporte: "",
@@ -223,10 +322,124 @@ const initialMatriculaForm = {
   observacionesDetalle: ""
 };
 
+type AcademicoNavigationState = {
+  openTab?: TabKey;
+  matriculaPrefill?: Partial<typeof initialMatriculaForm> & {
+    estudianteId?: string | number;
+    grupoId?: string | number;
+    anioLectivoId?: string | number;
+  };
+};
+
+type AcademicoPageProps = {
+  initialTab?: TabKey;
+  visibleTabs?: TabKey[];
+};
+
+
+function normalizeNivelParaCiclo(value: any) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+function getCicloPorNivel(value: any) {
+  const raw = String(value ?? "").trim();
+  const normalized = normalizeNivelParaCiclo(raw);
+
+  const numeroMatch = normalized.match(/\d+/);
+  const numero = numeroMatch ? Number(numeroMatch[0]) : null;
+
+  if (
+    numero !== null &&
+    numero >= 1 &&
+    numero <= 3
+  ) {
+    return "Primer Ciclo";
+  }
+
+  if (
+    numero !== null &&
+    numero >= 4 &&
+    numero <= 6
+  ) {
+    return "Segundo Ciclo";
+  }
+
+  if (
+    numero !== null &&
+    numero >= 7 &&
+    numero <= 9
+  ) {
+    return "Tercer Ciclo";
+  }
+
+  if (
+    numero !== null &&
+    numero >= 10 &&
+    numero <= 12
+  ) {
+    return "Cuarto Ciclo";
+  }
+
+  if (["PRIMERO", "SEGUNDO", "TERCERO"].some((nivel) => normalized.includes(nivel))) return "Primer Ciclo";
+  if (["CUARTO", "QUINTO", "SEXTO"].some((nivel) => normalized.includes(nivel))) return "Segundo Ciclo";
+  if (["SETIMO", "SEPTIMO", "OCTAVO", "NOVENO"].some((nivel) => normalized.includes(nivel))) return "Tercer Ciclo";
+  if (["DECIMO", "UNDECIMO", "UNDECIMO", "DUODECIMO", "DUODECIMO"].some((nivel) => normalized.includes(nivel))) return "Cuarto Ciclo";
+
+  return "Sin ciclo definido";
+}
+
 const initialMateriaForm = {
   codigo: "",
   nombre: "",
   descripcion: ""
+};
+
+type CorreoNotificacionConfig = {
+  TipoUso: string;
+  FromEmail?: string | null;
+  ParaModo?: string | null;
+  CcModo?: string | null;
+  AsuntoTemplate?: string | null;
+  CuerpoTemplate?: string | null;
+};
+
+const initialMensajeSeguimientoForm = {
+  tipoUso: "COTIDIANO",
+  valorNivel: "",
+  titulo: "",
+  cuerpo: ""
+};
+
+function getEtiquetaNivelMensaje(tipoUso: string, valorNivel: number | null | undefined) {
+  if (valorNivel === null || valorNivel === undefined) return "General";
+  if (String(tipoUso || "").toUpperCase() === "ASISTENCIA") {
+    if (Number(valorNivel) === 1) return "Ausencia";
+    if (Number(valorNivel) === 2) return "Tardía";
+  }
+  if (String(tipoUso || "").toUpperCase() === "TAREA" && Number(valorNivel) === 0) return "No entregado";
+  if (Number(valorNivel) === 1) return "Inicial";
+  if (Number(valorNivel) === 2) return "Intermedio";
+  if (Number(valorNivel) === 3) return "Avanzado";
+  return String(valorNivel);
+}
+
+const initialEspecialidadForm = {
+  descripcion: "",
+  permiteMultiplesPorSeccion: false
+};
+
+const initialRutaTransporteForm = {
+  descripcion: "",
+  responsable: "",
+  lugarInicio: "",
+  lugarFin: "",
+  capacidadEstudiantes: "",
+  horaInicio: "",
+  horaFin: ""
 };
 
 const initialAsignacionForm = {
@@ -273,6 +486,51 @@ const initialFechaClaseForm = {
   cantidadLeccionesPorDiaNueva: "1"
 };
 
+const academicoBulkImportLabels: Record<AcademicoBulkImportKey, { title: string; filename: string }> = {
+  grupos: { title: "grupos", filename: "plantilla_importacion_grupos.xlsx" },
+  materias: { title: "materias", filename: "plantilla_importacion_materias.xlsx" },
+  "asignaciones-docentes": { title: "asignaciones docentes", filename: "plantilla_importacion_asignaciones_docentes.xlsx" },
+  "grupos-materia": { title: "materias por grupo", filename: "plantilla_importacion_materias_por_grupo.xlsx" },
+  "horarios-grupo": { title: "horarios de clase", filename: "plantilla_importacion_horarios_clase.xlsx" },
+  feriados: { title: "feriados", filename: "plantilla_importacion_feriados.xlsx" }
+};
+
+const initialAcademicoBulkImportFiles: Record<AcademicoBulkImportKey, File | null> = {
+  grupos: null,
+  materias: null,
+  "asignaciones-docentes": null,
+  "grupos-materia": null,
+  "horarios-grupo": null,
+  feriados: null
+};
+
+const initialAcademicoBulkImportBooleanState: Record<AcademicoBulkImportKey, boolean> = {
+  grupos: false,
+  materias: false,
+  "asignaciones-docentes": false,
+  "grupos-materia": false,
+  "horarios-grupo": false,
+  feriados: false
+};
+
+const initialAcademicoBulkImportProgressState: Record<AcademicoBulkImportKey, AcademicoBulkImportProgress | null> = {
+  grupos: null,
+  materias: null,
+  "asignaciones-docentes": null,
+  "grupos-materia": null,
+  "horarios-grupo": null,
+  feriados: null
+};
+
+const initialAcademicoBulkImportResultState: Record<AcademicoBulkImportKey, AcademicoBulkImportResult | null> = {
+  grupos: null,
+  materias: null,
+  "asignaciones-docentes": null,
+  "grupos-materia": null,
+  "horarios-grupo": null,
+  feriados: null
+};
+
 function formatDate(value?: string | null) {
   if (!value) return "";
   return value.slice(0, 10);
@@ -298,7 +556,7 @@ function getStudentFullName(item: {
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
 }) {
-  return [item.Nombre, item.PrimerApellido || "", item.SegundoApellido || ""]
+  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -309,7 +567,7 @@ function getTeacherFullName(item: {
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
 }) {
-  return [item.Nombre, item.PrimerApellido || "", item.SegundoApellido || ""]
+  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -333,6 +591,9 @@ type TabKey =
   | "periodos"
   | "grupos"
   | "matriculas"
+  | "especialidades"
+  | "rutasTransporte"
+  | "evaluacion"
   | "materias"
   | "asignaciones"
   | "bloques"
@@ -341,10 +602,48 @@ type TabKey =
   | "fechasClase"
   | "feriados"
   | "diasLectivos"
+  | "configuracionCorreo"
+  | "habilidadesPlaneamiento"
+  | "mensajes";
+
+
+type FormSectionKey =
+  | "anios"
+  | "periodos"
+  | "grupos"
+  | "matriculas"
+  | "especialidades"
+  | "rutasTransporte"
+  | "materias"
+  | "asignaciones"
+  | "bloques"
+  | "gruposMateria"
+  | "horarios"
+  | "feriados"
+  | "diasLectivos"
   | "configuracionCorreo";
 
-export default function AcademicoPage() {
-  const [tab, setTab] = useState<TabKey>("anios");
+const initialOpenSections: Record<FormSectionKey, boolean> = {
+  anios: false,
+  periodos: false,
+  grupos: false,
+  matriculas: false,
+  especialidades: false,
+  rutasTransporte: false,
+  materias: false,
+  asignaciones: false,
+  bloques: false,
+  gruposMateria: false,
+  horarios: false,
+  feriados: false,
+  diasLectivos: false,
+  configuracionCorreo: false
+};
+
+export default function AcademicoPage({ initialTab = "anios", visibleTabs }: AcademicoPageProps) {
+  const location = useLocation();
+  const consumedNavigationKeyRef = useRef<string | null>(null);
+  const [tab, setTab] = useState<TabKey>(initialTab);
 
   const [anios, setAnios] = useState<AnioLectivo[]>([]);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
@@ -352,6 +651,10 @@ export default function AcademicoPage() {
   const [gruposCatalogo, setGruposCatalogo] = useState<Grupo[]>([]);
   const [grupos, setGrupos] = useState<Grupo[]>([]);
   const [matriculas, setMatriculas] = useState<Matricula[]>([]);
+  const [especialidadesCatalogo, setEspecialidadesCatalogo] = useState<Especialidad[]>([]);
+  const [especialidades, setEspecialidades] = useState<Especialidad[]>([]);
+  const [rutasTransporteCatalogo, setRutasTransporteCatalogo] = useState<RutaTransporte[]>([]);
+  const [rutasTransporte, setRutasTransporte] = useState<RutaTransporte[]>([]);
   const [materiasCatalogo, setMateriasCatalogo] = useState<Materia[]>([]);
   const [materias, setMaterias] = useState<Materia[]>([]);
   const [docentesCatalogo, setDocentesCatalogo] = useState<DocenteCatalogo[]>([]);
@@ -363,11 +666,14 @@ export default function AcademicoPage() {
   const [fechasClase, setFechasClase] = useState<FechaClase[]>([]);
   const [feriados, setFeriados] = useState<Feriado[]>([]);
   const [diasLectivos, setDiasLectivos] = useState<DiaLectivoConfig[]>([]);
+  const [mensajesSeguimiento, setMensajesSeguimiento] = useState<MensajeSeguimiento[]>([]);
 
   const [anioForm, setAnioForm] = useState(initialAnioForm);
   const [periodoForm, setPeriodoForm] = useState(initialPeriodoForm);
   const [grupoForm, setGrupoForm] = useState(initialGrupoForm);
   const [matriculaForm, setMatriculaForm] = useState(initialMatriculaForm);
+  const [especialidadForm, setEspecialidadForm] = useState(initialEspecialidadForm);
+  const [rutaTransporteForm, setRutaTransporteForm] = useState(initialRutaTransporteForm);
   const [materiaForm, setMateriaForm] = useState(initialMateriaForm);
   const [asignacionForm, setAsignacionForm] = useState(initialAsignacionForm);
   const [bloqueForm, setBloqueForm] = useState(initialBloqueForm);
@@ -375,11 +681,14 @@ export default function AcademicoPage() {
   const [horarioForm, setHorarioForm] = useState(initialHorarioForm);
   const [fechaClaseForm, setFechaClaseForm] = useState(initialFechaClaseForm);
   const [feriadoForm, setFeriadoForm] = useState({ fecha: "", nombre: "", descripcion: "" });
+  const [mensajeSeguimientoForm, setMensajeSeguimientoForm] = useState(initialMensajeSeguimientoForm);
 
   const [editingAnioId, setEditingAnioId] = useState<number | null>(null);
   const [editingPeriodoId, setEditingPeriodoId] = useState<number | null>(null);
   const [editingGrupoId, setEditingGrupoId] = useState<number | null>(null);
   const [editingMatriculaId, setEditingMatriculaId] = useState<number | null>(null);
+  const [editingEspecialidadId, setEditingEspecialidadId] = useState<number | null>(null);
+  const [editingRutaTransporteId, setEditingRutaTransporteId] = useState<number | null>(null);
   const [editingMateriaId, setEditingMateriaId] = useState<number | null>(null);
   const [editingAsignacionId, setEditingAsignacionId] = useState<number | null>(null);
   const [editingBloqueId, setEditingBloqueId] = useState<number | null>(null);
@@ -387,13 +696,35 @@ export default function AcademicoPage() {
   const [editingHorarioId, setEditingHorarioId] = useState<number | null>(null);
   const [editingFechaClaseId, setEditingFechaClaseId] = useState<number | null>(null);
   const [editingFeriadoId, setEditingFeriadoId] = useState<number | null>(null);
+  const [editingMensajeSeguimientoId, setEditingMensajeSeguimientoId] = useState<number | null>(null);
 
   const [reactivableMatriculaId, setReactivableMatriculaId] = useState<number | null>(null);
+  const [matriculaImportAnioId, setMatriculaImportAnioId] = useState("");
+  const [archivoImportacionMatricula, setArchivoImportacionMatricula] = useState<File | null>(null);
+  const [importandoMatriculas, setImportandoMatriculas] = useState(false);
+  const [matriculaImportResult, setMatriculaImportResult] = useState<MatriculaImportResult | null>(null);
+  const [matriculaImportProgress, setMatriculaImportProgress] = useState<MatriculaImportProgress | null>(null);
+  const matriculaImportFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [academicoBulkImportFiles, setAcademicoBulkImportFiles] = useState<Record<AcademicoBulkImportKey, File | null>>(initialAcademicoBulkImportFiles);
+  const [academicoBulkImportLoading, setAcademicoBulkImportLoading] = useState<Record<AcademicoBulkImportKey, boolean>>(initialAcademicoBulkImportBooleanState);
+  const [academicoBulkImportProgress, setAcademicoBulkImportProgress] = useState<Record<AcademicoBulkImportKey, AcademicoBulkImportProgress | null>>(initialAcademicoBulkImportProgressState);
+  const [academicoBulkImportResult, setAcademicoBulkImportResult] = useState<Record<AcademicoBulkImportKey, AcademicoBulkImportResult | null>>(initialAcademicoBulkImportResultState);
+  const academicoBulkImportFileRefs = useRef<Record<AcademicoBulkImportKey, HTMLInputElement | null>>({
+    grupos: null,
+    materias: null,
+    "asignaciones-docentes": null,
+    "grupos-materia": null,
+    "horarios-grupo": null,
+    feriados: null
+  });
 
   const [anioSearch, setAnioSearch] = useState("");
   const [periodoSearch, setPeriodoSearch] = useState("");
   const [grupoSearch, setGrupoSearch] = useState("");
   const [matriculaSearch, setMatriculaSearch] = useState("");
+  const [matriculaHasSearched, setMatriculaHasSearched] = useState(false);
+  const [especialidadSearch, setEspecialidadSearch] = useState("");
+  const [rutaTransporteSearch, setRutaTransporteSearch] = useState("");
   const [materiaSearch, setMateriaSearch] = useState("");
   const [asignacionSearch, setAsignacionSearch] = useState("");
   const [bloqueSearch, setBloqueSearch] = useState("");
@@ -406,6 +737,8 @@ export default function AcademicoPage() {
   const [incluirPeriodosInactivos, setIncluirPeriodosInactivos] = useState(false);
   const [incluirGruposInactivos, setIncluirGruposInactivos] = useState(false);
   const [incluirMatriculasInactivas, setIncluirMatriculasInactivas] = useState(false);
+  const [incluirEspecialidadesInactivas, setIncluirEspecialidadesInactivas] = useState(false);
+  const [incluirRutasTransporteInactivas, setIncluirRutasTransporteInactivas] = useState(false);
   const [incluirMateriasInactivas, setIncluirMateriasInactivas] = useState(false);
   const [incluirAsignacionesInactivas, setIncluirAsignacionesInactivas] = useState(false);
   const [incluirGrupoMateriaInactivas, setIncluirGrupoMateriaInactivas] = useState(false);
@@ -419,6 +752,8 @@ export default function AcademicoPage() {
   const [loadingPeriodo, setLoadingPeriodo] = useState(false);
   const [loadingGrupo, setLoadingGrupo] = useState(false);
   const [loadingMatricula, setLoadingMatricula] = useState(false);
+  const [loadingEspecialidad, setLoadingEspecialidad] = useState(false);
+  const [loadingRutaTransporte, setLoadingRutaTransporte] = useState(false);
   const [loadingMateria, setLoadingMateria] = useState(false);
   const [loadingAsignacion, setLoadingAsignacion] = useState(false);
   const [loadingBloque, setLoadingBloque] = useState(false);
@@ -427,8 +762,35 @@ export default function AcademicoPage() {
   const [loadingFechaClase, setLoadingFechaClase] = useState(false);
   const [loadingFeriado, setLoadingFeriado] = useState(false);
   const [loadingDiasLectivos, setLoadingDiasLectivos] = useState(false);
+  const [loadingMensajesSeguimiento, setLoadingMensajesSeguimiento] = useState(false);
   const [correoEstudianteDominio, setCorreoEstudianteDominio] = useState("@est.mep.go.cr");
+  const [correoEstudianteDominioGuardado, setCorreoEstudianteDominioGuardado] = useState("@est.mep.go.cr");
   const [loadingConfigCorreo, setLoadingConfigCorreo] = useState(false);
+  const [correoNotificacionConfigs, setCorreoNotificacionConfigs] = useState<CorreoNotificacionConfig[]>([]);
+  const [correoNotificacionTipo, setCorreoNotificacionTipo] = useState("COTIDIANO");
+  const [correoNotificacionMinimizado, setCorreoNotificacionMinimizado] = useState(true);
+  const [correoNotificacionForm, setCorreoNotificacionForm] = useState({
+    fromEmail: "info@profe360cr.com",
+    paraModo: "ALUMNO",
+    ccModo: "PROFESOR",
+    asuntoTemplate: "",
+    cuerpoTemplate: ""
+  });
+  const [boletaConductaConsecutivo, setBoletaConductaConsecutivo] = useState("1");
+  const [openSections, setOpenSections] = useState<Record<FormSectionKey, boolean>>(initialOpenSections);
+  const [fechasClaseMode, setFechasClaseMode] = useState<"none" | "generar" | "reprogramar">("none");
+
+  function openSection(section: FormSectionKey) {
+    setOpenSections((prev) => ({ ...prev, [section]: true }));
+  }
+
+  function closeSection(section: FormSectionKey) {
+    setOpenSections((prev) => ({ ...prev, [section]: false }));
+  }
+
+  function isSectionOpen(section: FormSectionKey) {
+    return openSections[section];
+  }
 
   const gruposActivos = useMemo(
     () => gruposCatalogo.filter((g) => g.Activo),
@@ -438,6 +800,11 @@ export default function AcademicoPage() {
   const aniosActivos = useMemo(
     () => anios.filter((a) => a.Activo),
     [anios]
+  );
+
+  const especialidadesActivas = useMemo(
+    () => especialidadesCatalogo.filter((e) => e.Activo),
+    [especialidadesCatalogo]
   );
 
   const materiasActivas = useMemo(
@@ -458,12 +825,16 @@ export default function AcademicoPage() {
     setEstudiantes(data.estudiantes || []);
     setGruposCatalogo(data.grupos || []);
     setPeriodos(data.periodos || []);
+    setEspecialidadesCatalogo(data.especialidades || []);
+    setRutasTransporteCatalogo(data.rutasTransporte || []);
     setMateriasCatalogo(data.materias || []);
     setDocentesCatalogo(data.docentes || []);
     setBloquesCatalogo(data.bloquesHorarios || []);
     setFeriados(data.feriados || []);
     setDiasLectivos(data.diasLectivos || []);
-    setCorreoEstudianteDominio(String(data.configuracionCorreoEstudiante?.dominio || "@est.mep.go.cr"));
+    const dominioConfigurado = String(data.configuracionCorreoEstudiante?.dominio || "@est.mep.go.cr");
+    setCorreoEstudianteDominio(dominioConfigurado);
+    setCorreoEstudianteDominioGuardado(dominioConfigurado);
   }
 
   async function loadAnios(query = "", incluirInactivos = incluirAniosInactivos) {
@@ -488,10 +859,33 @@ export default function AcademicoPage() {
   }
 
   async function loadMatriculas(query = "", incluirInactivas = incluirMatriculasInactivas) {
+    const cleanQuery = String(query || "").trim();
+
+    if (!cleanQuery) {
+      setMatriculas([]);
+      setMatriculaHasSearched(false);
+      return;
+    }
+
     const response = await api.get("/academico/matriculas", {
-      params: { q: query, incluirInactivas }
+      params: { q: cleanQuery, incluirInactivas }
     });
     setMatriculas(response.data?.data || []);
+    setMatriculaHasSearched(true);
+  }
+
+  async function loadEspecialidades(query = "", incluirInactivas = incluirEspecialidadesInactivas) {
+    const response = await api.get("/academico/especialidades", {
+      params: { q: query, incluirInactivas }
+    });
+    setEspecialidades(response.data?.data || []);
+  }
+
+  async function loadRutasTransporte(query = "", incluirInactivas = incluirRutasTransporteInactivas) {
+    const response = await api.get("/academico/rutas-transporte", {
+      params: { q: query, incluirInactivas }
+    });
+    setRutasTransporte(response.data?.data || []);
   }
 
   async function loadMaterias(query = "", incluirInactivas = incluirMateriasInactivas) {
@@ -548,6 +942,23 @@ export default function AcademicoPage() {
     setDiasLectivos(response.data?.data || []);
   }
 
+  async function loadMensajesSeguimiento() {
+    const response = await api.get("/academico/mensajes-seguimiento");
+    setMensajesSeguimiento(response.data?.data || []);
+  }
+
+  async function loadCorreoNotificacionConfigs() {
+    const response = await api.get("/academico/configuracion-correo-notificaciones");
+    const data = response.data?.data || [];
+    setCorreoNotificacionConfigs(data);
+  }
+
+  async function loadBoletaConductaConfig() {
+    const response = await api.get("/academico/boleta-conducta-config");
+    const data = response.data?.data || {};
+    setBoletaConductaConsecutivo(String(data?.siguienteNumero || 1));
+  }
+
   function handleToggleDiaLectivo(diaSemana: number) {
     setDiasLectivos((prev) =>
       prev.map((item) =>
@@ -571,6 +982,7 @@ export default function AcademicoPage() {
       });
 
       setMessage("Días lectivos actualizados correctamente");
+      closeSection("diasLectivos");
       await Promise.all([loadDiasLectivos(), loadCatalogos()]);
     } catch (error: any) {
       console.error("Error guardando días lectivos:", error);
@@ -582,28 +994,94 @@ export default function AcademicoPage() {
     }
   }
 
+  async function handleCancelarDiasLectivos() {
+    clearMessages();
+    await loadDiasLectivos();
+    closeSection("diasLectivos");
+  }
+
+  function handleCancelarConfigCorreo() {
+    clearMessages();
+    setCorreoEstudianteDominio(correoEstudianteDominioGuardado);
+    closeSection("configuracionCorreo");
+  }
+
   async function loadAll() {
     try {
       setErrorMessage("");
-      await Promise.all([
-        loadCatalogos(),
-        loadAnios("", incluirAniosInactivos),
-        loadPeriodos("", incluirPeriodosInactivos),
-        loadGrupos("", incluirGruposInactivos),
-        loadMatriculas("", incluirMatriculasInactivas),
-        loadMaterias("", incluirMateriasInactivas),
-        loadAsignaciones("", incluirAsignacionesInactivas),
-        loadBloques(""),
-        loadGruposMateria("", incluirGrupoMateriaInactivas),
-        loadHorarios("", incluirHorariosInactivos),
-        loadFechasClase(""),
-        loadFeriados("", incluirFeriadosInactivos),
-        loadDiasLectivos()
-      ]);
+
+      // Importante: antes se cargaban todos los endpoints académicos al mismo tiempo.
+      // Eso saturaba SQL Server y provocaba timeouts de 15 segundos en catálogos.
+      // Ahora se cargan los catálogos base y luego cada pestaña carga su listado cuando se abre.
+      await loadCatalogos();
     } catch (error: any) {
-      console.error("Error cargando módulo académico:", error);
+      console.error("Error cargando catálogos académicos:", error);
       setErrorMessage(
         error?.response?.data?.message || "No se pudo cargar el módulo académico"
+      );
+    }
+  }
+
+  async function loadTabData(tabToLoad: TabKey) {
+    try {
+      setErrorMessage("");
+
+      switch (tabToLoad) {
+        case "anios":
+          await loadAnios(anioSearch, incluirAniosInactivos);
+          break;
+        case "periodos":
+          await loadPeriodos(periodoSearch, incluirPeriodosInactivos);
+          break;
+        case "grupos":
+          await loadGrupos(grupoSearch, incluirGruposInactivos);
+          break;
+        case "matriculas":
+          await loadMatriculas(matriculaSearch, incluirMatriculasInactivas);
+          break;
+        case "especialidades":
+          await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
+          break;
+        case "rutasTransporte":
+          await loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas);
+          break;
+        case "materias":
+          await loadMaterias(materiaSearch, incluirMateriasInactivas);
+          break;
+        case "asignaciones":
+          await loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas);
+          break;
+        case "bloques":
+          await loadBloques(bloqueSearch);
+          break;
+        case "gruposMateria":
+          await loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas);
+          break;
+        case "horarios":
+          await loadHorarios(horarioSearch, incluirHorariosInactivos);
+          break;
+        case "fechasClase":
+          await loadFechasClase(fechaClaseSearch);
+          break;
+        case "feriados":
+          await loadFeriados(feriadoSearch, incluirFeriadosInactivos);
+          break;
+        case "diasLectivos":
+          await loadDiasLectivos();
+          break;
+        case "configuracionCorreo":
+          await Promise.all([loadCatalogos(), loadCorreoNotificacionConfigs(), loadBoletaConductaConfig()]);
+          break;
+        case "mensajes":
+          await Promise.all([loadMensajesSeguimiento(), loadCorreoNotificacionConfigs(), loadBoletaConductaConfig()]);
+          break;
+        default:
+          break;
+      }
+    } catch (error: any) {
+      console.error(`Error cargando pestaña académica ${tabToLoad}:`, error);
+      setErrorMessage(
+        error?.response?.data?.message || "No se pudo cargar la información de esta sección"
       );
     }
   }
@@ -612,65 +1090,167 @@ export default function AcademicoPage() {
     loadAll();
   }, []);
 
+  useEffect(() => {
+    loadTabData(tab);
+  }, [tab]);
+
+  useEffect(() => {
+    const navigationState = (location.state || null) as AcademicoNavigationState | null;
+
+    if (!navigationState) return;
+    if (consumedNavigationKeyRef.current === location.key) return;
+    if (navigationState.openTab !== "matriculas" && !navigationState.matriculaPrefill) return;
+
+    const hasRequestedAnio =
+      navigationState.matriculaPrefill?.anioLectivoId !== undefined &&
+      navigationState.matriculaPrefill?.anioLectivoId !== null &&
+      String(navigationState.matriculaPrefill?.anioLectivoId) !== "";
+
+    if (!hasRequestedAnio && anios.length === 0) return;
+
+    consumedNavigationKeyRef.current = location.key;
+    openMatriculaPrefilled(navigationState.matriculaPrefill);
+  }, [location.key, location.state, anios.length]);
+
   function clearMessages() {
     setMessage("");
     setErrorMessage("");
   }
 
+  function buildTodayForInput() {
+    const today = new Date();
+    const offset = today.getTimezoneOffset();
+    const local = new Date(today.getTime() - offset * 60 * 1000);
+    return local.toISOString().slice(0, 10);
+  }
+
+
+  function openMatriculaPrefilled(prefill?: AcademicoNavigationState["matriculaPrefill"]) {
+    clearMessages();
+    setTab("matriculas");
+    openSection("matriculas");
+    setEditingMatriculaId(null);
+    setReactivableMatriculaId(null);
+
+    const defaultAnioId =
+      prefill?.anioLectivoId !== undefined && prefill?.anioLectivoId !== null && String(prefill.anioLectivoId) !== ""
+        ? String(prefill.anioLectivoId)
+        : aniosActivos.length > 0
+          ? String(aniosActivos[0].AnioLectivoId)
+          : "";
+
+    setMatriculaForm({
+      ...initialMatriculaForm,
+      estudianteId:
+        prefill?.estudianteId !== undefined && prefill?.estudianteId !== null
+          ? String(prefill.estudianteId)
+          : "",
+      grupoId:
+        prefill?.grupoId !== undefined && prefill?.grupoId !== null
+          ? String(prefill.grupoId)
+          : "",
+      anioLectivoId: defaultAnioId,
+      fechaMatricula: prefill?.fechaMatricula || buildTodayForInput(),
+      observacion: prefill?.observacion || "",
+      tipoMatricula: prefill?.tipoMatricula || "",
+      especialidadId:
+        prefill?.especialidadId !== undefined && prefill?.especialidadId !== null && String(prefill.especialidadId) !== ""
+          ? String(prefill.especialidadId)
+          : "",
+      nivelAcademico:
+        prefill?.nivelAcademico !== undefined && prefill?.nivelAcademico !== null && String(prefill.nivelAcademico) !== ""
+          ? String(prefill.nivelAcademico)
+          : "",
+      especialidad: prefill?.especialidad || "",
+      seccionTexto: prefill?.seccionTexto || "",
+      rutaTransporte: prefill?.rutaTransporte || "",
+      esRepitente: !!prefill?.esRepitente,
+      permiteExcepcionProgresion: !!prefill?.permiteExcepcionProgresion,
+      justificacionExcepcion: prefill?.justificacionExcepcion || "",
+      correoEnvioBoleta: prefill?.correoEnvioBoleta || "",
+      observacionesDetalle: prefill?.observacionesDetalle || ""
+    });
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function resetAnioForm() {
     setAnioForm(initialAnioForm);
     setEditingAnioId(null);
+    closeSection("anios");
   }
 
   function resetPeriodoForm() {
     setPeriodoForm(initialPeriodoForm);
     setEditingPeriodoId(null);
+    closeSection("periodos");
   }
 
   function resetGrupoForm() {
     setGrupoForm(initialGrupoForm);
     setEditingGrupoId(null);
+    closeSection("grupos");
   }
 
 function resetMatriculaForm() {
   setMatriculaForm(initialMatriculaForm);
   setEditingMatriculaId(null);
   setReactivableMatriculaId(null);
+  closeSection("matriculas");
 }
+
+  function resetEspecialidadForm() {
+    setEspecialidadForm(initialEspecialidadForm);
+    setEditingEspecialidadId(null);
+    closeSection("especialidades");
+  }
+
+  function resetRutaTransporteForm() {
+    setRutaTransporteForm(initialRutaTransporteForm);
+    setEditingRutaTransporteId(null);
+    closeSection("rutasTransporte");
+  }
 
   function resetMateriaForm() {
     setMateriaForm(initialMateriaForm);
     setEditingMateriaId(null);
+    closeSection("materias");
   }
 
   function resetAsignacionForm() {
     setAsignacionForm(initialAsignacionForm);
     setEditingAsignacionId(null);
+    closeSection("asignaciones");
   }
 
   function resetBloqueForm() {
     setBloqueForm(initialBloqueForm);
     setEditingBloqueId(null);
+    closeSection("bloques");
   }
 
   function resetGrupoMateriaForm() {
     setGrupoMateriaForm(initialGrupoMateriaForm);
     setEditingGrupoMateriaId(null);
+    closeSection("gruposMateria");
   }
 
   function resetHorarioForm() {
     setHorarioForm(initialHorarioForm);
     setEditingHorarioId(null);
+    closeSection("horarios");
   }
 
   function resetFechaClaseForm() {
     setFechaClaseForm(initialFechaClaseForm);
     setEditingFechaClaseId(null);
+    setFechasClaseMode("none");
   }
 
   function resetFeriadoForm() {
     setFeriadoForm({ fecha: "", nombre: "", descripcion: "" });
     setEditingFeriadoId(null);
+    closeSection("feriados");
   }
 
   async function handleAnioSubmit(e: FormEvent) {
@@ -804,6 +1384,7 @@ function resetMatriculaForm() {
         observacion: matriculaForm.observacion || null,
         tipoMatricula: matriculaForm.tipoMatricula || null,
         nivelAcademico: matriculaForm.nivelAcademico ? Number(matriculaForm.nivelAcademico) : null,
+        especialidadId: matriculaForm.especialidadId ? Number(matriculaForm.especialidadId) : null,
         especialidad: matriculaForm.especialidad || null,
         seccionTexto: matriculaForm.seccionTexto || null,
         rutaTransporte: matriculaForm.rutaTransporte || null,
@@ -837,6 +1418,525 @@ function resetMatriculaForm() {
       );
     } finally {
       setLoadingMatricula(false);
+    }
+  }
+
+  async function handleDescargarPlantillaMatriculas() {
+    try {
+      clearMessages();
+      const response = await api.get("/academico/matriculas/plantilla-excel", {
+        responseType: "blob"
+      });
+
+      const blob = new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "plantilla_importacion_matriculas.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      setMessage("Plantilla de matrículas descargada correctamente");
+    } catch (error: any) {
+      console.error("Error descargando plantilla de matrículas:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo descargar la plantilla de matrículas");
+    }
+  }
+
+  async function handleImportarMatriculas(e: FormEvent) {
+    e.preventDefault();
+
+    if (!matriculaImportAnioId) {
+      setErrorMessage("Debes seleccionar el año lectivo para la importación");
+      return;
+    }
+
+    if (!archivoImportacionMatricula) {
+      setErrorMessage("Debes seleccionar un archivo Excel para importar");
+      return;
+    }
+
+    setImportandoMatriculas(true);
+    clearMessages();
+    setMatriculaImportResult(null);
+    setMatriculaImportProgress(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("anioLectivoId", matriculaImportAnioId);
+      formData.append("archivo", archivoImportacionMatricula);
+
+      const response = await api.post("/academico/matriculas/importar-excel/iniciar", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data"
+        }
+      });
+
+      const initialProgress: MatriculaImportProgress = response.data?.data;
+      const jobId = initialProgress?.jobId;
+
+      if (!jobId) {
+        throw new Error("No se recibió el identificador de la importación");
+      }
+
+      setMatriculaImportProgress(initialProgress);
+
+      let finalProgress = initialProgress;
+      while (!["COMPLETADO", "ERROR"].includes(finalProgress.status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        const progressResponse = await api.get(`/academico/matriculas/importar-excel/progreso/${jobId}`);
+        finalProgress = progressResponse.data?.data;
+        setMatriculaImportProgress(finalProgress);
+      }
+
+      if (finalProgress.status === "ERROR") {
+        throw new Error(finalProgress.error || "No se pudo procesar la importación");
+      }
+
+      setMatriculaImportResult({
+        totalRegistros: finalProgress.totalRegistros,
+        totalOk: finalProgress.totalOk,
+        totalError: finalProgress.totalError,
+        totalCreados: finalProgress.totalCreados,
+        totalReactivados: finalProgress.totalReactivados,
+        totalOmitidos: finalProgress.totalOmitidos,
+        resultados: finalProgress.resultados || []
+      });
+      setMessage("Importación de matrículas procesada correctamente");
+      setArchivoImportacionMatricula(null);
+      if (matriculaImportFileInputRef.current) {
+        matriculaImportFileInputRef.current.value = "";
+      }
+
+      await loadMatriculas(matriculaSearch, incluirMatriculasInactivas);
+    } catch (error: any) {
+      console.error("Error importando matrículas:", error);
+      setErrorMessage(
+        error?.response?.data?.message || "No se pudo importar el archivo de matrículas"
+      );
+    } finally {
+      setImportandoMatriculas(false);
+    }
+  }
+
+  async function handleDescargarResumenMatriculas() {
+    const jobId = matriculaImportProgress?.jobId;
+    if (!jobId) {
+      setErrorMessage("No hay un resumen de importación disponible para exportar");
+      return;
+    }
+
+    try {
+      clearMessages();
+      const response = await api.get(`/academico/matriculas/importar-excel/resumen/${jobId}/excel`, {
+        responseType: "blob"
+      });
+
+      const blob = new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "resumen_importacion_matriculas.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error("Error descargando resumen de matrículas:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo exportar el resumen de importación");
+    }
+  }
+
+  async function refreshAfterAcademicoBulkImport(kind: AcademicoBulkImportKey) {
+    if (kind === "grupos") {
+      await Promise.all([
+        loadGrupos(grupoSearch, incluirGruposInactivos),
+        loadCatalogos(),
+        loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas),
+        loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)
+      ]);
+      return;
+    }
+
+    if (kind === "materias") {
+      await Promise.all([
+        loadMaterias(materiaSearch, incluirMateriasInactivas),
+        loadCatalogos(),
+        loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas),
+        loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)
+      ]);
+      return;
+    }
+
+    if (kind === "asignaciones-docentes") {
+      await loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas);
+      return;
+    }
+
+    if (kind === "grupos-materia") {
+      await Promise.all([
+        loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas),
+        loadCatalogos(),
+        loadHorarios(horarioSearch, incluirHorariosInactivos)
+      ]);
+      return;
+    }
+
+    if (kind === "horarios-grupo") {
+      await Promise.all([
+        loadHorarios(horarioSearch, incluirHorariosInactivos),
+        loadFechasClase(fechaClaseSearch)
+      ]);
+      return;
+    }
+
+    await Promise.all([
+      loadFeriados(feriadoSearch, incluirFeriadosInactivos),
+      loadCatalogos(),
+      loadFechasClase(fechaClaseSearch)
+    ]);
+  }
+
+  function clearAcademicoBulkImport(kind: AcademicoBulkImportKey) {
+    setAcademicoBulkImportFiles((prev) => ({ ...prev, [kind]: null }));
+    setAcademicoBulkImportProgress((prev) => ({ ...prev, [kind]: null }));
+    setAcademicoBulkImportResult((prev) => ({ ...prev, [kind]: null }));
+    const input = academicoBulkImportFileRefs.current[kind];
+    if (input) input.value = "";
+  }
+
+  async function handleDescargarPlantillaAcademico(kind: AcademicoBulkImportKey) {
+    try {
+      clearMessages();
+      const response = await api.get(`/academico/importaciones/${kind}/plantilla-excel`, {
+        responseType: "blob"
+      });
+
+      const blob = new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = academicoBulkImportLabels[kind].filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      setMessage(`Plantilla de ${academicoBulkImportLabels[kind].title} descargada correctamente`);
+    } catch (error: any) {
+      console.error("Error descargando plantilla:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo descargar la plantilla");
+    }
+  }
+
+  async function handleImportarAcademicoBulk(kind: AcademicoBulkImportKey, e: FormEvent) {
+    e.preventDefault();
+
+    const file = academicoBulkImportFiles[kind];
+    if (!file) {
+      setErrorMessage("Debes seleccionar un archivo Excel para importar");
+      return;
+    }
+
+    setAcademicoBulkImportLoading((prev) => ({ ...prev, [kind]: true }));
+    setAcademicoBulkImportProgress((prev) => ({ ...prev, [kind]: null }));
+    setAcademicoBulkImportResult((prev) => ({ ...prev, [kind]: null }));
+    clearMessages();
+
+    try {
+      const formData = new FormData();
+      formData.append("archivo", file);
+
+      const response = await api.post(`/academico/importaciones/${kind}/iniciar`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data"
+        }
+      });
+
+      const initialProgress: AcademicoBulkImportProgress = response.data?.data;
+      const jobId = initialProgress?.jobId;
+      if (!jobId) {
+        throw new Error("No se recibió el identificador de la importación");
+      }
+
+      setAcademicoBulkImportProgress((prev) => ({ ...prev, [kind]: initialProgress }));
+
+      let finalProgress = initialProgress;
+      while (!["COMPLETADO", "ERROR"].includes(finalProgress.status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        const progressResponse = await api.get(`/academico/importaciones/${kind}/progreso/${jobId}`);
+        finalProgress = progressResponse.data?.data;
+        setAcademicoBulkImportProgress((prev) => ({ ...prev, [kind]: finalProgress }));
+      }
+
+      if (finalProgress.status === "ERROR") {
+        throw new Error(finalProgress.error || "No se pudo procesar la importación");
+      }
+
+      setAcademicoBulkImportResult((prev) => ({
+        ...prev,
+        [kind]: {
+          totalRegistros: finalProgress.totalRegistros,
+          totalOk: finalProgress.totalOk,
+          totalError: finalProgress.totalError,
+          totalCreados: finalProgress.totalCreados,
+          totalReactivados: finalProgress.totalReactivados,
+          totalOmitidos: finalProgress.totalOmitidos,
+          resultados: finalProgress.resultados || []
+        }
+      }));
+      setAcademicoBulkImportFiles((prev) => ({ ...prev, [kind]: null }));
+      const input = academicoBulkImportFileRefs.current[kind];
+      if (input) input.value = "";
+
+      setMessage(`Importación de ${academicoBulkImportLabels[kind].title} procesada correctamente`);
+      await refreshAfterAcademicoBulkImport(kind);
+    } catch (error: any) {
+      console.error("Error importando archivo:", error);
+      setErrorMessage(error?.response?.data?.message || error?.message || "No se pudo importar el archivo Excel");
+    } finally {
+      setAcademicoBulkImportLoading((prev) => ({ ...prev, [kind]: false }));
+    }
+  }
+
+  async function handleDescargarResumenAcademicoBulk(kind: AcademicoBulkImportKey) {
+    const jobId = academicoBulkImportProgress[kind]?.jobId;
+    if (!jobId) {
+      setErrorMessage("No hay un resumen de importación disponible para exportar");
+      return;
+    }
+
+    try {
+      clearMessages();
+      const response = await api.get(`/academico/importaciones/${kind}/resumen/${jobId}/excel`, {
+        responseType: "blob"
+      });
+
+      const blob = new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `resumen_${academicoBulkImportLabels[kind].filename}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error("Error descargando resumen:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo exportar el resumen de importación");
+    }
+  }
+
+  function renderAcademicoBulkImportPanel(kind: AcademicoBulkImportKey) {
+    const label = academicoBulkImportLabels[kind].title;
+    const loading = academicoBulkImportLoading[kind];
+    const progress = academicoBulkImportProgress[kind];
+    const result = academicoBulkImportResult[kind];
+    const file = academicoBulkImportFiles[kind];
+
+    return (
+      <div style={{ marginTop: "18px", paddingTop: "16px", borderTop: "1px solid #e5e7eb" }}>
+        <h4 style={{ margin: "0 0 12px" }}>Importar {label}</h4>
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={() => handleDescargarPlantillaAcademico(kind)}
+            disabled={loading}
+          >
+            Descargar plantilla
+          </button>
+        </div>
+        <form
+          className="form"
+          onSubmit={(e) => handleImportarAcademicoBulk(kind, e)}
+          aria-busy={loading}
+        >
+          <label>
+            Archivo Excel
+            <input
+              ref={(element) => {
+                academicoBulkImportFileRefs.current[kind] = element;
+              }}
+              type="file"
+              accept=".xlsx,.xls"
+              disabled={loading}
+              onChange={(e) => setAcademicoBulkImportFiles((prev) => ({ ...prev, [kind]: e.target.files?.[0] || null }))}
+            />
+          </label>
+
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <button className="primary-btn" disabled={loading || !file}>
+              {loading ? "Importando..." : "Importar registros"}
+            </button>
+            <button
+              type="button"
+              onClick={() => clearAcademicoBulkImport(kind)}
+              style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}
+            >
+              Limpiar importación
+            </button>
+          </div>
+        </form>
+
+        {(loading || progress) && (
+          <div
+            style={{
+              marginTop: "12px",
+              padding: "12px",
+              borderRadius: "10px",
+              background: "#0f172a",
+              color: "#e5f3ff"
+            }}
+          >
+            <strong>{loading ? `Procesando importación de ${label}` : `Importación de ${label} finalizada`}</strong>
+            <div style={{ marginTop: "4px", opacity: 0.85 }}>
+              {progress ? `${progress.procesados} de ${progress.totalRegistros} registros procesados` : "Preparando archivo..."}
+            </div>
+            <div className="processing-progress-track" aria-label={`Progreso de importación de ${label}`}>
+              <div
+                className="processing-progress-bar"
+                style={{ width: `${Math.max(0, Math.min(100, progress?.porcentaje || 0))}%` }}
+              />
+            </div>
+            <div className="processing-progress-meta">
+              <span>{progress?.porcentaje || 0}%</span>
+              <span>Creados: {progress?.totalCreados || 0}</span>
+              <span>Reactivados: {progress?.totalReactivados || 0}</span>
+              <span>Omitidos: {progress?.totalOmitidos || 0}</span>
+              <span>Errores: {progress?.totalError || 0}</span>
+            </div>
+          </div>
+        )}
+
+        {result && (
+          <div style={{ marginTop: "16px" }}>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+              <span><strong>Total:</strong> {result.totalRegistros}</span>
+              <span><strong>Creados:</strong> {result.totalCreados}</span>
+              <span><strong>Reactivados:</strong> {result.totalReactivados}</span>
+              <span><strong>Omitidos:</strong> {result.totalOmitidos}</span>
+              <span><strong>Errores:</strong> {result.totalError}</span>
+            </div>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => handleDescargarResumenAcademicoBulk(kind)}
+              style={{ marginBottom: "12px" }}
+            >
+              Exportar resumen a Excel
+            </button>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fila</th>
+                    <th>Referencia</th>
+                    <th>Estado</th>
+                    <th>Motivo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.resultados.slice(0, 20).map((item) => (
+                    <tr key={`${kind}-${item.fila}-${item.referencia}`}>
+                      <td>{item.fila}</td>
+                      <td>{item.referencia}</td>
+                      <td>{item.estado}</td>
+                      <td>{item.motivo}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  async function handleEspecialidadSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingEspecialidad(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        descripcion: especialidadForm.descripcion,
+        permiteMultiplesPorSeccion: !!especialidadForm.permiteMultiplesPorSeccion
+      };
+
+      if (!payload.descripcion.trim()) {
+        setErrorMessage("La descripción de la especialidad es obligatoria");
+        return;
+      }
+
+      if (editingEspecialidadId !== null) {
+        await api.put(`/academico/especialidades/${editingEspecialidadId}`, payload);
+        setMessage("Especialidad actualizada correctamente");
+      } else {
+        await api.post("/academico/especialidades", payload);
+        setMessage("Especialidad creada correctamente");
+      }
+
+      resetEspecialidadForm();
+      await Promise.all([
+        loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas),
+        loadCatalogos(),
+        loadMatriculas(matriculaSearch, incluirMatriculasInactivas)
+      ]);
+    } catch (error: any) {
+      console.error("Error guardando especialidad:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la especialidad");
+    } finally {
+      setLoadingEspecialidad(false);
+    }
+  }
+
+
+  async function handleRutaTransporteSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingRutaTransporte(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        descripcion: rutaTransporteForm.descripcion,
+        responsable: rutaTransporteForm.responsable || null,
+        lugarInicio: rutaTransporteForm.lugarInicio || null,
+        lugarFin: rutaTransporteForm.lugarFin || null,
+        capacidadEstudiantes: rutaTransporteForm.capacidadEstudiantes ? Number(rutaTransporteForm.capacidadEstudiantes) : null,
+        horaInicio: rutaTransporteForm.horaInicio || null,
+        horaFin: rutaTransporteForm.horaFin || null
+      };
+
+      if (editingRutaTransporteId !== null) {
+        await api.put(`/academico/rutas-transporte/${editingRutaTransporteId}`, payload);
+        setMessage("Ruta de transporte actualizada correctamente");
+      } else {
+        await api.post("/academico/rutas-transporte", payload);
+        setMessage("Ruta de transporte creada correctamente");
+      }
+
+      resetRutaTransporteForm();
+      await Promise.all([
+        loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      console.error("Error guardando ruta de transporte:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la ruta de transporte");
+    } finally {
+      setLoadingRutaTransporte(false);
     }
   }
 
@@ -1073,6 +2173,7 @@ function resetMatriculaForm() {
       }${data?.omitidasPorFeriado?.length ? ` | Feriados omitidos: ${data.omitidasPorFeriado.length}` : ""}`
     );
 
+    resetFechaClaseForm();
     await loadFechasClase(fechaClaseSearch);
   } catch (error: any) {
     console.error("Error generando fechas automáticas:", error);
@@ -1102,6 +2203,7 @@ async function handleReprogramarDesde(e: FormEvent) {
     await api.post("/academico/fechas-clase/reprogramar-desde", payload);
 
     setMessage("Reprogramación aplicada correctamente desde la fecha indicada");
+    resetFechaClaseForm();
     await loadFechasClase(fechaClaseSearch);
   } catch (error: any) {
     console.error("Error reprogramando fechas:", error);
@@ -1147,6 +2249,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditFeriado(item: Feriado) {
     setTab("feriados");
+    openSection("feriados");
     clearMessages();
     setEditingFeriadoId(item.FeriadoId);
     setFeriadoForm({
@@ -1158,16 +2261,16 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteFeriado(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar este feriado?");
+    const confirmado = window.confirm("¿Deseás eliminar este feriado?");
     if (!confirmado) return;
     clearMessages();
     try {
       await api.delete(`/academico/feriados/${id}`);
-      setMessage("Feriado desactivado correctamente");
+      setMessage("Feriado eliminado correctamente");
       if (editingFeriadoId === id) resetFeriadoForm();
       await Promise.all([loadFeriados(feriadoSearch, incluirFeriadosInactivos), loadCatalogos()]);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar el feriado");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el feriado");
     }
   }
 
@@ -1189,6 +2292,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditAnio(item: AnioLectivo) {
     setTab("anios");
+    openSection("anios");
     clearMessages();
     setEditingAnioId(item.AnioLectivoId);
     setAnioForm({
@@ -1201,6 +2305,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditPeriodo(item: Periodo) {
     setTab("periodos");
+    openSection("periodos");
     clearMessages();
     setEditingPeriodoId(item.PeriodoId);
     setPeriodoForm({
@@ -1215,6 +2320,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditGrupo(item: Grupo) {
     setTab("grupos");
+    openSection("grupos");
     clearMessages();
     setEditingGrupoId(item.GrupoId);
     setGrupoForm({
@@ -1228,6 +2334,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditMatricula(item: Matricula) {
     setTab("matriculas");
+    openSection("matriculas");
     clearMessages();
     setEditingMatriculaId(item.MatriculaId);
     setReactivableMatriculaId(null);
@@ -1239,7 +2346,8 @@ async function handleReprogramarDesde(e: FormEvent) {
       observacion: item.Observacion || "",
       tipoMatricula: item.TipoMatricula || "",
       nivelAcademico: item.NivelAcademico ? String(item.NivelAcademico) : "",
-      especialidad: item.Especialidad || item.GrupoEspecialidad || "",
+      especialidadId: item.EspecialidadId ? String(item.EspecialidadId) : "",
+      especialidad: item.EspecialidadDescripcion || item.Especialidad || item.GrupoEspecialidad || "",
       seccionTexto: item.SeccionTexto || item.GrupoNombre || "",
       rutaTransporte: item.RutaTransporte || "",
       esRepitente: !!item.EsRepitente,
@@ -1251,8 +2359,38 @@ async function handleReprogramarDesde(e: FormEvent) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function handleEditEspecialidad(item: Especialidad) {
+    setTab("especialidades");
+    openSection("especialidades");
+    clearMessages();
+    setEditingEspecialidadId(item.EspecialidadId);
+    setEspecialidadForm({
+      descripcion: item.Descripcion || "",
+      permiteMultiplesPorSeccion: !!item.PermiteMultiplesPorSeccion
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function handleEditRutaTransporte(item: RutaTransporte) {
+    setTab("rutasTransporte");
+    openSection("rutasTransporte");
+    clearMessages();
+    setEditingRutaTransporteId(item.RutaTransporteId);
+    setRutaTransporteForm({
+      descripcion: item.Descripcion || "",
+      responsable: item.Responsable || "",
+      lugarInicio: item.LugarInicio || "",
+      lugarFin: item.LugarFin || "",
+      capacidadEstudiantes: item.CapacidadEstudiantes !== null && item.CapacidadEstudiantes !== undefined ? String(item.CapacidadEstudiantes) : "",
+      horaInicio: formatTime(item.HoraInicio),
+      horaFin: formatTime(item.HoraFin)
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function handleEditMateria(item: Materia) {
     setTab("materias");
+    openSection("materias");
     clearMessages();
     setEditingMateriaId(item.MateriaId);
     setMateriaForm({
@@ -1265,6 +2403,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditAsignacion(item: AsignacionDocente) {
     setTab("asignaciones");
+    openSection("asignaciones");
     clearMessages();
     setEditingAsignacionId(item.AsignacionDocenteId);
     setAsignacionForm({
@@ -1280,6 +2419,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditBloque(item: BloqueHorario) {
     setTab("bloques");
+    openSection("bloques");
     clearMessages();
     setEditingBloqueId(item.BloqueHorarioId);
     setBloqueForm({
@@ -1293,6 +2433,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditGrupoMateria(item: GrupoMateria) {
     setTab("gruposMateria");
+    openSection("gruposMateria");
     clearMessages();
     setEditingGrupoMateriaId(item.GrupoMateriaId);
     setGrupoMateriaForm({
@@ -1305,6 +2446,7 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   function handleEditHorario(item: HorarioGrupo) {
     setTab("horarios");
+    openSection("horarios");
     clearMessages();
     setEditingHorarioId(item.HorarioGrupoId);
     setHorarioForm({
@@ -1331,17 +2473,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteAnio(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar este año lectivo?");
+    const confirmado = window.confirm("¿Deseás eliminar este año lectivo?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/anios-lectivos/${id}`);
-      setMessage("Año lectivo desactivado correctamente");
+      setMessage("Año lectivo eliminado correctamente");
       if (editingAnioId === id) resetAnioForm();
       await Promise.all([loadAnios(anioSearch, incluirAniosInactivos), loadCatalogos()]);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar el año lectivo");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el año lectivo");
     }
   }
 
@@ -1357,17 +2499,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeletePeriodo(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar este período?");
+    const confirmado = window.confirm("¿Deseás eliminar este período?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/periodos/${id}`);
-      setMessage("Período desactivado correctamente");
+      setMessage("Período eliminado correctamente");
       if (editingPeriodoId === id) resetPeriodoForm();
       await Promise.all([loadPeriodos(periodoSearch, incluirPeriodosInactivos), loadCatalogos()]);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar el período");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el período");
     }
   }
 
@@ -1383,17 +2525,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteGrupo(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar este grupo?");
+    const confirmado = window.confirm("¿Deseás eliminar este grupo?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/grupos/${id}`);
-      setMessage("Grupo desactivado correctamente");
+      setMessage("Grupo eliminado correctamente");
       if (editingGrupoId === id) resetGrupoForm();
       await Promise.all([loadGrupos(grupoSearch, incluirGruposInactivos), loadCatalogos()]);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar el grupo");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el grupo");
     }
   }
 
@@ -1409,17 +2551,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteMatricula(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar esta matrícula?");
+    const confirmado = window.confirm("¿Deseás eliminar esta matrícula?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/matriculas/${id}`);
-      setMessage("Matrícula desactivada correctamente");
+      setMessage("Matrícula eliminada correctamente");
       if (editingMatriculaId === id) resetMatriculaForm();
       await loadMatriculas(matriculaSearch, incluirMatriculasInactivas);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar la matrícula");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la matrícula");
     }
   }
 
@@ -1439,18 +2581,70 @@ async function handleReprogramarDesde(e: FormEvent) {
     }
   }
 
+  async function handleDeleteEspecialidad(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar esta especialidad?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/especialidades/${id}`);
+      setMessage("Especialidad eliminada correctamente");
+      if (editingEspecialidadId === id) resetEspecialidadForm();
+      await Promise.all([loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas), loadCatalogos()]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la especialidad");
+    }
+  }
+
+  async function handleReactivateEspecialidad(id: number) {
+    clearMessages();
+    try {
+      await api.patch(`/academico/especialidades/${id}/reactivar`);
+      setMessage("Especialidad reactivada correctamente");
+      await Promise.all([loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas), loadCatalogos()]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo reactivar la especialidad");
+    }
+  }
+
+  async function handleDeleteRutaTransporte(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar esta ruta de transporte?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/rutas-transporte/${id}`);
+      setMessage("Ruta de transporte eliminada correctamente");
+      if (editingRutaTransporteId === id) resetRutaTransporteForm();
+      await Promise.all([loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas), loadCatalogos()]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la ruta de transporte");
+    }
+  }
+
+  async function handleReactivateRutaTransporte(id: number) {
+    clearMessages();
+    try {
+      await api.patch(`/academico/rutas-transporte/${id}/reactivar`);
+      setMessage("Ruta de transporte reactivada correctamente");
+      await Promise.all([loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas), loadCatalogos()]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo reactivar la ruta de transporte");
+    }
+  }
+
   async function handleDeleteMateria(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar esta materia?");
+    const confirmado = window.confirm("¿Deseás eliminar esta materia?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/materias/${id}`);
-      setMessage("Materia desactivada correctamente");
+      setMessage("Materia eliminada correctamente");
       if (editingMateriaId === id) resetMateriaForm();
       await Promise.all([loadMaterias(materiaSearch, incluirMateriasInactivas), loadCatalogos()]);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar la materia");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la materia");
     }
   }
 
@@ -1466,17 +2660,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteAsignacion(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar esta asignación docente?");
+    const confirmado = window.confirm("¿Deseás eliminar esta asignación docente?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/asignaciones-docentes/${id}`);
-      setMessage("Asignación docente desactivada correctamente");
+      setMessage("Asignación docente eliminada correctamente");
       if (editingAsignacionId === id) resetAsignacionForm();
       await loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar la asignación docente");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la asignación docente");
     }
   }
 
@@ -1507,17 +2701,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteGrupoMateria(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar esta materia por grupo?");
+    const confirmado = window.confirm("¿Deseás eliminar esta materia por grupo?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/grupos-materia/${id}`);
-      setMessage("Materia por grupo desactivada correctamente");
+      setMessage("Materia por grupo eliminada correctamente");
       if (editingGrupoMateriaId === id) resetGrupoMateriaForm();
       await loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar la materia por grupo");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la materia por grupo");
     }
   }
 
@@ -1533,17 +2727,17 @@ async function handleReprogramarDesde(e: FormEvent) {
   }
 
   async function handleDeleteHorario(id: number) {
-    const confirmado = window.confirm("¿Deseás desactivar este horario de clase?");
+    const confirmado = window.confirm("¿Deseás eliminar este horario de clase?");
     if (!confirmado) return;
     clearMessages();
 
     try {
       await api.delete(`/academico/horarios-grupo/${id}`);
-      setMessage("Horario de clase desactivado correctamente");
+      setMessage("Horario de clase eliminado correctamente");
       if (editingHorarioId === id) resetHorarioForm();
       await loadHorarios(horarioSearch, incluirHorariosInactivos);
     } catch (error: any) {
-      setErrorMessage(error?.response?.data?.message || "No se pudo desactivar el horario de clase");
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el horario de clase");
     }
   }
 
@@ -1593,6 +2787,16 @@ async function handleReprogramarDesde(e: FormEvent) {
     await loadMatriculas(matriculaSearch, incluirMatriculasInactivas);
   }
 
+  async function handleEspecialidadSearch(e: FormEvent) {
+    e.preventDefault();
+    await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
+  }
+
+  async function handleRutaTransporteSearch(e: FormEvent) {
+    e.preventDefault();
+    await loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas);
+  }
+
   async function handleMateriaSearch(e: FormEvent) {
     e.preventDefault();
     await loadMaterias(materiaSearch, incluirMateriasInactivas);
@@ -1631,8 +2835,11 @@ async function handleReprogramarDesde(e: FormEvent) {
     try {
       const response = await api.put('/academico/configuracion-correo-estudiante', { dominio: correoEstudianteDominio });
       const data = response.data?.data || {};
-      setCorreoEstudianteDominio(String(data?.dominio || correoEstudianteDominio));
+      const dominioGuardado = String(data?.dominio || correoEstudianteDominio);
+      setCorreoEstudianteDominio(dominioGuardado);
+      setCorreoEstudianteDominioGuardado(dominioGuardado);
       setMessage('Configuración de correo estudiantil actualizada correctamente');
+      closeSection("configuracionCorreo");
     } catch (error: any) {
       setErrorMessage(error?.response?.data?.message || 'No se pudo actualizar la configuración de correo');
     } finally {
@@ -1640,23 +2847,136 @@ async function handleReprogramarDesde(e: FormEvent) {
     }
   }
 
+  useEffect(() => {
+    const cfg = correoNotificacionConfigs.find((item) => String(item.TipoUso || "").toUpperCase() === correoNotificacionTipo);
+    setCorreoNotificacionForm({
+      fromEmail: cfg?.FromEmail || "info@profe360cr.com",
+      paraModo: cfg?.ParaModo || "ALUMNO",
+      ccModo: cfg?.CcModo || "PROFESOR",
+      asuntoTemplate: cfg?.AsuntoTemplate || "",
+      cuerpoTemplate: cfg?.CuerpoTemplate || ""
+    });
+  }, [correoNotificacionTipo, correoNotificacionConfigs]);
+
+  async function handleCorreoNotificacionSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingConfigCorreo(true);
+    clearMessages();
+    try {
+      await api.put(`/academico/configuracion-correo-notificaciones/${correoNotificacionTipo}`, correoNotificacionForm);
+      setMessage("Parámetros de correo de notificación actualizados correctamente");
+      await loadCorreoNotificacionConfigs();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la configuración de correo de notificación");
+    } finally {
+      setLoadingConfigCorreo(false);
+    }
+  }
+
+  async function handleBoletaConductaConfigSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingConfigCorreo(true);
+    clearMessages();
+    try {
+      const siguienteNumero = Number(boletaConductaConsecutivo || 0);
+      await api.put("/academico/boleta-conducta-config", { siguienteNumero });
+      setMessage("Consecutivo de boleta de conducta actualizado correctamente");
+      await loadBoletaConductaConfig();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar el consecutivo de boleta de conducta");
+    } finally {
+      setLoadingConfigCorreo(false);
+    }
+  }
+
+  function resetMensajeSeguimientoForm() {
+    setMensajeSeguimientoForm(initialMensajeSeguimientoForm);
+    setEditingMensajeSeguimientoId(null);
+  }
+
+  async function handleMensajeSeguimientoSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingMensajesSeguimiento(true);
+    clearMessages();
+    try {
+      const payload = {
+        tipoUso: mensajeSeguimientoForm.tipoUso,
+        valorNivel: mensajeSeguimientoForm.valorNivel === "" ? null : Number(mensajeSeguimientoForm.valorNivel),
+        titulo: mensajeSeguimientoForm.titulo,
+        cuerpo: mensajeSeguimientoForm.cuerpo
+      };
+      if (editingMensajeSeguimientoId) {
+        await api.put(`/academico/mensajes-seguimiento/${editingMensajeSeguimientoId}`, payload);
+        setMessage("Mensaje actualizado correctamente");
+      } else {
+        await api.post("/academico/mensajes-seguimiento", payload);
+        setMessage("Mensaje creado correctamente");
+      }
+      resetMensajeSeguimientoForm();
+      await loadMensajesSeguimiento();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar el mensaje");
+    } finally {
+      setLoadingMensajesSeguimiento(false);
+    }
+  }
+
+  async function handleDeleteMensajeSeguimiento(id: number) {
+    const confirmed = window.confirm("¿Eliminar este mensaje?");
+    if (!confirmed) return;
+    setLoadingMensajesSeguimiento(true);
+    clearMessages();
+    try {
+      await api.delete(`/academico/mensajes-seguimiento/${id}`);
+      setMessage("Mensaje eliminado correctamente");
+      await loadMensajesSeguimiento();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el mensaje");
+    } finally {
+      setLoadingMensajesSeguimiento(false);
+    }
+  }
+
+  const tabButtons: { key: TabKey; label: string }[] = [
+    { key: "anios", label: "Año Lectivo" },
+    { key: "periodos", label: "Periodos" },
+    { key: "grupos", label: "Gestión de grupos" },
+    { key: "matriculas", label: "Matrícula" },
+    { key: "especialidades", label: "Especialidades" },
+    { key: "rutasTransporte", label: "Rutas" },
+    { key: "evaluacion", label: "Parametrización de Evaluaciones" },
+    { key: "materias", label: "Materias" },
+    { key: "habilidadesPlaneamiento", label: "Habilidades de Planeamiento" },
+    { key: "asignaciones", label: "Asignación Docentes" },
+    { key: "bloques", label: "Bloque Horario" },
+    { key: "gruposMateria", label: "Materias por grupo" },
+    { key: "horarios", label: "Horario de clases" },
+    { key: "fechasClase", label: "Fecha de clases" },
+    { key: "diasLectivos", label: "Días Lectivos" },
+    { key: "feriados", label: "Feriados" },
+    { key: "configuracionCorreo", label: "Correo Institucional" },
+    { key: "mensajes", label: "Mensajes" }
+  ];
+
+  const visibleTabButtons = visibleTabs?.length
+    ? tabButtons.filter((item) => visibleTabs.includes(item.key))
+    : tabButtons;
+
   return (
     <div className="stack">
       <section className="card">
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "16px" }}>
-          <button type="button" className="primary-btn" onClick={() => setTab("anios")} style={{ opacity: tab === "anios" ? 1 : 0.75 }}>Años lectivos</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("periodos")} style={{ opacity: tab === "periodos" ? 1 : 0.75 }}>Períodos</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("grupos")} style={{ opacity: tab === "grupos" ? 1 : 0.75 }}>Gestión de grupos</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("matriculas")} style={{ opacity: tab === "matriculas" ? 1 : 0.75 }}>Matrículas</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("materias")} style={{ opacity: tab === "materias" ? 1 : 0.75 }}>Materias</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("asignaciones")} style={{ opacity: tab === "asignaciones" ? 1 : 0.75 }}>Asignación docente</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("bloques")} style={{ opacity: tab === "bloques" ? 1 : 0.75 }}>Bloques horarios</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("gruposMateria")} style={{ opacity: tab === "gruposMateria" ? 1 : 0.75 }}>Materias por grupo</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("horarios")} style={{ opacity: tab === "horarios" ? 1 : 0.75 }}>Horario de clases</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("fechasClase")} style={{ opacity: tab === "fechasClase" ? 1 : 0.75 }}>Fechas de clase</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("diasLectivos")} style={{ opacity: tab === "diasLectivos" ? 1 : 0.75 }}>Días lectivos</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("feriados")} style={{ opacity: tab === "feriados" ? 1 : 0.75 }}>Feriados</button>
-          <button type="button" className="primary-btn" onClick={() => setTab("configuracionCorreo")} style={{ opacity: tab === "configuracionCorreo" ? 1 : 0.75 }}>Correo estudiantil</button>
+          {visibleTabButtons.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className="primary-btn"
+              onClick={() => setTab(item.key)}
+              style={{ opacity: tab === item.key ? 1 : 0.75 }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
 
         {message && (
@@ -1689,10 +3009,13 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
 
+        {tab === "habilidadesPlaneamiento" && <HabilidadesPlaneamientoAcademicoPage />}
 
         {tab === "configuracionCorreo" && (
-          <div className="two-col">
+          <div className={isSectionOpen("configuracionCorreo") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("configuracionCorreo") ? (
+                <>
               <h3>Configuración de correo estudiantil</h3>
               <form className="form" onSubmit={handleConfigCorreoSubmit}>
                 <label>
@@ -1706,8 +3029,22 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingConfigCorreo}>
                     {loadingConfigCorreo ? "Guardando..." : "Guardar configuración"}
                   </button>
+                  <button type="button" onClick={handleCancelarConfigCorreo} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Configuración de correo estudiantil</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); openSection("configuracionCorreo"); }}>
+                      Editar configuración
+                    </button>
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -1718,12 +3055,268 @@ async function handleReprogramarDesde(e: FormEvent) {
                 <div>La clave inicial será el número de identificación y en el primer ingreso se solicitará el cambio</div>
               </div>
             </section>
+            <section className="card" style={{ marginBottom: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <h3 style={{ margin: 0 }}>Parámetros de notificación</h3>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => setCorreoNotificacionMinimizado((prev) => !prev)}
+                >
+                  {correoNotificacionMinimizado ? "Editar" : "Minimizar"}
+                </button>
+              </div>
+              {!correoNotificacionMinimizado ? (
+              <>
+              <form className="form" onSubmit={handleCorreoNotificacionSubmit}>
+                <label>
+                  Tema
+                  <select value={correoNotificacionTipo} onChange={(e) => setCorreoNotificacionTipo(e.target.value)}>
+                    <option value="COTIDIANO">Cotidiano</option>
+                    <option value="TAREA">Tarea</option>
+                    <option value="ASISTENCIA">Asistencia</option>
+                  </select>
+                </label>
+                <label>
+                  De
+                  <input value={correoNotificacionForm.fromEmail} onChange={(e) => setCorreoNotificacionForm((prev) => ({ ...prev, fromEmail: e.target.value }))} />
+                </label>
+                <label>
+                  Para
+                  <select value={correoNotificacionForm.paraModo} onChange={(e) => setCorreoNotificacionForm((prev) => ({ ...prev, paraModo: e.target.value }))}>
+                    <option value="ALUMNO">Correo del Alumno</option>
+                    <option value="ENCARGADO">Correo del Encargado</option>
+                  </select>
+                </label>
+                <label>
+                  CC
+                  <select value={correoNotificacionForm.ccModo} onChange={(e) => setCorreoNotificacionForm((prev) => ({ ...prev, ccModo: e.target.value }))}>
+                    <option value="PROFESOR">Profesor reporta</option>
+                    <option value="NINGUNO">Sin copia</option>
+                  </select>
+                </label>
+                <label>
+                  Asunto (plantilla)
+                  <input value={correoNotificacionForm.asuntoTemplate} onChange={(e) => setCorreoNotificacionForm((prev) => ({ ...prev, asuntoTemplate: e.target.value }))} placeholder="Ejemplo: {{reporte}} - {{alumno}} - {{fecha}}" />
+                </label>
+                <label>
+                  Cuerpo (plantilla)
+                  <textarea rows={6} value={correoNotificacionForm.cuerpoTemplate} onChange={(e) => setCorreoNotificacionForm((prev) => ({ ...prev, cuerpoTemplate: e.target.value }))} placeholder="Variables: {{fecha}}, {{alumno}}, {{seccion}}, {{materia}}, {{lecciones}}, {{profesor}}, {{colegio}}, {{detalle}}" />
+                </label>
+                <button className="primary-btn" disabled={loadingConfigCorreo}>{loadingConfigCorreo ? "Guardando..." : "Guardar parámetros"}</button>
+              </form>
+              <div className="table-wrap" style={{ marginTop: "12px" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Tema</th>
+                      <th>De</th>
+                      <th>Para</th>
+                      <th>CC</th>
+                      <th>Asunto</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {correoNotificacionConfigs.map((item) => (
+                      <tr key={`cfg-noti-${item.TipoUso}`}>
+                        <td>{item.TipoUso}</td>
+                        <td>{item.FromEmail || "-"}</td>
+                        <td>{item.ParaModo || "-"}</td>
+                        <td>{item.CcModo || "-"}</td>
+                        <td>{item.AsuntoTemplate || "-"}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="primary-btn"
+                            style={{ padding: "6px 10px" }}
+                            onClick={() => {
+                              setCorreoNotificacionTipo(String(item.TipoUso || "COTIDIANO").toUpperCase());
+                              setCorreoNotificacionForm({
+                                fromEmail: item.FromEmail || "info@profe360cr.com",
+                                paraModo: item.ParaModo || "ALUMNO",
+                                ccModo: item.CcModo || "PROFESOR",
+                                asuntoTemplate: item.AsuntoTemplate || "",
+                                cuerpoTemplate: item.CuerpoTemplate || ""
+                              });
+                            }}
+                          >
+                            Editar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {!correoNotificacionConfigs.length && (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: "center", padding: "12px" }}>
+                          No hay parámetros guardados todavía.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              </>
+              ) : (
+                <p style={{ marginTop: "8px", marginBottom: 0 }}>Sección minimizada. Presioná <strong>Editar</strong> para ver y modificar parámetros.</p>
+              )}
+            </section>
+          </div>
+        )}
+
+        {tab === "mensajes" && (
+          <div className="stack">
+            <div className="card">
+              <h3>Mensajes para informar al encargado</h3>
+              <p style={{ marginTop: 0 }}>Definí plantillas para cotidiano, tarea, asistencia y exámenes. Se pueden configurar por nivel 1/2/3 o generales.</p>
+              <form onSubmit={handleMensajeSeguimientoSubmit} className="stack" style={{ gap: "10px" }}>
+                <label>Tipo
+                  <select value={mensajeSeguimientoForm.tipoUso} onChange={(e) => {
+                    const tipoUso = e.target.value;
+                    setMensajeSeguimientoForm((prev) => ({
+                      ...prev,
+                      tipoUso,
+                      valorNivel: tipoUso === "ASISTENCIA"
+                        ? (prev.valorNivel === "1" || prev.valorNivel === "2" ? prev.valorNivel : "")
+                        : prev.valorNivel
+                    }));
+                  }}>
+                    <option value="COTIDIANO">Cotidiano</option>
+                    <option value="TAREA">Tarea</option>
+                    <option value="ASISTENCIA">Asistencia</option>
+                    <option value="EXAMEN">Examen</option>
+                  </select>
+                </label>
+                <label>Nivel (opcional)
+                  <select value={mensajeSeguimientoForm.valorNivel} onChange={(e) => setMensajeSeguimientoForm((prev) => ({ ...prev, valorNivel: e.target.value }))}>
+                    <option value="">General</option>
+                    {mensajeSeguimientoForm.tipoUso === "ASISTENCIA" ? (
+                      <>
+                        <option value="1">Ausencia</option>
+                        <option value="2">Tardía</option>
+                      </>
+                    ) : mensajeSeguimientoForm.tipoUso === "TAREA" ? (
+                      <>
+                        <option value="0">No entregado</option>
+                        <option value="1">1 (Inicial)</option>
+                        <option value="2">2 (Intermedio)</option>
+                        <option value="3">3 (Avanzado)</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="1">1 (Inicial)</option>
+                        <option value="2">2 (Intermedio)</option>
+                        <option value="3">3 (Avanzado)</option>
+                      </>
+                    )}
+                  </select>
+                </label>
+                <label>Título (opcional)
+                  <input value={mensajeSeguimientoForm.titulo} onChange={(e) => setMensajeSeguimientoForm((prev) => ({ ...prev, titulo: e.target.value }))} />
+                </label>
+                <label>Mensaje
+                  <textarea rows={4} value={mensajeSeguimientoForm.cuerpo} onChange={(e) => setMensajeSeguimientoForm((prev) => ({ ...prev, cuerpo: e.target.value }))} />
+                </label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button type="submit" className="primary-btn" disabled={loadingMensajesSeguimiento}>{editingMensajeSeguimientoId ? "Actualizar" : "Guardar"}</button>
+                  <button type="button" className="primary-btn" style={{ background: "#0f172a" }} onClick={resetMensajeSeguimientoForm}>Agregar nuevo</button>
+                </div>
+              </form>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tipo</th>
+                    <th>Nivel</th>
+                    <th>Título</th>
+                    <th>Mensaje</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mensajesSeguimiento.map((item) => (
+                    <tr key={item.MensajeSeguimientoId}>
+                      <td>{item.TipoUso}</td>
+                      <td>{getEtiquetaNivelMensaje(item.TipoUso, item.ValorNivel)}</td>
+                      <td>{item.Titulo || "-"}</td>
+                      <td>{item.Cuerpo}</td>
+                      <td style={{ display: "flex", gap: "6px" }}>
+                        <button type="button" className="primary-btn" style={{ padding: "6px 10px" }} onClick={() => {
+                          setEditingMensajeSeguimientoId(item.MensajeSeguimientoId);
+                          setMensajeSeguimientoForm({
+                            tipoUso: item.TipoUso,
+                            valorNivel: item.ValorNivel === null || item.ValorNivel === undefined ? "" : String(item.ValorNivel),
+                            titulo: item.Titulo || "",
+                            cuerpo: item.Cuerpo || ""
+                          });
+                        }}>Editar</button>
+                        <button type="button" onClick={() => handleDeleteMensajeSeguimiento(item.MensajeSeguimientoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!mensajesSeguimiento.length && (
+                    <tr><td colSpan={5} style={{ textAlign: "center", padding: "14px" }}>No hay mensajes configurados.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="card">
+              <h3>Boleta de conducta: consecutivo</h3>
+              <p style={{ marginTop: 0 }}>Definí el número desde el cual iniciará el consecutivo de la boleta de reporte de conducta.</p>
+              <form onSubmit={handleBoletaConductaConfigSubmit} style={{ display: "flex", gap: "10px", alignItems: "end", flexWrap: "wrap" }}>
+                <label style={{ minWidth: "220px" }}>
+                  Siguiente número
+                  <input
+                    type="number"
+                    min="1"
+                    value={boletaConductaConsecutivo}
+                    onChange={(e) => setBoletaConductaConsecutivo(e.target.value)}
+                  />
+                </label>
+                <button type="submit" className="primary-btn" disabled={loadingConfigCorreo}>
+                  {loadingConfigCorreo ? "Guardando..." : "Guardar consecutivo"}
+                </button>
+              </form>
+            </div>
+            <div className="card">
+              <h3>Plantillas de configuración de correo</h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Tema</th>
+                      <th>De</th>
+                      <th>Para</th>
+                      <th>CC</th>
+                      <th>Asunto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {correoNotificacionConfigs.map((item) => (
+                      <tr key={`cfg-correo-${item.TipoUso}`}>
+                        <td>{item.TipoUso}</td>
+                        <td>{item.FromEmail || "-"}</td>
+                        <td>{item.ParaModo || "-"}</td>
+                        <td>{item.CcModo || "-"}</td>
+                        <td>{item.AsuntoTemplate || "-"}</td>
+                      </tr>
+                    ))}
+                    {!correoNotificacionConfigs.length && (
+                      <tr><td colSpan={5} style={{ textAlign: "center", padding: "14px" }}>No hay plantillas de correo configuradas.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
         {tab === "anios" && (
-          <div className="two-col">
+          <div className={isSectionOpen("anios") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("anios") ? (
+                <>
               <h3>{editingAnioId !== null ? "Editar año lectivo" : "Crear año lectivo"}</h3>
               <form className="form" onSubmit={handleAnioSubmit}>
                 <label>
@@ -1742,13 +3335,22 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingAnio}>
                     {loadingAnio ? (editingAnioId !== null ? "Actualizando..." : "Guardando...") : (editingAnioId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingAnioId !== null && (
-                    <button type="button" onClick={resetAnioForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetAnioForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Años lectivos</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetAnioForm(); openSection("anios"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar año lectivo
+                    </button>
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -1781,7 +3383,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditAnio(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteAnio(item.AnioLectivoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteAnio(item.AnioLectivoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateAnio(item.AnioLectivoId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -1798,8 +3400,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "periodos" && (
-          <div className="two-col">
+          <div className={isSectionOpen("periodos") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("periodos") ? (
+                <>
               <h3>{editingPeriodoId !== null ? "Editar período" : "Crear período"}</h3>
               <form className="form" onSubmit={handlePeriodoSubmit}>
                 <label>
@@ -1829,13 +3433,22 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingPeriodo}>
                     {loadingPeriodo ? (editingPeriodoId !== null ? "Actualizando..." : "Guardando...") : (editingPeriodoId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingPeriodoId !== null && (
-                    <button type="button" onClick={resetPeriodoForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetPeriodoForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Períodos</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetPeriodoForm(); openSection("periodos"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar período
+                    </button>
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -1870,7 +3483,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditPeriodo(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeletePeriodo(item.PeriodoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeletePeriodo(item.PeriodoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivatePeriodo(item.PeriodoId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -1887,8 +3500,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "grupos" && (
-          <div className="two-col">
+          <div className={isSectionOpen("grupos") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("grupos") ? (
+                <>
               <h3>{editingGrupoId !== null ? "Editar grupo" : "Crear grupo"}</h3>
               <form className="form" onSubmit={handleGrupoSubmit}>
                 <label>
@@ -1914,13 +3529,23 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingGrupo}>
                     {loadingGrupo ? (editingGrupoId !== null ? "Actualizando..." : "Guardando...") : (editingGrupoId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingGrupoId !== null && (
-                    <button type="button" onClick={resetGrupoForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetGrupoForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Gestión de grupos</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetGrupoForm(); openSection("grupos"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar grupo
+                    </button>
+                  </div>
+                </>
+              )}
+              {renderAcademicoBulkImportPanel("grupos")}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -1939,7 +3564,7 @@ async function handleReprogramarDesde(e: FormEvent) {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>ID</th><th>Año lectivo</th><th>Grupo</th><th>Nivel</th><th>Jornada</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>ID</th><th>Año lectivo</th><th>Grupo</th><th>Nivel</th><th>Ciclo</th><th>Jornada</th><th>Estado</th><th>Acciones</th></tr>
                   </thead>
                   <tbody>
                     {grupos.map((item) => (
@@ -1948,13 +3573,14 @@ async function handleReprogramarDesde(e: FormEvent) {
                         <td>{item.AnioNombre || ""}</td>
                         <td>{item.Nombre}</td>
                         <td>{item.Nivel || ""}</td>
+                        <td>{getCicloPorNivel(item.Nivel)}</td>
                         <td>{item.Jornada || ""}</td>
                         <td>{item.Activo ? "Activo" : "Inactivo"}</td>
                         <td>
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditGrupo(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteGrupo(item.GrupoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteGrupo(item.GrupoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateGrupo(item.GrupoId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -1971,8 +3597,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "matriculas" && (
-          <div className="two-col">
+          <div className={isSectionOpen("matriculas") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("matriculas") ? (
+                <>
               <h3>{editingMatriculaId !== null ? "Editar matrícula" : "Crear matrícula"}</h3>
 <form className="form" onSubmit={handleMatriculaSubmit}>
   <label>
@@ -2093,15 +3721,32 @@ async function handleReprogramarDesde(e: FormEvent) {
 
   <label>
     Especialidad
-    <input
-      value={matriculaForm.especialidad}
-      onChange={(e) =>
+    <select
+      value={matriculaForm.especialidadId}
+      onChange={(e) => {
+        const especialidadId = e.target.value;
+        const especialidadSeleccionada = especialidadesCatalogo.find(
+          (item) => String(item.EspecialidadId) === String(especialidadId)
+        );
+
         setMatriculaForm((prev: any) => ({
           ...prev,
-          especialidad: e.target.value
-        }))
-      }
-    />
+          especialidadId,
+          especialidad: especialidadSeleccionada?.Descripcion || ""
+        }));
+      }}
+    >
+      <option value="">Sin especialidad</option>
+      {especialidadesActivas.map((item) => (
+        <option key={item.EspecialidadId} value={item.EspecialidadId}>
+          {item.Descripcion}
+          {item.PermiteMultiplesPorSeccion ? " - permite varias por sección" : ""}
+        </option>
+      ))}
+    </select>
+    <small style={{ opacity: 0.75 }}>
+      Este campo no es obligatorio. Las especialidades se administran desde el botón Especialidades.
+    </small>
   </label>
 
   <label>
@@ -2260,24 +3905,176 @@ async function handleReprogramarDesde(e: FormEvent) {
           : "Guardar matrícula"}
     </button>
 
-    {editingMatriculaId !== null && (
-      <button
-        type="button"
-        onClick={resetMatriculaForm}
-        style={{
-          border: "1px solid #d1d5db",
-          borderRadius: "10px",
-          padding: "10px 14px",
-          background: "#fff",
-          cursor: "pointer"
-        }}
-      >
-        Cancelar
-      </button>
-    )}
+    <button
+      type="button"
+      onClick={resetMatriculaForm}
+      style={{
+        border: "1px solid #d1d5db",
+        borderRadius: "10px",
+        padding: "10px 14px",
+        background: "#fff",
+        cursor: "pointer"
+      }}
+    >
+      Cancelar
+    </button>
   </div>
 </form>
+                </>
+              ) : (
+                <>
+                  <h3>Matrículas</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetMatriculaForm(); openSection("matriculas"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar matrícula
+                    </button>
+                  </div>
+                </>
+              )}
+              <div style={{ marginTop: "18px", paddingTop: "16px", borderTop: "1px solid #e5e7eb" }}>
+                <h4 style={{ margin: "0 0 12px" }}>Importar matrículas</h4>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    onClick={handleDescargarPlantillaMatriculas}
+                    disabled={importandoMatriculas}
+                  >
+                    Descargar plantilla
+                  </button>
+                </div>
+                <form className="form" onSubmit={handleImportarMatriculas} aria-busy={importandoMatriculas}>
+                  <label>
+                    Año lectivo
+                    <select
+                      value={matriculaImportAnioId}
+                      onChange={(e) => setMatriculaImportAnioId(e.target.value)}
+                      required
+                    >
+                      <option value="">Seleccione</option>
+                      {aniosActivos.map((item) => (
+                        <option key={item.AnioLectivoId} value={item.AnioLectivoId}>
+                          {item.Nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
+                  <label>
+                    Archivo Excel
+                    <input
+                      ref={matriculaImportFileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls"
+                      disabled={importandoMatriculas}
+                      onChange={(e) => setArchivoImportacionMatricula(e.target.files?.[0] || null)}
+                    />
+                  </label>
+
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button
+                      className="primary-btn"
+                      disabled={importandoMatriculas || !archivoImportacionMatricula || !matriculaImportAnioId}
+                    >
+                      {importandoMatriculas ? "Importando..." : "Importar matrículas"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArchivoImportacionMatricula(null);
+                        setMatriculaImportResult(null);
+                        setMatriculaImportProgress(null);
+                        if (matriculaImportFileInputRef.current) {
+                          matriculaImportFileInputRef.current.value = "";
+                        }
+                      }}
+                      style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}
+                    >
+                      Limpiar importación
+                    </button>
+                  </div>
+                </form>
+
+                {(importandoMatriculas || matriculaImportProgress) && (
+                  <div
+                    style={{
+                      marginTop: "12px",
+                      padding: "12px",
+                      borderRadius: "10px",
+                      background: "#0f172a",
+                      color: "#e5f3ff"
+                    }}
+                  >
+                    <strong>
+                      {importandoMatriculas
+                        ? "Procesando importación de matrículas"
+                        : "Importación de matrículas finalizada"}
+                    </strong>
+                    <div style={{ marginTop: "4px", opacity: 0.85 }}>
+                      {matriculaImportProgress
+                        ? `${matriculaImportProgress.procesados} de ${matriculaImportProgress.totalRegistros} registros procesados`
+                        : "Preparando archivo..."}
+                    </div>
+                    <div className="processing-progress-track" aria-label="Progreso de importación de matrículas">
+                      <div
+                        className="processing-progress-bar"
+                        style={{ width: `${Math.max(0, Math.min(100, matriculaImportProgress?.porcentaje || 0))}%` }}
+                      />
+                    </div>
+                    <div className="processing-progress-meta">
+                      <span>{matriculaImportProgress?.porcentaje || 0}%</span>
+                      <span>Creadas: {matriculaImportProgress?.totalCreados || 0}</span>
+                      <span>Reactivadas: {matriculaImportProgress?.totalReactivados || 0}</span>
+                      <span>Omitidas: {matriculaImportProgress?.totalOmitidos || 0}</span>
+                      <span>Errores: {matriculaImportProgress?.totalError || 0}</span>
+                    </div>
+                  </div>
+                )}
+
+                {matriculaImportResult && (
+                  <div style={{ marginTop: "16px" }}>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+                      <span><strong>Total:</strong> {matriculaImportResult.totalRegistros}</span>
+                      <span><strong>Creadas:</strong> {matriculaImportResult.totalCreados}</span>
+                      <span><strong>Reactivadas:</strong> {matriculaImportResult.totalReactivados}</span>
+                      <span><strong>Omitidas:</strong> {matriculaImportResult.totalOmitidos}</span>
+                      <span><strong>Errores:</strong> {matriculaImportResult.totalError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={handleDescargarResumenMatriculas}
+                      style={{ marginBottom: "12px" }}
+                    >
+                      Exportar resumen a Excel
+                    </button>
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Fila</th>
+                            <th>Cédula</th>
+                            <th>Sección</th>
+                            <th>Estado</th>
+                            <th>Motivo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {matriculaImportResult.resultados.slice(0, 20).map((item) => (
+                            <tr key={`${item.fila}-${item.cedula}-${item.seccion}`}>
+                              <td>{item.fila}</td>
+                              <td>{item.cedula}</td>
+                              <td>{item.seccion}</td>
+                              <td>{item.estado}</td>
+                              <td>{item.motivo}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2285,7 +4082,7 @@ async function handleReprogramarDesde(e: FormEvent) {
               <form onSubmit={handleMatriculaSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
                 <input placeholder="Buscar por estudiante, grupo o año" value={matriculaSearch} onChange={(e) => setMatriculaSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
                 <button className="primary-btn" type="submit">Buscar</button>
-                <button type="button" onClick={() => { setMatriculaSearch(""); loadMatriculas("", incluirMatriculasInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                <button type="button" onClick={() => { setMatriculaSearch(""); setMatriculas([]); setMatriculaHasSearched(false); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
                   Limpiar
                 </button>
               </form>
@@ -2334,7 +4131,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                               Ver boleta
                             </button>
                             {item.Estado === "Activa" ? (
-                              <button type="button" onClick={() => handleDeleteMatricula(item.MatriculaId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteMatricula(item.MatriculaId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateMatricula(item.MatriculaId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -2342,7 +4139,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                         </td>
                       </tr>
                     ))}
-                    {!matriculas.length && <tr><td colSpan={11} style={{ textAlign: "center", padding: "16px" }}>No hay matrículas registradas</td></tr>}
+                    {!matriculas.length && <tr><td colSpan={11} style={{ textAlign: "center", padding: "16px" }}>{matriculaHasSearched ? "No hay matrículas que coincidan con la bésqueda" : "Digite estudiante, grupo o año para buscar matrículas"}</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -2350,9 +4147,220 @@ async function handleReprogramarDesde(e: FormEvent) {
           </div>
         )}
 
-        {tab === "materias" && (
-          <div className="two-col">
+
+
+        {tab === "especialidades" && (
+          <div className={isSectionOpen("especialidades") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("especialidades") ? (
+                <>
+                  <h3>{editingEspecialidadId !== null ? "Editar especialidad" : "Crear especialidad"}</h3>
+                  <form className="form" onSubmit={handleEspecialidadSubmit}>
+                    <label>
+                      Descripción
+                      <input
+                        value={especialidadForm.descripcion}
+                        onChange={(e) => setEspecialidadForm({ ...especialidadForm, descripcion: e.target.value })}
+                        placeholder="Ejemplo: Contabilidad, Informática, Turismo"
+                        required
+                      />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                      <input
+                        type="checkbox"
+                        checked={!!especialidadForm.permiteMultiplesPorSeccion}
+                        onChange={(e) => setEspecialidadForm({ ...especialidadForm, permiteMultiplesPorSeccion: e.target.checked })}
+                      />
+                      <span>
+                        Permitir diferentes especialidades en una misma sección durante la misma lección
+                        <small style={{ display: "block", opacity: 0.75 }}>
+                          Marcá esta opción cuando una misma sección pueda dividirse por especialidades, por ejemplo Contabilidad, Informática y Turismo en la misma franja de clase.
+                        </small>
+                      </span>
+                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingEspecialidad}>
+                        {loadingEspecialidad ? (editingEspecialidadId !== null ? "Actualizando..." : "Guardando...") : (editingEspecialidadId !== null ? "Actualizar" : "Guardar")}
+                      </button>
+                      <button type="button" onClick={resetEspecialidadForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Especialidades</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetEspecialidadForm(); openSection("especialidades"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar especialidad
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de especialidades</h3>
+              <form onSubmit={handleEspecialidadSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
+                <input placeholder="Buscar por descripción" value={especialidadSearch} onChange={(e) => setEspecialidadSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                <button className="primary-btn" type="submit">Buscar</button>
+                <button type="button" onClick={() => { setEspecialidadSearch(""); loadEspecialidades("", incluirEspecialidadesInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                  Limpiar
+                </button>
+              </form>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <input type="checkbox" checked={incluirEspecialidadesInactivas} onChange={(e) => setIncluirEspecialidadesInactivas(e.target.checked)} />
+                Incluir especialidades inactivas
+              </label>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>ID</th><th>Descripción</th><th>Varias por sección</th><th>Estado</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                    {especialidades.map((item) => (
+                      <tr key={item.EspecialidadId}>
+                        <td>{item.EspecialidadId}</td>
+                        <td>{item.Descripcion}</td>
+                        <td>{item.PermiteMultiplesPorSeccion ? "Sí" : "No"}</td>
+                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => handleEditEspecialidad(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                            {item.Activo ? (
+                              <button type="button" onClick={() => handleDeleteEspecialidad(item.EspecialidadId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                            ) : (
+                              <button type="button" onClick={() => handleReactivateEspecialidad(item.EspecialidadId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!especialidades.length && <tr><td colSpan={5} style={{ textAlign: "center", padding: "16px" }}>No hay especialidades registradas</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+
+        {tab === "rutasTransporte" && (
+          <div className={isSectionOpen("rutasTransporte") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("rutasTransporte") ? (
+                <>
+                  <h3>{editingRutaTransporteId !== null ? "Editar ruta" : "Crear ruta"}</h3>
+                  <form className="form" onSubmit={handleRutaTransporteSubmit}>
+                    <label>
+                      Descripción
+                      <input value={rutaTransporteForm.descripcion} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, descripcion: e.target.value })} placeholder="Ejemplo: Ruta Norte" required />
+                    </label>
+                    <label>
+                      Responsable
+                      <input value={rutaTransporteForm.responsable} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, responsable: e.target.value })} placeholder="Nombre del responsable" />
+                    </label>
+                    <label>
+                      Lugar de inicio
+                      <input value={rutaTransporteForm.lugarInicio} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, lugarInicio: e.target.value })} />
+                    </label>
+                    <label>
+                      Lugar de fin
+                      <input value={rutaTransporteForm.lugarFin} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, lugarFin: e.target.value })} />
+                    </label>
+                    <label>
+                      Capacidad de estudiantes
+                      <input type="number" min="0" value={rutaTransporteForm.capacidadEstudiantes} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, capacidadEstudiantes: e.target.value })} />
+                    </label>
+                    <label>
+                      Hora de inicio
+                      <input type="time" value={rutaTransporteForm.horaInicio} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, horaInicio: e.target.value })} />
+                    </label>
+                    <label>
+                      Hora de fin
+                      <input type="time" value={rutaTransporteForm.horaFin} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, horaFin: e.target.value })} />
+                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingRutaTransporte}>
+                        {loadingRutaTransporte ? (editingRutaTransporteId !== null ? "Actualizando..." : "Guardando...") : (editingRutaTransporteId !== null ? "Actualizar" : "Guardar")}
+                      </button>
+                      <button type="button" onClick={resetRutaTransporteForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Rutas</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetRutaTransporteForm(); openSection("rutasTransporte"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar ruta
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de rutas</h3>
+              <form onSubmit={handleRutaTransporteSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
+                <input placeholder="Buscar por descripción, responsable o lugares" value={rutaTransporteSearch} onChange={(e) => setRutaTransporteSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                <button className="primary-btn" type="submit">Buscar</button>
+                <button type="button" onClick={() => { setRutaTransporteSearch(""); loadRutasTransporte("", incluirRutasTransporteInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                  Limpiar
+                </button>
+              </form>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <input type="checkbox" checked={incluirRutasTransporteInactivas} onChange={(e) => setIncluirRutasTransporteInactivas(e.target.checked)} />
+                Incluir rutas inactivas
+              </label>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>ID</th><th>Descripción</th><th>Responsable</th><th>Inicio</th><th>Fin</th><th>Capacidad</th><th>Horario</th><th>Estado</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                    {rutasTransporte.map((item) => (
+                      <tr key={item.RutaTransporteId}>
+                        <td>{item.RutaTransporteId}</td>
+                        <td>{item.Descripcion}</td>
+                        <td>{item.Responsable || ""}</td>
+                        <td>{item.LugarInicio || ""}</td>
+                        <td>{item.LugarFin || ""}</td>
+                        <td>{item.CapacidadEstudiantes ?? ""}</td>
+                        <td>{[formatTime(item.HoraInicio), formatTime(item.HoraFin)].filter(Boolean).join(" - ")}</td>
+                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => handleEditRutaTransporte(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                            {item.Activo ? (
+                              <button type="button" onClick={() => handleDeleteRutaTransporte(item.RutaTransporteId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                            ) : (
+                              <button type="button" onClick={() => handleReactivateRutaTransporte(item.RutaTransporteId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!rutasTransporte.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>No hay rutas registradas</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {tab === "evaluacion" && (
+          <EvaluacionParametrizacionPage />
+        )}
+
+        {tab === "materias" && (
+          <div className={isSectionOpen("materias") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("materias") ? (
+                <>
               <h3>{editingMateriaId !== null ? "Editar materia" : "Crear materia"}</h3>
               <form className="form" onSubmit={handleMateriaSubmit}>
                 <label>
@@ -2371,13 +4379,23 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingMateria}>
                     {loadingMateria ? (editingMateriaId !== null ? "Actualizando..." : "Guardando...") : (editingMateriaId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingMateriaId !== null && (
-                    <button type="button" onClick={resetMateriaForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetMateriaForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Materias</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetMateriaForm(); openSection("materias"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar materia
+                    </button>
+                  </div>
+                </>
+              )}
+              {renderAcademicoBulkImportPanel("materias")}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2410,7 +4428,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditMateria(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteMateria(item.MateriaId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteMateria(item.MateriaId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateMateria(item.MateriaId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -2427,8 +4445,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "asignaciones" && (
-          <div className="two-col">
+          <div className={isSectionOpen("asignaciones") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("asignaciones") ? (
+                <>
               <h3>{editingAsignacionId !== null ? "Editar asignación docente" : "Crear asignación docente"}</h3>
               <form className="form" onSubmit={handleAsignacionSubmit}>
                 <label>
@@ -2493,13 +4513,23 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingAsignacion}>
                     {loadingAsignacion ? (editingAsignacionId !== null ? "Actualizando..." : "Guardando...") : (editingAsignacionId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingAsignacionId !== null && (
-                    <button type="button" onClick={resetAsignacionForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetAsignacionForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Asignación docente</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetAsignacionForm(); openSection("asignaciones"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar asignación
+                    </button>
+                  </div>
+                </>
+              )}
+              {renderAcademicoBulkImportPanel("asignaciones-docentes")}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2535,7 +4565,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditAsignacion(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteAsignacion(item.AsignacionDocenteId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteAsignacion(item.AsignacionDocenteId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateAsignacion(item.AsignacionDocenteId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -2552,8 +4582,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "bloques" && (
-          <div className="two-col">
+          <div className={isSectionOpen("bloques") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("bloques") ? (
+                <>
               <h3>{editingBloqueId !== null ? "Editar bloque horario" : "Crear bloque horario"}</h3>
               <form className="form" onSubmit={handleBloqueSubmit}>
                 <label>
@@ -2576,13 +4608,22 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingBloque}>
                     {loadingBloque ? (editingBloqueId !== null ? "Actualizando..." : "Guardando...") : (editingBloqueId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingBloqueId !== null && (
-                    <button type="button" onClick={resetBloqueForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetBloqueForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Bloques horarios</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetBloqueForm(); openSection("bloques"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar bloque horario
+                    </button>
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2624,8 +4665,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "gruposMateria" && (
-          <div className="two-col">
+          <div className={isSectionOpen("gruposMateria") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("gruposMateria") ? (
+                <>
               <h3>{editingGrupoMateriaId !== null ? "Editar materia por grupo" : "Crear materia por grupo"}</h3>
               <form className="form" onSubmit={handleGrupoMateriaSubmit}>
                 <label>
@@ -2665,13 +4708,23 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingGrupoMateria}>
                     {loadingGrupoMateria ? (editingGrupoMateriaId !== null ? "Actualizando..." : "Guardando...") : (editingGrupoMateriaId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingGrupoMateriaId !== null && (
-                    <button type="button" onClick={resetGrupoMateriaForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetGrupoMateriaForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Materias por grupo</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetGrupoMateriaForm(); openSection("gruposMateria"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar materia por grupo
+                    </button>
+                  </div>
+                </>
+              )}
+              {renderAcademicoBulkImportPanel("grupos-materia")}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2704,7 +4757,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditGrupoMateria(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteGrupoMateria(item.GrupoMateriaId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteGrupoMateria(item.GrupoMateriaId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateGrupoMateria(item.GrupoMateriaId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -2721,8 +4774,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "horarios" && (
-          <div className="two-col">
+          <div className={isSectionOpen("horarios") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("horarios") ? (
+                <>
               <h3>{editingHorarioId !== null ? "Editar horario de clase" : "Crear horario de clase"}</h3>
               <form className="form" onSubmit={handleHorarioSubmit}>
                 <label>
@@ -2764,13 +4819,23 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingHorario}>
                     {loadingHorario ? (editingHorarioId !== null ? "Actualizando..." : "Guardando...") : (editingHorarioId !== null ? "Actualizar" : "Guardar")}
                   </button>
-                  {editingHorarioId !== null && (
-                    <button type="button" onClick={resetHorarioForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetHorarioForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Horario de clases</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetHorarioForm(); openSection("horarios"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar horario
+                    </button>
+                  </div>
+                </>
+              )}
+              {renderAcademicoBulkImportPanel("horarios-grupo")}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2806,7 +4871,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditHorario(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteHorario(item.HorarioGrupoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteHorario(item.HorarioGrupoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateHorario(item.HorarioGrupoId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -2824,8 +4889,10 @@ async function handleReprogramarDesde(e: FormEvent) {
 
         
         {tab === "diasLectivos" && (
-          <div className="two-col">
+          <div className={isSectionOpen("diasLectivos") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("diasLectivos") ? (
+                <>
               <h3>Configuración de días lectivos</h3>
               <p style={{ marginTop: 0, opacity: 0.85 }}>
                 Marcá uno o varios días en los que la institución imparte clases normalmente
@@ -2848,14 +4915,21 @@ async function handleReprogramarDesde(e: FormEvent) {
                 <button className="primary-btn" type="button" disabled={loadingDiasLectivos} onClick={handleGuardarDiasLectivos}>
                   {loadingDiasLectivos ? "Guardando..." : "Guardar cambios"}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => loadDiasLectivos()}
-                  style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}
-                >
-                  Recargar
+                <button type="button" onClick={handleCancelarDiasLectivos} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                  Cancelar
                 </button>
               </div>
+                </>
+              ) : (
+                <>
+                  <h3>Configuración de días lectivos</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); openSection("diasLectivos"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Editar días lectivos
+                    </button>
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2885,8 +4959,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "feriados" && (
-          <div className="two-col">
+          <div className={isSectionOpen("feriados") ? "two-col" : "stack"}>
             <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("feriados") ? (
+                <>
               <h3>{editingFeriadoId !== null ? "Editar feriado" : "Crear feriado"}</h3>
 
               <form className="form" onSubmit={handleFeriadoSubmit}>
@@ -2909,14 +4985,23 @@ async function handleReprogramarDesde(e: FormEvent) {
                   <button className="primary-btn" disabled={loadingFeriado}>
                     {loadingFeriado ? (editingFeriadoId !== null ? "Actualizando..." : "Guardando...") : (editingFeriadoId !== null ? "Actualizar" : "Guardar")}
                   </button>
-
-                  {editingFeriadoId !== null && (
-                    <button type="button" onClick={resetFeriadoForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                      Cancelar
-                    </button>
-                  )}
+                  <button type="button" onClick={resetFeriadoForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Cancelar
+                  </button>
                 </div>
               </form>
+                </>
+              ) : (
+                <>
+                  <h3>Feriados</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetFeriadoForm(); openSection("feriados"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar feriado
+                    </button>
+                  </div>
+                </>
+              )}
+              {renderAcademicoBulkImportPanel("feriados")}
             </section>
 
             <section className="card" style={{ marginBottom: 0 }}>
@@ -2952,7 +5037,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button type="button" onClick={() => handleEditFeriado(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
                             {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteFeriado(item.FeriadoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Desactivar</button>
+                              <button type="button" onClick={() => handleDeleteFeriado(item.FeriadoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
                             ) : (
                               <button type="button" onClick={() => handleReactivateFeriado(item.FeriadoId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
                             )}
@@ -2969,8 +5054,10 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "fechasClase" && (
-  <div className="two-col">
-    <section className="card" style={{ marginBottom: 0 }}>
+          <div className={fechasClaseMode !== "none" ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {fechasClaseMode !== "none" ? (
+                <>
       <h3>Generación automática de fechas de clase</h3>
 
       <form className="form" onSubmit={handleGenerarFechasAutomaticas}>
@@ -3049,6 +5136,9 @@ async function handleReprogramarDesde(e: FormEvent) {
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
           <button className="primary-btn" disabled={loadingFechaClase}>
             {loadingFechaClase ? "Generando..." : "Generar automáticamente"}
+          </button>
+          <button type="button" onClick={resetFechaClaseForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+            Cancelar
           </button>
         </div>
       </form>
@@ -3143,11 +5233,28 @@ async function handleReprogramarDesde(e: FormEvent) {
           <button className="primary-btn" disabled={loadingFechaClase}>
             {loadingFechaClase ? "Reprogramando..." : "Reprogramar desde fecha"}
           </button>
+          <button type="button" onClick={resetFechaClaseForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+            Cancelar
+          </button>
         </div>
       </form>
-    </section>
+                </>
+              ) : (
+                <>
+                  <h3>Fechas de clase</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); setEditingFechaClaseId(null); setFechaClaseForm(initialFechaClaseForm); setFechasClaseMode("generar"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Generación automática
+                    </button>
+                    <button type="button" style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }} onClick={() => { clearMessages(); setEditingFechaClaseId(null); setFechaClaseForm(initialFechaClaseForm); setFechasClaseMode("reprogramar"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Reprogramar desde una fecha
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
 
-    <section className="card" style={{ marginBottom: 0 }}>
+            <section className="card" style={{ marginBottom: 0 }}>
       <h3>Listado de fechas de clase</h3>
 
       <form onSubmit={handleFechaClaseSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
@@ -3220,3 +5327,7 @@ async function handleReprogramarDesde(e: FormEvent) {
     </div>
   );
 }
+
+
+
+

@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+﻿import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../lib/http";
 
@@ -67,7 +67,7 @@ export default function ResetPasswordPage() {
         <img src="/logo.png" alt="Profe360" className="login-logo" />
         <h1>Restablecer clave</h1>
         <p className="muted">
-          Ingresá tu correo, número de cédula y la nueva clave
+          Ingresí tu correo, número de cédula y la nueva clave
         </p>
 
         {!token ? (
@@ -156,3 +156,5 @@ export default function ResetPasswordPage() {
     </div>
   );
 }
+
+

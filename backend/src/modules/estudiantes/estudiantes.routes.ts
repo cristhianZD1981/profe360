@@ -8,6 +8,11 @@ import { hashPassword } from "../../utils/password";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
+const STUDENT_IMPORT_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO"
+];
 
 router.use(requireAuth);
 
@@ -25,6 +30,36 @@ type EncargadoPayload = {
   esPrincipal?: boolean;
   recibeNotificaciones?: boolean;
 };
+
+type ImportResultRow = {
+  fila: number;
+  identificacion: string;
+  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  motivo: string;
+};
+
+type ImportJobStatus = "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+
+type ImportJob = {
+  id: string;
+  institucionId: number;
+  usuarioId: number | null;
+  status: ImportJobStatus;
+  totalRegistros: number;
+  procesados: number;
+  totalOk: number;
+  totalError: number;
+  totalCreados: number;
+  totalReactivados: number;
+  totalOmitidos: number;
+  resultados: ImportResultRow[];
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+const importJobs = new Map<string, ImportJob>();
+const IMPORT_JOB_TTL_MS = 30 * 60 * 1000;
 
 function buildCodigoCarnet(institucionId: number, identificacion: string) {
   const limpio = String(identificacion || "").replace(/\s+/g, "").trim();
@@ -352,6 +387,9 @@ async function createStudentWithTransaction(params: {
     sexo,
     fotoUrl,
     nacionalidad,
+    tipoEstudianteId,
+    rutaTransporteId,
+    autorizaWhatsAppEncargado,
     adecuacion,
     discapacidad,
     enfermedad,
@@ -408,7 +446,10 @@ async function createStudentWithTransaction(params: {
     .input("fotoUrl", sql.NVarChar, fotoUrl || null)
     .input("codigoCarnet", sql.NVarChar, codigoCarnet)
     .input("qrContenido", sql.NVarChar, qrContenido)
-    .input("nacionalidad", sql.NVarChar, nacionalidad || null)
+     .input("nacionalidad", sql.NVarChar, nacionalidad || null)
+    .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
+    .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
+    .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
     .input("adecuacion", sql.NVarChar, adecuacion || null)
     .input("discapacidad", sql.NVarChar, discapacidad || null)
     .input("enfermedad", sql.NVarChar, enfermedad || null)
@@ -434,6 +475,9 @@ async function createStudentWithTransaction(params: {
         CodigoCarnet,
         QrContenido,
         Nacionalidad,
+        TipoEstudianteId,
+        RutaTransporteId,
+        AutorizaWhatsAppEncargado,
         Adecuacion,
         Discapacidad,
         Enfermedad,
@@ -456,6 +500,9 @@ async function createStudentWithTransaction(params: {
         @codigoCarnet,
         @qrContenido,
         @nacionalidad,
+        @tipoEstudianteId,
+        @rutaTransporteId,
+        @autorizaWhatsAppEncargado,
         @adecuacion,
         @discapacidad,
         @enfermedad,
@@ -492,11 +539,416 @@ async function createStudentWithTransaction(params: {
   return estudiante;
 }
 
+async function importStudentWithTransaction(params: {
+  transaction: any;
+  institucionId: number;
+  payload: any;
+}) {
+  const { transaction, institucionId, payload } = params;
+  const identificacionNormalizada = String(payload.identificacion || "").replace(/[-\s]/g, "").trim();
+
+  const existing = await transaction.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("identificacion", sql.NVarChar, identificacionNormalizada)
+    .query(`
+      SELECT TOP 1 EstudianteId, Identificacion, Correo, Activo
+      FROM dbo.Estudiante
+      WHERE InstitucionId = @institucionId
+        AND REPLACE(REPLACE(LTRIM(RTRIM(Identificacion)), N'-', N''), N' ', N'') = @identificacion
+      ORDER BY CASE WHEN ISNULL(Activo, 1) = 1 THEN 0 ELSE 1 END, EstudianteId DESC
+    `);
+
+  const row = existing.recordset[0];
+  if (row && row.Activo !== false && row.Activo !== 0) {
+    return {
+      estado: "OMITIDO" as const,
+      motivo: "El estudiante ya existe activo; no se volvio a incluir"
+    };
+  }
+
+  if (!row) {
+    await createStudentWithTransaction({ transaction, institucionId, payload });
+    return {
+      estado: "CREADO" as const,
+      motivo: "Registro creado correctamente"
+    };
+  }
+
+  const {
+    identificacion,
+    nombre,
+    primerApellido,
+    segundoApellido,
+    fechaNacimiento,
+    telefono,
+    sexo,
+    fotoUrl,
+    nacionalidad,
+    tipoEstudianteId,
+    rutaTransporteId,
+    autorizaWhatsAppEncargado,
+    adecuacion,
+    discapacidad,
+    enfermedad,
+    rutaTransporteHabitual,
+    observacionMedica,
+    encargados = []
+  } = payload;
+
+  const codigoCarnet = buildCodigoCarnet(institucionId, identificacion);
+  const qrContenido = codigoCarnet;
+  const dominioCorreo = await getCorreoEstudianteDominio(transaction, institucionId);
+  const correoGenerado = buildStudentEmail(identificacion, dominioCorreo);
+
+  await transaction.request()
+    .input("estudianteId", sql.Int, row.EstudianteId)
+    .input("identificacion", sql.NVarChar, identificacion)
+    .input("nombre", sql.NVarChar, nombre)
+    .input("primerApellido", sql.NVarChar, primerApellido || null)
+    .input("segundoApellido", sql.NVarChar, segundoApellido || null)
+    .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
+    .input("correo", sql.NVarChar, correoGenerado)
+    .input("telefono", sql.NVarChar, telefono || null)
+    .input("sexo", sql.NVarChar, sexo || null)
+    .input("fotoUrl", sql.NVarChar, fotoUrl || null)
+    .input("codigoCarnet", sql.NVarChar, codigoCarnet)
+    .input("qrContenido", sql.NVarChar, qrContenido)
+    .input("nacionalidad", sql.NVarChar, nacionalidad || null)
+    .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
+    .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
+    .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
+    .input("adecuacion", sql.NVarChar, adecuacion || null)
+    .input("discapacidad", sql.NVarChar, discapacidad || null)
+    .input("enfermedad", sql.NVarChar, enfermedad || null)
+    .input("rutaTransporteHabitual", sql.NVarChar, rutaTransporteHabitual || null)
+    .input("observacionMedica", sql.NVarChar, observacionMedica || null)
+    .query(`
+      UPDATE dbo.Estudiante
+      SET Identificacion = @identificacion,
+          Nombre = @nombre,
+          PrimerApellido = @primerApellido,
+          SegundoApellido = @segundoApellido,
+          FechaNacimiento = @fechaNacimiento,
+          Correo = @correo,
+          Telefono = @telefono,
+          Sexo = @sexo,
+          FotoUrl = COALESCE(@fotoUrl, FotoUrl),
+          CodigoCarnet = @codigoCarnet,
+          QrContenido = @qrContenido,
+          Nacionalidad = @nacionalidad,
+          TipoEstudianteId = @tipoEstudianteId,
+          RutaTransporteId = @rutaTransporteId,
+          AutorizaWhatsAppEncargado = @autorizaWhatsAppEncargado,
+          Adecuacion = @adecuacion,
+          Discapacidad = @discapacidad,
+          Enfermedad = @enfermedad,
+          RutaTransporteHabitual = @rutaTransporteHabitual,
+          ObservacionMedica = @observacionMedica,
+          Activo = 1,
+          UpdatedAt = SYSDATETIME()
+      WHERE EstudianteId = @estudianteId
+    `);
+
+  const encargadosNormalizados = normalizeEncargados(encargados);
+  if (encargadosNormalizados.length > 0) {
+    await replaceEncargadosHistorico({
+      transaction,
+      institucionId,
+      estudianteId: row.EstudianteId,
+      encargados: encargadosNormalizados
+    });
+  }
+
+  await ensureParentPortalUser({
+    transaction,
+    institucionId,
+    correoUsuario: correoGenerado,
+    nombre,
+    primerApellido,
+    segundoApellido,
+    telefono,
+    passwordInicial: identificacion,
+    oldCorreo: row.Correo || null
+  });
+
+  return {
+    estado: "REACTIVADO" as const,
+    motivo: "Registro reactivado y actualizado desde la importacion"
+  };
+}
+
+function cleanupImportJobs() {
+  const now = Date.now();
+  for (const [id, job] of importJobs.entries()) {
+    const finished = job.status === "COMPLETADO" || job.status === "ERROR";
+    if (finished && now - job.updatedAt > IMPORT_JOB_TTL_MS) {
+      importJobs.delete(id);
+    }
+  }
+}
+
+function createImportJob(params: { institucionId: number; usuarioId: number | null; totalRegistros: number }) {
+  cleanupImportJobs();
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const job: ImportJob = {
+    id,
+    institucionId: params.institucionId,
+    usuarioId: params.usuarioId,
+    status: "PENDIENTE",
+    totalRegistros: params.totalRegistros,
+    procesados: 0,
+    totalOk: 0,
+    totalError: 0,
+    totalCreados: 0,
+    totalReactivados: 0,
+    totalOmitidos: 0,
+    resultados: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  importJobs.set(id, job);
+  return job;
+}
+
+function serializeImportJob(job: ImportJob) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    totalRegistros: job.totalRegistros,
+    procesados: job.procesados,
+    totalOk: job.totalOk,
+    totalError: job.totalError,
+    totalCreados: job.totalCreados,
+    totalReactivados: job.totalReactivados,
+    totalOmitidos: job.totalOmitidos,
+    porcentaje: job.totalRegistros ? Math.round((job.procesados / job.totalRegistros) * 100) : 0,
+    error: job.error || null,
+    resultados: job.status === "COMPLETADO" || job.status === "ERROR" ? job.resultados : job.resultados.slice(-20)
+  };
+}
+
+function parseImportRowsFromFile(file?: Express.Multer.File) {
+  if (!file?.buffer) {
+    const error: any = new Error("Debés adjuntar un archivo Excel");
+    error.status = 400;
+    throw error;
+  }
+
+  const workbook = XLSX.read(file.buffer, { type: "buffer" });
+  const sheetName = workbook.SheetNames.includes("Estudiantes")
+    ? "Estudiantes"
+    : workbook.SheetNames[0];
+
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<any>(sheet, { defval: "" });
+
+  if (!rows.length) {
+    const error: any = new Error("El archivo no contiene registros para importar");
+    error.status = 400;
+    throw error;
+  }
+
+  return rows;
+}
+
+function buildImportPayloadFromRow(row: any) {
+  const identificacion = toNullableString(row.identificacion);
+  const nombre = toNullableString(row.nombre);
+
+  if (!identificacion || !nombre) {
+    return {
+      identificacion: identificacion || "",
+      error: "Los campos obligatorios identificacion y nombre son requeridos",
+      payload: null
+    };
+  }
+
+  const encargados = [
+    {
+      tipoEncargado: "MADRE",
+      identificacion: toNullableString(row.madre_identificacion),
+      nombre: toNullableString(row.madre_nombre),
+      primerApellido: toNullableString(row.madre_primerApellido),
+      segundoApellido: toNullableString(row.madre_segundoApellido),
+      correo: toNullableString(row.madre_correo),
+      telefono: toNullableString(row.madre_telefono),
+      direccionExacta: toNullableString(row.madre_direccionExacta),
+      parentesco: "Madre",
+      viveConEstudiante: toBoolean(row.madre_viveConEstudiante),
+      esPrincipal: toBoolean(row.madre_esPrincipal),
+      recibeNotificaciones: toBoolean(row.madre_recibeNotificaciones, true)
+    },
+    {
+      tipoEncargado: "PADRE",
+      identificacion: toNullableString(row.padre_identificacion),
+      nombre: toNullableString(row.padre_nombre),
+      primerApellido: toNullableString(row.padre_primerApellido),
+      segundoApellido: toNullableString(row.padre_segundoApellido),
+      correo: toNullableString(row.padre_correo),
+      telefono: toNullableString(row.padre_telefono),
+      direccionExacta: toNullableString(row.padre_direccionExacta),
+      parentesco: "Padre",
+      viveConEstudiante: toBoolean(row.padre_viveConEstudiante),
+      esPrincipal: toBoolean(row.padre_esPrincipal),
+      recibeNotificaciones: toBoolean(row.padre_recibeNotificaciones, true)
+    },
+    {
+      tipoEncargado: "ENCARGADO",
+      identificacion: toNullableString(row.encargado_identificacion),
+      nombre: toNullableString(row.encargado_nombre),
+      primerApellido: toNullableString(row.encargado_primerApellido),
+      segundoApellido: toNullableString(row.encargado_segundoApellido),
+      correo: toNullableString(row.encargado_correo),
+      telefono: toNullableString(row.encargado_telefono),
+      direccionExacta: toNullableString(row.encargado_direccionExacta),
+      parentesco: toNullableString(row.encargado_parentesco) || "Encargado",
+      viveConEstudiante: toBoolean(row.encargado_viveConEstudiante),
+      esPrincipal: toBoolean(row.encargado_esPrincipal),
+      recibeNotificaciones: toBoolean(row.encargado_recibeNotificaciones, true)
+    }
+  ];
+
+  return {
+    identificacion,
+    error: null,
+    payload: {
+      identificacion,
+      nombre,
+      primerApellido: toNullableString(row.primerApellido),
+      segundoApellido: toNullableString(row.segundoApellido),
+      fechaNacimiento: toExcelDate(row.fechaNacimiento),
+      sexo: toNullableString(row.sexo),
+      correo: toNullableString(row.correo),
+      telefono: toNullableString(row.telefono),
+      fotoUrl: null,
+      nacionalidad: toNullableString(row.nacionalidad),
+      tipoEstudianteId: row.tipoEstudianteId ? Number(row.tipoEstudianteId) : null,
+      rutaTransporteId: row.rutaTransporteId ? Number(row.rutaTransporteId) : null,
+      autorizaWhatsAppEncargado: toBoolean(row.autorizaWhatsAppEncargado),
+      adecuacion: toNullableString(row.adecuacion),
+      discapacidad: toNullableString(row.discapacidad),
+      enfermedad: toNullableString(row.enfermedad),
+      rutaTransporteHabitual: toNullableString(row.rutaTransporteHabitual),
+      observacionMedica: toNullableString(row.observacionMedica),
+      encargados
+    }
+  };
+}
+
+async function processStudentImportRows(params: { rows: any[]; institucionId: number; job?: ImportJob }) {
+  const { rows, institucionId, job } = params;
+  const pool = await getPool();
+
+  const resultados: ImportResultRow[] = [];
+  let totalOk = 0;
+  let totalError = 0;
+  let totalCreados = 0;
+  let totalReactivados = 0;
+  let totalOmitidos = 0;
+
+  if (job) {
+    job.status = "PROCESANDO";
+    job.updatedAt = Date.now();
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const fila = i + 2;
+    const built = buildImportPayloadFromRow(row);
+
+    if (built.error || !built.payload) {
+      resultados.push({
+        fila,
+        identificacion: built.identificacion || "",
+        estado: "ERROR",
+        motivo: built.error || "No se pudo preparar el registro"
+      });
+      totalError++;
+    } else {
+      const transaction = new sql.Transaction(pool);
+
+      try {
+        await transaction.begin();
+        const importResult = await importStudentWithTransaction({
+          transaction,
+          institucionId,
+          payload: built.payload
+        });
+        await transaction.commit();
+
+        resultados.push({
+          fila,
+          identificacion: built.identificacion || "",
+          estado: importResult.estado,
+          motivo: importResult.motivo
+        });
+        if (importResult.estado === "CREADO") {
+          totalOk++;
+          totalCreados++;
+        } else if (importResult.estado === "REACTIVADO") {
+          totalOk++;
+          totalReactivados++;
+        } else if (importResult.estado === "OMITIDO") {
+          totalOmitidos++;
+        }
+      } catch (error: any) {
+        try {
+          await transaction.rollback();
+        } catch {}
+
+        resultados.push({
+          fila,
+          identificacion: built.identificacion || "",
+          estado: "ERROR",
+          motivo: error?.message || "No se pudo cargar el registro"
+        });
+        totalError++;
+      }
+    }
+
+    if (job) {
+      job.procesados = i + 1;
+      job.totalOk = totalOk;
+      job.totalError = totalError;
+      job.totalCreados = totalCreados;
+      job.totalReactivados = totalReactivados;
+      job.totalOmitidos = totalOmitidos;
+      job.resultados = resultados;
+      job.updatedAt = Date.now();
+    }
+  }
+
+  if (job) {
+    job.status = "COMPLETADO";
+    job.procesados = rows.length;
+    job.totalOk = totalOk;
+    job.totalError = totalError;
+    job.totalCreados = totalCreados;
+    job.totalReactivados = totalReactivados;
+    job.totalOmitidos = totalOmitidos;
+    job.resultados = resultados;
+    job.updatedAt = Date.now();
+  }
+
+  return {
+    totalRegistros: rows.length,
+    totalOk,
+    totalError,
+    totalCreados,
+    totalReactivados,
+    totalOmitidos,
+    resultados
+  };
+}
+
 router.get("/", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
     const incluirInactivos =
       String(req.query.incluirInactivos || "false") === "true";
+    const page = Math.max(1, Number(req.query.page || 1) || 1);
+    const pageSize = Math.min(500, Math.max(25, Number(req.query.pageSize || 100) || 100));
+    const offset = (page - 1) * pageSize;
 
     if (!req.auth?.institucionId) {
       return badRequest(res, "El usuario no tiene institución asignada");
@@ -509,44 +961,67 @@ router.get("/", async (req, res) => {
       .input("institucionId", sql.Int, req.auth.institucionId)
       .input("q", sql.NVarChar, `%${q}%`)
       .input("incluirInactivos", sql.Bit, incluirInactivos)
+      .input("offset", sql.Int, offset)
+      .input("pageSize", sql.Int, pageSize)
       .query(`
-        SELECT
-          e.EstudianteId,
-          e.Identificacion,
-          e.Nombre,
-          e.PrimerApellido,
-          e.SegundoApellido,
-          e.FechaNacimiento,
-          e.Sexo,
-          e.Correo,
-          e.Telefono,
-          e.FotoUrl,
-          e.CodigoCarnet,
-          e.QrContenido,
-          e.Nacionalidad,
-          e.Adecuacion,
-          e.Discapacidad,
-          e.Enfermedad,
-          e.RutaTransporteHabitual,
-          e.ObservacionMedica,
-          e.Activo
-        FROM dbo.Estudiante e
-        WHERE e.InstitucionId = @institucionId
-          AND (@incluirInactivos = 1 OR e.Activo = 1)
-          AND (
-            @q = '%%'
-            OR e.Identificacion LIKE @q
-            OR e.Nombre LIKE @q
-            OR e.PrimerApellido LIKE @q
-            OR e.SegundoApellido LIKE @q
-            OR e.Correo LIKE @q
-            OR e.Telefono LIKE @q
-            OR e.Nacionalidad LIKE @q
+        WITH base AS (
+          SELECT
+            e.EstudianteId,
+            e.Identificacion,
+            e.Nombre,
+            e.PrimerApellido,
+            e.SegundoApellido,
+            e.FechaNacimiento,
+            e.Sexo,
+            e.Correo,
+            e.Telefono,
+            e.FotoUrl,
+            e.CodigoCarnet,
+            e.QrContenido,
+            e.Nacionalidad,
+            e.TipoEstudianteId,
+            te.Descripcion AS TipoEstudianteDescripcion,
+            e.RutaTransporteId,
+            rt.Descripcion AS RutaTransporteDescripcion,
+            e.AutorizaWhatsAppEncargado,
+            e.Adecuacion,
+            e.Discapacidad,
+            e.Enfermedad,
+            e.RutaTransporteHabitual,
+            e.ObservacionMedica,
+            e.Activo
+          FROM dbo.Estudiante e
+          LEFT JOIN dbo.TipoEstudiante te
+            ON te.TipoEstudianteId = e.TipoEstudianteId
+          LEFT JOIN dbo.RutaTransporte rt
+            ON rt.RutaTransporteId = e.RutaTransporteId
+          WHERE e.InstitucionId = @institucionId
+            AND (@incluirInactivos = 1 OR e.Activo = 1)
+            AND (
+              @q = '%%'
+              OR e.Identificacion LIKE @q
+              OR e.Nombre LIKE @q
+              OR e.PrimerApellido LIKE @q
+              OR e.SegundoApellido LIKE @q
+              OR e.Correo LIKE @q
+              OR e.Telefono LIKE @q
+              OR e.Nacionalidad LIKE @q
+              OR te.Descripcion LIKE @q
+              OR rt.Descripcion LIKE @q
+            )
           )
-        ORDER BY e.EstudianteId DESC
+        SELECT
+          base.*,
+          COUNT(1) OVER() AS TotalRegistros
+        FROM base
+        ORDER BY PrimerApellido, SegundoApellido, Nombre, EstudianteId
+        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
       `);
 
-    return ok(res, result.recordset);
+    const total = Number(result.recordset[0]?.TotalRegistros || 0);
+    const items = result.recordset.map(({ TotalRegistros, ...row }: any) => row);
+
+    return ok(res, { items, total, page, pageSize });
   } catch (error) {
     console.error("Error al listar estudiantes:", error);
     return res.status(500).json({
@@ -556,9 +1031,148 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.get("/dashboard", async (req, res) => {
+  try {
+    if (!req.auth?.institucionId) {
+      return badRequest(res, "El usuario no tiene institucion asignada");
+    }
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("institucionId", sql.Int, req.auth.institucionId)
+      .query(`
+        DECLARE @anioLectivoActualId INT;
+
+        SELECT TOP 1 @anioLectivoActualId = AnioLectivoId
+        FROM dbo.AnioLectivo
+        WHERE InstitucionId = @institucionId
+          AND Activo = 1
+        ORDER BY FechaInicio DESC, AnioLectivoId DESC;
+
+        DECLARE @matriculasBase TABLE (
+          EstudianteId INT,
+          Grupo NVARCHAR(200),
+          Seccion NVARCHAR(200),
+          Especialidad NVARCHAR(200)
+        );
+
+        INSERT INTO @matriculasBase (EstudianteId, Grupo, Seccion, Especialidad)
+        SELECT
+          e.EstudianteId,
+          COALESCE(NULLIF(LTRIM(RTRIM(g.Nivel)), ''), N'Sin grupo') AS Grupo,
+          COALESCE(NULLIF(LTRIM(RTRIM(md.SeccionTexto)), ''), NULLIF(LTRIM(RTRIM(g.Nombre)), ''), N'Sin seccion') AS Seccion,
+          COALESCE(NULLIF(LTRIM(RTRIM(esp.Descripcion)), ''), NULLIF(LTRIM(RTRIM(md.Especialidad)), ''), NULLIF(LTRIM(RTRIM(g.Especialidad)), ''), N'Sin especialidad') AS Especialidad
+        FROM dbo.Matricula m
+        INNER JOIN dbo.Estudiante e
+          ON e.EstudianteId = m.EstudianteId
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = m.GrupoId
+        LEFT JOIN dbo.MatriculaDetalle md
+          ON md.MatriculaId = m.MatriculaId
+        LEFT JOIN dbo.Especialidad esp
+          ON esp.EspecialidadId = md.EspecialidadId
+        WHERE e.InstitucionId = @institucionId
+          AND e.Activo = 1
+          AND m.Estado = N'Activa'
+          AND (@anioLectivoActualId IS NULL OR m.AnioLectivoId = @anioLectivoActualId);
+
+        SELECT
+          SUM(CASE WHEN e.Activo = 1 THEN 1 ELSE 0 END) AS TotalActivos,
+          SUM(CASE WHEN e.Activo = 0 THEN 1 ELSE 0 END) AS TotalInactivos,
+          COUNT(1) AS TotalGeneral,
+          (SELECT COUNT(DISTINCT EstudianteId) FROM @matriculasBase) AS TotalMatriculados
+        FROM dbo.Estudiante e
+        WHERE e.InstitucionId = @institucionId;
+
+        SELECT TOP 12 Grupo AS Label, COUNT(DISTINCT EstudianteId) AS Total
+        FROM @matriculasBase
+        GROUP BY Grupo
+        ORDER BY Total DESC, Label;
+
+        SELECT TOP 18 Seccion AS Label, COUNT(DISTINCT EstudianteId) AS Total
+        FROM @matriculasBase
+        GROUP BY Seccion
+        ORDER BY Total DESC, Label;
+
+        SELECT
+          COALESCE(NULLIF(LTRIM(RTRIM(e.Sexo)), ''), N'Sin especificar') AS Label,
+          COUNT(1) AS Total
+        FROM dbo.Estudiante e
+        WHERE e.InstitucionId = @institucionId
+          AND e.Activo = 1
+        GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(e.Sexo)), ''), N'Sin especificar')
+        ORDER BY Total DESC, Label;
+
+        SELECT TOP 12 Especialidad AS Label, COUNT(DISTINCT EstudianteId) AS Total
+        FROM @matriculasBase
+        GROUP BY Especialidad
+        ORDER BY Total DESC, Label;
+
+        SELECT TOP 12
+          COALESCE(NULLIF(LTRIM(RTRIM(e.Nacionalidad)), ''), N'Sin especificar') AS Label,
+          COUNT(1) AS Total
+        FROM dbo.Estudiante e
+        WHERE e.InstitucionId = @institucionId
+          AND e.Activo = 1
+        GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(e.Nacionalidad)), ''), N'Sin especificar')
+        ORDER BY Total DESC, Label;
+
+        SELECT TOP 12
+          COALESCE(NULLIF(LTRIM(RTRIM(te.Descripcion)), ''), N'Sin tipo') AS Label,
+          COUNT(1) AS Total
+        FROM dbo.Estudiante e
+        LEFT JOIN dbo.TipoEstudiante te
+          ON te.TipoEstudianteId = e.TipoEstudianteId
+        WHERE e.InstitucionId = @institucionId
+          AND e.Activo = 1
+        GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(te.Descripcion)), ''), N'Sin tipo')
+        ORDER BY Total DESC, Label;
+
+        SELECT
+          SUM(CASE WHEN NULLIF(LTRIM(RTRIM(e.Adecuacion)), '') IS NOT NULL THEN 1 ELSE 0 END) AS ConAdecuacion,
+          SUM(CASE WHEN NULLIF(LTRIM(RTRIM(e.Discapacidad)), '') IS NOT NULL THEN 1 ELSE 0 END) AS ConDiscapacidad,
+          SUM(CASE WHEN NULLIF(LTRIM(RTRIM(e.Enfermedad)), '') IS NOT NULL THEN 1 ELSE 0 END) AS ConCondicionMedica,
+          SUM(CASE WHEN e.AutorizaWhatsAppEncargado = 1 THEN 1 ELSE 0 END) AS WhatsAppAutorizado,
+          SUM(CASE WHEN e.RutaTransporteId IS NOT NULL OR NULLIF(LTRIM(RTRIM(e.RutaTransporteHabitual)), '') IS NOT NULL THEN 1 ELSE 0 END) AS ConRutaTransporte
+        FROM dbo.Estudiante e
+        WHERE e.InstitucionId = @institucionId
+          AND e.Activo = 1;
+      `);
+
+    const totales = result.recordsets[0]?.[0] || {};
+    const otros = result.recordsets[7]?.[0] || {};
+
+    return ok(res, {
+      totalActivos: Number(totales.TotalActivos || 0),
+      totalInactivos: Number(totales.TotalInactivos || 0),
+      totalGeneral: Number(totales.TotalGeneral || 0),
+      totalMatriculados: Number(totales.TotalMatriculados || 0),
+      porGrupo: result.recordsets[1] || [],
+      porSeccion: result.recordsets[2] || [],
+      porGenero: result.recordsets[3] || [],
+      porEspecialidad: result.recordsets[4] || [],
+      porNacionalidad: result.recordsets[5] || [],
+      porTipo: result.recordsets[6] || [],
+      otros: [
+        { Label: "Con adecuacion", Total: Number(otros.ConAdecuacion || 0) },
+        { Label: "Con discapacidad", Total: Number(otros.ConDiscapacidad || 0) },
+        { Label: "Con condicion medica", Total: Number(otros.ConCondicionMedica || 0) },
+        { Label: "WhatsApp autorizado", Total: Number(otros.WhatsAppAutorizado || 0) },
+        { Label: "Con ruta de transporte", Total: Number(otros.ConRutaTransporte || 0) }
+      ]
+    });
+  } catch (error) {
+    console.error("Error cargando dashboard de estudiantes:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "Error interno al cargar dashboard de estudiantes"
+    });
+  }
+});
+
 router.get(
   "/plantilla-excel",
-  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
+  requireRoles(...STUDENT_IMPORT_ROLES),
   async (_req, res) => {
     try {
       const wb = XLSX.utils.book_new();
@@ -580,15 +1194,18 @@ router.get(
         { Campo: "sexo", Obligatorio: "No", Descripcion: "Masculino, Femenino u Otro" },
         { Campo: "correo", Obligatorio: "No", Descripcion: "Se genera automáticamente con identificación + dominio institucional" },
         { Campo: "telefono", Obligatorio: "No", Descripcion: "Teléfono del estudiante" },
+        { Campo: "tipoEstudianteId", Obligatorio: "No", Descripcion: "Id del tipo de estudiante configurado en Académico" },
         { Campo: "nacionalidad", Obligatorio: "No", Descripcion: "Nacionalidad" },
         { Campo: "adecuacion", Obligatorio: "No", Descripcion: "Adecuación" },
         { Campo: "discapacidad", Obligatorio: "No", Descripcion: "Discapacidad" },
         { Campo: "enfermedad", Obligatorio: "No", Descripcion: "Enfermedad" },
+        { Campo: "rutaTransporteId", Obligatorio: "No", Descripcion: "Id de la ruta de transporte configurada en Académico" },
         {
           Campo: "rutaTransporteHabitual",
           Obligatorio: "No",
-          Descripcion: "Ruta de transporte"
+          Descripcion: "Nombre o referencia de ruta de transporte"
         },
+        { Campo: "autorizaWhatsAppEncargado", Obligatorio: "No", Descripcion: "Sí o No. Indica si padre, madre o encargado autoriza recibir información por WhatsApp" },
         {
           Campo: "observacionMedica",
           Obligatorio: "No",
@@ -765,7 +1382,9 @@ router.get(
           adecuacion: "No",
           discapacidad: "",
           enfermedad: "",
+          rutaTransporteId: "",
           rutaTransporteHabitual: "Ruta 1",
+          autorizaWhatsAppEncargado: "Sí",
           observacionMedica: "",
           madre_nombre: "Laura",
           madre_primerApellido: "Pérez",
@@ -830,8 +1449,133 @@ router.get(
 );
 
 router.post(
+  "/importar-excel/iniciar",
+  requireRoles(...STUDENT_IMPORT_ROLES),
+  upload.single("archivo"),
+  async (req, res) => {
+    try {
+      if (!req.auth?.institucionId) {
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+      }
+
+      const rows = parseImportRowsFromFile(req.file);
+      const job = createImportJob({
+        institucionId: req.auth.institucionId,
+        usuarioId: req.auth.usuarioId || req.auth.userId || null,
+        totalRegistros: rows.length
+      });
+
+      setImmediate(() => {
+        processStudentImportRows({
+          rows,
+          institucionId: req.auth!.institucionId!,
+          job
+        }).catch((error) => {
+          console.error("Error procesando importaciÃ³n de estudiantes:", error);
+          job.status = "ERROR";
+          job.error = error?.message || "No se pudo procesar el archivo Excel";
+          job.updatedAt = Date.now();
+        });
+      });
+
+      return ok(res, serializeImportJob(job), "ImportaciÃ³n iniciada");
+    } catch (error: any) {
+      if (error?.status === 400) return badRequest(res, error.message);
+      console.error("Error iniciando importaciÃ³n de estudiantes:", error);
+      return res.status(500).json({
+        ok: false,
+        message: "No se pudo iniciar la importaciÃ³n"
+      });
+    }
+  }
+);
+
+router.get(
+  "/importar-excel/progreso/:jobId",
+  requireRoles(...STUDENT_IMPORT_ROLES),
+  async (req, res) => {
+    try {
+      if (!req.auth?.institucionId) {
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+      }
+
+      cleanupImportJobs();
+      const job = importJobs.get(String(req.params.jobId || ""));
+
+      if (!job || job.institucionId !== req.auth.institucionId) {
+        return res.status(404).json({
+          ok: false,
+          message: "No se encontrÃ³ la importaciÃ³n solicitada"
+        });
+      }
+
+      return ok(res, serializeImportJob(job));
+    } catch (error) {
+      console.error("Error consultando progreso de importaciÃ³n:", error);
+      return res.status(500).json({
+        ok: false,
+        message: "No se pudo consultar el progreso de la importaciÃ³n"
+      });
+    }
+  }
+);
+
+router.get(
+  "/importar-excel/resumen/:jobId/excel",
+  requireRoles(...STUDENT_IMPORT_ROLES),
+  async (req, res) => {
+    try {
+      if (!req.auth?.institucionId) {
+        return badRequest(res, "El usuario no tiene instituciÃƒÂ³n asignada");
+      }
+
+      cleanupImportJobs();
+      const job = importJobs.get(String(req.params.jobId || ""));
+
+      if (!job || job.institucionId !== req.auth.institucionId) {
+        return res.status(404).json({
+          ok: false,
+          message: "No se encontrÃƒÂ³ la importaciÃƒÂ³n solicitada"
+        });
+      }
+
+      const wb = XLSX.utils.book_new();
+      const resumen = [
+        { Concepto: "Total registros", Valor: job.totalRegistros },
+        { Concepto: "Procesados", Valor: job.procesados },
+        { Concepto: "Creados", Valor: job.totalCreados },
+        { Concepto: "Reactivados y actualizados", Valor: job.totalReactivados },
+        { Concepto: "Omitidos por existir activos", Valor: job.totalOmitidos },
+        { Concepto: "Errores", Valor: job.totalError },
+        { Concepto: "Estado", Valor: job.status }
+      ];
+      const detalle = job.resultados.map((item) => ({
+        Fila: item.fila,
+        Identificacion: item.identificacion,
+        Estado: item.estado,
+        Motivo: item.motivo
+      }));
+
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), "Resumen");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), "Detalle");
+
+      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Disposition", `attachment; filename="resumen_importacion_estudiantes_${job.id}.xlsx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      return res.send(buffer);
+    } catch (error) {
+      console.error("Error exportando resumen de importaciÃƒÂ³n:", error);
+      return res.status(500).json({
+        ok: false,
+        message: "No se pudo exportar el resumen de importaciÃƒÂ³n"
+      });
+    }
+  }
+);
+
+router.post(
   "/importar-excel",
-  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
+  requireRoles(...STUDENT_IMPORT_ROLES),
   upload.single("archivo"),
   async (req, res) => {
     try {
@@ -1031,6 +1775,11 @@ router.get("/:id/detalle", async (req, res) => {
           e.CodigoCarnet,
           e.QrContenido,
           e.Nacionalidad,
+          e.TipoEstudianteId,
+          te.Descripcion AS TipoEstudianteDescripcion,
+          e.RutaTransporteId,
+          rt.Descripcion AS RutaTransporteDescripcion,
+          e.AutorizaWhatsAppEncargado,
           e.Adecuacion,
           e.Discapacidad,
           e.Enfermedad,
@@ -1038,6 +1787,10 @@ router.get("/:id/detalle", async (req, res) => {
           e.ObservacionMedica,
           e.Activo
         FROM dbo.Estudiante e
+        LEFT JOIN dbo.TipoEstudiante te
+          ON te.TipoEstudianteId = e.TipoEstudianteId
+        LEFT JOIN dbo.RutaTransporte rt
+          ON rt.RutaTransporteId = e.RutaTransporteId
         WHERE e.EstudianteId = @id
           AND e.InstitucionId = @institucionId
       `);
@@ -1131,6 +1884,8 @@ router.get("/:id/carnet", async (req, res) => {
           e.CodigoCarnet,
           e.QrContenido,
           e.Nacionalidad,
+          e.RutaTransporteId,
+          e.AutorizaWhatsAppEncargado,
           e.Adecuacion,
           e.Discapacidad,
           e.Enfermedad,
@@ -1199,6 +1954,9 @@ router.post(
         fechaNacimiento,
         correo,
         telefono,
+        tipoEstudianteId,
+        rutaTransporteId,
+        autorizaWhatsAppEncargado,
         sexo,
         fotoUrl,
         nacionalidad,
@@ -1231,6 +1989,9 @@ router.post(
           fechaNacimiento,
           correo,
           telefono,
+          tipoEstudianteId,
+          rutaTransporteId,
+          autorizaWhatsAppEncargado,
           sexo,
           fotoUrl,
           nacionalidad,
@@ -1299,6 +2060,9 @@ router.put(
         fechaNacimiento,
         correo,
         telefono,
+        tipoEstudianteId,
+        rutaTransporteId,
+        autorizaWhatsAppEncargado,
         sexo,
         fotoUrl,
         nacionalidad,
@@ -1374,7 +2138,10 @@ router.put(
         .input("segundoApellido", sql.NVarChar, segundoApellido || null)
         .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
         .input("correo", sql.NVarChar, correoGenerado)
-        .input("telefono", sql.NVarChar, telefono || null)
+                .input("telefono", sql.NVarChar, telefono || null)
+        .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
+        .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
+        .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
         .input("sexo", sql.NVarChar, sexo || null)
         .input("fotoUrl", sql.NVarChar, fotoUrl || null)
         .input("codigoCarnet", sql.NVarChar, codigoCarnet)
@@ -1399,6 +2166,9 @@ router.put(
             FechaNacimiento = @fechaNacimiento,
             Correo = @correo,
             Telefono = @telefono,
+            TipoEstudianteId = @tipoEstudianteId,
+            RutaTransporteId = @rutaTransporteId,
+            AutorizaWhatsAppEncargado = @autorizaWhatsAppEncargado,
             Sexo = @sexo,
             FotoUrl = @fotoUrl,
             CodigoCarnet = @codigoCarnet,
@@ -1512,13 +2282,13 @@ router.delete(
       }
 
       return ok(res, {
-        message: "Estudiante desactivado correctamente"
+          message: "Estudiante eliminado correctamente"
       });
     } catch (error) {
-      console.error("Error al desactivar estudiante:", error);
+      console.error("Error al eliminar estudiante:", error);
       return res.status(500).json({
         ok: false,
-        message: "Error interno al desactivar estudiante"
+        message: "Error interno al eliminar estudiante"
       });
     }
   }

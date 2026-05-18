@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 
@@ -142,14 +142,14 @@ function formatDate(value?: string | null) {
 }
 
 function getFullName(item: { Nombre: string; PrimerApellido?: string | null; SegundoApellido?: string | null }) {
-  return [item.Nombre, item.PrimerApellido || "", item.SegundoApellido || ""]
+  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 function getTeacherName(item: { Nombre: string; PrimerApellido?: string | null; SegundoApellido?: string | null }) {
-  return [item.Nombre, item.PrimerApellido || "", item.SegundoApellido || ""]
+  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
@@ -386,7 +386,7 @@ export default function HorariosPage() {
         }
       }
 
-      setErrorMessage("Debés seleccionar una sección, un profesor, un estudiante o escribir un criterio de búsqueda");
+      setErrorMessage("Debés seleccionar una sección, un profesor, un estudiante o escribir un criterio de bésqueda");
     } catch (error: any) {
       console.error("Error consultando horarios:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo realizar la consulta");
@@ -560,7 +560,7 @@ export default function HorariosPage() {
             {miHorario && (
               <HorarioGrid
                 title="Mi horario semanal"
-                subtitle={`${miHorario.encabezado.docente || user?.nombre || ""}${miHorario.encabezado.periodo ? ` • ${miHorario.encabezado.periodo}` : ""}${miHorario.encabezado.anioLectivo ? ` • ${miHorario.encabezado.anioLectivo}` : ""}`}
+                subtitle={`${miHorario.encabezado.docente || user?.nombre || ""}${miHorario.encabezado.periodo ? ` - ${miHorario.encabezado.periodo}` : ""}${miHorario.encabezado.anioLectivo ? ` - ${miHorario.encabezado.anioLectivo}` : ""}`}
                 data={miHorario}
               />
             )}
@@ -585,7 +585,7 @@ export default function HorariosPage() {
               <HorarioGrid
                 key={`${grupo.encabezado.grupoId}-${grupo.encabezado.periodoId ?? "sin-periodo"}`}
                 title={`Horario del grupo ${grupo.encabezado.grupo || ""}${grupo.encabezado.nivel ? ` - ${grupo.encabezado.nivel}` : ""}`}
-                subtitle={`${grupo.encabezado.periodo ? `${grupo.encabezado.periodo} • ` : ""}${grupo.encabezado.anioLectivo || ""}`}
+                subtitle={`${grupo.encabezado.periodo ? `${grupo.encabezado.periodo} - ` : ""}${grupo.encabezado.anioLectivo || ""}`}
                 data={grupo}
               />
             ))}
@@ -795,7 +795,7 @@ export default function HorariosPage() {
               {consultaHorarioSeccion && (
                 <HorarioGrid
                   title={`Horario de la sección ${consultaHorarioSeccion.encabezado.grupo || ""}${consultaHorarioSeccion.encabezado.nivel ? ` - ${consultaHorarioSeccion.encabezado.nivel}` : ""}`}
-                  subtitle={`${consultaHorarioSeccion.encabezado.periodo ? `${consultaHorarioSeccion.encabezado.periodo} • ` : ""}${consultaHorarioSeccion.encabezado.anioLectivo || ""}`}
+                  subtitle={`${consultaHorarioSeccion.encabezado.periodo ? `${consultaHorarioSeccion.encabezado.periodo} - ` : ""}${consultaHorarioSeccion.encabezado.anioLectivo || ""}`}
                   data={consultaHorarioSeccion}
                 />
               )}
@@ -803,7 +803,7 @@ export default function HorariosPage() {
               {consultaHorarioDocente && (
                 <HorarioGrid
                   title={`Horario del profesor ${consultaHorarioDocente.encabezado.docente || ""}`}
-                  subtitle={`${consultaHorarioDocente.encabezado.periodo ? `${consultaHorarioDocente.encabezado.periodo} • ` : ""}${consultaHorarioDocente.encabezado.anioLectivo || ""}`}
+                  subtitle={`${consultaHorarioDocente.encabezado.periodo ? `${consultaHorarioDocente.encabezado.periodo} - ` : ""}${consultaHorarioDocente.encabezado.anioLectivo || ""}`}
                   data={consultaHorarioDocente}
                 />
               )}
@@ -816,8 +816,8 @@ export default function HorariosPage() {
                   </section>
 
                   <HorarioGrid
-                    title={`Horario del estudiante • ${consultaHorarioEstudiante.horario.encabezado.grupo || ""}${consultaHorarioEstudiante.horario.encabezado.nivel ? ` - ${consultaHorarioEstudiante.horario.encabezado.nivel}` : ""}`}
-                    subtitle={`${consultaHorarioEstudiante.horario.encabezado.periodo ? `${consultaHorarioEstudiante.horario.encabezado.periodo} • ` : ""}${consultaHorarioEstudiante.horario.encabezado.anioLectivo || ""}`}
+                    title={`Horario del estudiante - ${consultaHorarioEstudiante.horario.encabezado.grupo || ""}${consultaHorarioEstudiante.horario.encabezado.nivel ? ` - ${consultaHorarioEstudiante.horario.encabezado.nivel}` : ""}`}
+                    subtitle={`${consultaHorarioEstudiante.horario.encabezado.periodo ? `${consultaHorarioEstudiante.horario.encabezado.periodo} - ` : ""}${consultaHorarioEstudiante.horario.encabezado.anioLectivo || ""}`}
                     data={consultaHorarioEstudiante.horario}
                   />
                 </div>
@@ -839,3 +839,7 @@ export default function HorariosPage() {
     </div>
   );
 }
+
+
+
+

@@ -155,62 +155,82 @@ Este correo es automático, por favor no responder.`
 router.get("/", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
+    const page = Math.max(1, Number(req.query.page || 1) || 1);
+    const pageSize = Math.min(500, Math.max(25, Number(req.query.pageSize || 100) || 100));
+    const offset = (page - 1) * pageSize;
+
+    const pool = await getPool();
+
 
     const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
     const institucionId = esSuperAdmin ? null : Number(req.auth?.institucionId || 0);
 
-    const pool = await getPool();
     const request = pool.request()
       .input("institucionId", sql.Int, institucionId)
-      .input("q", sql.NVarChar, `%${q}%`);
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("offset", sql.Int, offset)
+      .input("pageSize", sql.Int, pageSize);
 
     const result = await request.query(`
+      WITH base AS (
+        SELECT
+          u.UsuarioId,
+          u.InstitucionId,
+          i.Nombre AS InstitucionNombre,
+          i.NombreComercial AS InstitucionNombreComercial,
+          u.Correo,
+          u.NumeroCedula,
+          u.Nombre,
+          u.PrimerApellido,
+          u.SegundoApellido,
+          u.Telefono,
+          u.Cargo,
+          u.Activo,
+          COALESCE(STRING_AGG(r.Nombre, ', '), '') AS Roles
+        FROM dbo.Usuario u
+        LEFT JOIN dbo.Institucion i
+          ON i.InstitucionId = u.InstitucionId
+        LEFT JOIN dbo.UsuarioRol ur
+          ON ur.UsuarioId = u.UsuarioId
+         AND ur.Activo = 1
+        LEFT JOIN dbo.Rol r
+          ON r.RolId = ur.RolId
+        WHERE (@institucionId IS NULL OR u.InstitucionId = @institucionId)
+          AND (
+            @q = '%%'
+            OR u.Correo LIKE @q
+            OR u.NumeroCedula LIKE @q
+            OR u.Nombre LIKE @q
+            OR u.PrimerApellido LIKE @q
+            OR u.SegundoApellido LIKE @q
+            OR u.Cargo LIKE @q
+          )
+        GROUP BY
+          u.UsuarioId,
+          u.InstitucionId,
+          i.Nombre,
+          i.NombreComercial,
+          u.Correo,
+          u.NumeroCedula,
+          u.Nombre,
+          u.PrimerApellido,
+          u.SegundoApellido,
+          u.Telefono,
+          u.Cargo,
+          u.Activo
+      )
       SELECT
-        u.UsuarioId,
-        u.InstitucionId,
-        i.Nombre AS InstitucionNombre,
-        i.NombreComercial AS InstitucionNombreComercial,
-        u.Correo,
-        u.NumeroCedula,
-        u.Nombre,
-        u.PrimerApellido,
-        u.SegundoApellido,
-        u.Telefono,
-        u.Activo,
-        COALESCE(STRING_AGG(r.Nombre, ', '), '') AS Roles
-      FROM dbo.Usuario u
-      LEFT JOIN dbo.Institucion i
-        ON i.InstitucionId = u.InstitucionId
-      LEFT JOIN dbo.UsuarioRol ur
-        ON ur.UsuarioId = u.UsuarioId
-       AND ur.Activo = 1
-      LEFT JOIN dbo.Rol r
-        ON r.RolId = ur.RolId
-      WHERE (@institucionId IS NULL OR u.InstitucionId = @institucionId)
-        AND (
-          @q = '%%'
-          OR u.Correo LIKE @q
-          OR u.NumeroCedula LIKE @q
-          OR u.Nombre LIKE @q
-          OR u.PrimerApellido LIKE @q
-          OR u.SegundoApellido LIKE @q
-        )
-      GROUP BY
-        u.UsuarioId,
-        u.InstitucionId,
-        i.Nombre,
-        i.NombreComercial,
-        u.Correo,
-        u.NumeroCedula,
-        u.Nombre,
-        u.PrimerApellido,
-        u.SegundoApellido,
-        u.Telefono,
-        u.Activo
-      ORDER BY u.UsuarioId DESC
+        base.*,
+        COUNT(1) OVER() AS TotalRegistros
+      FROM base
+      ORDER BY PrimerApellido, SegundoApellido, Nombre, UsuarioId
+      OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
     `);
 
-    return ok(res, result.recordset);
+    const total = Number(result.recordset[0]?.TotalRegistros || 0);
+    const items = result.recordset.map(({ TotalRegistros, ...row }: any) => row);
+
+    return ok(res, { items, total, page, pageSize });
   } catch (error) {
     console.error("Error al listar usuarios:", error);
     return res.status(500).json({
@@ -258,6 +278,11 @@ router.get("/plantilla-excel", async (req, res) => {
         Descripcion: "Teléfono"
       },
       {
+        Campo: "cargo",
+        Obligatorio: "No",
+        Descripcion: "Cargo del usuario. Ejemplo: Directora, Profesor, Auxiliar Administrativo"
+      },
+      {
         Campo: "rol",
         Obligatorio: "Sí",
         Descripcion: esSuperAdmin
@@ -281,6 +306,7 @@ router.get("/plantilla-excel", async (req, res) => {
         primerApellido: "Pérez",
         segundoApellido: "Rojas",
         telefono: "88888888",
+        cargo: "Profesor",
         rol: "PROFESOR",
         institucionId: esSuperAdmin ? "1" : ""
       }
@@ -315,6 +341,8 @@ router.get("/plantilla-excel", async (req, res) => {
 
 router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
   try {
+    const pool = await getPool();
+
     if (!req.file?.buffer) {
       return badRequest(res, "Debés adjuntar un archivo Excel");
     }
@@ -334,8 +362,6 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
     if (!rows.length) {
       return badRequest(res, "El archivo no contiene registros para importar");
     }
-
-    const pool = await getPool();
 
     const resultados: Array<{
       fila: number;
@@ -357,6 +383,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
       const primerApellido = toNullableString(row.primerApellido);
       const segundoApellido = toNullableString(row.segundoApellido);
       const telefono = toNullableString(row.telefono);
+      const cargo = toNullableString(row.cargo);
       const roleName = String(row.rol || "").trim();
 
       const targetInstitucionId = esSuperAdmin
@@ -450,6 +477,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
             .input("primerApellido", sql.NVarChar, primerApellido)
             .input("segundoApellido", sql.NVarChar, segundoApellido)
             .input("telefono", sql.NVarChar, telefono)
+            .input("cargo", sql.NVarChar, cargo)
             .query(`
               INSERT INTO dbo.Usuario
               (
@@ -461,6 +489,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 PrimerApellido,
                 SegundoApellido,
                 Telefono,
+                Cargo,
                 Activo,
                 DebeCambiarPassword
               )
@@ -480,6 +509,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 @primerApellido,
                 @segundoApellido,
                 @telefono,
+                @cargo,
                 1,
                 1
               )
@@ -577,6 +607,7 @@ router.post("/", async (req, res) => {
       primerApellido,
       segundoApellido,
       telefono,
+      cargo,
       institucionId,
       roleNames = []
     } = req.body;
@@ -653,7 +684,8 @@ router.post("/", async (req, res) => {
       .input("nombre", sql.NVarChar, nombre)
       .input("primerApellido", sql.NVarChar, primerApellido || null)
       .input("segundoApellido", sql.NVarChar, segundoApellido || null)
-      .input("telefono", sql.NVarChar, telefono || null)
+       .input("telefono", sql.NVarChar, telefono || null)
+      .input("cargo", sql.NVarChar, cargo || null)
       .query(`
         INSERT INTO dbo.Usuario
         (
@@ -665,6 +697,7 @@ router.post("/", async (req, res) => {
           PrimerApellido,
           SegundoApellido,
           Telefono,
+          Cargo,
           Activo,
           DebeCambiarPassword
         )
@@ -675,6 +708,7 @@ router.post("/", async (req, res) => {
           INSERTED.NumeroCedula,
           INSERTED.Nombre,
           INSERTED.PrimerApellido,
+          INSERTED.Cargo,
           INSERTED.Activo
         VALUES
         (
@@ -686,6 +720,7 @@ router.post("/", async (req, res) => {
           @primerApellido,
           @segundoApellido,
           @telefono,
+          @cargo,
           1,
           1
         )
@@ -762,6 +797,7 @@ router.put("/:id", async (req, res) => {
       primerApellido,
       segundoApellido,
       telefono,
+      cargo,
       roleNames = [],
       institucionId
     } = req.body;
@@ -846,7 +882,8 @@ router.put("/:id", async (req, res) => {
       .input("nombre", sql.NVarChar, nombre)
       .input("primerApellido", sql.NVarChar, primerApellido || null)
       .input("segundoApellido", sql.NVarChar, segundoApellido || null)
-      .input("telefono", sql.NVarChar, telefono || null)
+       .input("telefono", sql.NVarChar, telefono || null)
+      .input("cargo", sql.NVarChar, cargo || null)
       .query(`
         UPDATE dbo.Usuario
         SET
@@ -857,6 +894,7 @@ router.put("/:id", async (req, res) => {
           PrimerApellido = @primerApellido,
           SegundoApellido = @segundoApellido,
           Telefono = @telefono,
+          Cargo = @cargo,
           UpdatedAt = SYSDATETIME()
         OUTPUT
           INSERTED.UsuarioId,
@@ -865,6 +903,7 @@ router.put("/:id", async (req, res) => {
           INSERTED.NumeroCedula,
           INSERTED.Nombre,
           INSERTED.PrimerApellido,
+          INSERTED.Cargo,
           INSERTED.Activo
         WHERE UsuarioId = @id
           AND (@institucionFiltro IS NULL OR InstitucionId = @institucionFiltro)

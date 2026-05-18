@@ -1,4 +1,4 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/auth";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Layout from "./components/Layout";
@@ -14,6 +14,28 @@ import AsistenciaPage from "./pages/AsistenciaPage";
 import ReportesPage from "./pages/ReportesPage";
 import HorariosPage from "./pages/HorariosPage";
 import BoletaMatriculaPage from "./pages/BoletaMatriculaPage";
+import BoletaConductaPage from "./pages/BoletaConductaPage";
+import GestionProfePage from "./pages/GestionProfePage";
+import PlaneamientoIAPage from "./pages/PlaneamientoIAPage";
+import ConfiguracionIAPage from "./pages/ConfiguracionIAPage";
+import SeguimientoNotasPage from "./pages/SeguimientoNotasPage";
+import ParametrizacionesPage from "./pages/ParametrizacionesPage";
+import HabilidadesPlaneamientoAcademicoPage from "./pages/HabilidadesPlaneamientoAcademicoPage";
+import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
+
+const ADMINISTRATIVO_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO"
+];
+
+const PARAMETRIZACIONES_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO",
+  "PROFESOR",
+  "PROFESOR_GUIA"
+];
 
 export default function App() {
   return (
@@ -39,6 +61,14 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/boletas/conducta/:boletaConductaId"
+          element={
+            <ProtectedRoute>
+              <BoletaConductaPage />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/"
@@ -54,20 +84,154 @@ export default function App() {
             path="usuarios"
             element={
               <ProtectedRoute
-                allowedRoles={[
-                  "SUPER_ADMIN",
-                  "ADMIN_INSTITUCIONAL",
-                  "ADMINISTRATIVO"
-                ]}
+                allowedRoles={ADMINISTRATIVO_ROLES}
               >
                 <UsuariosPage />
               </ProtectedRoute>
             }
           />
           <Route path="estudiantes" element={<EstudiantesPage />} />
-          <Route path="academico" element={<AcademicoPage />} />
+          <Route
+            path="administrativo"
+            element={
+              <ProtectedRoute
+                allowedRoles={ADMINISTRATIVO_ROLES}
+              >
+                <AcademicoPage
+                  visibleTabs={[
+                    "anios",
+                    "periodos",
+                    "grupos",
+                    "especialidades",
+                    "rutasTransporte",
+                    "materias",
+                    "asignaciones",
+                    "bloques",
+                    "fechasClase",
+                    "diasLectivos",
+                    "feriados",
+                    "configuracionCorreo",
+                    "mensajes"
+                  ]}
+                />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="academico"
+            element={
+              <ProtectedRoute
+                allowedRoles={ADMINISTRATIVO_ROLES}
+              >
+                <AcademicoPage
+                  visibleTabs={[
+                    "anios",
+                    "periodos",
+                    "grupos",
+                    "especialidades",
+                    "rutasTransporte",
+                    "materias",
+                    "asignaciones",
+                    "bloques",
+                    "fechasClase",
+                    "diasLectivos",
+                    "feriados",
+                    "configuracionCorreo",
+                    "mensajes"
+                  ]}
+                />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="matricula"
+            element={
+              <ProtectedRoute
+                allowedRoles={ADMINISTRATIVO_ROLES}
+              >
+                <AcademicoPage initialTab="matriculas" visibleTabs={["matriculas"]} />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="parametrizaciones"
+            element={
+              <ProtectedRoute
+                allowedRoles={PARAMETRIZACIONES_ROLES}
+              >
+                <ParametrizacionesPage />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="habilidades-planeamiento" replace />} />
+            <Route path="habilidades-planeamiento" element={<HabilidadesPlaneamientoAcademicoPage />} />
+            <Route path="evaluaciones" element={<EvaluacionParametrizacionPage />} />
+            <Route path="promt-ia" element={<ConfiguracionIAPage />} />
+            <Route path="configuracion-ia" element={<Navigate to="../promt-ia" replace />} />
+          </Route>
           <Route path="horarios" element={<HorariosPage />} />
           <Route path="asistencia" element={<AsistenciaPage />} />
+          <Route
+            path="seguimiento-notas"
+            element={
+              <ProtectedRoute
+                allowedRoles={[
+                  "SUPER_ADMIN",
+                  "ADMIN_INSTITUCIONAL",
+                  "ADMINISTRATIVO",
+                  "PROFESOR",
+                  "PROFESOR_GUIA"
+                ]}
+              >
+                <SeguimientoNotasPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="gestion-profe"
+            element={
+              <ProtectedRoute
+                allowedRoles={[
+                  "SUPER_ADMIN",
+                  "ADMIN_INSTITUCIONAL",
+                  "ADMINISTRATIVO",
+                  "PROFESOR",
+                  "PROFESOR_GUIA"
+                ]}
+              >
+                <GestionProfePage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="planeamiento-ia"
+            element={
+              <ProtectedRoute
+                allowedRoles={[
+                  "SUPER_ADMIN",
+                  "ADMIN_INSTITUCIONAL",
+                  "ADMINISTRATIVO",
+                  "PROFESOR",
+                  "PROFESOR_GUIA"
+                ]}
+              >
+                <PlaneamientoIAPage />
+              </ProtectedRoute>
+            }
+          />
+
+
+          <Route
+            path="configuracion-ia"
+            element={
+              <ProtectedRoute
+                allowedRoles={ADMINISTRATIVO_ROLES}
+              >
+                <ConfiguracionIAPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="reportes" element={<ReportesPage />} />
         </Route>
       </Routes>

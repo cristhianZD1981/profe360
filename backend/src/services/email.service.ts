@@ -8,9 +8,16 @@ export interface SendEmailInput {
   subject: string;
   html?: string;
   text?: string;
+  from?: string;
   cc?: EmailAddress;
   bcc?: EmailAddress;
   replyTo?: EmailAddress;
+  attachments?: Array<{
+    filename: string;
+    content: string;
+    type?: string;
+    disposition?: "attachment" | "inline";
+  }>;
 }
 
 function buildFromAddress() {
@@ -32,7 +39,7 @@ export async function sendEmail(input: SendEmailInput) {
   const resend = new Resend(env.mail.resendApiKey);
 
   const payload: any = {
-    from: buildFromAddress(),
+    from: input.from || buildFromAddress(),
     to: input.to,
     subject: input.subject
   };
@@ -42,6 +49,7 @@ export async function sendEmail(input: SendEmailInput) {
   if (input.cc) payload.cc = input.cc;
   if (input.bcc) payload.bcc = input.bcc;
   if (input.replyTo) payload.replyTo = input.replyTo;
+  if (input.attachments?.length) payload.attachments = input.attachments;
 
   const { data, error } = await resend.emails.send(payload);
 

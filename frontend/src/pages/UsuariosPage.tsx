@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 
@@ -13,6 +13,7 @@ type User = {
   PrimerApellido: string | null;
   SegundoApellido?: string | null;
   Telefono?: string | null;
+  Cargo?: string | null;
   Roles: string;
   Activo: boolean;
 };
@@ -44,6 +45,7 @@ const initialForm = {
   primerApellido: "",
   segundoApellido: "",
   telefono: "",
+  cargo: "",
   roleNames: ["PROFESOR"]
 };
 
@@ -62,6 +64,8 @@ const ROLES_PERMITIDOS_GESTION_INSTITUCIONAL = [
   "ADMINISTRATIVO",
   "PADRE_FAMILIA"
 ];
+
+const USERS_PAGE_SIZE = 100;
 
 function parseJwt(token: string) {
   try {
@@ -85,6 +89,9 @@ export default function UsuariosPage() {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingListado, setLoadingListado] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
   const [isFormExpanded, setIsFormExpanded] = useState(false);
 
   const [archivoImportacion, setArchivoImportacion] = useState<File | null>(null);
@@ -131,12 +138,21 @@ export default function UsuariosPage() {
     return [];
   }, [roles, isSuperAdmin, isAdminInstitucional, isAdministrativo]);
 
-  async function load(query = "") {
+  async function load(query = "", nextPage = page) {
+    const cleanQuery = String(query || "").trim();
+    setLoadingListado(true);
     try {
       const requests: Promise<any>[] = [
-        api.get("/usuarios", { params: { q: query } }),
         api.get("/catalogos/roles")
       ];
+
+      if (cleanQuery) {
+        requests.unshift(
+          api.get("/usuarios", {
+            params: { q: cleanQuery, page: nextPage, pageSize: USERS_PAGE_SIZE }
+          })
+        );
+      }
 
       if (isSuperAdmin) {
         requests.push(
@@ -146,11 +162,27 @@ export default function UsuariosPage() {
 
       const responses = await Promise.all(requests);
 
-      const usersResponse = responses[0];
-      const rolesResponse = responses[1];
-      const institucionesResponse = responses[2];
+      const usersResponse = cleanQuery ? responses[0] : null;
+      const rolesResponse = cleanQuery ? responses[1] : responses[0];
+      const institucionesResponse = cleanQuery ? responses[2] : responses[1];
 
-      setItems(usersResponse.data.data ?? []);
+      if (cleanQuery && usersResponse) {
+        const usersData = usersResponse.data.data ?? [];
+        if (Array.isArray(usersData)) {
+          setItems(usersData);
+          setTotalItems(usersData.length);
+          setPage(nextPage);
+        } else {
+          setItems(usersData.items ?? []);
+          setTotalItems(Number(usersData.total || 0));
+          setPage(Number(usersData.page || nextPage));
+        }
+      } else {
+        setItems([]);
+        setTotalItems(0);
+        setPage(1);
+      }
+
       setRoles(rolesResponse.data.data ?? []);
 
       if (isSuperAdmin) {
@@ -165,6 +197,8 @@ export default function UsuariosPage() {
     } catch (error) {
       console.error("Error cargando usuarios:", error);
       setErrorMessage("No se pudo cargar la información de usuarios");
+    } finally {
+      setLoadingListado(false);
     }
   }
 
@@ -227,6 +261,7 @@ export default function UsuariosPage() {
         primerApellido: form.primerApellido || null,
         segundoApellido: form.segundoApellido || null,
         telefono: form.telefono || null,
+        cargo: form.cargo || null,
         roleNames: form.roleNames
       };
 
@@ -290,6 +325,7 @@ export default function UsuariosPage() {
       primerApellido: item.PrimerApellido || "",
       segundoApellido: item.SegundoApellido || "",
       telefono: item.Telefono || "",
+      cargo: item.Cargo || "",
       roleNames: [roleSeguro]
     });
     setIsFormExpanded(true);
@@ -424,7 +460,7 @@ export default function UsuariosPage() {
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
-    await load(search);
+    await load(search, 1);
   }
 
   async function handleDescargarPlantilla() {
@@ -496,6 +532,10 @@ export default function UsuariosPage() {
     }
   }
 
+  const totalPages = Math.max(1, Math.ceil(totalItems / USERS_PAGE_SIZE));
+  const pageStart = totalItems ? (page - 1) * USERS_PAGE_SIZE + 1 : 0;
+  const pageEnd = totalItems ? Math.min(totalItems, pageStart + items.length - 1) : 0;
+
   return (
     <div className="two-col">
       <div style={{ display: "grid", gap: "16px" }}>
@@ -512,13 +552,12 @@ export default function UsuariosPage() {
           >
             <div>
               <h3 style={{ margin: 0 }}>
-                {editingId ? "Editar usuario" : "Usuarios"}
-              </h3>
-              <p style={{ margin: "6px 0 0", color: "#cbd5e1" }}>
                 {isFormExpanded
-                  ? "Completá los datos y guardá los cambios"
-                  : "El formulario se muestra solo cuando agregás o editás un registro"}
-              </p>
+                  ? editingId
+                    ? "Editar usuario"
+                    : "Crear usuario"
+                  : "Usuarios"}
+              </h3>
             </div>
 
             {canManageUsers && !isFormExpanded && (
@@ -651,6 +690,15 @@ export default function UsuariosPage() {
                 </label>
 
                 <label>
+                  Cargo
+                  <input
+                    value={form.cargo}
+                    onChange={(e) => setForm({ ...form, cargo: e.target.value })}
+                    placeholder="Ejemplo: Directora, Profesor, Auxiliar Administrativo"
+                  />
+                </label>
+
+                <label>
                   Rol
                   <select
                     value={form.roleNames[0]}
@@ -693,18 +741,7 @@ export default function UsuariosPage() {
                   </button>
                 </div>
               </form>
-            ) : (
-              <div
-                style={{
-                  border: "1px dashed rgba(255,255,255,0.18)",
-                  borderRadius: "12px",
-                  padding: "14px",
-                  color: "#cbd5e1"
-                }}
-              >
-                El formulario está minimizado para que la pantalla no se abra ocupando mucho espacio.
-              </div>
-            )
+            ) : null
           ) : (
             <div style={{ color: "#6b7280" }}>
               Este rol no tiene permisos para crear o modificar usuarios
@@ -820,7 +857,7 @@ export default function UsuariosPage() {
             type="button"
             onClick={() => {
               setSearch("");
-              load("");
+              load("", 1);
             }}
             style={{
               border: "1px solid #d1d5db",
@@ -835,6 +872,35 @@ export default function UsuariosPage() {
           </button>
         </form>
 
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
+          <div style={{ color: "#cbd5e1", fontWeight: 700 }}>
+            {loadingListado
+              ? "Cargando usuarios..."
+              : `Mostrando ${pageStart}-${pageEnd} de ${totalItems} usuarios`}
+          </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <button
+              type="button"
+              disabled={loadingListado || page <= 1}
+              onClick={() => load(search, page - 1)}
+              style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "8px 12px", background: "#fff", cursor: page <= 1 ? "not-allowed" : "pointer", color: "#111827" }}
+            >
+              Anterior
+            </button>
+            <span style={{ color: "#cbd5e1", fontWeight: 800 }}>
+              Página {page} de {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={loadingListado || page >= totalPages}
+              onClick={() => load(search, page + 1)}
+              style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "8px 12px", background: "#fff", cursor: page >= totalPages ? "not-allowed" : "pointer", color: "#111827" }}
+            >
+              Siguiente
+            </button>
+          </div>
+        </div>
+
         <div className="table-wrap">
           <table>
             <thead>
@@ -843,6 +909,7 @@ export default function UsuariosPage() {
                 <th>Correo</th>
                 <th>Cédula</th>
                 <th>Nombre</th>
+                <th>Cargo</th>
                 <th>Institución</th>
                 <th>Roles</th>
                 <th>Estado</th>
@@ -863,8 +930,12 @@ export default function UsuariosPage() {
                     <td>{item.Correo}</td>
                     <td>{item.NumeroCedula || ""}</td>
                     <td>
-                      {item.Nombre} {item.PrimerApellido || ""}
+                      {[item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
+                        .join(" ")
+                        .replace(/\s+/g, " ")
+                        .trim()}
                     </td>
+                    <td>{item.Cargo || ""}</td>
                     <td>{institucionNombre}</td>
                     <td>{item.Roles || "Sin rol"}</td>
                     <td>{item.Activo ? "Activo" : "Inactivo"}</td>
@@ -960,8 +1031,10 @@ export default function UsuariosPage() {
 
               {!items.length && (
                 <tr>
-                  <td colSpan={8} style={{ textAlign: "center", padding: "16px" }}>
-                    No hay usuarios registrados
+                  <td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>
+                    {search.trim()
+                      ? "No hay usuarios que coincidan con la bésqueda"
+                      : "Digite un correo, nombre o cédula para buscar usuarios"}
                   </td>
                 </tr>
               )}
@@ -972,3 +1045,7 @@ export default function UsuariosPage() {
     </div>
   );
 }
+
+
+
+

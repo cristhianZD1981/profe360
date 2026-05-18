@@ -6,6 +6,19 @@ type ProtectedRouteProps = {
   allowedRoles?: string[];
 };
 
+function normalizeRole(role: string) {
+  return role.trim().toUpperCase();
+}
+
+function hasAllowedRole(userRoles: string[] = [], allowedRoles: string[] = []) {
+  if (!allowedRoles.length) return true;
+
+  const normalizedUserRoles = userRoles.map(normalizeRole);
+  const normalizedAllowedRoles = allowedRoles.map(normalizeRole);
+
+  return normalizedAllowedRoles.some((role) => normalizedUserRoles.includes(role));
+}
+
 export default function ProtectedRoute({
   children,
   allowedRoles
@@ -24,10 +37,7 @@ export default function ProtectedRoute({
     return <Navigate to="/login" replace />;
   }
 
-  if (
-    allowedRoles?.length &&
-    !allowedRoles.some((role) => user?.roles?.includes(role))
-  ) {
+  if (!hasAllowedRole(user?.roles || [], allowedRoles || [])) {
     return <Navigate to="/" replace />;
   }
 

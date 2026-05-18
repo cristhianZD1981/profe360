@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 
 type Institution = {
@@ -10,6 +10,8 @@ type Institution = {
   CorreoPrincipal: string | null;
   TelefonoPrincipal: string | null;
   Direccion: string | null;
+  CodigoPresupuestario?: string | null;
+  DireccionExacta?: string | null;
   LogoUrl: string | null;
   MembreteUrl: string | null;
   NombreOficialBoleta: string | null;
@@ -26,6 +28,8 @@ const initialForm = {
   correoPrincipal: "",
   telefonoPrincipal: "",
   direccion: "",
+  codigoPresupuestario: "",
+  direccionExacta: "",
   logoUrl: "",
   membreteUrl: "",
   nombreOficialBoleta: "",
@@ -52,6 +56,7 @@ export default function InstitucionesPage() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingMembrete, setUploadingMembrete] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [isFormExpanded, setIsFormExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const [incluirInactivas, setIncluirInactivas] = useState(false);
 
@@ -78,25 +83,6 @@ export default function InstitucionesPage() {
 
       const data = response.data.data ?? [];
       setItems(data);
-
-      if (!isSuperAdmin && isAdminInstitucional && data.length === 1 && !editingId) {
-        const item = data[0];
-        setEditingId(item.InstitucionId);
-        setForm({
-          tipoClienteId: item.TipoClienteId,
-          nombre: item.Nombre || "",
-          nombreComercial: item.NombreComercial || "",
-          cedulaJuridica: item.CedulaJuridica || "",
-          correoPrincipal: item.CorreoPrincipal || "",
-          telefonoPrincipal: item.TelefonoPrincipal || "",
-          direccion: item.Direccion || "",
-          logoUrl: item.LogoUrl || "",
-          membreteUrl: item.MembreteUrl || "",
-          nombreOficialBoleta: item.NombreOficialBoleta || "",
-          regionalEducativa: item.RegionalEducativa || "",
-          circuitoEducativo: item.CircuitoEducativo || ""
-        });
-      }
     } catch (error) {
       console.error("Error cargando instituciones:", error);
       setErrorMessage("No se pudo cargar el listado de instituciones");
@@ -106,6 +92,15 @@ export default function InstitucionesPage() {
   useEffect(() => {
     load("", incluirInactivas);
   }, []);
+
+  function openCreateForm() {
+    setEditingId(null);
+    setForm(initialForm);
+    setMessage("");
+    setErrorMessage("");
+    setIsFormExpanded(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   async function subirArchivo(file: File, tipo: "logo" | "membrete") {
     if (tipo === "logo") setUploadingLogo(true);
@@ -169,6 +164,8 @@ export default function InstitucionesPage() {
         correoPrincipal: form.correoPrincipal || null,
         telefonoPrincipal: form.telefonoPrincipal || null,
         direccion: form.direccion || null,
+        codigoPresupuestario: form.codigoPresupuestario || null,
+        direccionExacta: form.direccionExacta || null,
         logoUrl: form.logoUrl || null,
         membreteUrl: form.membreteUrl || null,
         nombreOficialBoleta: form.nombreOficialBoleta || null,
@@ -184,10 +181,9 @@ export default function InstitucionesPage() {
         setMessage("Institución creada correctamente");
       }
 
-      if (isSuperAdmin) {
-        setForm(initialForm);
-        setEditingId(null);
-      }
+      setForm(initialForm);
+      setEditingId(null);
+      setIsFormExpanded(false);
 
       await load(search, incluirInactivas);
     } catch (error: any) {
@@ -215,12 +211,15 @@ export default function InstitucionesPage() {
       correoPrincipal: item.CorreoPrincipal || "",
       telefonoPrincipal: item.TelefonoPrincipal || "",
       direccion: item.Direccion || "",
+      codigoPresupuestario: item.CodigoPresupuestario || "",
+      direccionExacta: item.DireccionExacta || "",
       logoUrl: item.LogoUrl || "",
       membreteUrl: item.MembreteUrl || "",
       nombreOficialBoleta: item.NombreOficialBoleta || "",
       regionalEducativa: item.RegionalEducativa || "",
       circuitoEducativo: item.CircuitoEducativo || ""
     });
+    setIsFormExpanded(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -229,6 +228,7 @@ export default function InstitucionesPage() {
     setForm(initialForm);
     setMessage("");
     setErrorMessage("");
+    setIsFormExpanded(false);
   }
 
   async function handleDelete(id: number) {
@@ -245,6 +245,9 @@ export default function InstitucionesPage() {
       if (editingId === id) {
         setEditingId(null);
         setForm(initialForm);
+        if (isSuperAdmin) {
+          setIsFormExpanded(false);
+        }
       }
 
       await load(search, incluirInactivas);
@@ -286,13 +289,52 @@ export default function InstitucionesPage() {
   return (
     <div className="two-col">
       <section className="card">
-        <h3>
-          {editingId
-            ? "Editar institución"
-            : isSuperAdmin
-              ? "Crear institución"
-              : "Mi institución"}
-        </h3>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "12px",
+            flexWrap: "wrap",
+            marginBottom: "12px"
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>
+              {isFormExpanded
+                ? editingId
+                  ? "Editar institución"
+                  : isSuperAdmin
+                    ? "Crear institución"
+                    : "Mi institución"
+                : "Instituciones"}
+            </h3>
+          </div>
+
+          {!isFormExpanded && (
+            <>
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={openCreateForm}
+                >
+                  Agregar institución
+                </button>
+              )}
+
+              {!isSuperAdmin && items.length > 0 && (
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => handleEdit(items[0])}
+                >
+                  Editar institución
+                </button>
+              )}
+            </>
+          )}
+        </div>
 
         {message && (
           <div
@@ -324,7 +366,8 @@ export default function InstitucionesPage() {
           </div>
         )}
 
-        <form className="form" onSubmit={handleSubmit}>
+        {isFormExpanded ? (
+          <form className="form" onSubmit={handleSubmit}>
           {isSuperAdmin && (
             <label>
               Tipo cliente
@@ -409,6 +452,23 @@ export default function InstitucionesPage() {
             <input
               value={form.direccion}
               onChange={(e) => setForm({ ...form, direccion: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Código presupuestario
+            <input
+              value={form.codigoPresupuestario}
+              onChange={(e) => setForm({ ...form, codigoPresupuestario: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Dirección exacta
+            <textarea
+              rows={3}
+              value={form.direccionExacta}
+              onChange={(e) => setForm({ ...form, direccionExacta: e.target.value })}
             />
           </label>
 
@@ -540,23 +600,22 @@ export default function InstitucionesPage() {
                   : "Guardar"}
             </button>
 
-            {editingId && isSuperAdmin && (
-              <button
-                type="button"
-                onClick={handleCancelEdit}
-                style={{
-                  border: "1px solid #d1d5db",
-                  borderRadius: "10px",
-                  padding: "10px 14px",
-                  background: "#fff",
-                  cursor: "pointer"
-                }}
-              >
-                Cancelar
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: "10px",
+                padding: "10px 14px",
+                background: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              Cancelar
+            </button>
           </div>
         </form>
+        ) : null}
       </section>
 
       <section className="card">
@@ -628,6 +687,8 @@ export default function InstitucionesPage() {
                 <th>Circuito</th>
                 <th>Correo</th>
                 <th>Teléfono</th>
+                <th>Código presupuestario</th>
+                <th>Dirección exacta</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
@@ -677,6 +738,8 @@ export default function InstitucionesPage() {
                   <td>{item.CircuitoEducativo ?? ""}</td>
                   <td>{item.CorreoPrincipal ?? ""}</td>
                   <td>{item.TelefonoPrincipal ?? ""}</td>
+                  <td>{item.CodigoPresupuestario ?? ""}</td>
+                  <td>{item.DireccionExacta ?? ""}</td>
                   <td>{item.Activo ? "Activa" : "Inactiva"}</td>
                   <td>
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -747,3 +810,5 @@ export default function InstitucionesPage() {
     </div>
   );
 }
+
+
