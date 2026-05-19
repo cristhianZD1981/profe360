@@ -1485,6 +1485,7 @@ export default function GestionProfePage() {
       const porcentajeComponente = Number(detalleItem.Porcentaje || 0);
       const detalleId = Number(detalleItem.EstructuraGrupoDetalleId);
       let nota = 0;
+      let porcentajeEvaluado = 0;
       let porcentajeGanado = 0;
       let evaluados = 0;
       let pendientes = 0;
@@ -1499,6 +1500,7 @@ export default function GestionProfePage() {
         const puntosArticulo = escalaArticulo37(porcentajeAusencias);
         nota = totalLecciones ? (puntosArticulo / 5) * 100 : 0;
         porcentajeGanado = (nota / 100) * porcentajeComponente;
+        porcentajeEvaluado = totalLecciones > 0 ? porcentajeComponente : 0;
         evaluados = totalLecciones;
         pendientes = totalLecciones ? 0 : 1;
         resumen = totalLecciones
@@ -1507,7 +1509,14 @@ export default function GestionProfePage() {
         detallesLista = registros.map((registro) => ({
           key: `asis-${registro.AsistenciaRegistroId}`,
           titulo: `${registro.BloqueNombre || "Lección"} ${registro.HoraInicio || ""}-${registro.HoraFin || ""}`.trim(),
-          subtitulo: registro.Fecha,
+          subtitulo: (() => {
+            const fecha = new Date(String(registro.Fecha || ""));
+            if (!Number.isFinite(fecha.getTime())) return String(registro.Fecha || "");
+            const dd = String(fecha.getDate()).padStart(2, "0");
+            const mm = String(fecha.getMonth() + 1).padStart(2, "0");
+            const yyyy = String(fecha.getFullYear());
+            return `${dd}-${mm}-${yyyy}`;
+          })(),
           nota: ausenciaEquivalente(registro.Estado) > 0 ? 0 : 100,
           porcentaje: 0,
           estado: registro.Estado || "Presente"
@@ -1551,6 +1560,13 @@ export default function GestionProfePage() {
         });
         porcentajeGanado = actividadesResumen.reduce((acc, item) => acc + ((item.notaActividad / 100) * porcentajeComponente * item.pesoActividad), 0);
         nota = porcentajeComponente ? (porcentajeGanado / porcentajeComponente) * 100 : 0;
+        porcentajeEvaluado = actividadesResumen.reduce((acc, item) => {
+          const asignados = Math.max(0, Number(item.totalAsignados || 0));
+          const evaluadosActividad = Math.max(0, Number(item.indicadoresEvaluados || 0));
+          if (!asignados || !Number.isFinite(asignados)) return acc;
+          const ratioEvaluado = Math.min(evaluadosActividad, asignados) / asignados;
+          return acc + (ratioEvaluado * porcentajeComponente * item.pesoActividad);
+        }, 0);
         evaluados = actividadesResumen.reduce((acc, item) => acc + item.indicadoresEvaluados, 0);
         pendientes = actividadesDetalle.length
           ? actividadesResumen.reduce((acc, item) => acc + Math.max(0, item.totalAsignados - item.indicadoresEvaluados), 0)
@@ -1564,7 +1580,7 @@ export default function GestionProfePage() {
           subtitulo: `${item.indicadoresEvaluados}/${item.totalAsignados} indicadores evaluados`,
           nota: item.notaActividad,
           porcentaje: (item.notaActividad / 100) * porcentajeComponente * item.pesoActividad,
-          estado: item.indicadoresEvaluados ? "Calculada" : "Pendiente"
+          estado: item.indicadoresEvaluados ? "Calificada" : "Pendiente"
         }));
         if (!detallesLista.length) {
           detallesLista = indicadoresTipo.map((indicador) => {
@@ -1586,23 +1602,52 @@ export default function GestionProfePage() {
         const notasDetalle = notasEstudiante.filter((notaItem) => actividadesDetalle.some((actividad) => Number(actividad.ActividadId) === Number(notaItem.ActividadId)));
         const notasPorActividad = actividadesDetalle.map((actividad) => {
           const notaItem = notasDetalle.find((item) => Number(item.ActividadId) === Number(actividad.ActividadId));
-          const notaDirecta = Number(notaItem?.NotaObtenida ?? 0);
+          const puntosObtenidos = notaItem?.PuntosObtenidos;
           const maximo = Number(notaItem?.PuntosMaximos || actividad.PuntosMaximos || 0);
-          const notaCalculada = notaDirecta > 0 ? notaDirecta : maximo ? (Number(notaItem?.PuntosObtenidos || 0) / maximo) * 100 : 0;
-          return { actividad, notaItem, notaCalculada };
+          const tieneRegistroCalificado = puntosObtenidos !== null && puntosObtenidos !== undefined && Number.isFinite(Number(puntosObtenidos));
+          const notaDirecta = Number(notaItem?.NotaObtenida ?? 0);
+          const notaCalculada = !tieneRegistroCalificado
+            ? 0
+            : (notaDirecta > 0 ? notaDirecta : (maximo ? (Number(puntosObtenidos) / maximo) * 100 : 0));
+          return { actividad, notaItem, notaCalculada, tieneRegistroCalificado };
         });
-        nota = promedioNumeros(notasPorActividad.filter((item) => item.notaItem).map((item) => item.notaCalculada));
-        porcentajeGanado = (nota / 100) * porcentajeComponente;
-        evaluados = notasDetalle.length;
+
+        const sumaPesosConfig = notasPorActividad.reduce((acc, item) => acc + Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0)), 0);
+        const pesoDefault = actividadesDetalle.length ? (porcentajeComponente / actividadesDetalle.length) : 0;
+
+        porcentajeGanado = notasPorActividad.reduce((acc, item) => {
+          if (!item.tieneRegistroCalificado) return acc;
+          const peActividad = sumaPesosConfig > 0
+            ? Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0))
+            : pesoDefault;
+          return acc + ((item.notaCalculada / 100) * peActividad);
+        }, 0);
+
+        // "Porcentaje Evaluado": cuánto del componente ya tiene calificación registrada.
+        porcentajeEvaluado = notasPorActividad.reduce((acc, item) => {
+          if (!item.tieneRegistroCalificado) return acc;
+          const peActividad = sumaPesosConfig > 0
+            ? Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0))
+            : pesoDefault;
+          return acc + peActividad;
+        }, 0);
+        nota = Math.min(100, porcentajeComponente > 0 ? (porcentajeGanado / porcentajeComponente) * 100 : 0);
+        evaluados = notasPorActividad.filter((item) => item.tieneRegistroCalificado).length;
         pendientes = Math.max(0, actividadesDetalle.length - evaluados);
         resumen = `${evaluados}/${actividadesDetalle.length} actividades calificadas`;
         detallesLista = notasPorActividad.map((item) => ({
           key: `act-${item.actividad.ActividadId}`,
           titulo: item.actividad.Nombre || "Actividad",
           subtitulo: `Puntos: ${Number(item.notaItem?.PuntosObtenidos || 0).toFixed(2)} / ${Number(item.notaItem?.PuntosMaximos || item.actividad.PuntosMaximos || 0).toFixed(2)}`,
-          nota: item.notaItem ? item.notaCalculada : 0,
-          porcentaje: actividadesDetalle.length ? ((item.notaCalculada / 100) * porcentajeComponente) / actividadesDetalle.length : 0,
-          estado: item.notaItem ? "Calificada" : "Pendiente"
+          nota: item.tieneRegistroCalificado ? item.notaCalculada : 0,
+          porcentaje: (() => {
+            if (!item.tieneRegistroCalificado) return 0;
+            const peActividad = sumaPesosConfig > 0
+              ? Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0))
+              : pesoDefault;
+            return (item.notaCalculada / 100) * peActividad;
+          })(),
+          estado: item.tieneRegistroCalificado ? "Calificada" : "Pendiente"
         }));
       }
 
@@ -1611,6 +1656,7 @@ export default function GestionProfePage() {
         nombre: detalleItem.Nombre || detalleItem.ComponenteCatalogoNombre || tipo,
         tipo,
         porcentajeComponente,
+        porcentajeEvaluado,
         nota,
         porcentajeGanado,
         evaluados,
@@ -1622,6 +1668,7 @@ export default function GestionProfePage() {
 
     return estudiantes.map((estudiante) => {
       const componentes = detalles.map((detalleItem) => calcularComponente(detalleItem, estudiante));
+      const totalEvaluado = componentes.reduce((acc, item) => acc + Number((item as any).porcentajeEvaluado || 0), 0);
       const totalGanado = componentes.reduce((acc, item) => acc + Number(item.porcentajeGanado || 0), 0);
       const promedioGeneral = componentes.length ? (totalGanado / Math.max(1, componentes.reduce((acc, item) => acc + Number(item.porcentajeComponente || 0), 0))) * 100 : 0;
       return {
@@ -1629,6 +1676,7 @@ export default function GestionProfePage() {
         estudiante,
         nombre: getFullName(estudiante),
         identificacion: estudiante.Identificacion || "",
+        totalEvaluado,
         totalGanado,
         promedioGeneral,
         componentes
@@ -3236,17 +3284,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function calcularNotaExamen(puntosObtenidos: string, puntosMaximos: number) {
-    const obtenidos = Number(String(puntosObtenidos || "").replace(",", "."));
+    const texto = String(puntosObtenidos || "").trim();
+    const obtenidos = texto === "" ? NaN : Number(texto);
     const maximos = Number(puntosMaximos || 0);
     if (!Number.isFinite(obtenidos) || !Number.isFinite(maximos) || maximos <= 0) return 0;
     return Number(((obtenidos / maximos) * 100).toFixed(2));
   }
 
   function calcularPorcentajeGanadoExamen(nota: number, actividad?: SeguimientoActividad | null, detalleItem?: SeguimientoEvaluacionDetalle | null) {
-    const porcentajeComponente = Number(detalleItem?.Porcentaje || 0);
-    const porcentajeActividad = Number(actividad?.PorcentajeDentroRubro || 0);
-    const pesoActividad = porcentajeActividad > 0 ? porcentajeActividad / 100 : 1;
-    return Number(((Number(nota || 0) / 100) * porcentajeComponente * pesoActividad).toFixed(2));
+    void detalleItem;
+    const pe = Number(actividad?.PorcentajeDentroRubro || 0);
+    return Number(((Number(nota || 0) / 100) * pe).toFixed(2));
   }
 
   async function guardarSeguimientoActividad() {
@@ -3264,17 +3312,18 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     const registros = (seguimientoContexto.estudiantes || []).map((estudiante) => {
       const draft = getSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId);
       const aviso = getSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId);
+      const puntosTexto = String(draft.puntosObtenidos || "").trim();
       return {
         estudianteId: estudiante.EstudianteId,
-        puntosObtenidos: draft.puntosObtenidos === "" ? null : Number(String(draft.puntosObtenidos).replace(",", ".")),
+        puntosObtenidos: puntosTexto === "" ? null : Number(puntosTexto),
         observacion: aviso.informar ? (aviso.observacion || draft.observacion || "") : (draft.observacion || ""),
         informarEncargado: aviso.informar
       };
     });
 
-    const invalid = registros.find((item) => item.puntosObtenidos !== null && (!Number.isFinite(Number(item.puntosObtenidos)) || Number(item.puntosObtenidos) < 0 || Number(item.puntosObtenidos) > puntosMaximos));
+    const invalid = registros.find((item) => item.puntosObtenidos !== null && (!Number.isFinite(Number(item.puntosObtenidos)) || !Number.isInteger(Number(item.puntosObtenidos)) || Number(item.puntosObtenidos) < 0 || Number(item.puntosObtenidos) > puntosMaximos));
     if (invalid) {
-      setErrorMessage("Los puntos obtenidos deben estar entre 0 y " + puntosMaximos);
+      setErrorMessage("Los puntos obtenidos deben ser números enteros entre 0 y " + puntosMaximos);
       return;
     }
 
@@ -5252,10 +5301,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             </div>
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Seguimiento Diario</button>
-              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
               <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
+              <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
               <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : secondaryButtonStyle} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Espesificaciones y Examenes</button>
+              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
               <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); }}>Reportes</button>
             </div>
 
@@ -5324,6 +5373,23 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         color: "#0f172a",
                         background: "#ffffff"
                       };
+                      const getComponentePalette = (detalleItem: SeguimientoEvaluacionDetalle) => {
+                        const tipoKey = normalizarSeguimientoKey(getTipoSeguimientoFromDetalle(detalleItem));
+                        if (tipoKey.includes("ASIST")) {
+                          return { header: "#e0f2fe", subheader: "#f0f9ff", cell: "#f0f9ff" };
+                        }
+                        if (tipoKey.includes("COTIDIAN")) {
+                          return { header: "#fef3c7", subheader: "#fffbeb", cell: "#fffbeb" };
+                        }
+                        if (tipoKey.includes("TAREA")) {
+                          return { header: "#dcfce7", subheader: "#f0fdf4", cell: "#f0fdf4" };
+                        }
+                        return { header: "#fed7aa", subheader: "#ffedd5", cell: "#fff7ed" };
+                      };
+                      const promedioHeaderBg = "#dbeafe";
+                      const promedioCellBg = "#eff6ff";
+                      const accionHeaderBg = "#ede9fe";
+                      const accionCellBg = "#f5f3ff";
                       const buscarComponenteAlumno = (alumnoItem: typeof consolidadoAlumnos[number], detalleItem: SeguimientoEvaluacionDetalle) => {
                         const detalleId = Number(detalleItem.EstructuraGrupoDetalleId);
                         const nombreDetalle = String(detalleItem.Nombre || detalleItem.ComponenteCatalogoNombre || "").trim().toLowerCase();
@@ -5340,44 +5406,52 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             <thead>
                               <tr>
                                 <th rowSpan={2} style={{ ...thBase, textAlign: "left", minWidth: "150px" }}>Alumno</th>
-                                {componentesTabla.map((componente) => (
-                                  <th key={`header-componente-${componente.EstructuraGrupoDetalleId}`} colSpan={2} style={thBase}>
-                                    {componente.Nombre || componente.ComponenteCatalogoNombre || "Componente"}
-                                  </th>
-                                ))}
-                                <th colSpan={2} style={thBase}>Promedio final</th>
-                                <th rowSpan={2} style={{ ...thBase, minWidth: "90px" }}>Acción</th>
+                                {componentesTabla.map((componente) => {
+                                  const palette = getComponentePalette(componente);
+                                  return (
+                                    <th key={`header-componente-${componente.EstructuraGrupoDetalleId}`} colSpan={2} style={{ ...thBase, background: palette.header }}>
+                                      {componente.Nombre || componente.ComponenteCatalogoNombre || "Componente"}
+                                    </th>
+                                  );
+                                })}
+                                <th colSpan={2} style={{ ...thBase, background: promedioHeaderBg }}>Promedio final</th>
+                                <th rowSpan={2} style={{ ...thBase, minWidth: "90px", background: accionHeaderBg }}>Acción</th>
                               </tr>
                               <tr>
-                                {componentesTabla.map((componente) => (
-                                  <React.Fragment key={`subheader-componente-${componente.EstructuraGrupoDetalleId}`}>
-                                    <th style={{ ...thBase, background: "#f1f5f9" }}>% valor</th>
-                                    <th style={{ ...thBase, background: "#f1f5f9" }}>% obtenido</th>
-                                  </React.Fragment>
-                                ))}
-                                <th style={{ ...thBase, background: "#f1f5f9" }}>Evaluado</th>
-                                <th style={{ ...thBase, background: "#f1f5f9" }}>Obtenido</th>
+                                {componentesTabla.map((componente) => {
+                                  const palette = getComponentePalette(componente);
+                                  return (
+                                    <React.Fragment key={`subheader-componente-${componente.EstructuraGrupoDetalleId}`}>
+                                      <th style={{ ...thBase, background: palette.subheader }}>% valor</th>
+                                      <th style={{ ...thBase, background: palette.subheader }}>% obtenido</th>
+                                    </React.Fragment>
+                                  );
+                                })}
+                                <th style={{ ...thBase, background: promedioCellBg }}>Evaluado</th>
+                                <th style={{ ...thBase, background: promedioCellBg }}>Obtenido</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {consolidadoAlumnos.map((alumno) => {
+                              {consolidadoAlumnos.map((alumno, alumnoIndex) => {
                                 const abierto = notasDetalleAbierto === alumno.key;
+                                const zebraRowBg = alumnoIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                                 return (
                                   <React.Fragment key={`consolidado-alumno-${alumno.key}`}>
-                                    <tr style={{ background: abierto ? "#eff6ff" : "#ffffff" }}>
-                                      <td style={{ ...tdBase, textAlign: "left", fontWeight: 900 }}>{alumno.nombre}</td>
+                                    <tr style={{ background: abierto ? "#eff6ff" : zebraRowBg }}>
+                                      <td style={{ ...tdBase, textAlign: "left", fontWeight: 900, background: abierto ? "#eff6ff" : zebraRowBg }}>{alumno.nombre}</td>
                                       {componentesTabla.map((detalleItem) => {
                                         const componente = buscarComponenteAlumno(alumno, detalleItem);
+                                        const palette = getComponentePalette(detalleItem);
                                         return (
                                           <React.Fragment key={`valor-${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`}>
-                                            <td style={tdBase}>{formatPercent(Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0))}</td>
-                                            <td style={{ ...tdBase, color: "#166534", fontWeight: 900 }}>{formatPercent(Number(componente?.porcentajeGanado || 0))}</td>
+                                            <td style={{ ...tdBase, background: palette.cell }}>{formatPercent(Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0))}</td>
+                                            <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: palette.cell }}>{formatPercent(Number(componente?.porcentajeGanado || 0))}</td>
                                           </React.Fragment>
                                         );
                                       })}
-                                      <td style={tdBase}>{formatPercent(alumno.promedioGeneral)}</td>
-                                      <td style={{ ...tdBase, color: "#166534", fontWeight: 900 }}>{formatPercent(alumno.totalGanado)}</td>
-                                      <td style={tdBase}>
+                                      <td style={{ ...tdBase, background: promedioCellBg }}>{formatPercent(Number((alumno as any).totalEvaluado || 0))}</td>
+                                      <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: promedioCellBg }}>{formatPercent(alumno.totalGanado)}</td>
+                                      <td style={{ ...tdBase, background: accionCellBg }}>
                                         <button type="button" style={{ ...secondaryButtonStyle, padding: "5px 8px", fontSize: "12px" }} onClick={() => setNotasDetalleAbierto(abierto ? "" : alumno.key)}>
                                           {abierto ? "Ocultar" : "Ver detalle"}
                                         </button>
@@ -5393,7 +5467,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                 <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "8px", padding: "10px", background: "#e2e8f0", color: "#0f172a", fontWeight: 900, fontSize: "12px" }}>
                                                   <span>{componente.nombre}</span>
                                                   <span>% comp.: {formatPercent(componente.porcentajeComponente)}</span>
-                                                  <span>Nota: {formatPercent(componente.nota)}</span>
+                                                  <span>Porcentaje Evaluado: {formatPercent(Number((componente as any).porcentajeEvaluado ?? 0))}</span>
                                                   <span style={{ color: "#166534" }}>Ganado: {formatPercent(componente.porcentajeGanado)}</span>
                                                 </div>
                                                 <div style={{ padding: "10px", color: "#334155", fontWeight: 800, fontSize: "12px" }}>{componente.resumen}</div>
@@ -5414,15 +5488,37 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                         </tr>
                                                       </thead>
                                                       <tbody>
-                                                        {componente.detalles.map((detalleItem) => (
-                                                          <tr key={detalleItem.key}>
+                                                        {componente.detalles.map((detalleItem) => {
+                                                          const estadoKey = normalizarSeguimientoKey(detalleItem.estado || "");
+                                                          const subtitulo = String(detalleItem.subtitulo || "");
+                                                          const usarProgreso = subtitulo.toLowerCase().includes("indicadores");
+                                                          const matchProgreso = usarProgreso ? subtitulo.match(/(\d+)\s*\/\s*(\d+)/) : null;
+                                                          const evaluados = matchProgreso ? Number(matchProgreso[1]) : null;
+                                                          const total = matchProgreso ? Number(matchProgreso[2]) : null;
+                                                          const tieneProgreso = evaluados !== null && total !== null && Number.isFinite(evaluados) && Number.isFinite(total) && total > 0;
+                                                          const completoPorProgreso = !!(tieneProgreso && evaluados === total);
+                                                          const pendientePorProgreso = !!(tieneProgreso && evaluados === 0);
+                                                          const parcialPorProgreso = !!(tieneProgreso && evaluados > 0 && evaluados < total);
+                                                          const completoPorEstado = estadoKey.includes("CALIFICAD") || estadoKey.includes("CALCULAD");
+                                                          const pendientePorEstado = estadoKey.includes("PENDIENT") || estadoKey.includes("NO CALIFICAD");
+                                                          const colorFondo = completoPorProgreso || (!tieneProgreso && completoPorEstado)
+                                                            ? "#dcfce7"
+                                                            : parcialPorProgreso
+                                                              ? "#fef9c3"
+                                                              : pendientePorProgreso || (!tieneProgreso && pendientePorEstado)
+                                                                ? "#fee2e2"
+                                                                : "#ffffff";
+
+                                                          return (
+                                                          <tr key={detalleItem.key} style={{ background: colorFondo }}>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 800 }}>{detalleItem.titulo}</td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", color: "#334155" }}>{detalleItem.subtitulo}</td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0" }}>{detalleItem.estado || "-"}</td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 800 }}>{formatPercent(detalleItem.nota)}</td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 900, color: "#166534" }}>{formatPercent(detalleItem.porcentaje)}</td>
                                                           </tr>
-                                                        ))}
+                                                        );
+                                                        })}
                                                       </tbody>
                                                     </table>
                                                   </div>
@@ -5724,9 +5820,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           <span style={{ color: "#0f172a", fontWeight: 700 }}>Actividad evaluativa</span>
                           <select style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px" }} value={seguimientoActividadSeleccionada?.ActividadId ? String(seguimientoActividadSeleccionada.ActividadId) : ""} onChange={(event) => setSeguimientoActividadId(event.target.value)}>
                             {seguimientoActividadesFiltradas.length === 0 ? <option value="">No hay actividades configuradas para este componente</option> : null}
-                            {seguimientoActividadesFiltradas.map((actividad) => (
-                              <option key={actividad.ActividadId} value={actividad.ActividadId}>{actividad.Nombre} - {Number(actividad.PuntosMaximos || 0).toFixed(2)} pts</option>
-                            ))}
+                            {seguimientoActividadesFiltradas.map((actividad) => {
+                              const puntos = Math.round(Number(actividad.PuntosMaximos || 0));
+                              const pe = Math.round(Number(actividad.PorcentajeDentroRubro || 0));
+                              const labelExamen = `${actividad.Nombre} - ${puntos}pts - ${pe}%`;
+                              return (
+                                <option key={actividad.ActividadId} value={actividad.ActividadId}>
+                                  {isTipoExamenSeguimiento(seguimientoTipo) ? labelExamen : `${actividad.Nombre} - ${Number(actividad.PuntosMaximos || 0).toFixed(2)} pts`}
+                                </option>
+                              );
+                            })}
                           </select>
                         </label>
 
@@ -5774,7 +5877,30 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     return (
                                       <tr key={`exam-${estudiante.EstudianteId}`} style={{ background: zebraBg }}>
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{getFullName(estudiante)}<div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div></td>
-                                        <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}><input type="number" min="0" max={puntosMaximosActividad || 0} step="0.01" value={draft.puntosObtenidos} onChange={(e) => updateSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { puntosObtenidos: e.target.value })} style={{ width: "130px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }} /></td>
+                                        <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            pattern="[0-9]*"
+                                            value={draft.puntosObtenidos}
+                                            onChange={(e) => {
+                                              const limpio = String(e.target.value || "").replace(/\D+/g, "");
+                                              const maximo = Number.isFinite(puntosMaximosActividad) ? Math.max(0, Math.trunc(puntosMaximosActividad)) : 0;
+                                              if (limpio === "") {
+                                                updateSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { puntosObtenidos: "" });
+                                                return;
+                                              }
+                                              const valor = Number(limpio);
+                                              const acotado = Number.isFinite(valor) ? Math.min(valor, maximo) : 0;
+                                              updateSeguimientoExamenDraft(
+                                                seguimientoActividadSeleccionada.ActividadId,
+                                                estudiante.EstudianteId,
+                                                { puntosObtenidos: String(acotado) }
+                                              );
+                                            }}
+                                            style={{ width: "130px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }}
+                                          />
+                                        </td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>{Number(puntosMaximosActividad || 0).toFixed(2)}</td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{nota.toFixed(2)}</td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{porcentajeGanado.toFixed(2)}%</td>
@@ -6394,9 +6520,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         La materia y el grado se toman del grupo seleccionado en Mis grupos. Luego elegís las habilidades y las indicaciones para la IA.
                       </p>
                     </div>
-                    <button type="button" style={secondaryButtonStyle} onClick={() => loadHabilidadesIa()} disabled={loadingHabilidadesIa}>
-                      {loadingHabilidadesIa ? "Cargando..." : "Actualizar habilidades"}
-                    </button>
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
@@ -6592,6 +6715,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
+                    <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-start" }}>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => loadHabilidadesIa()} disabled={loadingHabilidadesIa}>
+                        {loadingHabilidadesIa ? "Cargando..." : "Actualizar habilidades"}
+                      </button>
+                    </div>
+
                     <label style={{ color: "#e5eefb" }}>
                       Mes o meses
                       <select

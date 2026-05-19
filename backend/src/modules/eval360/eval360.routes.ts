@@ -4970,12 +4970,13 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
       const rawPuntos = registro.puntosObtenidos;
       const puntosObtenidos = rawPuntos === null || rawPuntos === undefined || String(rawPuntos).trim() === "" ? null : Number(rawPuntos);
-      if (puntosObtenidos !== null && (!Number.isFinite(puntosObtenidos) || puntosObtenidos < 0 || puntosObtenidos > puntosMaximos)) {
+      if (puntosObtenidos !== null && (!Number.isFinite(puntosObtenidos) || !Number.isInteger(puntosObtenidos) || puntosObtenidos < 0 || puntosObtenidos > puntosMaximos)) {
         await transaction.rollback();
-        return badRequest(res, "Los puntos obtenidos deben estar entre 0 y los puntos mÃ¡ximos de la actividad");
+        return badRequest(res, "Los puntos obtenidos deben ser enteros entre 0 y los puntos máximos de la actividad");
       }
 
-      const porcentajeObtenido = puntosObtenidos === null ? null : Number(((puntosObtenidos / puntosMaximos) * 100).toFixed(2));
+      const porcentajeEvaluacion = Number(actividad.PorcentajeDentroRubro || 0);
+      const porcentajeObtenido = puntosObtenidos === null ? null : Number(((puntosObtenidos / puntosMaximos) * porcentajeEvaluacion).toFixed(2));
       const observacion = normalizeText(registro.observacion || "") || null;
       const informarEncargado = !!registro.informarEncargado;
 
