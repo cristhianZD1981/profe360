@@ -38,6 +38,7 @@ type EstudianteGrupo = {
   EncargadoPrincipalNombre?: string | null;
   EncargadoPrincipalCorreo?: string | null;
   EncargadoPrincipalTelefono?: string | null;
+  EncargadosWhatsAppDetalle?: string | null;
   AutorizaWhatsAppEncargado?: boolean | number;
   MatriculaId: number;
   EstadoMatricula: string;
@@ -654,6 +655,17 @@ function getFullName(item: { Nombre: string; PrimerApellido?: string | null; Seg
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function getCorreoHabilitadoEstudiante(item: EstudianteGrupo) {
+  return String(item.Correo || item.EncargadoPrincipalCorreo || "").trim();
+}
+
+function getTelefonoWhatsAppHabilitado(item: EstudianteGrupo) {
+  if (!Boolean(item.AutorizaWhatsAppEncargado)) return "";
+  const detalle = String(item.EncargadosWhatsAppDetalle || "").trim();
+  if (detalle) return detalle;
+  return String(item.EncargadoPrincipalTelefono || "").trim();
 }
 
 function formatPercent(value?: number | string | null) {
@@ -5775,6 +5787,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                               <>
                                                 {getFullName(estudiante)}
                                                 <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
+                                                <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                                  Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
+                                                </div>
+                                                <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                                  WA: {getTelefonoWhatsAppHabilitado(estudiante) || "No habilitado"}
+                                                </div>
                                               </>
                                             ) : null}
                                           </td>
@@ -5876,7 +5894,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                                     return (
                                       <tr key={`exam-${estudiante.EstudianteId}`} style={{ background: zebraBg }}>
-                                        <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{getFullName(estudiante)}<div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div></td>
+                                        <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>
+                                          {getFullName(estudiante)}
+                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
+                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                            Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
+                                          </div>
+                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                            WA: {getTelefonoWhatsAppHabilitado(estudiante) || "No habilitado"}
+                                          </div>
+                                        </td>
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
                                           <input
                                             type="text"
@@ -6090,7 +6117,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                       <tr key={estudiante.EstudianteId} style={{ background: zebraBg }}>
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", color: "#0f172a", fontWeight: 700 }}>
                                           {getFullName(estudiante)}
-                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Correo || estudiante.Identificacion}</div>
+                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
+                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                            Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
+                                          </div>
+                                          <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                            WA: {getTelefonoWhatsAppHabilitado(estudiante) || "No habilitado"}
+                                          </div>
                                         </td>
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", color: "#1e293b" }}>{seguimientoIndicadorSeleccionado.IndicadorBase}</td>
                                         {(["INICIAL", "INTERMEDIO", "AVANZADO", normalizarSeguimientoKey(seguimientoTipo).includes("TAREA") ? "NO_ENTREGADO" : "AUSENTE"] as SeguimientoEstado[]).map((estado) => (
@@ -6422,7 +6455,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                           return (
                             <tr key={`asis-${estudiante.EstudianteId}`} style={{ background: zebraBg }}>
-                              <td style={stickyTableCellStyle}>{getFullName(estudiante)}</td>
+                              <td style={stickyTableCellStyle}>
+                                {getFullName(estudiante)}
+                                <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
+                                <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                  Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
+                                </div>
+                                <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
+                                  WA: {getTelefonoWhatsAppHabilitado(estudiante) || "No habilitado"}
+                                </div>
+                              </td>
                               <td>{estudiante.Identificacion}</td>
                               <td>
                                 <select value={draft.estado} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value)}>

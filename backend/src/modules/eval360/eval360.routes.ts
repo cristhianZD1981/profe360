@@ -3800,12 +3800,76 @@ function buildSeguimientoMensaje(params: {
   return { text: correo.text, html: correo.html };
 }
 
+function normalizeWhatsAppPhone(raw?: string | null) {
+  const original = String(raw || "").trim();
+  if (!original) return "";
+  const normalized = original.replace(/[^\d+]/g, "");
+  if (!normalized) return "";
+  if (normalized.startsWith("+")) return normalized;
+  return `+${normalized}`;
+}
+
 async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensaje: string }) {
-  // Profe360 todavÃ­a no tiene proveedor real de WhatsApp en este mÃ³dulo.
-  // Se deja simulado para no romper el flujo y para conectar luego 2Chat/Aspe/Make.
-  if (!params.telefono) return { enviado: false, modo: "omitido", motivo: "Sin telÃ©fono de encargado" };
-  console.log("WhatsApp seguimiento simulado:", { telefono: params.telefono, mensaje: params.mensaje });
-  return { enviado: false, modo: "simulado", telefono: params.telefono };
+  const telefono = normalizeWhatsAppPhone(params.telefono);
+  if (!telefono) return { enviado: false, modo: "omitido", motivo: "Sin teléfono válido de encargado" };
+
+  const mode = String(process.env.WHATSAPP_MODE || "simulado").trim().toLowerCase();
+  const provider = String(process.env.WHATSAPP_PROVIDER || "generic").trim().toLowerCase();
+  const webhookUrl = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim();
+  const webhookToken = String(process.env.WHATSAPP_WEBHOOK_TOKEN || "").trim();
+  const webhookAuthHeader = String(process.env.WHATSAPP_WEBHOOK_AUTH_HEADER || "Authorization").trim() || "Authorization";
+  const fromNumber = normalizeWhatsAppPhone(process.env.WHATSAPP_FROM_NUMBER || "");
+
+  if (mode !== "webhook" || !webhookUrl) {
+    console.log("WhatsApp seguimiento simulado:", { telefono, mensaje: params.mensaje });
+    return { enviado: false, modo: "simulado", telefono, motivo: webhookUrl ? "WHATSAPP_MODE no es webhook" : "WHATSAPP_WEBHOOK_URL no configurado" };
+  }
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    let payload: Record<string, any> = {
+      telefono,
+      mensaje: String(params.mensaje || ""),
+      canal: "whatsapp",
+      origen: "profe360-seguimiento"
+    };
+
+    if (provider === "2chat") {
+      if (!webhookToken) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_WEBHOOK_TOKEN no configurado para 2Chat" };
+      if (!fromNumber) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_FROM_NUMBER no configurado para 2Chat" };
+      headers["X-User-API-Key"] = webhookToken;
+      payload = {
+        from_number: fromNumber,
+        to_number: telefono,
+        text: String(params.mensaje || "")
+      };
+    } else if (webhookToken) {
+      headers[webhookAuthHeader] = webhookToken.toLowerCase().startsWith("bearer ")
+        ? webhookToken
+        : `Bearer ${webhookToken}`;
+    }
+
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    const rawBody = await response.text();
+    if (!response.ok) {
+      const snippet = rawBody.slice(0, 200);
+      console.error("Error enviando WhatsApp por webhook:", response.status, snippet);
+      return { enviado: false, modo: "webhook", telefono, status: response.status, error: snippet || "Respuesta no OK del proveedor" };
+    }
+
+    return { enviado: true, modo: "webhook", telefono, status: response.status };
+  } catch (error: any) {
+    const readable = String(error?.message || error || "Error desconocido");
+    console.error("Excepción enviando WhatsApp por webhook:", readable);
+    return { enviado: false, modo: "webhook", telefono, error: readable };
+  }
 }
 
 function getEstadoLabelSeguimiento(estado: string) {
@@ -4136,6 +4200,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
             enc.NombreCompleto AS EncargadoPrincipalNombre,
             enc.Correo AS EncargadoPrincipalCorreo,
             enc.Telefono AS EncargadoPrincipalTelefono,
+            encWa.Detalle AS EncargadosWhatsAppDetalle,
             m.MatriculaId,
             m.Estado AS EstadoMatricula
           FROM dbo.Matricula m
@@ -4152,6 +4217,23 @@ router.get("/seguimiento/contexto", async (req, res) => {
               AND ISNULL(en.Activo, 1) = 1
             ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
           ) enc
+          OUTER APPLY (
+            SELECT
+              STUFF((
+                SELECT DISTINCT
+                  ' | ' +
+                  COALESCE(NULLIF(LTRIM(RTRIM(ee2.Parentesco)), ''), CASE WHEN en2.TipoEncargado = 'MADRE' THEN 'Madre' WHEN en2.TipoEncargado = 'PADRE' THEN 'Padre' ELSE 'Encargado' END) +
+                  ': ' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+                FROM dbo.EstudianteEncargado ee2
+                INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+                WHERE ee2.EstudianteId = e.EstudianteId
+                  AND ISNULL(ee2.Activo, 1) = 1
+                  AND ISNULL(en2.Activo, 1) = 1
+                  AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                  AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+                FOR XML PATH(''), TYPE
+              ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
+          ) encWa
           WHERE m.GrupoId = @grupoId
             AND m.AnioLectivoId = @anioLectivoId
             AND ISNULL(e.Activo, 1) = 1
@@ -4626,7 +4708,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
       estudianteId: number;
       estudianteNombre: string;
       correoEstudiante?: string | null;
-      telefonoEncargado?: string | null;
+      telefonosEncargados?: string[];
       autorizaWhatsApp?: boolean;
       estado: string;
       observacion?: string | null;
@@ -4793,16 +4875,21 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
               e.SegundoApellido,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
-              enc.Telefono AS EncargadoPrincipalTelefono
+              enc.Telefonos AS EncargadosTelefonos
             FROM dbo.Estudiante e
             OUTER APPLY (
-              SELECT TOP 1 en.Telefono
-              FROM dbo.EstudianteEncargado ee
-              INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
-              WHERE ee.EstudianteId = e.EstudianteId
-                AND ISNULL(ee.Activo, 1) = 1
-                AND ISNULL(en.Activo, 1) = 1
-              ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
+              SELECT
+                STUFF((
+                  SELECT DISTINCT '|' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+                  FROM dbo.EstudianteEncargado ee2
+                  INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+                  WHERE ee2.EstudianteId = e.EstudianteId
+                    AND ISNULL(ee2.Activo, 1) = 1
+                    AND ISNULL(en2.Activo, 1) = 1
+                    AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                    AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+                  FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 1, '') AS Telefonos
             ) enc
             WHERE e.EstudianteId = @estudianteId
           `);
@@ -4813,7 +4900,10 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
             estudianteId,
             estudianteNombre: [estudiante.Nombre, estudiante.PrimerApellido, estudiante.SegundoApellido].filter(Boolean).join(" "),
             correoEstudiante: estudiante.Correo,
-            telefonoEncargado: estudiante.EncargadoPrincipalTelefono,
+            telefonosEncargados: String(estudiante.EncargadosTelefonos || "")
+              .split("|")
+              .map((item: string) => String(item || "").trim())
+              .filter((item: string) => item.length > 0),
             autorizaWhatsApp: !!estudiante.AutorizaWhatsAppEncargado,
             estado,
             observacion
@@ -4885,8 +4975,11 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
       }
 
       if (aviso.autorizaWhatsApp) {
-        const whatsapp = await sendWhatsAppSeguimiento({ telefono: aviso.telefonoEncargado, mensaje: mensaje.text });
-        resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", ...whatsapp });
+        const telefonos = Array.from(new Set((aviso.telefonosEncargados || []).map((t) => String(t || "").trim()).filter(Boolean)));
+        for (const telefono of telefonos) {
+          const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: bodyFinal });
+          resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
+        }
       }
     }
 
@@ -4939,7 +5032,7 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
       estudianteId: number;
       estudianteNombre: string;
       correoEstudiante?: string | null;
-      telefonoEncargado?: string | null;
+      telefonosEncargados?: string[];
       autorizaWhatsApp?: boolean;
       observacion?: string | null;
       puntosObtenidos?: number | null;
@@ -5035,17 +5128,31 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
               e.SegundoApellido,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
-              enc.Telefono AS EncargadoPrincipalTelefono,
-              enc.Correo AS EncargadoPrincipalCorreo
+              enc.Telefonos AS EncargadosTelefonos,
+              encCorreo.Correo AS EncargadoPrincipalCorreo
             FROM dbo.Estudiante e
             OUTER APPLY (
-              SELECT TOP 1 en.Telefono, en.Correo
+              SELECT TOP 1 en.Correo
               FROM dbo.EstudianteEncargado ee
               INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
               WHERE ee.EstudianteId = e.EstudianteId
                 AND ISNULL(ee.Activo, 1) = 1
                 AND ISNULL(en.Activo, 1) = 1
               ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
+            ) encCorreo
+            OUTER APPLY (
+              SELECT
+                STUFF((
+                  SELECT DISTINCT '|' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+                  FROM dbo.EstudianteEncargado ee2
+                  INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+                  WHERE ee2.EstudianteId = e.EstudianteId
+                    AND ISNULL(ee2.Activo, 1) = 1
+                    AND ISNULL(en2.Activo, 1) = 1
+                    AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                    AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+                  FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 1, '') AS Telefonos
             ) enc
             WHERE e.EstudianteId = @estudianteId
           `);
@@ -5055,7 +5162,10 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
             estudianteId,
             estudianteNombre: [estudiante.Nombre, estudiante.PrimerApellido, estudiante.SegundoApellido].filter(Boolean).join(" "),
             correoEstudiante: estudiante.Correo || estudiante.EncargadoPrincipalCorreo,
-            telefonoEncargado: estudiante.EncargadoPrincipalTelefono,
+            telefonosEncargados: String(estudiante.EncargadosTelefonos || "")
+              .split("|")
+              .map((item: string) => String(item || "").trim())
+              .filter((item: string) => item.length > 0),
             autorizaWhatsApp: !!estudiante.AutorizaWhatsAppEncargado,
             observacion,
             puntosObtenidos,
@@ -5125,8 +5235,11 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
       }
 
       if (aviso.autorizaWhatsApp) {
-        const whatsapp = await sendWhatsAppSeguimiento({ telefono: aviso.telefonoEncargado, mensaje: textoFinal });
-        resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", ...whatsapp });
+        const telefonos = Array.from(new Set((aviso.telefonosEncargados || []).map((t) => String(t || "").trim()).filter(Boolean)));
+        for (const telefono of telefonos) {
+          const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: textoFinal });
+          resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
+        }
       }
     }
 

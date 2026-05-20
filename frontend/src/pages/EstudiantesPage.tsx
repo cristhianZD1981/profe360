@@ -345,6 +345,10 @@ export default function EstudiantesPage() {
     roles.includes("SUPER_ADMIN") ||
     roles.includes("ADMIN_INSTITUCIONAL") ||
     roles.includes("ADMINISTRATIVO");
+  const canManualInstitutionalUserCorreo =
+    roles.includes("SUPER_ADMIN") ||
+    roles.includes("ADMIN_INSTITUCIONAL") ||
+    roles.includes("ADMINISTRATIVO");
   const canImportStudents = canManageStudents;
   const isProfesorRole = roles.includes("PROFESOR");
   const canAccessStudentMatricula =
@@ -458,8 +462,10 @@ export default function EstudiantesPage() {
     const limpio = String(form.identificacion || "").replace(/\s+/g, "").trim();
     const dominio = String(dominioCorreoEstudiante || "@est.mep.go.cr").trim();
     const dominioNormalizado = dominio.startsWith("@") ? dominio : `@${dominio}`;
-    setForm((prev) => ({ ...prev, correo: limpio ? `${limpio}${dominioNormalizado}`.toLowerCase() : "" }));
-  }, [form.identificacion, dominioCorreoEstudiante]);
+    if (!canManualInstitutionalUserCorreo) {
+      setForm((prev) => ({ ...prev, correo: limpio ? `${limpio}${dominioNormalizado}`.toLowerCase() : "" }));
+    }
+  }, [form.identificacion, dominioCorreoEstudiante, canManualInstitutionalUserCorreo]);
 
   function resetAllForms() {
     setForm(initialForm);
@@ -1397,10 +1403,15 @@ export default function EstudiantesPage() {
               <input
                 type="email"
                 value={form.correo}
-                readOnly
+                readOnly={!canManualInstitutionalUserCorreo}
+                onChange={(e) =>
+                  setForm({ ...form, correo: e.target.value })
+                }
               />
               <small style={{ opacity: 0.8 }}>
-                Se genera automáticamente con el número de identificación + {dominioCorreoEstudiante}
+                {canManualInstitutionalUserCorreo
+                  ? "Podés editar manualmente este campo. Si lo dejás vacío, se generará automático con identificación + dominio institucional."
+                  : `Se genera automáticamente con el número de identificación + ${dominioCorreoEstudiante}`}
               </small>
             </label>
 

@@ -2121,6 +2121,18 @@ router.put(
         req.auth.institucionId
       );
       const correoGenerado = buildStudentEmail(identificacion, dominioCorreo);
+      const userRoles = Array.isArray(req.auth?.roles) ? req.auth.roles : [];
+      const canManualInstitutionalUserCorreo =
+        userRoles.includes("SUPER_ADMIN") ||
+        userRoles.includes("ADMIN_INSTITUCIONAL") ||
+        userRoles.includes("ADMINISTRATIVO");
+      const correoManualNormalizado = String(correo || "")
+        .trim()
+        .toLowerCase();
+      const correoFinal =
+        canManualInstitutionalUserCorreo && correoManualNormalizado
+          ? correoManualNormalizado
+          : correoGenerado;
 
       const currentStudent = await transaction
         .request()
@@ -2137,7 +2149,7 @@ router.put(
         .input("primerApellido", sql.NVarChar, primerApellido || null)
         .input("segundoApellido", sql.NVarChar, segundoApellido || null)
         .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
-        .input("correo", sql.NVarChar, correoGenerado)
+        .input("correo", sql.NVarChar, correoFinal)
                 .input("telefono", sql.NVarChar, telefono || null)
         .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
         .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
@@ -2207,7 +2219,7 @@ router.put(
       await ensureParentPortalUser({
         transaction,
         institucionId: req.auth.institucionId,
-        correoUsuario: correoGenerado,
+        correoUsuario: correoFinal,
         nombre,
         primerApellido,
         segundoApellido,
@@ -2216,7 +2228,7 @@ router.put(
         oldCorreo: currentStudent.recordset[0]?.Correo || null
       });
 
-      result.recordset[0].Correo = correoGenerado;
+      result.recordset[0].Correo = correoFinal;
       await transaction.commit();
       return ok(res, result.recordset[0]);
     } catch (error: any) {

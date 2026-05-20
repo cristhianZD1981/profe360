@@ -516,10 +516,44 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
           e.SegundoApellido,
           e.Correo,
           e.Telefono,
+          enc.NombreCompleto AS EncargadoPrincipalNombre,
+          enc.Correo AS EncargadoPrincipalCorreo,
+          enc.Telefono AS EncargadoPrincipalTelefono,
+          encWa.Detalle AS EncargadosWhatsAppDetalle,
+          e.AutorizaWhatsAppEncargado,
           ma.MatriculaId,
           ma.Estado AS EstadoMatricula
         FROM dbo.Matricula ma
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+        OUTER APPLY (
+          SELECT TOP 1
+            LTRIM(RTRIM(CONCAT(ISNULL(en.Nombre, ''), ' ', ISNULL(en.PrimerApellido, ''), ' ', ISNULL(en.SegundoApellido, '')))) AS NombreCompleto,
+            en.Correo,
+            en.Telefono
+          FROM dbo.EstudianteEncargado ee
+          INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
+          WHERE ee.EstudianteId = e.EstudianteId
+            AND ISNULL(ee.Activo, 1) = 1
+            AND ISNULL(en.Activo, 1) = 1
+          ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
+        ) enc
+        OUTER APPLY (
+          SELECT
+            STUFF((
+              SELECT DISTINCT
+                ' | ' +
+                COALESCE(NULLIF(LTRIM(RTRIM(ee2.Parentesco)), ''), CASE WHEN en2.TipoEncargado = 'MADRE' THEN 'Madre' WHEN en2.TipoEncargado = 'PADRE' THEN 'Padre' ELSE 'Encargado' END) +
+                ': ' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+              FROM dbo.EstudianteEncargado ee2
+              INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+              WHERE ee2.EstudianteId = e.EstudianteId
+                AND ISNULL(ee2.Activo, 1) = 1
+                AND ISNULL(en2.Activo, 1) = 1
+                AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+              FOR XML PATH(''), TYPE
+            ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
+        ) encWa
         WHERE ma.GrupoId = @grupoId
           AND ma.AnioLectivoId = @anioLectivoId
           AND ma.Estado <> N'Inactiva'
@@ -898,6 +932,76 @@ function formatDateCR(value?: string | Date | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
   return date.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function getReadableError(error: any) {
+  if (!error) return "Error desconocido";
+  if (typeof error === "string") return error;
+  if (error.message) return String(error.message);
+  return "Error desconocido";
+}
+
+async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensaje: string }) {
+  const telefonoRaw = String(params.telefono || "").trim();
+  const telefono = telefonoRaw.replace(/[^\d+]/g, "");
+  if (!telefono) return { enviado: false, modo: "omitido", motivo: "Sin teléfono válido de encargado" };
+
+  const mode = String(process.env.WHATSAPP_MODE || "simulado").trim().toLowerCase();
+  if (mode !== "webhook") {
+    console.log("WhatsApp simulado:", { telefono, mensaje: params.mensaje });
+    return { enviado: true, modo: "simulado" };
+  }
+
+  const provider = String(process.env.WHATSAPP_PROVIDER || "").trim().toLowerCase();
+  const url = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim();
+  const token = String(process.env.WHATSAPP_WEBHOOK_TOKEN || "").trim();
+  const fromNumber = String(process.env.WHATSAPP_FROM_NUMBER || "").trim();
+  const authHeader = String(process.env.WHATSAPP_WEBHOOK_AUTH_HEADER || "Authorization").trim() || "Authorization";
+
+  if (!url) return { enviado: false, modo: "webhook", motivo: "Falta WHATSAPP_WEBHOOK_URL" };
+  if (!token) return { enviado: false, modo: "webhook", motivo: "Falta WHATSAPP_WEBHOOK_TOKEN" };
+
+  let payload: any = {};
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+  if (provider === "2chat") {
+    if (!fromNumber) return { enviado: false, modo: "webhook", motivo: "Falta WHATSAPP_FROM_NUMBER para provider 2chat" };
+    headers["X-User-API-Key"] = token;
+    payload = {
+      from_number: fromNumber,
+      to_number: telefono,
+      text: params.mensaje
+    };
+  } else {
+    headers[authHeader] = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+    payload = {
+      canal: "whatsapp",
+      to: telefono,
+      telefono,
+      phone: telefono,
+      message: params.mensaje,
+      text: params.mensaje
+    };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+    const body = await response.text();
+
+    if (!response.ok) {
+      console.error("Error enviando WhatsApp por webhook:", response.status, body);
+      return { enviado: false, modo: "webhook", status: response.status, motivo: body || `HTTP ${response.status}` };
+    }
+
+    return { enviado: true, modo: "webhook", status: response.status };
+  } catch (error: any) {
+    console.error("Error enviando WhatsApp por webhook:", error);
+    return { enviado: false, modo: "webhook", motivo: getReadableError(error) };
+  }
 }
 
 function sanitizeResultadoIAJsonForList(value: any) {
@@ -2577,16 +2681,21 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
               e.SegundoApellido,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
-              enc.Telefono AS EncargadoPrincipalTelefono
+              enc.Telefonos AS EncargadosTelefonos
             FROM dbo.Estudiante e
             OUTER APPLY (
-              SELECT TOP 1 en.Telefono
-              FROM dbo.EstudianteEncargado ee
-              INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
-              WHERE ee.EstudianteId = e.EstudianteId
-                AND ISNULL(ee.Activo, 1) = 1
-                AND ISNULL(en.Activo, 1) = 1
-              ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
+              SELECT
+                STUFF((
+                  SELECT DISTINCT '|' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+                  FROM dbo.EstudianteEncargado ee2
+                  INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+                  WHERE ee2.EstudianteId = e.EstudianteId
+                    AND ISNULL(ee2.Activo, 1) = 1
+                    AND ISNULL(en2.Activo, 1) = 1
+                    AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                    AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+                  FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 1, '') AS Telefonos
             ) enc
             WHERE e.EstudianteId = @estudianteId
           `);
@@ -2631,8 +2740,21 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
         }
 
         if (estudiante.AutorizaWhatsAppEncargado) {
-          console.log("WhatsApp asistencia simulado:", { telefono: estudiante.EncargadoPrincipalTelefono, mensaje: texto });
-          notificaciones.push({ estudianteId, canal: "whatsapp", enviado: Boolean(estudiante.EncargadoPrincipalTelefono), simulado: true });
+          const telefonos = Array.from(
+            new Set(
+              String(estudiante.EncargadosTelefonos || "")
+                .split("|")
+                .map((item: string) => String(item || "").trim())
+                .filter((item: string) => item.length > 0)
+            )
+          );
+          for (const telefono of telefonos) {
+            const whatsapp = await sendWhatsAppSeguimiento({
+              telefono,
+              mensaje: texto
+            });
+            notificaciones.push({ estudianteId, canal: "whatsapp", telefono, ...whatsapp });
+          }
         }
       } catch (notifyError: any) {
         console.error("No se pudo notificar asistencia:", notifyError);
