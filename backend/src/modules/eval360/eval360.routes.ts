@@ -1821,7 +1821,22 @@ function parseJsonSeguro(value: any) {
 
 function splitTextLines(value: any) {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item || "").trim()).filter(Boolean);
+    return value.map((item) => {
+      if (item && typeof item === "object") {
+        return String(
+          item.Descripcion
+          || item.descripcion
+          || item.Indicador
+          || item.indicador
+          || item.indicadorBase
+          || item.texto
+          || item.nombre
+          || ""
+        ).trim();
+      }
+
+      return String(item || "").trim();
+    }).filter(Boolean);
   }
 
   return String(value || "")
@@ -2079,35 +2094,46 @@ async function callOpenAiIndicadores(prompt: string) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini",
-      input: prompt,
-      temperature: 0.25
-    })
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    console.error("Error OpenAI Eval360 indicadores:", text);
-    return null;
-  }
-
-  const data: any = await response.json();
-  const text = data.output_text || data.output?.[0]?.content?.[0]?.text || "";
-  if (!text) return null;
-
   try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    return JSON.parse(match[0]);
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini",
+        input: prompt,
+        temperature: 0.25
+      })
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("Error OpenAI Eval360 indicadores:", response.status, text.slice(0, 1000));
+      return null;
+    }
+
+    const data: any = await response.json();
+    const text = data.output_text || data.output?.[0]?.content?.[0]?.text || "";
+    if (!text) return null;
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) return null;
+
+      try {
+        return JSON.parse(match[0]);
+      } catch (parseError) {
+        console.error("Respuesta OpenAI Eval360 indicadores no es JSON válido:", parseError);
+        return null;
+      }
+    }
+  } catch (error) {
+    console.error("No se pudo consultar OpenAI Eval360 indicadores; se usará fallback local:", error);
+    return null;
   }
 }
 
