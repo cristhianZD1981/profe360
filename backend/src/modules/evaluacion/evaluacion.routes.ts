@@ -271,9 +271,6 @@ async function canReadPlantilla(pool: any, req: any, plantilla: any) {
 
   if (!isProfesor(req)) return false;
 
-  const asignado = await assertProfesorAsignado(pool, req, Number(plantilla.MateriaId), Number(plantilla.AnioLectivoId));
-  if (!asignado) return false;
-
   const esPropia = Number(plantilla.UsuarioCreadorId || 0) > 0 && Number(plantilla.UsuarioCreadorId) === getUserId(req);
   return Boolean(plantilla.EsPublica) || esPropia;
 }
@@ -287,8 +284,6 @@ async function canWritePlantilla(pool: any, req: any, plantilla: any) {
   if (isInstitutionAdmin(req)) return true;
 
   if (!isProfesor(req)) return false;
-  const asignado = await assertProfesorAsignado(pool, req, Number(plantilla.MateriaId), Number(plantilla.AnioLectivoId));
-  if (!asignado) return false;
   return Number(plantilla.UsuarioCreadorId || 0) > 0 && Number(plantilla.UsuarioCreadorId) === getUserId(req);
 }
 
@@ -661,15 +656,7 @@ router.get("/plantillas", async (req, res) => {
     }
 
     const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
-      ? `AND EXISTS (
-          SELECT 1
-          FROM dbo.AsignacionDocente ad
-          WHERE ad.UsuarioId = @usuarioId
-            AND ad.MateriaId = ep.MateriaId
-            AND ad.AnioLectivoId = ep.AnioLectivoId
-            AND ad.Activo = 1
-        )
-        AND (ISNULL(ep.EsPublica, 1) = 1 OR ep.UsuarioCreadorId = @usuarioId)`
+      ? "AND (ISNULL(ep.EsPublica, 1) = 1 OR ep.UsuarioCreadorId = @usuarioId)"
       : "";
 
     const result = await request.query(`
@@ -777,11 +764,6 @@ router.post("/plantillas", async (req, res) => {
     if (anioLectivoId === null || periodoId === null || materiaId === null) return;
     if (!nombre) return badRequest(res, "El nombre de la plantilla es obligatorio");
 
-    if (isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)) {
-      const asignado = await assertProfesorAsignado(pool, req, materiaId, anioLectivoId);
-      if (!asignado) return forbidden(res, "Solo podÃ©s crear plantillas para materias asignadas");
-    }
-
     const duplicada = await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("anioLectivoId", sql.Int, anioLectivoId)
@@ -845,7 +827,7 @@ router.post("/plantillas", async (req, res) => {
         )
       `);
 
-    return created(res, result.recordset[0], "Plantilla de evaluaciÃ³n creada correctamente");
+    return created(res, result.recordset[0], "Plantilla de evaluación creada correctamente");
   } catch (error) {
     console.error("Error creando plantilla de evaluaciÃ³n:", error);
     return res.status(500).json({ ok: false, message: "No se pudo crear la plantilla de evaluaciÃ³n" });
@@ -872,11 +854,6 @@ router.put("/plantillas/:id", async (req, res) => {
 
     if (anioLectivoId === null || periodoId === null || materiaId === null) return;
     if (!nombre) return badRequest(res, "El nombre de la plantilla es obligatorio");
-
-    if (isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)) {
-      const asignado = await assertProfesorAsignado(pool, req, materiaId, anioLectivoId);
-      if (!asignado) return forbidden(res, "Solo podes modificar plantillas de materias asignadas");
-    }
 
     const duplicada = await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
@@ -924,7 +901,7 @@ router.put("/plantillas/:id", async (req, res) => {
         WHERE EvaluacionPlantillaId = @plantillaId
       `);
 
-    return ok(res, result.recordset[0], "Plantilla de evaluacion actualizada correctamente");
+    return ok(res, result.recordset[0], "Plantilla de evaluación actualizada correctamente");
   } catch (error) {
     console.error("Error actualizando plantilla de evaluacion:", error);
     return res.status(500).json({ ok: false, message: "No se pudo actualizar la plantilla de evaluacion" });
@@ -1027,7 +1004,7 @@ router.delete("/plantillas/:id", async (req, res) => {
         WHERE EvaluacionPlantillaId = @plantillaId;
       `);
 
-    return ok(res, null, "Plantilla de evaluaciÃ³n eliminada correctamente");
+    return ok(res, null, "Plantilla de evaluación eliminada correctamente");
   } catch (error) {
     console.error("Error eliminando plantilla de evaluaciÃ³n:", error);
     return res.status(500).json({ ok: false, message: "No se pudo eliminar la plantilla de evaluaciÃ³n" });
@@ -1053,7 +1030,7 @@ router.patch("/plantillas/:id/reactivar", async (req, res) => {
         WHERE EvaluacionPlantillaId = @plantillaId
       `);
 
-    return ok(res, null, "Plantilla de evaluaciÃ³n reactivada correctamente");
+    return ok(res, null, "Plantilla de evaluación reactivada correctamente");
   } catch (error) {
     console.error("Error reactivando plantilla de evaluaciÃ³n:", error);
     return res.status(500).json({ ok: false, message: "No se pudo reactivar la plantilla de evaluaciÃ³n" });
@@ -1084,7 +1061,7 @@ router.patch("/plantillas/:id/activar", async (req, res) => {
         WHERE EvaluacionPlantillaId = @plantillaId
       `);
 
-    return ok(res, null, "Plantilla de evaluaciÃ³n activada correctamente");
+    return ok(res, null, "Plantilla de evaluación activada correctamente");
   } catch (error) {
     console.error("Error activando plantilla de evaluaciÃ³n:", error);
     return res.status(500).json({ ok: false, message: "No se pudo activar la plantilla de evaluaciÃ³n" });
@@ -1117,11 +1094,6 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
 
     if (anioLectivoId === null || periodoId === null || materiaId === null) return;
     if (!nombre) return badRequest(res, "El nombre de la nueva plantilla es obligatorio");
-
-    if (!isSuperAdmin(req) && !isInstitutionAdmin(req) && isProfesor(req)) {
-      const asignado = await assertProfesorAsignado(pool, req, materiaId, anioLectivoId);
-      if (!asignado) return forbidden(res, "Solo podÃ©s copiar plantillas hacia materias asignadas");
-    }
 
     const duplicada = await pool.request()
       .input("institucionId", sql.Int, institucionDestinoId)
@@ -1280,6 +1252,19 @@ router.post("/plantillas/:plantillaId/componentes", async (req, res) => {
     if (permitePlaneamiento && !tipoSeguimiento) {
       return badRequest(res, "Debe seleccionar si el componente se relaciona con Trabajo cotidiano, Tareas o Asistencia diaria");
     }
+    const duplicado = await pool.request()
+      .input("plantillaId", sql.Int, plantillaId)
+      .input("descripcion", sql.NVarChar(150), descripcion)
+      .query(`
+        SELECT TOP 1 EvaluacionComponenteId
+        FROM dbo.EvaluacionComponente
+        WHERE EvaluacionPlantillaId = @plantillaId
+          AND ISNULL(Activo, 1) = 1
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return badRequest(res, "Ya existe un rubro de calificación con ese nombre en esta plantilla");
+    }
 
     const result = await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
@@ -1339,6 +1324,21 @@ router.put("/componentes/:id", async (req, res) => {
     if (permitePlaneamiento && !tipoSeguimiento) {
       return badRequest(res, "Debe seleccionar si el componente se relaciona con Trabajo cotidiano, Tareas o Asistencia diaria");
     }
+    const duplicado = await pool.request()
+      .input("componenteId", sql.Int, componenteId)
+      .input("plantillaId", sql.Int, Number(plantillaId))
+      .input("descripcion", sql.NVarChar(150), descripcion)
+      .query(`
+        SELECT TOP 1 EvaluacionComponenteId
+        FROM dbo.EvaluacionComponente
+        WHERE EvaluacionPlantillaId = @plantillaId
+          AND EvaluacionComponenteId <> @componenteId
+          AND ISNULL(Activo, 1) = 1
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return badRequest(res, "Ya existe un rubro de calificación con ese nombre en esta plantilla");
+    }
 
     const result = await pool.request()
       .input("componenteId", sql.Int, componenteId)
@@ -1384,7 +1384,7 @@ router.delete("/componentes/:id", async (req, res) => {
     if (!plantillaId) return res.status(404).json({ ok: false, message: "Componente no encontrado" });
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para desactivar este componente");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para eliminar este rubro de calificación");
 
     await pool.request()
       .input("componenteId", sql.Int, componenteId)
@@ -1395,10 +1395,10 @@ router.delete("/componentes/:id", async (req, res) => {
         WHERE EvaluacionComponenteId = @componenteId
       `);
 
-    return ok(res, null, "Componente desactivado correctamente");
+    return ok(res, null, "Rubro de calificación eliminado correctamente");
   } catch (error) {
-    console.error("Error desactivando componente de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo desactivar el componente de evaluaciÃ³n" });
+    console.error("Error eliminando rubro de calificación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar el rubro de calificación" });
   }
 });
 
@@ -1568,7 +1568,7 @@ router.delete("/actividades/:id", async (req, res) => {
     if (!plantillaId) return res.status(404).json({ ok: false, message: "Actividad no encontrada" });
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para desactivar esta actividad");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para eliminar esta actividad");
 
     await pool.request()
       .input("actividadId", sql.Int, actividadId)
@@ -1579,10 +1579,10 @@ router.delete("/actividades/:id", async (req, res) => {
         WHERE EvaluacionActividadId = @actividadId
       `);
 
-    return ok(res, null, "Actividad desactivada correctamente");
+    return ok(res, null, "Actividad eliminada correctamente");
   } catch (error) {
-    console.error("Error desactivando actividad evaluativa:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo desactivar la actividad evaluativa" });
+    console.error("Error eliminando actividad evaluativa:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar la actividad evaluativa" });
   }
 });
 

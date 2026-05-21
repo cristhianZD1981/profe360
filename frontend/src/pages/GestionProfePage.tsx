@@ -1,5 +1,5 @@
 ﻿// @ts-nocheck
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
 
 type GrupoProfesor = {
@@ -992,6 +992,7 @@ export default function GestionProfePage() {
   const [q, setQ] = useState("");
   const [loadingGrupos, setLoadingGrupos] = useState(false);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
+  const [loadingDetalleCardId, setLoadingDetalleCardId] = useState<number | null>(null);
   const [savingNotas, setSavingNotas] = useState(false);
   const [eval360Plantillas, setEval360Plantillas] = useState<Eval360Plantilla[]>([]);
   const [eval360PlantillaId, setEval360PlantillaId] = useState("");
@@ -1121,6 +1122,7 @@ export default function GestionProfePage() {
   const [notasDetalleAbierto, setNotasDetalleAbierto] = useState<string>("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const detalleGrupoRef = useRef<HTMLElement | null>(null);
 
   const gruposOrdenados = useMemo(() => {
     return [...grupos].sort(compararGruposProfesor);
@@ -1814,39 +1816,15 @@ export default function GestionProfePage() {
     return mesesSeleccionadosIa.join(", ");
   }, [mesesSeleccionadosIa]);
 
-  const areasHabilidades = useMemo(() => {
-    return Array.from(new Set(habilidadesIa.map((h) => String(h.Area || "").trim()).filter(Boolean)))
-      .sort(ordenarMeses);
-  }, [habilidadesIa]);
-
   const habilidadesFiltradasIa = useMemo(() => {
-    const texto = String(planeamientoIaForm.busquedaTexto || "").trim().toLowerCase();
-
     return habilidadesIa.filter((habilidad) => {
       const mes = String(habilidad.Mes || "").trim();
-      const area = String(habilidad.Area || "").trim();
 
       if (mesesSeleccionadosIa.length > 0 && !mesesSeleccionadosIa.includes(mes)) return false;
-      if (planeamientoIaForm.area && area !== planeamientoIaForm.area) return false;
-
-      if (texto) {
-        const contenido = [
-          habilidad.MateriaNombre,
-          habilidad.TipoColegio,
-          habilidad.Grado,
-          habilidad.Mes,
-          habilidad.Area,
-          habilidad.NumeroHabilidad,
-          habilidad.DescripcionHabilidad,
-          habilidad.DocumentoReferencia
-        ].filter(Boolean).join(" ").toLowerCase();
-
-        if (!contenido.includes(texto)) return false;
-      }
 
       return true;
     });
-  }, [habilidadesIa, mesesSeleccionadosIa, planeamientoIaForm.area, planeamientoIaForm.busquedaTexto]);
+  }, [habilidadesIa, mesesSeleccionadosIa]);
 
   useEffect(() => {
     const materiaId = Number(planeamientoIaForm.materiaId || 0);
@@ -2904,6 +2882,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   async function loadDetalle(item: GrupoProfesor) {
+    setLoadingDetalleCardId(item.AsignacionDocenteId);
     setSelected(item);
     setDetalle(null);
     setNoteDrafts({});
@@ -2967,7 +2946,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const data = response.data?.data || response.data || null;
       setDetalle(data);
       setNoteDrafts(buildDraftsFromDetalle(data));
-      await Promise.all([
+      void Promise.allSettled([
         loadPlaneamientos(item),
         loadSeguimientoEvaluacion(item)
       ]);
@@ -2976,8 +2955,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar el detalle del grupo seleccionado");
     } finally {
       setLoadingDetalle(false);
+      setLoadingDetalleCardId(null);
     }
   }
+
+  useEffect(() => {
+    if (loadingDetalle) return;
+    if (!selected || !detalle) return;
+    setTimeout(() => {
+      detalleGrupoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
+  }, [loadingDetalle, selected?.AsignacionDocenteId, detalle, activePanel]);
 
 
   async function loadNivelesDesempeno() {
@@ -5222,6 +5210,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   key={item.AsignacionDocenteId}
                   type="button"
                   onClick={() => loadDetalle(item)}
+                  disabled={loadingDetalle}
                   style={{
                     ...cardStyle,
                     textAlign: "left",
@@ -5234,6 +5223,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <span>{item.MateriaCodigo ? `${item.MateriaCodigo} - ` : ""}{item.MateriaNombre}</span>
                   <span style={{ opacity: 0.75 }}>{item.AnioNombre} / {item.PeriodoNombre}</span>
                   <span style={{ opacity: 0.75 }}>Estudiantes: {item.TotalEstudiantes || 0}</span>
+                  {loadingDetalle && loadingDetalleCardId === item.AsignacionDocenteId ? (
+                    <span style={{ marginTop: "6px", color: "#1d4ed8", fontWeight: 800 }}>Cargando sesión...</span>
+                  ) : null}
                 </button>
               );
             })}
@@ -5241,7 +5233,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         )}
       </section>
 
-      <section id="detalle-grupo-profesor" className="card">
+      <section id="detalle-grupo-profesor" className="card" ref={detalleGrupoRef}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
           <div>
             <h3>{selectedTitle}</h3>
@@ -5262,55 +5254,41 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         {!selected ? (
           <p style={{ marginTop: "12px" }}>Seleccioná un grupo para ver estudiantes y estructura de evaluación.</p>
         ) : loadingDetalle ? (
-          <p style={{ marginTop: "12px" }}>Cargando detalle...</p>
+          <div style={{ marginTop: "12px", padding: "12px", borderRadius: "12px", background: "#dbeafe", border: "1px solid #60a5fa", color: "#1e3a8a", fontWeight: 800 }}>
+            Cargando sesión seleccionada...
+          </div>
         ) : detalle ? (
           <div style={{ display: "grid", gap: "16px", marginTop: "16px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}>
-              <div style={cardStyle}>
-                <strong>Estudiantes</strong>
-                <span style={{ fontSize: "24px", fontWeight: 700 }}>{detalle.estudiantes.length}</span>
-              </div>
-              <div style={{ ...cardStyle, gap: "8px" }}>
-                <strong>Plantilla</strong>
-                {(() => {
-                  const nombrePlantillaActiva = seguimientoContexto?.estructura?.PlantillaBaseNombre || eval360Estructura?.estructura?.PlantillaBaseNombre || detalle.plantilla?.Nombre || "";
-                  return nombrePlantillaActiva ? (
-                    <span style={{ color: "#0f172a", fontWeight: 700 }}>{nombrePlantillaActiva}</span>
-                  ) : (
-                    <div style={{ display: "grid", gap: "8px" }}>
-                      <span style={{ color: "#b45309", fontWeight: 800 }}>Sin plantilla activa</span>
-                      <select
-                        style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "8px 10px", fontWeight: 700 }}
-                        value={eval360PlantillaId}
-                        onChange={(event) => setEval360PlantillaId(event.target.value)}
-                        disabled={savingEval360 || loadingSeguimiento}
-                      >
-                        <option value="">Seleccionar plantilla</option>
-                        {(seguimientoContexto?.plantillas || eval360Plantillas).map((plantilla) => (
-                          <option key={plantilla.EvaluacionPlantillaId} value={plantilla.EvaluacionPlantillaId}>{plantilla.Nombre}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="primary-btn"
-                        onClick={async () => { await crearEval360DesdePlantilla(); if (selected) { await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); } }}
-                        disabled={!eval360PlantillaId || savingEval360 || !selected}
-                      >
-                        {savingEval360 ? "Asignando..." : "Asignar plantilla"}
-                      </button>
-                    </div>
-                  );
-                })()}
-              </div>
-              <div style={cardStyle}>
-                <strong>Actividades</strong>
-                <span style={{ fontSize: "24px", fontWeight: 700 }}>{detalle.actividades.length}</span>
-              </div>
-              <div style={cardStyle}>
-                <strong>Notas registradas</strong>
-                <span style={{ fontSize: "24px", fontWeight: 700 }}>{resumenGrupo.totalNotas}</span>
-              </div>
-            </div>
+            {(() => {
+              const nombrePlantillaActiva = seguimientoContexto?.estructura?.PlantillaBaseNombre || eval360Estructura?.estructura?.PlantillaBaseNombre || detalle.plantilla?.Nombre || "";
+              const cargandoPlantilla = loadingDetalle || loadingSeguimiento;
+              if (nombrePlantillaActiva || cargandoPlantilla) return null;
+
+              return (
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", padding: "10px 12px", borderRadius: "12px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412" }}>
+                  <strong>Sin plantilla activa</strong>
+                  <select
+                    style={{ minWidth: "240px", color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "8px 10px", fontWeight: 700 }}
+                    value={eval360PlantillaId}
+                    onChange={(event) => setEval360PlantillaId(event.target.value)}
+                    disabled={savingEval360 || loadingSeguimiento}
+                  >
+                    <option value="">Seleccionar plantilla</option>
+                    {(seguimientoContexto?.plantillas || eval360Plantillas).map((plantilla) => (
+                      <option key={plantilla.EvaluacionPlantillaId} value={plantilla.EvaluacionPlantillaId}>{plantilla.Nombre}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    onClick={async () => { await crearEval360DesdePlantilla(); if (selected) { await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); } }}
+                    disabled={!eval360PlantillaId || savingEval360 || !selected}
+                  >
+                    {savingEval360 ? "Asignando..." : "Asignar plantilla"}
+                  </button>
+                </div>
+              );
+            })()}
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
@@ -6527,6 +6505,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             grado: getGradoPlaneamientoFromGrupo(selected),
                             grupoId: String(selected.GrupoId || ""),
                             grupoIds: [String(selected.GrupoId || "")].filter(Boolean),
+                            area: "",
+                            busquedaTexto: "",
                             habilidadesIds: []
                           }));
                           setDocumentoApoyoIa(null);
@@ -6559,12 +6539,27 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     <div>
                       <strong>Generar planeamiento con IA</strong>
                       <p style={{ margin: "4px 0 0", color: "#b8c7da" }}>
-                        La materia y el grado se toman del grupo seleccionado en Mis grupos. Luego elegís las habilidades y las indicaciones para la IA.
+                        Revisá el contexto del grupo, elegí las habilidades y agregá indicaciones solo si necesitás orientar a la IA.
                       </p>
                     </div>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "8px" }}>
+                    {[
+                      "1. Confirmá el grupo",
+                      "2. Elegí habilidades",
+                      "3. Agregá indicaciones opcionales",
+                      "4. Generá y revisá"
+                    ].map((step) => (
+                      <span key={step} style={{ border: "1px solid #38516f", background: "#122033", borderRadius: "999px", padding: "7px 10px", color: "#c6d7eb", fontWeight: 800, fontSize: "13px", textAlign: "center" }}>
+                        {step}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div style={{ display: "grid", gap: "8px" }}>
+                    <strong style={{ color: "#e5eefb" }}>1. Contexto del planeamiento</strong>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
                     <label style={{ color: "#e5eefb" }}>
                       Materia
                       <div
@@ -6698,16 +6693,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </div>
 
                     <label style={{ color: "#e5eefb" }}>
-                      Tipo de colegio
-                      <input
-                        value={planeamientoIaForm.tipoColegio}
-                        onChange={(e) => updatePlaneamientoIaField("tipoColegio", e.target.value)}
-                        placeholder="Ejemplo: Académico, Técnico, Nocturno"
-                        style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
-                      />
-                    </label>
-
-                    <label style={{ color: "#e5eefb" }}>
                       Plantilla IA
                       <select
                         value={plantillaPlaneamientoIaId}
@@ -6754,15 +6739,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         </small>
                       )}
                     </label>
+                    </div>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
-                    <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-start" }}>
-                      <button type="button" style={secondaryButtonStyle} onClick={() => loadHabilidadesIa()} disabled={loadingHabilidadesIa}>
-                        {loadingHabilidadesIa ? "Cargando..." : "Actualizar habilidades"}
-                      </button>
-                    </div>
-
+                  <div style={{ display: "grid", gap: "8px" }}>
+                    <strong style={{ color: "#e5eefb" }}>2. Período y alcance</strong>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
                     <label style={{ color: "#e5eefb" }}>
                       Mes o meses
                       <select
@@ -6780,29 +6762,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         ))}
                       </select>
                       <small style={{ color: "#b8c7da" }}>Ctrl + clic para seleccionar varios meses. Si no seleccionés ninguno, se muestran todos.</small>
-                    </label>
-
-                    <label style={{ color: "#e5eefb" }}>
-                      Área
-                      <select
-                        value={planeamientoIaForm.area}
-                        onChange={(e) => updatePlaneamientoIaField("area", e.target.value)}
-                        disabled={loadingHabilidadesIa}
-                      >
-                        <option value="">Todas las Áreas</option>
-                        {areasHabilidades.map((area) => (
-                          <option key={area} value={area}>{area}</option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label style={{ color: "#e5eefb" }}>
-                      Buscar texto
-                      <input
-                        value={planeamientoIaForm.busquedaTexto}
-                        onChange={(e) => updatePlaneamientoIaField("busquedaTexto", e.target.value)}
-                        placeholder="Buscar por habilidad, Área, número o referencia"
-                      />
                     </label>
 
                     <label style={{ color: "#e5eefb" }}>
@@ -6836,6 +6795,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
                       />
                     </label>
+                    </div>
                   </div>
 
                   <label style={{ color: "#e5eefb" }}>
@@ -6848,48 +6808,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     />
                   </label>
 
-                  <label style={{ color: "#e5eefb" }}>
-                    Indicaciones, consideraciones o premisas para la IA
-                    <textarea
-                      rows={4}
-                      value={planeamientoIaForm.indicaciones}
-                      onChange={(e) => updatePlaneamientoIaField("indicaciones", e.target.value)}
-                      placeholder="Ejemplo: considerar adecuación curricular, grupo con rezago, usar problemas contextualizados de Costa Rica, incluir trabajo colaborativo..."
-                      style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
-                    />
-                  </label>
-
-                  <label style={{ color: "#e5eefb" }}>
-                    Documento de apoyo para la IA (opcional)
-                    <input
-                      type="file"
-                      accept=".txt,.csv,.json,.md,.pdf,.doc,.docx"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        if (file && file.size > 10 * 1024 * 1024) {
-                          setDocumentoApoyoIa(null);
-                          e.target.value = "";
-                          setErrorMessage("El documento de apoyo no puede superar 10 MB");
-                          return;
-                        }
-                        setDocumentoApoyoIa(file);
-                        if (file) setErrorMessage("");
-                      }}
-                      style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
-                    />
-                    <small style={{ color: "#b8c7da" }}>
-                      Podés adjuntar lineamientos, indicaciones o material de apoyo. Este archivo no define el formato de salida.
-                    </small>
-                    {documentoApoyoIa && (
-                      <small style={{ display: "block", color: "#67e8f9", marginTop: "4px" }}>
-                        Documento seleccionado: {documentoApoyoIa.name}
-                      </small>
-                    )}
-                  </label>
-
                   <div style={{ display: "grid", gap: "8px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-                      <strong>Habilidades</strong>
+                      <strong>3. Seleccioná las habilidades</strong>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                         <button type="button" style={secondaryButtonStyle} onClick={seleccionarTodasHabilidadesIa} disabled={habilidadesFiltradasIa.length === 0}>
                           Seleccionar todas
@@ -6902,11 +6823,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                     {habilidadesIa.length === 0 ? (
                       <div style={{ padding: "12px", borderRadius: "12px", background: "#ffffff", border: "1px solid #e5e7eb", color: "#b8c7da" }}>
-                        Seleccioná materia y grado para cargar las habilidades. Luego escogé si deseás filtrar por Mes o por Área.
+                        Las habilidades se cargan automáticamente con la materia y el grado del grupo seleccionado.
                       </div>
                     ) : habilidadesFiltradasIa.length === 0 ? (
                       <div style={{ padding: "12px", borderRadius: "12px", background: "#ffffff", border: "1px solid #e5e7eb", color: "#b8c7da" }}>
-                        No hay habilidades para la opción seleccionada. Verificá el Mes o Área escogido.
+                        No hay habilidades para el mes seleccionado. Probá dejando el mes en blanco para verlas todas.
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: "8px", maxHeight: "280px", overflow: "auto", paddingRight: "4px" }}>
@@ -6952,6 +6873,48 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         })}
                       </div>
                     )}
+                  </div>
+
+                  <div style={{ display: "grid", gap: "10px" }}>
+                    <strong style={{ color: "#e5eefb" }}>4. Indicaciones opcionales</strong>
+                    <label style={{ color: "#e5eefb" }}>
+                      Indicaciones, consideraciones o premisas para la IA
+                      <textarea
+                        rows={4}
+                        value={planeamientoIaForm.indicaciones}
+                        onChange={(e) => updatePlaneamientoIaField("indicaciones", e.target.value)}
+                        placeholder="Ejemplo: grupo con rezago, usar un ejemplo de la página 12 del documento, incluir adecuación curricular..."
+                        style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
+                      />
+                    </label>
+
+                    <label style={{ color: "#e5eefb" }}>
+                      Documento de apoyo para la IA
+                      <input
+                        type="file"
+                        accept=".txt,.csv,.json,.md,.pdf,.doc,.docx"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          if (file && file.size > 10 * 1024 * 1024) {
+                            setDocumentoApoyoIa(null);
+                            e.target.value = "";
+                            setErrorMessage("El documento de apoyo no puede superar 10 MB");
+                            return;
+                          }
+                          setDocumentoApoyoIa(file);
+                          if (file) setErrorMessage("");
+                        }}
+                        style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
+                      />
+                      <small style={{ color: "#b8c7da" }}>
+                        Usalo solo si necesitás que la IA tome ejemplos, premisas o ejercicios de un documento específico.
+                      </small>
+                      {documentoApoyoIa && (
+                        <small style={{ display: "block", color: "#67e8f9", marginTop: "4px" }}>
+                          Documento seleccionado: {documentoApoyoIa.name}
+                        </small>
+                      )}
+                    </label>
                   </div>
 
                   <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>

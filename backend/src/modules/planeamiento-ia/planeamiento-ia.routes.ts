@@ -333,19 +333,26 @@ function buildFallbackPlaneamiento(input: {
   plantillaFormatoNombre?: string;
   indicacionesDocente?: string;
 }) {
+  const permiteMultiplesIndicadores = permiteMultiplesIndicadoresPorHabilidad(input.indicacionesDocente || "");
   const habilidadesSeleccionadas = input.habilidades.map((h) => {
-    const numero = h.NumeroHabilidad ? `Habilidad ${h.NumeroHabilidad}: ` : "";
+    const numero = h.NumeroHabilidad ? `${h.NumeroHabilidad}: ` : "";
     return `${numero}${h.DescripcionHabilidad || input.tema || "habilidad seleccionada"}`;
   });
 
-  const indicadoresEvaluacion = habilidadesSeleccionadas.flatMap((descripcion) => ([
-    `Identifica los elementos esenciales de ${descripcion} en situaciones contextualizadas propias de su nivel.`,
-    `Aplica procedimientos matemáticos vinculados con ${descripcion} para resolver problemas de forma ordenada y pertinente.`,
-    `Comunica procedimientos, representaciones y resultados asociados con ${descripcion}, justificando las decisiones tomadas.`
-  ]));
+  const problemaReal = construirProblemaRealMomento1(habilidadesSeleccionadas, input.materiaNombre, input.grado, input.tema);
+
+  const indicadoresEvaluacion = habilidadesSeleccionadas.flatMap((descripcion) => {
+    const base = `Resuelve situaciones contextualizadas relacionadas con ${descripcion}, explicando su procedimiento de forma clara.`;
+    if (!permiteMultiplesIndicadores) return [base];
+    return [
+      base,
+      `Resuelve situaciones matemáticas vinculadas con ${descripcion} usando estrategias pertinentes.`,
+      `Comunica resultados y justifica decisiones asociadas con ${descripcion}.`
+    ];
+  });
 
   const estrategiasMediacion = [
-    "Momento 1: Propuesta del problema. Se presenta una situación contextualizada, cercana al entorno del estudiantado, que permita activar conocimientos previos, interpretar datos, formular preguntas y comprender el reto matemático antes de aplicar procedimientos.",
+    `Momento 1: Propuesta del problema. ${problemaReal}`,
     "Momento 2: Trabajo estudiantil independiente. El estudiantado trabaja de forma individual, en parejas o en pequeños grupos, explorando estrategias, representaciones, dibujos, tablas, cálculos o recursos concretos/digitales para buscar una solución al problema planteado.",
     "Momento 3: Discusión interactiva y comunicativa. Se socializan procedimientos, se comparan estrategias, se justifican respuestas y se formalizan los conocimientos matemáticos necesarios, promoviendo el uso correcto del vocabulario y la argumentación.",
     "Momento 4: Clausura o cierre. Se sistematizan los aprendizajes, se aclaran errores frecuentes, se relacionan los resultados con la habilidad trabajada y se deja una evidencia breve del aprendizaje alcanzado.",
@@ -405,9 +412,7 @@ function buildFallbackPlaneamiento(input: {
       queNoFunciono: "",
       quePuedoMejorar: ""
     },
-    observaciones: input.plantillaFormatoNombre
-      ? `Se adjuntó la plantilla de formato "${input.plantillaFormatoNombre}". En modo local se genera una estructura base; revisá el formato antes de aplicar.`
-      : "Espacio para registrar ajustes antes, durante y después de la aplicación del planeamiento didáctico.",
+    observaciones: "",
     semanas
   };
 }
@@ -427,7 +432,7 @@ function buildPrompt(input: {
   indicacionesDocente?: string;
 }) {
   const habilidadesText = input.habilidades.map((h, index) => (
-    `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Habilidad ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
+    `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Número ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
   )).join("\n");
 
   return `
@@ -449,8 +454,10 @@ ${input.indicacionesDocente || "No se indicaron premisas adicionales."}
 
 IMPORTANTE SOBRE LAS INDICACIONES DEL DOCENTE:
 Las indicaciones del docente tienen prioridad sobre la plantilla general.
+Si las indicaciones del docente piden usar un ejemplo específico, una página o un formato tomado del Documento de apoyo, debés aplicarlo explícitamente y de forma mandatoria en la respuesta.
 Si el docente solicita adecuación significativa, color, resaltado o cualquier condición especial, debe reflejarse explícitamente en el JSON final.
 Si el docente pide pintar o resaltar una sección en azul, devolvé colorResaltado = "azul" en el objeto correspondiente y agregá el marcador [AZUL] al inicio del texto visible.
+Si no se aportan indicaciones y/o documento de apoyo, generá el planeamiento con los datos disponibles sin bloquear la salida.
 No ignorés esta sección.
 
 Habilidades específicas seleccionadas:
@@ -468,8 +475,9 @@ Si se aportó una plantilla o formato de salida, usalo como referencia principal
 Criterios obligatorios para construir la respuesta:
 1. Las estrategias de mediación deben organizarse desde la resolución de problemas, no como ejercicios aislados.
 2. Deben partir de contextos reales, situaciones cercanas al estudiantado y modelización cuando aplique.
-3. Deben considerar los momentos:
-   - Momento 1: Propuesta del problema
+3. En estrategias de medición/mediación debe iniciar obligatoriamente con:
+   - Momento 1: Propuesta del problema.
+   Después del título, redactá un problema real y concreto que el estudiantado deba resolver, construido en función de los indicadores dados. No transcribás esta instrucción como contenido.
    - Momento 2: Trabajo estudiantil independiente
    - Momento 3: Discusión interactiva y comunicativa
    - Momento 4: Clausura o cierre
@@ -481,6 +489,13 @@ Criterios obligatorios para construir la respuesta:
 8. El texto debe ser formal, claro, docente y costarricense.
 9. No inventés normativa oficial específica ni citas textuales. Si falta información, proponé una versión razonable como borrador editable.
 10. Las estrategias de mediación e indicadores deben alinearse directamente con las habilidades seleccionadas.
+11. En "indicadoresEvaluacion", generá por defecto UN (1) indicador por cada habilidad seleccionada. Solo generá más de uno por habilidad si en las indicaciones del docente se solicita explícitamente. Si hay múltiples para una misma habilidad, numeralos como 1.1, 1.2, 1.3, etc.
+12. No incluyás el texto "Enfoque:" dentro de "estrategiasMediacion". El enfoque va únicamente en el campo "enfoque".
+13. Si se adjunta Documento de apoyo y las indicaciones piden usar un ejemplo o copiar literal un ejercicio de una página concreta, debés hacerlo de forma mandatoria.
+14. Si faltan Indicaciones y/o Documento de apoyo, construí el planeamiento únicamente con los datos disponibles sin bloquear la generación.
+15. En "estrategiasMediacion" no incluyás líneas que inicien con "Enfoque:".
+16. En "indicadoresEvaluacion" no iniciés ningún indicador con "Identifica y aplica".
+17. El campo "observaciones" debe quedar como string vacío: "".
 
 Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
 
@@ -494,8 +509,8 @@ Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
     "Competencias para el empleo digno y el emprendimiento"
   ],
   "aprendizajesEsperados": [
-    "Habilidad 1: ...",
-    "Habilidad 2: ..."
+    "1: ...",
+    "2: ..."
   ],
   "estrategiasMediacion": [
     "Momento 1: Propuesta del problema...",
@@ -606,7 +621,7 @@ async function buildPromptDesdeBD(pool: any, input: {
   }
 
   const habilidadesText = input.habilidades.map((h, index) => (
-    `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Habilidad ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
+    `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Número ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
   )).join("\n");
 
   const prompt = `
@@ -629,6 +644,7 @@ ${clampPromptText(input.indicacionesDocente || "No se indicaron premisas adicion
 
 IMPORTANTE SOBRE LAS INDICACIONES DEL DOCENTE:
 Las indicaciones del docente tienen prioridad sobre la plantilla general.
+Si las indicaciones del docente piden usar un ejemplo específico, una página o un formato tomado del Documento de apoyo, debés aplicarlo explícitamente en la respuesta.
 Si el docente solicita adecuación significativa, color, resaltado o cualquier condición especial, debe reflejarse explícitamente en el JSON final.
 Si el docente pide pintar o resaltar una sección en azul, devolvé colorResaltado = "azul" en el objeto correspondiente y agregá el marcador [AZUL] al inicio del texto visible.
 No ignorés esta sección.
@@ -727,6 +743,118 @@ function normalizarParaBusqueda(value: any) {
     .toLowerCase();
 }
 
+function permiteMultiplesIndicadoresPorHabilidad(indicaciones: string) {
+  const texto = normalizarParaBusqueda(indicaciones);
+  if (!texto || !texto.includes("indicador")) return false;
+  return (
+    texto.includes("mas de un") ||
+    texto.includes("más de un") ||
+    texto.includes("varios") ||
+    texto.includes("multiples") ||
+    texto.includes("múltiples") ||
+    /\b2\b|\b3\b|\b4\b|\bdos\b|\btres\b|\bcuatro\b/.test(texto)
+  );
+}
+
+function limpiarEstrategiasMediacion(estrategias: any[]) {
+  return (Array.isArray(estrategias) ? estrategias : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item) => {
+      const normalizado = normalizarParaBusqueda(item).replace(/^[\-\*\d\.\)\s:]+/, "");
+      return !normalizado.startsWith("enfoque:");
+    });
+}
+
+function construirProblemaRealMomento1(habilidades: any[], materiaNombre?: string, grado?: string, tema?: string) {
+  const descripciones = (Array.isArray(habilidades) ? habilidades : [])
+    .map((h: any) => String(h?.DescripcionHabilidad || h || "").trim())
+    .map((h) => h.replace(/^[\-\*\u2022]\s*/, "").replace(/^habilidad\s+/i, ""))
+    .filter(Boolean);
+  const foco = descripciones.length
+    ? descripciones.slice(0, 2).join(" y ")
+    : tema || "los aprendizajes seleccionados";
+  const materia = materiaNombre || "la asignatura";
+  const nivel = grado ? ` de ${grado}` : "";
+  return `La municipalidad de la comunidad necesita tomar una decisión a partir de una situación real vinculada con ${foco}. El estudiantado debe analizar la información disponible, representar los datos o relaciones necesarias, resolver el reto y justificar una recomendación viable para el contexto${nivel} en ${materia}.`;
+}
+
+function asegurarMomento1Primero(estrategias: string[], input?: { habilidades?: any[]; materiaNombre?: string; grado?: string; tema?: string }) {
+  const base = (Array.isArray(estrategias) ? estrategias : []).map((e) => String(e || "").trim()).filter(Boolean);
+  const idxMomento1 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 1: propuesta del problema"));
+  const textoOriginal = idxMomento1 >= 0 ? base[idxMomento1] : "";
+  const originalNormalizado = normalizarParaBusqueda(textoOriginal);
+  const requiereReemplazo = !textoOriginal
+    || originalNormalizado.includes("planteamiento de un problema real a resolver")
+    || originalNormalizado.length < 90;
+  const problemaReal = construirProblemaRealMomento1(input?.habilidades || [], input?.materiaNombre, input?.grado, input?.tema);
+  const momento1Texto = requiereReemplazo
+    ? `Momento 1: Propuesta del problema. ${problemaReal}`
+    : textoOriginal;
+  const resto = idxMomento1 >= 0 ? base.filter((_, i) => i !== idxMomento1) : base;
+  return [momento1Texto, ...resto];
+}
+
+function ajustarIndicadoresPorHabilidad(input: { indicadoresEntrada: string[]; habilidades: any[]; permitirMultiples: boolean }) {
+  const indicadores = (input.indicadoresEntrada || []).map((i) => limpiarPrefijoIndicador(i)).filter(Boolean);
+  const habilidades = Array.isArray(input.habilidades) ? input.habilidades : [];
+  const cantidadObjetivo = Math.max(1, habilidades.length || indicadores.length || 1);
+  const baseDesdeHabilidad = habilidades.map((h: any) => {
+    const descripcion = String(h?.DescripcionHabilidad || "").trim() || "la habilidad seleccionada";
+    return `Resuelve situaciones contextualizadas relacionadas con ${descripcion}, explicando su procedimiento de forma clara.`;
+  });
+
+  if (!input.permitirMultiples) {
+    if (indicadores.length >= cantidadObjetivo) return indicadores.slice(0, cantidadObjetivo);
+    return [...indicadores, ...baseDesdeHabilidad].slice(0, cantidadObjetivo);
+  }
+
+  const baseMultiples = indicadores.length ? indicadores : baseDesdeHabilidad;
+  const porHabilidad = Math.max(1, Math.ceil(baseMultiples.length / cantidadObjetivo));
+  const numerados: string[] = [];
+  for (let i = 0; i < cantidadObjetivo; i += 1) {
+    for (let j = 0; j < porHabilidad; j += 1) {
+      const idx = i * porHabilidad + j;
+      const texto = baseMultiples[idx];
+      if (!texto) continue;
+      numerados.push(`${i + 1}.${j + 1} ${texto.replace(/^\d+(\.\d+)?\s+/, "")}`);
+    }
+  }
+  return numerados.length ? numerados : baseDesdeHabilidad.map((t, i) => `${i + 1}.1 ${t}`);
+}
+
+function requiereUsoMandatorioDocumento(indicacionesDocente: string, documentoApoyoTexto?: string) {
+  const texto = normalizarParaBusqueda(indicacionesDocente);
+  const hayDocumento = Boolean(String(documentoApoyoTexto || "").trim());
+  if (!hayDocumento) return false;
+  const pideEjemplo = texto.includes("usar un ejemplo") || texto.includes("use un ejemplo") || texto.includes("tomar un ejemplo");
+  const pideLiteral = texto.includes("copie de forma literal") || texto.includes("copiar de forma literal") || texto.includes("literal");
+  const pidePagina = texto.includes("pagina") || texto.includes("página");
+  return (pideEjemplo || pideLiteral) && pidePagina;
+}
+
+function requiereUsoMandatorioCondicionales(indicacionesDocente: string, documentoApoyoTexto?: string) {
+  const hayIndicaciones = Boolean(String(indicacionesDocente || "").trim());
+  const hayDocumento = Boolean(String(documentoApoyoTexto || "").trim());
+  return hayIndicaciones || hayDocumento;
+}
+
+function limpiarPrefijoAprendizaje(value: any) {
+  return String(value || "")
+    .trim()
+    .replace(/^[\-\*\u2022]\s*/, "")
+    .replace(/^habilidad\s+/i, "");
+}
+
+function limpiarPrefijoIndicador(value: any) {
+  return String(value || "")
+    .trim()
+    .replace(/^[\-\*\u2022]\s*/, "")
+    .replace(/^indicador\s+\d+(\.\d+)?\s*[:.-]?\s*/i, "")
+    .replace(/^identifica\s+y\s+aplica\s+/i, "")
+    .replace(/\bhabilidad\s+(\d+\s*:)/gi, "$1");
+}
+
 function pideAdecuacionSignificativa(indicacionesDocente: string) {
   const texto = normalizarParaBusqueda(indicacionesDocente);
   return texto.includes("adecuacion significativa")
@@ -768,17 +896,36 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   mes: string;
   tema: string;
   habilidades: any[];
+  documentoApoyoTexto?: string;
 }) {
   const resultado = resultadoEntrada && typeof resultadoEntrada === "object" ? { ...resultadoEntrada } : {};
   const indicacionesDocente = input.indicacionesDocente || "";
   const requiereAdecuacion = pideAdecuacionSignificativa(indicacionesDocente);
   const requiereAzul = pideColorAzul(indicacionesDocente);
-
-  if (!requiereAdecuacion) return resultado;
+  const permitirMultiples = permiteMultiplesIndicadoresPorHabilidad(indicacionesDocente);
 
   if (!Array.isArray(resultado.estrategiasMediacion)) {
     resultado.estrategiasMediacion = splitLines(resultado.estrategiasMediacion);
   }
+  resultado.estrategiasMediacion = asegurarMomento1Primero(
+    limpiarEstrategiasMediacion(resultado.estrategiasMediacion),
+    {
+      habilidades: input.habilidades,
+      materiaNombre: input.materiaNombre,
+      grado: input.grado,
+      tema: input.tema
+    }
+  );
+
+  resultado.indicadoresEvaluacion = ajustarIndicadoresPorHabilidad({
+    indicadoresEntrada: splitLines(resultado.indicadoresEvaluacion),
+    habilidades: input.habilidades,
+    permitirMultiples
+  });
+
+  resultado.observaciones = "";
+
+  if (!requiereAdecuacion) return resultado;
 
   const yaTieneAdecuacion = resultado.estrategiasMediacion.some((item: any) => {
     const texto = normalizarParaBusqueda(item);
@@ -1734,7 +1881,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     console.log(`[planeamiento-ia] generar-planeamiento: carga de habilidades en ${Date.now() - t0}ms`);
 
     const effectiveMateria = materiaNombre || habilidades.recordset[0]?.MateriaNombre || "Materia";
-    const documentoApoyo = await extractDocumentoApoyoText(getUploadedFile(req, "documentoApoyo"));
+    const documentoApoyoFile = getUploadedFile(req, "documentoApoyo");
+    const documentoApoyo = await extractDocumentoApoyoText(documentoApoyoFile);
     const plantillaFormatoFile = getUploadedFile(req, "plantillaFormato");
     const plantillaFormato = await extractPlantillaFormatoText(plantillaFormatoFile);
     const plantillaFormatoDocx = cachePlantillaFormatoDocx(plantillaFormatoFile);
@@ -1780,7 +1928,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       grado,
       mes,
       tema,
-      habilidades: habilidades.recordset
+      habilidades: habilidades.recordset,
+      documentoApoyoTexto: documentoApoyo.texto
     });
 
     const resultado = {
@@ -2179,7 +2328,6 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
     : competenciasBase.map(() => true);
 
   const estrategiasXml = [
-    ...(input.contenido.enfoque ? [xmlParagraph(`Enfoque: ${input.contenido.enfoque}`, { size: 19 })] : []),
     ...xmlParagraphsFromList(input.contenido.estrategias, input.row.Observaciones || "Sin estrategias registradas", { bulletPrefix: "- ", size: 19 })
   ];
 
@@ -2224,7 +2372,7 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
           (cellXml) => replaceCellBody(cellXml, xmlParagraphsFromList(input.contenido.aprendizajes, "Sin aprendizajes registrados", { bulletPrefix: "- ", size: 19 })),
           (cellXml) => replaceCellBody(cellXml, estrategiasXml),
           (cellXml) => replaceCellBody(cellXml, input.contenido.indicadores.length
-            ? input.contenido.indicadores.map((item: string, idx: number) => xmlParagraph(`Indicador ${idx + 1}: ${item}`, { size: 19 }))
+            ? input.contenido.indicadores.map((item: string) => xmlParagraph(limpiarPrefijoIndicador(item), { size: 19 }))
             : [xmlParagraph("Sin indicadores registrados", { size: 19 })])
         ]),
         null,
@@ -2264,18 +2412,25 @@ function tableRow(values: { text: string; bold?: boolean; width?: number }[]) {
 }
 
 function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[]) {
-  const aprendizajes = splitLines(resultado?.aprendizajesEsperados);
+  const aprendizajes = splitLines(resultado?.aprendizajesEsperados).map(limpiarPrefijoAprendizaje).filter(Boolean);
   const estrategiasBase = splitLines(resultado?.estrategiasMediacion);
   const estrategiaAdecuacion = resultado?.estrategiaAdecuacionSignificativa;
   const textoAdecuacionVisible = estrategiaAdecuacion?.aplica && estrategiaAdecuacion?.textoVisible
     ? String(estrategiaAdecuacion.textoVisible)
     : "";
-  const estrategias = textoAdecuacionVisible && !estrategiasBase.some((item: string) => normalizarParaBusqueda(item).includes("adecuacion significativa"))
-    ? [...estrategiasBase, textoAdecuacionVisible]
-    : estrategiasBase;
+  const estrategiasLimpias = asegurarMomento1Primero(limpiarEstrategiasMediacion(estrategiasBase), {
+    habilidades: aprendizajes,
+    tema: resultado?.nombre
+  });
+  const estrategias = textoAdecuacionVisible && !estrategiasLimpias.some((item: string) => normalizarParaBusqueda(item).includes("adecuacion significativa"))
+    ? asegurarMomento1Primero([...estrategiasLimpias, textoAdecuacionVisible], {
+      habilidades: aprendizajes,
+      tema: resultado?.nombre
+    })
+    : estrategiasLimpias;
   const indicadores = splitLines(resultado?.indicadoresEvaluacion).length
-    ? splitLines(resultado?.indicadoresEvaluacion)
-    : indicadoresFallback;
+    ? splitLines(resultado?.indicadoresEvaluacion).map(limpiarPrefijoIndicador).filter(Boolean)
+    : indicadoresFallback.map(limpiarPrefijoIndicador).filter(Boolean);
   const cotidiano = splitLines(resultado?.trabajoCotidiano);
   const tareas = splitLines(resultado?.tareas);
   const evaluacion = splitLines(resultado?.evaluacionSugerida);
@@ -2294,15 +2449,15 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
   return {
     nombre: String(resultado?.nombre || "Planeamiento didáctico"),
     enfoque: String(resultado?.enfoque || "Resolución de problemas, contextualización y mediación pedagógica basada en habilidades específicas"),
-    aprendizajes: aprendizajes.length ? aprendizajes : semanas.map((s: any) => String(s?.habilidadBase || s?.proposito || "")).filter(Boolean),
+    aprendizajes: aprendizajes.length ? aprendizajes : semanas.map((s: any) => limpiarPrefijoAprendizaje(s?.habilidadBase || s?.proposito || "")).filter(Boolean),
     estrategias: estrategias.length ? estrategias : estrategiasFromWeeks,
-    indicadores: indicadores.length ? indicadores : indicadoresFromWeeks,
+    indicadores: indicadores.length ? indicadores : indicadoresFromWeeks.map(limpiarPrefijoIndicador).filter(Boolean),
     competenciasGenerales,
     cotidiano,
     tareas,
     evaluacion,
     recursos,
-    observaciones: String(resultado?.observaciones || ""),
+    observaciones: "",
     reflexiones: resultado?.reflexionesDocentes || {}
   };
 }
@@ -2599,7 +2754,6 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
       : competenciasBase.map(() => true);
 
     const estrategiasChildren = [
-      ...(contenido.enfoque ? [simpleParagraph(`Enfoque: ${contenido.enfoque}`, { size: 19 })] : []),
       ...textParagraphs(contenido.estrategias, row.Observaciones || "Sin estrategias registradas", { bulletPrefix: "- ", size: 19 })
     ];
 
@@ -2675,7 +2829,7 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
               templateCell(estrategiasChildren, { width: 8222 }),
               templateCell(
                 contenido.indicadores.length
-                  ? contenido.indicadores.map((item: string, idx: number) => simpleParagraph(`Indicador ${idx + 1}: ${item}`, { size: 19 }))
+                  ? contenido.indicadores.map((item: string) => simpleParagraph(limpiarPrefijoIndicador(item), { size: 19 }))
                   : [simpleParagraph("Sin indicadores registrados", { size: 19 })],
                 { width: 2982 }
               )

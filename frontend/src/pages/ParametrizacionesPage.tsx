@@ -17,11 +17,6 @@ const PARAMETRIZACIONES_ROLES = [
 
 const opciones: OpcionParametrizacion[] = [
   {
-    title: "Habilidades de Planeamiento",
-    path: "/parametrizaciones/habilidades-planeamiento",
-    allowedRoles: PARAMETRIZACIONES_ROLES
-  },
-  {
     title: "Evaluaciones",
     path: "/parametrizaciones/evaluaciones",
     allowedRoles: PARAMETRIZACIONES_ROLES
@@ -55,7 +50,7 @@ export default function ParametrizacionesPage() {
       <section className="card">
         <h2>Parametrizaciones</h2>
         <p className="muted">
-          Configurá habilidades, evaluaciones y plantillas de Promt IA.
+          Configurá evaluaciones y plantillas de Promt IA.
         </p>
 
         <div className="param-top-nav" role="tablist" aria-label="Opciones de parametrizaciones">

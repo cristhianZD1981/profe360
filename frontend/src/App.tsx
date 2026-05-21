@@ -20,7 +20,6 @@ import PlaneamientoIAPage from "./pages/PlaneamientoIAPage";
 import ConfiguracionIAPage from "./pages/ConfiguracionIAPage";
 import SeguimientoNotasPage from "./pages/SeguimientoNotasPage";
 import ParametrizacionesPage from "./pages/ParametrizacionesPage";
-import HabilidadesPlaneamientoAcademicoPage from "./pages/HabilidadesPlaneamientoAcademicoPage";
 import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
 
 const ADMINISTRATIVO_ROLES = [
@@ -105,6 +104,7 @@ export default function App() {
                     "especialidades",
                     "rutasTransporte",
                     "materias",
+                    "habilidadesPlaneamiento",
                     "asignaciones",
                     "bloques",
                     "fechasClase",
@@ -131,6 +131,7 @@ export default function App() {
                     "especialidades",
                     "rutasTransporte",
                     "materias",
+                    "habilidadesPlaneamiento",
                     "asignaciones",
                     "bloques",
                     "fechasClase",
@@ -163,8 +164,8 @@ export default function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="habilidades-planeamiento" replace />} />
-            <Route path="habilidades-planeamiento" element={<HabilidadesPlaneamientoAcademicoPage />} />
+            <Route index element={<Navigate to="evaluaciones" replace />} />
+            <Route path="habilidades-planeamiento" element={<Navigate to="/administrativo" replace />} />
             <Route path="evaluaciones" element={<EvaluacionParametrizacionPage />} />
             <Route path="promt-ia" element={<ConfiguracionIAPage />} />
             <Route path="configuracion-ia" element={<Navigate to="../promt-ia" replace />} />
@@ -226,7 +227,7 @@ export default function App() {
             path="configuracion-ia"
             element={
               <ProtectedRoute
-                allowedRoles={ADMINISTRATIVO_ROLES}
+                allowedRoles={PARAMETRIZACIONES_ROLES}
               >
                 <ConfiguracionIAPage />
               </ProtectedRoute>
