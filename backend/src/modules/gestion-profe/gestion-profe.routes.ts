@@ -221,9 +221,11 @@ router.get("/mis-grupos", async (req, res) => {
         u.PrimerApellido AS ProfesorPrimerApellido,
         u.SegundoApellido AS ProfesorSegundoApellido,
         COUNT(DISTINCT ma.MatriculaId) AS TotalEstudiantes,
-        ep.EvaluacionPlantillaId,
-        ep.Nombre AS EvaluacionPlantillaNombre,
-        ep.Estado AS EvaluacionPlantillaEstado
+        COALESCE(epSesion.EvaluacionPlantillaId, ep.EvaluacionPlantillaId) AS EvaluacionPlantillaId,
+        COALESCE(epSesion.Nombre, ep.Nombre) AS EvaluacionPlantillaNombre,
+        COALESCE(epSesion.Estado, ep.Estado) AS EvaluacionPlantillaEstado,
+        CASE WHEN epSesion.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
+        ISNULL(epSesion.TieneCalificaciones, 0) AS TieneCalificacionesEvaluacion
       FROM dbo.AsignacionDocente ad
       INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
       LEFT JOIN dbo.Materia m ON m.MateriaId = ad.MateriaId
@@ -247,6 +249,51 @@ router.get("/mis-grupos", async (req, res) => {
           AND ep2.Activo = 1
         ORDER BY CASE WHEN ep2.Estado = N'ACTIVA' THEN 0 ELSE 1 END, ep2.EvaluacionPlantillaId DESC
       ) ep
+      OUTER APPLY (
+        SELECT TOP 1
+          eg.EstructuraGrupoId,
+          eg.PlantillaBaseId AS EvaluacionPlantillaId,
+          ep3.Nombre,
+          ep3.Estado,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM dbo.Eval360_NotaActividad na
+              INNER JOIN dbo.Eval360_Actividad act ON act.ActividadId = na.ActividadId
+              WHERE act.EstructuraGrupoId = eg.EstructuraGrupoId
+                AND (
+                  (na.PuntosObtenidos IS NOT NULL AND na.PuntosObtenidos > 0)
+                  OR (na.PorcentajeObtenido IS NOT NULL AND na.PorcentajeObtenido > 0)
+                )
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.Eval360_SeguimientoIndicador si
+              INNER JOIN dbo.Eval360_Actividad act ON act.ActividadId = si.ActividadId
+              WHERE act.EstructuraGrupoId = eg.EstructuraGrupoId
+                AND ISNULL(si.ValorSeleccionado, 0) > 0
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.AsistenciaRegistro ar
+              WHERE ar.GrupoId = eg.GrupoId
+                AND ar.MateriaId = eg.MateriaId
+                AND ar.AnioLectivoId = eg.AnioLectivoId
+                AND ar.PeriodoId = eg.PeriodoId
+            )
+            THEN 1
+            ELSE 0
+          END AS TieneCalificaciones
+        FROM dbo.Eval360_EstructuraGrupo eg
+        LEFT JOIN dbo.EvaluacionPlantilla ep3 ON ep3.EvaluacionPlantillaId = eg.PlantillaBaseId
+        WHERE eg.InstitucionId = ad.InstitucionId
+          AND eg.GrupoId = ad.GrupoId
+          AND eg.MateriaId = ad.MateriaId
+          AND eg.AnioLectivoId = ad.AnioLectivoId
+          AND eg.PeriodoId = ad.PeriodoId
+          AND eg.Activo = 1
+        ORDER BY eg.EstructuraGrupoId DESC
+      ) epSesion
       WHERE ad.Activo = 1
         AND ad.MateriaId IS NOT NULL
         AND (@anioLectivoId IS NULL OR ad.AnioLectivoId = @anioLectivoId)
@@ -286,6 +333,11 @@ router.get("/mis-grupos", async (req, res) => {
         u.Nombre,
         u.PrimerApellido,
         u.SegundoApellido,
+        epSesion.EstructuraGrupoId,
+        epSesion.TieneCalificaciones,
+        epSesion.EvaluacionPlantillaId,
+        epSesion.Nombre,
+        epSesion.Estado,
         ep.EvaluacionPlantillaId,
         ep.Nombre,
         ep.Estado
@@ -1002,6 +1054,82 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
     console.error("Error enviando WhatsApp por webhook:", error);
     return { enviado: false, modo: "webhook", motivo: getReadableError(error) };
   }
+}
+
+async function ensureReporteEnvioBitacoraTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.ReporteEnvioBitacora', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.ReporteEnvioBitacora (
+        ReporteEnvioBitacoraId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        Modulo NVARCHAR(40) NOT NULL,
+        RegistroClave NVARCHAR(200) NOT NULL,
+        GrupoId INT NULL,
+        MateriaId INT NULL,
+        PeriodoId INT NULL,
+        AnioLectivoId INT NULL,
+        EstudianteId INT NULL,
+        Fecha DATE NULL,
+        CorreoEnviado BIT NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_Correo DEFAULT(0),
+        WaEnviado BIT NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_Wa DEFAULT(0),
+        UltimoEnvioAt DATETIME2 NULL,
+        UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_UpdatedAt DEFAULT(SYSDATETIME()),
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_CreatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE UNIQUE INDEX UX_ReporteEnvioBitacora_ModuloClave ON dbo.ReporteEnvioBitacora(Modulo, RegistroClave);
+      CREATE INDEX IX_ReporteEnvioBitacora_Filtros ON dbo.ReporteEnvioBitacora(GrupoId, MateriaId, PeriodoId, AnioLectivoId, EstudianteId, Fecha);
+    END
+  `);
+}
+
+async function upsertReporteEnvioBitacora(pool: any, payload: {
+  modulo: string;
+  registroClave: string;
+  grupoId?: number | null;
+  materiaId?: number | null;
+  periodoId?: number | null;
+  anioLectivoId?: number | null;
+  estudianteId?: number | null;
+  fecha?: string | null;
+  correoEnviado?: boolean;
+  waEnviado?: boolean;
+}) {
+  await pool.request()
+    .input("modulo", sql.NVarChar(40), String(payload.modulo || "").trim().toUpperCase())
+    .input("registroClave", sql.NVarChar(200), String(payload.registroClave || "").trim())
+    .input("grupoId", sql.Int, payload.grupoId || null)
+    .input("materiaId", sql.Int, payload.materiaId || null)
+    .input("periodoId", sql.Int, payload.periodoId || null)
+    .input("anioLectivoId", sql.Int, payload.anioLectivoId || null)
+    .input("estudianteId", sql.Int, payload.estudianteId || null)
+    .input("fecha", sql.Date, payload.fecha || null)
+    .input("correoEnviado", sql.Bit, payload.correoEnviado ? 1 : 0)
+    .input("waEnviado", sql.Bit, payload.waEnviado ? 1 : 0)
+    .query(`
+      MERGE dbo.ReporteEnvioBitacora AS target
+      USING (
+        SELECT
+          @modulo AS Modulo,
+          @registroClave AS RegistroClave
+      ) AS source
+      ON target.Modulo = source.Modulo
+         AND target.RegistroClave = source.RegistroClave
+      WHEN MATCHED THEN
+        UPDATE SET
+          GrupoId = COALESCE(@grupoId, target.GrupoId),
+          MateriaId = COALESCE(@materiaId, target.MateriaId),
+          PeriodoId = COALESCE(@periodoId, target.PeriodoId),
+          AnioLectivoId = COALESCE(@anioLectivoId, target.AnioLectivoId),
+          EstudianteId = COALESCE(@estudianteId, target.EstudianteId),
+          Fecha = COALESCE(@fecha, target.Fecha),
+          CorreoEnviado = CASE WHEN @correoEnviado = 1 THEN 1 ELSE target.CorreoEnviado END,
+          WaEnviado = CASE WHEN @waEnviado = 1 THEN 1 ELSE target.WaEnviado END,
+          UltimoEnvioAt = CASE WHEN @correoEnviado = 1 OR @waEnviado = 1 THEN SYSDATETIME() ELSE target.UltimoEnvioAt END,
+          UpdatedAt = SYSDATETIME()
+      WHEN NOT MATCHED THEN
+        INSERT (Modulo, RegistroClave, GrupoId, MateriaId, PeriodoId, AnioLectivoId, EstudianteId, Fecha, CorreoEnviado, WaEnviado, UltimoEnvioAt, UpdatedAt, CreatedAt)
+        VALUES (@modulo, @registroClave, @grupoId, @materiaId, @periodoId, @anioLectivoId, @estudianteId, @fecha, @correoEnviado, @waEnviado, CASE WHEN @correoEnviado = 1 OR @waEnviado = 1 THEN SYSDATETIME() ELSE NULL END, SYSDATETIME(), SYSDATETIME());
+    `);
 }
 
 function sanitizeResultadoIAJsonForList(value: any) {
@@ -2403,6 +2531,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
     if (!asignacion) return forbidden(res, "No tenés permisos para consultar asistencia de este grupo y materia");
 
     const pool = await getPool();
+    await ensureReporteEnvioBitacoraTable(pool);
     const diaSemana = getDiaSemanaEscolar(fecha);
 
     const leccionesResult = await pool.request()
@@ -2461,24 +2590,37 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
       .input("fecha", sql.Date, fecha)
       .query(`
         SELECT
-          AsistenciaRegistroId,
-          EstudianteId,
-          HorarioGrupoId,
-          BloqueHorarioId,
-          GrupoId,
-          MateriaId,
-          AnioLectivoId,
-          PeriodoId,
-          Fecha,
-          Estado,
-          MinutosTardia,
-          Observacion
-        FROM dbo.AsistenciaRegistro
-        WHERE GrupoId = @grupoId
-          AND MateriaId = @materiaId
-          AND AnioLectivoId = @anioLectivoId
-          AND PeriodoId = @periodoId
-          AND Fecha = @fecha
+          ar.AsistenciaRegistroId,
+          ar.EstudianteId,
+          ar.HorarioGrupoId,
+          ar.BloqueHorarioId,
+          ar.GrupoId,
+          ar.MateriaId,
+          ar.AnioLectivoId,
+          ar.PeriodoId,
+          ar.Fecha,
+          ar.Estado,
+          ar.MinutosTardia,
+          ar.Observacion,
+          ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+          ISNULL(reb.WaEnviado, 0) AS WaEnviado
+        FROM dbo.AsistenciaRegistro ar
+        LEFT JOIN dbo.ReporteEnvioBitacora reb
+          ON reb.Modulo = N'ASISTENCIA'
+         AND reb.RegistroClave = CONCAT(
+           N'ASIS|',
+           CONVERT(varchar(20), ar.GrupoId), N'|',
+           CONVERT(varchar(20), ar.MateriaId), N'|',
+           CONVERT(varchar(20), ar.PeriodoId), N'|',
+           CONVERT(varchar(10), ar.Fecha, 23), N'|',
+           CONVERT(varchar(20), ar.EstudianteId), N'|',
+           CONVERT(varchar(20), ar.HorarioGrupoId)
+         )
+        WHERE ar.GrupoId = @grupoId
+          AND ar.MateriaId = @materiaId
+          AND ar.AnioLectivoId = @anioLectivoId
+          AND ar.PeriodoId = @periodoId
+          AND ar.Fecha = @fecha
       `);
 
     const resumen = await buildResumenAsistencia(grupoId, materiaId, anioLectivoId, periodoId);
@@ -2527,6 +2669,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     if (!asignacion) return forbidden(res, "No tenés permisos para registrar asistencia en este grupo y materia");
 
     const pool = await getPool();
+    await ensureReporteEnvioBitacoraTable(pool);
     const estudiantesResult = await pool.request()
       .input("grupoId", sql.Int, grupoId)
       .input("anioLectivoId", sql.Int, anioLectivoId)
@@ -2669,6 +2812,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     const institucionNombre = String(institucionNombreResult.recordset[0]?.Nombre || "");
 
     for (const [estudianteId, items] of porEstudiante.entries()) {
+      let correoEnviado = false;
+      let waEnviado = false;
       try {
         const estudianteResult = await pool.request()
           .input("estudianteId", sql.Int, estudianteId)
@@ -2737,6 +2882,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
             html: `<p>${toHtmlWithLineBreaks(texto)}</p>`
           });
           notificaciones.push({ estudianteId, canal: "correo", ...correo });
+          if (correo?.enviado === true) correoEnviado = true;
         }
 
         if (estudiante.AutorizaWhatsAppEncargado) {
@@ -2754,11 +2900,27 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
               mensaje: texto
             });
             notificaciones.push({ estudianteId, canal: "whatsapp", telefono, ...whatsapp });
+            if (whatsapp?.enviado === true) waEnviado = true;
           }
         }
       } catch (notifyError: any) {
         console.error("No se pudo notificar asistencia:", notifyError);
         notificaciones.push({ estudianteId, enviado: false, error: notifyError?.message || "Error notificando" });
+      }
+      for (const item of items) {
+        const registroClave = `ASIS|${grupoId}|${materiaId}|${periodoId}|${fecha}|${estudianteId}|${Number(item.horarioGrupoId || 0)}`;
+        await upsertReporteEnvioBitacora(pool, {
+          modulo: "ASISTENCIA",
+          registroClave,
+          grupoId,
+          materiaId,
+          periodoId,
+          anioLectivoId,
+          estudianteId,
+          fecha,
+          correoEnviado,
+          waEnviado
+        });
       }
     }
 
@@ -2968,6 +3130,171 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/pdf", async (req, 
   } catch (error) {
     console.error("Error generando reporte PDF:", error);
     return res.status(500).json({ ok: false, message: "No se pudo generar el reporte en PDF" });
+  }
+});
+
+router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/auditoria-envios", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+
+    const grupoId = Number(req.params.grupoId);
+    const materiaId = Number(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
+    const periodoId = toOptionalNumber(req.query.periodoId);
+    const desde = normalizeText(req.query.desde);
+    const hasta = normalizeText(req.query.hasta);
+
+    if (!Number.isFinite(grupoId) || !Number.isFinite(materiaId)) return badRequest(res, "Grupo o materia inválida");
+    if (!anioLectivoId || !periodoId) return badRequest(res, "Debés indicar año lectivo y periodo");
+    if (!desde || !hasta) return badRequest(res, "Debés indicar rango de fechas");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenés permisos para consultar este reporte");
+
+    const pool = await getPool();
+    await ensureReporteEnvioBitacoraTable(pool);
+
+    const result = await pool.request()
+      .input("grupoId", sql.Int, grupoId)
+      .input("materiaId", sql.Int, materiaId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("desde", sql.Date, desde)
+      .input("hasta", sql.Date, hasta)
+      .query(`
+        SELECT
+          reb.ReporteEnvioBitacoraId,
+          reb.Modulo,
+          CASE
+            WHEN reb.Modulo = N'ASISTENCIA' THEN N'Asistencia'
+            WHEN reb.Modulo = N'COTIDIANO_INDICADOR' THEN N'Cotidiano (Indicador)'
+            WHEN reb.Modulo = N'COTIDIANO_ACTIVIDAD' THEN N'Cotidiano (Actividad)'
+            WHEN reb.Modulo = N'TAREAS_INDICADOR' THEN N'Tareas (Indicador)'
+            WHEN reb.Modulo = N'TAREAS_ACTIVIDAD' THEN N'Tareas (Actividad)'
+            ELSE reb.Modulo
+          END AS ModuloNombre,
+          reb.RegistroClave,
+          reb.Fecha,
+          reb.CorreoEnviado,
+          reb.WaEnviado,
+          reb.UltimoEnvioAt,
+          reb.EstudianteId,
+          e.Identificacion,
+          e.Nombre,
+          e.PrimerApellido,
+          e.SegundoApellido
+        FROM dbo.ReporteEnvioBitacora reb
+        LEFT JOIN dbo.Estudiante e ON e.EstudianteId = reb.EstudianteId
+        WHERE reb.GrupoId = @grupoId
+          AND reb.MateriaId = @materiaId
+          AND reb.AnioLectivoId = @anioLectivoId
+          AND reb.PeriodoId = @periodoId
+          AND reb.Fecha BETWEEN @desde AND @hasta
+          AND reb.Modulo IN (N'ASISTENCIA', N'COTIDIANO_INDICADOR', N'COTIDIANO_ACTIVIDAD', N'TAREAS_INDICADOR', N'TAREAS_ACTIVIDAD')
+        ORDER BY reb.Fecha DESC, reb.Modulo, e.PrimerApellido, e.SegundoApellido, e.Nombre
+      `);
+
+    return ok(res, {
+      desde,
+      hasta,
+      total: result.recordset.length,
+      filas: result.recordset
+    });
+  } catch (error) {
+    console.error("Error cargando auditoría de envíos:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la auditoría de envíos" });
+  }
+});
+
+router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/auditoria-envios/excel", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+
+    const grupoId = Number(req.params.grupoId);
+    const materiaId = Number(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
+    const periodoId = toOptionalNumber(req.query.periodoId);
+    const desde = normalizeText(req.query.desde);
+    const hasta = normalizeText(req.query.hasta);
+
+    if (!Number.isFinite(grupoId) || !Number.isFinite(materiaId)) return badRequest(res, "Grupo o materia inválida");
+    if (!anioLectivoId || !periodoId) return badRequest(res, "Debés indicar año lectivo y periodo");
+    if (!desde || !hasta) return badRequest(res, "Debés indicar rango de fechas");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenés permisos para consultar este reporte");
+
+    const pool = await getPool();
+    await ensureReporteEnvioBitacoraTable(pool);
+
+    const result = await pool.request()
+      .input("grupoId", sql.Int, grupoId)
+      .input("materiaId", sql.Int, materiaId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("desde", sql.Date, desde)
+      .input("hasta", sql.Date, hasta)
+      .query(`
+        SELECT
+          CASE
+            WHEN reb.Modulo = N'ASISTENCIA' THEN N'Asistencia'
+            WHEN reb.Modulo = N'COTIDIANO_INDICADOR' THEN N'Cotidiano (Indicador)'
+            WHEN reb.Modulo = N'COTIDIANO_ACTIVIDAD' THEN N'Cotidiano (Actividad)'
+            WHEN reb.Modulo = N'TAREAS_INDICADOR' THEN N'Tareas (Indicador)'
+            WHEN reb.Modulo = N'TAREAS_ACTIVIDAD' THEN N'Tareas (Actividad)'
+            ELSE reb.Modulo
+          END AS ModuloNombre,
+          reb.Fecha,
+          ISNULL(e.Identificacion, N'') AS Identificacion,
+          LTRIM(RTRIM(CONCAT(ISNULL(e.Nombre, N''), N' ', ISNULL(e.PrimerApellido, N''), N' ', ISNULL(e.SegundoApellido, N'')))) AS Estudiante,
+          CASE WHEN reb.CorreoEnviado = 1 THEN N'Sí' ELSE N'No' END AS CorreoEnviado,
+          CASE WHEN reb.WaEnviado = 1 THEN N'Sí' ELSE N'No' END AS WaEnviado,
+          reb.UltimoEnvioAt,
+          reb.RegistroClave
+        FROM dbo.ReporteEnvioBitacora reb
+        LEFT JOIN dbo.Estudiante e ON e.EstudianteId = reb.EstudianteId
+        WHERE reb.GrupoId = @grupoId
+          AND reb.MateriaId = @materiaId
+          AND reb.AnioLectivoId = @anioLectivoId
+          AND reb.PeriodoId = @periodoId
+          AND reb.Fecha BETWEEN @desde AND @hasta
+          AND reb.Modulo IN (N'ASISTENCIA', N'COTIDIANO_INDICADOR', N'COTIDIANO_ACTIVIDAD', N'TAREAS_INDICADOR', N'TAREAS_ACTIVIDAD')
+        ORDER BY reb.Fecha DESC, reb.Modulo, e.PrimerApellido, e.SegundoApellido, e.Nombre
+      `);
+
+    const rows: any[][] = [];
+    rows.push(["Auditoría de envíos (Asistencia, Cotidiano y Tareas)"]);
+    rows.push([`Grupo: ${String(asignacion?.GrupoNombre || "")}`, `Materia: ${String(asignacion?.MateriaNombre || "")}`]);
+    rows.push([`Rango: ${desde} a ${hasta}`]);
+    rows.push([]);
+    rows.push(["Módulo", "Fecha", "Identificación", "Estudiante", "Correo enviado", "WA enviado", "Último envío", "Clave de registro"]);
+
+    for (const item of result.recordset) {
+      rows.push([
+        String(item.ModuloNombre || ""),
+        formatDateCR(item.Fecha),
+        String(item.Identificacion || ""),
+        String(item.Estudiante || ""),
+        String(item.CorreoEnviado || "No"),
+        String(item.WaEnviado || "No"),
+        item.UltimoEnvioAt ? formatDateCR(item.UltimoEnvioAt) : "",
+        String(item.RegistroClave || "")
+      ]);
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    worksheet["!cols"] = [{ wch: 24 }, { wch: 14 }, { wch: 18 }, { wch: 34 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 48 }];
+    XLSX.utils.book_append_sheet(workbook, worksheet, "AuditoriaEnvios");
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const fileName = `auditoria-envios-${String(asignacion?.GrupoNombre || "grupo").replace(/\s+/g, "-")}-${String(asignacion?.MateriaNombre || "materia").replace(/\s+/g, "-")}-${desde}-a-${hasta}.xlsx`;
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error exportando auditoría de envíos:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo exportar la auditoría de envíos" });
   }
 });
 

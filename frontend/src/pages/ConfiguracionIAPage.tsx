@@ -1,4 +1,4 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 
@@ -658,7 +658,7 @@ export default function ConfiguracionIAPage() {
               checked={form.esPublica}
               onChange={(e) => setForm((prev) => ({ ...prev, esPublica: e.target.checked }))}
             />
-            Plantilla publica (si no se marca, queda privada)
+            Plantilla Privada (si se marca, quedara Publica)
           </label>
 
           <label style={labelStyle}>
@@ -876,6 +876,7 @@ export default function ConfiguracionIAPage() {
     </section>
   );
 }
+
 
 
 

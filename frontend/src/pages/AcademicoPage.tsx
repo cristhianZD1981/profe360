@@ -3177,7 +3177,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                       ...prev,
                       tipoUso,
                       valorNivel: tipoUso === "ASISTENCIA"
-                        ? (prev.valorNivel === "1" || prev.valorNivel === "2" ? prev.valorNivel : "")
+                        ? (prev.valorNivel === "1" || prev.valorNivel === "2" || prev.valorNivel === "3" ? prev.valorNivel : "")
                         : prev.valorNivel
                     }));
                   }}>
@@ -3193,7 +3193,8 @@ async function handleReprogramarDesde(e: FormEvent) {
                     {mensajeSeguimientoForm.tipoUso === "ASISTENCIA" ? (
                       <>
                         <option value="1">Ausencia</option>
-                        <option value="2">Tardía</option>
+                        <option value="2">Tardía menor a 10 min</option>
+                        <option value="3">Tardía mayor a 10 min</option>
                       </>
                     ) : mensajeSeguimientoForm.tipoUso === "TAREA" ? (
                       <>

@@ -181,7 +181,7 @@ function normalizeTipoUsoMensaje(value: any) {
 
 function isValorNivelPermitido(tipoUso: string, valorNivel: number | null) {
   if (valorNivel === null) return true;
-  if (tipoUso === "ASISTENCIA") return [1, 2].includes(Number(valorNivel));
+  if (tipoUso === "ASISTENCIA") return [1, 2, 3].includes(Number(valorNivel));
   if (tipoUso === "TAREA") return [0, 1, 2, 3].includes(Number(valorNivel));
   return [1, 2, 3].includes(Number(valorNivel));
 }
@@ -7870,3 +7870,4 @@ router.get("/importaciones/:kind/resumen/:jobId/excel", async (req, res) => {
 });
 
 export default router;
+

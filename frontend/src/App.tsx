@@ -36,6 +36,15 @@ const PARAMETRIZACIONES_ROLES = [
   "PROFESOR_GUIA"
 ];
 
+const GESTION_PROFE_ROLES = ["PROFESOR"];
+
+const REPORTE_CERTIFICACIONES_ROLES = [
+  "SUPER_ADMIN",
+  "ADMIN_INSTITUCIONAL",
+  "ADMINISTRATIVO",
+  "PROFESOR_GUIA"
+];
+
 export default function App() {
   return (
     <AuthProvider>
@@ -192,13 +201,7 @@ export default function App() {
             path="gestion-profe"
             element={
               <ProtectedRoute
-                allowedRoles={[
-                  "SUPER_ADMIN",
-                  "ADMIN_INSTITUCIONAL",
-                  "ADMINISTRATIVO",
-                  "PROFESOR",
-                  "PROFESOR_GUIA"
-                ]}
+                allowedRoles={GESTION_PROFE_ROLES}
               >
                 <GestionProfePage />
               </ProtectedRoute>
@@ -233,7 +236,16 @@ export default function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="reportes" element={<ReportesPage />} />
+          <Route
+            path="reportes"
+            element={
+              <ProtectedRoute
+                allowedRoles={REPORTE_CERTIFICACIONES_ROLES}
+              >
+                <ReportesPage />
+              </ProtectedRoute>
+            }
+          />
         </Route>
       </Routes>
     </AuthProvider>

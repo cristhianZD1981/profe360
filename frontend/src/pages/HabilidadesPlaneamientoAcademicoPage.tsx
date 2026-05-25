@@ -79,6 +79,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [minimized, setMinimized] = useState(true);
   const [archivoExcel, setArchivoExcel] = useState<File | null>(null);
   const [importProgress, setImportProgress] = useState<number | null>(null);
   const [importResult, setImportResult] = useState<any | null>(null);
@@ -101,6 +102,46 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     () => catalogos.materias.find((materia) => String(materia.MateriaId) === String(form.materiaId)),
     [catalogos.materias, form.materiaId]
   );
+
+  const stats = useMemo(() => {
+    const total = habilidades.length;
+    const activas = habilidades.filter((item) => !!item.Activo).length;
+    const inactivas = Math.max(0, total - activas);
+
+    const porMateriaMap = new Map<string, number>();
+    const porGradoMap = new Map<string, number>();
+    const porTipoColegioMap = new Map<string, number>();
+
+    for (const item of habilidades) {
+      const materia = String(item.MateriaNombre || "Sin materia").trim() || "Sin materia";
+      const grado = String(item.Grado || "Sin grado").trim() || "Sin grado";
+      const tipoColegio = String(item.TipoColegio || "Sin tipo").trim() || "Sin tipo";
+      porMateriaMap.set(materia, (porMateriaMap.get(materia) || 0) + 1);
+      porGradoMap.set(grado, (porGradoMap.get(grado) || 0) + 1);
+      porTipoColegioMap.set(tipoColegio, (porTipoColegioMap.get(tipoColegio) || 0) + 1);
+    }
+
+    const toSorted = (map: Map<string, number>) =>
+      Array.from(map.entries())
+        .map(([label, cantidad]) => ({ label, cantidad }))
+        .sort((a, b) => b.cantidad - a.cantidad || a.label.localeCompare(b.label, "es"));
+
+    const porMateria = toSorted(porMateriaMap);
+    const porGrado = toSorted(porGradoMap);
+    const porTipoColegio = toSorted(porTipoColegioMap);
+
+    return {
+      total,
+      activas,
+      inactivas,
+      materiasDistintas: porMateria.length,
+      gradosDistintos: porGrado.length,
+      tiposColegioDistintos: porTipoColegio.length,
+      porMateria,
+      porGrado,
+      porTipoColegio
+    };
+  }, [habilidades]);
 
   function canEditHabilidad(item: Habilidad) {
     if (isAdminRole) return true;
@@ -374,13 +415,87 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
             <button type="button" className="primary-btn" onClick={openNewForm} disabled={!canCreateHabilidades}>Agregar habilidad</button>
             <button type="button" style={secondaryButtonStyle} onClick={handleDescargarPlantilla}>Descargar plantilla</button>
             <button type="button" style={secondaryButtonStyle} onClick={() => setShowImport((prev) => !prev)} disabled={!canCreateHabilidades}>Importar Excel</button>
+            <button type="button" style={secondaryButtonStyle} onClick={() => setMinimized(true)}>Minimizar</button>
+            <button type="button" style={secondaryButtonStyle} onClick={() => setMinimized(false)}>Maximizar</button>
           </div>
         </div>
 
         {message && <div style={{ marginTop: "12px", padding: "10px 12px", borderRadius: "10px", background: "#ecfdf3", color: "#166534", border: "1px solid #bbf7d0" }}>{message}</div>}
         {errorMessage && <div style={{ marginTop: "12px", padding: "10px 12px", borderRadius: "10px", background: "#fef2f2", color: "#991b1b", border: "1px solid #fecaca" }}>{errorMessage}</div>}
 
-        {showImport && (
+        <div style={{ marginTop: "14px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "10px" }}>
+          <div style={{ border: "1px solid #dbe4f0", borderRadius: "12px", padding: "10px", background: "rgba(255,255,255,0.04)" }}>
+            <strong>Total registros</strong>
+            <div style={{ fontSize: "24px", fontWeight: 800 }}>{stats.total}</div>
+          </div>
+          <div style={{ border: "1px solid #bbf7d0", borderRadius: "12px", padding: "10px", background: "#ecfdf3", color: "#166534" }}>
+            <strong>Activas</strong>
+            <div style={{ fontSize: "24px", fontWeight: 800 }}>{stats.activas}</div>
+          </div>
+          <div style={{ border: "1px solid #fecaca", borderRadius: "12px", padding: "10px", background: "#fef2f2", color: "#991b1b" }}>
+            <strong>Inactivas</strong>
+            <div style={{ fontSize: "24px", fontWeight: 800 }}>{stats.inactivas}</div>
+          </div>
+          <div style={{ border: "1px solid #dbe4f0", borderRadius: "12px", padding: "10px", background: "rgba(255,255,255,0.04)" }}>
+            <strong>Materias</strong>
+            <div style={{ fontSize: "24px", fontWeight: 800 }}>{stats.materiasDistintas}</div>
+          </div>
+          <div style={{ border: "1px solid #dbe4f0", borderRadius: "12px", padding: "10px", background: "rgba(255,255,255,0.04)" }}>
+            <strong>Grados</strong>
+            <div style={{ fontSize: "24px", fontWeight: 800 }}>{stats.gradosDistintos}</div>
+          </div>
+          <div style={{ border: "1px solid #dbe4f0", borderRadius: "12px", padding: "10px", background: "rgba(255,255,255,0.04)" }}>
+            <strong>Tipos de colegio</strong>
+            <div style={{ fontSize: "24px", fontWeight: 800 }}>{stats.tiposColegioDistintos}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: "12px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: "12px", padding: "10px" }}>
+            <strong>Registros por Materia</strong>
+            <div style={{ marginTop: "8px", display: "grid", gap: "4px" }}>
+              {stats.porMateria.slice(0, 6).map((item) => (
+                <div key={`mat-${item.label}`} style={{ display: "flex", justifyContent: "space-between", gap: "10px" }}>
+                  <span>{item.label}</span>
+                  <strong>{item.cantidad}</strong>
+                </div>
+              ))}
+              {!stats.porMateria.length && <span style={{ opacity: 0.7 }}>Sin datos</span>}
+            </div>
+          </div>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: "12px", padding: "10px" }}>
+            <strong>Registros por Grado</strong>
+            <div style={{ marginTop: "8px", display: "grid", gap: "4px" }}>
+              {stats.porGrado.slice(0, 6).map((item) => (
+                <div key={`gra-${item.label}`} style={{ display: "flex", justifyContent: "space-between", gap: "10px" }}>
+                  <span>{item.label}</span>
+                  <strong>{item.cantidad}</strong>
+                </div>
+              ))}
+              {!stats.porGrado.length && <span style={{ opacity: 0.7 }}>Sin datos</span>}
+            </div>
+          </div>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: "12px", padding: "10px" }}>
+            <strong>Otros: Tipo de colegio</strong>
+            <div style={{ marginTop: "8px", display: "grid", gap: "4px" }}>
+              {stats.porTipoColegio.slice(0, 6).map((item) => (
+                <div key={`tip-${item.label}`} style={{ display: "flex", justifyContent: "space-between", gap: "10px" }}>
+                  <span>{item.label}</span>
+                  <strong>{item.cantidad}</strong>
+                </div>
+              ))}
+              {!stats.porTipoColegio.length && <span style={{ opacity: 0.7 }}>Sin datos</span>}
+            </div>
+          </div>
+        </div>
+
+        {minimized ? (
+          <div style={{ marginTop: "12px", padding: "12px", border: "1px dashed #cbd5e1", borderRadius: "12px", color: "#475569" }}>
+            Panel minimizado. Presioná “Maximizar” para ver formularios y listado.
+          </div>
+        ) : null}
+
+        {!minimized && showImport && (
           <form onSubmit={handleImport} className="form" style={{ marginTop: "14px", border: "1px solid #e5e7eb", borderRadius: "14px", padding: "14px" }}>
             <h4>Importar habilidades desde Excel</h4>
             <input type="file" accept=".xlsx,.xls" onChange={(e) => setArchivoExcel(e.target.files?.[0] || null)} />
@@ -432,7 +547,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
           </form>
         )}
 
-        {showForm && (
+        {!minimized && showForm && (
           <form onSubmit={handleSave} className="form" style={{ marginTop: "14px", border: "1px solid #e5e7eb", borderRadius: "14px", padding: "14px" }}>
             <h4>{editingId ? "Editar habilidad" : "Nueva habilidad"}</h4>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
@@ -492,6 +607,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
         )}
       </section>
 
+      {!minimized && (
       <section className="card" style={{ marginBottom: 0 }}>
         <h4>Buscar habilidades</h4>
         <form onSubmit={handleFilterSubmit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px", alignItems: "end" }}>
@@ -614,6 +730,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
           </table>
         </div>
       </section>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 
@@ -160,8 +160,8 @@ export default function EvaluacionParametrizacionPage() {
   const { user } = useAuth();
   const roles = user?.roles || [];
   const currentUserId = Number(user?.userId || 0);
+  const isSuperAdminRole = roles.some((role) => role === "SUPER_ADMIN");
   const isAdminRole = roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role));
-  const isProfesorRole = roles.some((role) => ["PROFESOR", "PROFESOR_GUIA"].includes(role));
 
   const [view, setView] = useState<"plantillas" | "niveles">("plantillas");
 
@@ -199,6 +199,8 @@ export default function EvaluacionParametrizacionPage() {
   const [filtroMateria, setFiltroMateria] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [copyProgress, setCopyProgress] = useState(0);
+  const copyProgressTimerRef = useRef<number | null>(null);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -231,21 +233,24 @@ export default function EvaluacionParametrizacionPage() {
 
   const canManageSelectedPlantilla = useMemo(() => {
     if (!selectedPlantilla) return false;
-    if (isAdminRole) return true;
-    if (!isProfesorRole) return false;
+    if (isSuperAdminRole) return true;
     return currentUserId > 0 && Number(selectedPlantilla.UsuarioCreadorId || 0) === currentUserId;
-  }, [selectedPlantilla, isAdminRole, isProfesorRole, currentUserId]);
+  }, [selectedPlantilla, isSuperAdminRole, currentUserId]);
+
+  const isSelectedPlantillaActiva = useMemo(() => {
+    if (!selectedPlantilla) return false;
+    const estado = String(selectedPlantilla.Estado || "").trim().toUpperCase();
+    return !!selectedPlantilla.Activo && estado === "ACTIVA";
+  }, [selectedPlantilla]);
 
   const canActivateSelectedPlantilla = useMemo(() => {
     if (!selectedPlantilla) return false;
     if (!canManageSelectedPlantilla) return false;
-    const estado = String(selectedPlantilla.Estado || "").trim().toUpperCase();
-    return !(selectedPlantilla.Activo && estado === "ACTIVA");
-  }, [selectedPlantilla, canManageSelectedPlantilla]);
+    return !isSelectedPlantillaActiva;
+  }, [selectedPlantilla, canManageSelectedPlantilla, isSelectedPlantillaActiva]);
 
   function canEditPlantilla(item: EvaluacionPlantilla) {
-    if (isAdminRole) return true;
-    if (!isProfesorRole) return false;
+    if (isSuperAdminRole) return true;
     return currentUserId > 0 && Number(item.UsuarioCreadorId || 0) === currentUserId;
   }
 
@@ -314,7 +319,7 @@ export default function EvaluacionParametrizacionPage() {
     try {
       await Promise.all([loadCatalogos(), loadPlantillas(), loadNiveles()]);
     } catch (error: any) {
-      setErrorMessage(getErrorMessage(error, "No se pudo cargar la parametrización de evaluación"));
+      setErrorMessage(getErrorMessage(error, "No se pudo cargar la parametrizacion de evaluacion"));
     } finally {
       setLoading(false);
     }
@@ -340,7 +345,7 @@ export default function EvaluacionParametrizacionPage() {
     try {
       await loadNiveles();
     } catch (error: any) {
-      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los niveles de desempeño"));
+      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los niveles de desempeno"));
     }
   }
 
@@ -369,6 +374,11 @@ export default function EvaluacionParametrizacionPage() {
   }
 
   function resetCopiaForm() {
+    if (copyProgressTimerRef.current !== null) {
+      window.clearInterval(copyProgressTimerRef.current);
+      copyProgressTimerRef.current = null;
+    }
+    setCopyProgress(0);
     setCopiaForm(initialCopiaForm);
     setShowCopiarForm(false);
   }
@@ -469,7 +479,7 @@ export default function EvaluacionParametrizacionPage() {
       setErrorMessage("Solo podes eliminar plantillas creadas por vos");
       return;
     }
-    if (!window.confirm("¿Deseás eliminar esta plantilla de evaluación?")) return;
+    if (!window.confirm("Deseas eliminar esta plantilla de evaluacion?")) return;
     setLoading(true);
     clearMessages();
     try {
@@ -545,6 +555,14 @@ export default function EvaluacionParametrizacionPage() {
     e.preventDefault();
     if (!selectedPlantilla) return;
     setLoading(true);
+    setCopyProgress(5);
+    if (copyProgressTimerRef.current !== null) {
+      window.clearInterval(copyProgressTimerRef.current);
+      copyProgressTimerRef.current = null;
+    }
+    copyProgressTimerRef.current = window.setInterval(() => {
+      setCopyProgress((prev) => (prev >= 90 ? 90 : prev + 5));
+    }, 650);
     clearMessages();
     try {
       const response = await api.post(`/evaluacion/plantillas/${selectedPlantilla.EvaluacionPlantillaId}/copiar`, {
@@ -555,6 +573,7 @@ export default function EvaluacionParametrizacionPage() {
         cicloEvaluacion: getCicloNombre(copiaForm.materiaId),
         esPublica: copiaForm.esPublica
       });
+      setCopyProgress(100);
       setMessage(response.data?.message || "Plantilla copiada correctamente");
       resetCopiaForm();
       const nueva = response.data?.data;
@@ -563,6 +582,10 @@ export default function EvaluacionParametrizacionPage() {
     } catch (error: any) {
       setErrorMessage(getErrorMessage(error, "No se pudo copiar la plantilla"));
     } finally {
+      if (copyProgressTimerRef.current !== null) {
+        window.clearInterval(copyProgressTimerRef.current);
+        copyProgressTimerRef.current = null;
+      }
       setLoading(false);
     }
   }
@@ -590,18 +613,18 @@ export default function EvaluacionParametrizacionPage() {
       const response = editingNivelId !== null
         ? await api.put(`/evaluacion/niveles-desempeno/${editingNivelId}`, payload)
         : await api.post("/evaluacion/niveles-desempeno", payload);
-      setMessage(response.data?.message || "Nivel de desempeño guardado correctamente");
+      setMessage(response.data?.message || "Nivel de desempeno guardado correctamente");
       resetNivelForm();
       await Promise.all([loadNiveles(), loadCatalogos()]);
     } catch (error: any) {
-      setErrorMessage(getErrorMessage(error, "No se pudo guardar el nivel de desempeño"));
+      setErrorMessage(getErrorMessage(error, "No se pudo guardar el nivel de desempeno"));
     } finally {
       setLoading(false);
     }
   }
 
   async function handleDesactivarNivel(id: number) {
-    if (!window.confirm("¿Deseás desactivar este nivel de desempeño?")) return;
+    if (!window.confirm("Deseas desactivar este nivel de desempeno?")) return;
     setLoading(true);
     clearMessages();
     try {
@@ -632,6 +655,10 @@ export default function EvaluacionParametrizacionPage() {
   function handleNuevoComponente() {
     if (!canManageSelectedPlantilla) {
       setErrorMessage("Solo podes agregar componentes en plantillas creadas por vos");
+      return;
+    }
+    if (isSelectedPlantillaActiva) {
+      setErrorMessage("No se pueden agregar rubros cuando la plantilla esta activa");
       return;
     }
     clearMessages();
@@ -693,15 +720,15 @@ export default function EvaluacionParametrizacionPage() {
       setErrorMessage("Solo podes modificar componentes de plantillas creadas por vos");
       return;
     }
-    if (!window.confirm("¿Deseás eliminar este rubro de calificación?")) return;
+    if (!window.confirm("Deseas eliminar este rubro de calificacion?")) return;
     setLoading(true);
     clearMessages();
     try {
       const response = await api.delete(`/evaluacion/componentes/${id}`);
-      setMessage(response.data?.message || "Rubro de calificación eliminado correctamente");
+      setMessage(response.data?.message || "Rubro de calificacion eliminado correctamente");
       await Promise.all([loadDetallePlantilla(selectedPlantilla.EvaluacionPlantillaId), loadPlantillas()]);
     } catch (error: any) {
-      setErrorMessage(getErrorMessage(error, "No se pudo eliminar el rubro de calificación"));
+      setErrorMessage(getErrorMessage(error, "No se pudo eliminar el rubro de calificacion"));
     } finally {
       setLoading(false);
     }
@@ -821,7 +848,7 @@ export default function EvaluacionParametrizacionPage() {
       setErrorMessage("Solo podes modificar actividades de plantillas creadas por vos");
       return;
     }
-    if (!window.confirm("¿Deseás eliminar esta actividad evaluativa?")) return;
+    if (!window.confirm("Deseas eliminar esta actividad evaluativa?")) return;
     setLoading(true);
     clearMessages();
     try {
@@ -899,9 +926,9 @@ export default function EvaluacionParametrizacionPage() {
   return (
     <div className="stack">
       <section className="card">
-        <h3>Parametrización de evaluación</h3>
+        <h3>Parametrizacion de evaluacion</h3>
         <p style={{ marginTop: 0, opacity: 0.8 }}>
-          Definí plantillas por año, periodo y ciclo. La suma válida se calcula con el porcentaje de los componentes hasta completar el 100%. Las actividades son opcionales.
+          Defini plantillas por ano, periodo y ciclo. La suma valida se calcula con el porcentaje de los componentes hasta completar el 100%. Las actividades son opcionales.
         </p>
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
           <button type="button" className="primary-btn" onClick={handleNuevaPlantilla}>
@@ -932,10 +959,10 @@ export default function EvaluacionParametrizacionPage() {
           <section className="card" style={{ marginBottom: 0 }}>
             {showNivelForm ? (
               <>
-                <h3>{editingNivelId !== null ? "Editar nivel de desempeño" : "Crear nivel de desempeño"}</h3>
+                <h3>{editingNivelId !== null ? "Editar nivel de desempeno" : "Crear nivel de desempeno"}</h3>
                 <form className="form" onSubmit={handleNivelSubmit}>
                   <label>
-                    Descripción
+                    Descripcion
                     <input value={nivelForm.descripcion} onChange={(e) => setNivelForm({ ...nivelForm, descripcion: e.target.value })} placeholder="Ejemplo: Inicial" required />
                   </label>
                   <label>
@@ -950,7 +977,7 @@ export default function EvaluacionParametrizacionPage() {
               </>
             ) : (
               <>
-                <h3>Niveles de desempeño</h3>
+                <h3>Niveles de desempeno</h3>
                 <button type="button" className="primary-btn" onClick={handleNuevoNivel}>Agregar nivel</button>
               </>
             )}
@@ -970,7 +997,7 @@ export default function EvaluacionParametrizacionPage() {
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>ID</th><th>Descripción</th><th>Valor</th><th>Estado</th><th>Acciones</th></tr>
+                  <tr><th>ID</th><th>Descripcion</th><th>Valor</th><th>Estado</th><th>Acciones</th></tr>
                 </thead>
                 <tbody>
                   {niveles.map((item) => (
@@ -1012,7 +1039,7 @@ export default function EvaluacionParametrizacionPage() {
                       <input value={plantillaForm.nombre} onChange={(e) => setPlantillaForm({ ...plantillaForm, nombre: e.target.value })} placeholder="Ejemplo: Tercer ciclo - I Trimestre 2026" required />
                     </label>
                     <label>
-                      Año lectivo
+                      Ano lectivo
                       <select value={plantillaForm.anioLectivoId} onChange={(e) => setPlantillaForm({ ...plantillaForm, anioLectivoId: e.target.value, periodoId: "" })} required>
                         <option value="">Seleccione</option>
                         {aniosLectivos.map((item: any) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
@@ -1050,7 +1077,7 @@ export default function EvaluacionParametrizacionPage() {
                     </label>
                     <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                       <input type="checkbox" checked={plantillaForm.esPublica} onChange={(e) => setPlantillaForm({ ...plantillaForm, esPublica: e.target.checked })} />
-                      Plantilla publica (si no se marca, queda privada)
+                      Plantilla Privada (si se marca, quedara Publica)
                     </label>
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                       <button className="primary-btn" disabled={loading}>{editingPlantillaId !== null ? "Actualizar plantilla" : "Guardar plantilla"}</button>
@@ -1067,7 +1094,7 @@ export default function EvaluacionParametrizacionPage() {
                       <input value={copiaForm.nombre} onChange={(e) => setCopiaForm({ ...copiaForm, nombre: e.target.value })} required />
                     </label>
                     <label>
-                      Año lectivo destino
+                      Ano lectivo destino
                       <select value={copiaForm.anioLectivoId} onChange={(e) => setCopiaForm({ ...copiaForm, anioLectivoId: e.target.value, periodoId: "" })} required>
                         <option value="">Seleccione</option>
                         {aniosLectivos.map((item: any) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
@@ -1094,15 +1121,23 @@ export default function EvaluacionParametrizacionPage() {
                       Hacer publica la copia
                     </label>
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                      <button className="primary-btn" disabled={loading}>Copiar plantilla</button>
+                      <button className="primary-btn" disabled={loading}>{loading ? "Copiando plantilla..." : "Copiar plantilla"}</button>
                       <button type="button" onClick={resetCopiaForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>Cancelar</button>
                     </div>
+                    {loading ? (
+                      <div style={{ display: "grid", gap: "6px" }}>
+                        <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+                          <div style={{ width: `${copyProgress}%`, height: "100%", borderRadius: "999px", background: "linear-gradient(90deg, #2563eb 0%, #0ea5e9 100%)", transition: "width 280ms ease" }} />
+                        </div>
+                        <small style={{ color: "#475569" }}>{copyProgress}% completado</small>
+                      </div>
+                    ) : null}
                   </form>
                 </>
               ) : (
                 <>
-                  <h3>Plantillas de evaluación</h3>
-                  <p style={{ margin: 0, opacity: 0.75 }}>El formulario está minimizado. Usá el botón Agregar plantilla para abrirlo.</p>
+                  <h3>Plantillas de evaluacion</h3>
+                  <p style={{ margin: 0, opacity: 0.75 }}>El formulario esta minimizado. Usa el boton Agregar plantilla para abrirlo.</p>
                 </>
               )}
             </section>
@@ -1113,7 +1148,7 @@ export default function EvaluacionParametrizacionPage() {
                 <input placeholder="Buscar por nombre, ciclo o periodo" value={search} onChange={(e) => setSearch(e.target.value)} />
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
                   <select value={filtroAnio} onChange={(e) => { setFiltroAnio(e.target.value); setFiltroPeriodo(""); }}>
-                    <option value="">Todos los años</option>
+                    <option value="">Todos los anos</option>
                     {aniosLectivos.map((item: any) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
                   </select>
                   <select value={filtroPeriodo} onChange={(e) => setFiltroPeriodo(e.target.value)}>
@@ -1146,7 +1181,7 @@ export default function EvaluacionParametrizacionPage() {
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>ID</th><th>Nombre</th><th>Año</th><th>Periodo</th><th>Ciclo</th><th>Visibilidad</th><th>Total</th><th>Estado</th><th>Acciones</th></tr>
+                  <tr><th>ID</th><th>Nombre</th><th>Ano</th><th>Periodo</th><th>Ciclo</th><th>Visibilidad</th><th>Total</th><th>Estado</th><th>Acciones</th></tr>
                 </thead>
                 <tbody>
                   {plantillas.map((item) => {
@@ -1197,7 +1232,7 @@ export default function EvaluacionParametrizacionPage() {
                     )}
                   </div>
                   <div style={{ marginTop: "8px", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "10px", background: "#f8fafc", fontSize: "13px", color: "#475569" }}>
-                    Cotidiano y tareas se califican con niveles Inicial = 1, Intermedio = 2 y Avanzado = 3. La nota del componente se calcula como puntos obtenidos entre puntos máximos y luego se aplica el porcentaje del componente. Asistencia se calcula desde la toma diaria usando la escala del Artículo 37.
+                    Cotidiano y tareas se califican con niveles Inicial = 1, Intermedio = 2 y Avanzado = 3. La nota del componente se calcula como puntos obtenidos entre puntos maximos y luego se aplica el porcentaje del componente. Asistencia se calcula desde la toma diaria usando la escala del Articulo 37.
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -1211,21 +1246,21 @@ export default function EvaluacionParametrizacionPage() {
                     title={
                       !canManageSelectedPlantilla
                         ? "Solo podes activar plantillas creadas por vos"
-                        : (!canActivateSelectedPlantilla ? "La plantilla ya está activa" : undefined)
+                        : (!canActivateSelectedPlantilla ? "La plantilla ya esta activa" : undefined)
                     }
                   >
                     Activar plantilla
                   </button>
-                  <button type="button" onClick={handleNuevoComponente} disabled={!canManageSelectedPlantilla} title={!canManageSelectedPlantilla ? "Solo podes agregar rubros de calificación en plantillas creadas por vos" : undefined} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: canManageSelectedPlantilla ? "pointer" : "not-allowed", opacity: canManageSelectedPlantilla ? 1 : 0.45 }}>Agregar Rubro de Calificación</button>
+                  <button type="button" onClick={handleNuevoComponente} disabled={!canManageSelectedPlantilla || isSelectedPlantillaActiva} title={!canManageSelectedPlantilla ? "Solo podes agregar rubros de calificacion en plantillas creadas por vos" : (isSelectedPlantillaActiva ? "La plantilla activa no permite agregar rubros" : undefined)} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: canManageSelectedPlantilla && !isSelectedPlantillaActiva ? "pointer" : "not-allowed", opacity: canManageSelectedPlantilla && !isSelectedPlantillaActiva ? 1 : 0.45 }}>Agregar Rubro de Calificacion</button>
                 </div>
               </div>
 
               {showComponenteForm && (
                 <form className="form" onSubmit={handleComponenteSubmit} style={{ marginTop: "16px", padding: "12px", border: "1px solid #e5e7eb", borderRadius: "12px" }}>
-                  <h4 style={{ marginTop: 0 }}>{editingComponenteId !== null ? "Editar Rubro de Calificación" : "Crear Rubro de Calificación"}</h4>
+                  <h4 style={{ marginTop: 0 }}>{editingComponenteId !== null ? "Editar Rubro de Calificacion" : "Crear Rubro de Calificacion"}</h4>
                   <label>
-                    Rubro de Calificación
-                    <input value={componenteForm.descripcion} onChange={(e) => setComponenteForm({ ...componenteForm, descripcion: e.target.value })} placeholder="Ejemplo: Exámenes" required />
+                    Rubro de Calificacion
+                    <input value={componenteForm.descripcion} onChange={(e) => setComponenteForm({ ...componenteForm, descripcion: e.target.value })} placeholder="Ejemplo: Examenes" required />
                   </label>
                   <label>
                     Porcentaje dentro de la nota final
@@ -1245,7 +1280,7 @@ export default function EvaluacionParametrizacionPage() {
                         tipoSeguimiento: e.target.checked ? componenteForm.tipoSeguimiento : ""
                       })}
                     />
-                    Permitir cálculo automático desde seguimiento
+                    Permitir calculo automatico desde seguimiento
                   </label>
                   {componenteForm.permitePlaneamiento && (
                     <label>
@@ -1263,10 +1298,10 @@ export default function EvaluacionParametrizacionPage() {
                     </label>
                   )}
                   <div style={{ padding: "10px 12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e5e7eb", fontSize: "13px", color: "#475569" }}>
-                    Si esta opción queda activa, el componente se calculará desde el seguimiento seleccionado: Trabajo cotidiano, Tareas o Asistencia diaria. Si no está activa, solo se evaluará con los componentes y actividades configurados manualmente.
+                    Si esta opcion queda activa, el componente se calculara desde el seguimiento seleccionado: Trabajo cotidiano, Tareas o Asistencia diaria. Si no esta activa, solo se evaluara con los componentes y actividades configurados manualmente.
                   </div>
                   <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                    <button className="primary-btn" disabled={loading}>{editingComponenteId !== null ? "Actualizar Rubro de Calificación" : "Guardar Rubro de Calificación"}</button>
+                    <button className="primary-btn" disabled={loading}>{editingComponenteId !== null ? "Actualizar Rubro de Calificacion" : "Guardar Rubro de Calificacion"}</button>
                     <button type="button" onClick={resetComponenteForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>Cancelar</button>
                   </div>
                 </form>
@@ -1283,7 +1318,7 @@ export default function EvaluacionParametrizacionPage() {
                     </select>
                   </label>
                   <label>
-                    Descripción
+                    Descripcion
                     <input value={actividadForm.descripcion} onChange={(e) => setActividadForm({ ...actividadForm, descripcion: e.target.value })} placeholder="Ejemplo: Examen 1" required />
                   </label>
                   <label>
@@ -1347,7 +1382,7 @@ export default function EvaluacionParametrizacionPage() {
                           </button>
                           <button type="button" onClick={() => handleEditComponente(componente)} disabled={!canManageSelectedPlantilla} title={!canManageSelectedPlantilla ? "Solo podes editar componentes en plantillas creadas por vos" : undefined} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: canManageSelectedPlantilla ? "pointer" : "not-allowed", opacity: canManageSelectedPlantilla ? 1 : 0.45 }}>Editar</button>
                           {componente.Activo ? (
-                            <button type="button" onClick={() => handleDesactivarComponente(componente.EvaluacionComponenteId)} disabled={!canManageSelectedPlantilla} title={!canManageSelectedPlantilla ? "Solo podes eliminar rubros de calificación en plantillas creadas por vos" : undefined} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: canManageSelectedPlantilla ? "pointer" : "not-allowed", opacity: canManageSelectedPlantilla ? 1 : 0.45 }}>Eliminar</button>
+                            <button type="button" onClick={() => handleDesactivarComponente(componente.EvaluacionComponenteId)} disabled={!canManageSelectedPlantilla} title={!canManageSelectedPlantilla ? "Solo podes eliminar rubros de calificacion en plantillas creadas por vos" : undefined} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: canManageSelectedPlantilla ? "pointer" : "not-allowed", opacity: canManageSelectedPlantilla ? 1 : 0.45 }}>Eliminar</button>
                           ) : (
                             <button type="button" onClick={() => handleReactivarComponente(componente.EvaluacionComponenteId)} disabled={!canManageSelectedPlantilla} title={!canManageSelectedPlantilla ? "Solo podes reactivar componentes en plantillas creadas por vos" : undefined} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: canManageSelectedPlantilla ? "pointer" : "not-allowed", opacity: canManageSelectedPlantilla ? 1 : 0.45 }}>Reactivar</button>
                           )}
@@ -1357,7 +1392,7 @@ export default function EvaluacionParametrizacionPage() {
                       <div className="table-wrap" style={{ marginTop: "10px" }}>
                         <table>
                           <thead>
-                            <tr><th>Actividad</th><th>% del Rubro de Calificación</th><th>% real de nota</th><th>Indicadores</th><th>Fecha</th><th>Estado</th><th>Acciones</th></tr>
+                            <tr><th>Actividad</th><th>% del Rubro de Calificacion</th><th>% real de nota</th><th>Indicadores</th><th>Fecha</th><th>Estado</th><th>Acciones</th></tr>
                           </thead>
                           <tbody>
                             {(componente.Actividades || []).map((actividad) => {
@@ -1403,14 +1438,14 @@ export default function EvaluacionParametrizacionPage() {
                                 </tr>
                               );
                             })}
-                            {!componente.Actividades?.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: "12px" }}>Este Rubro de Calificación no tiene actividades</td></tr>}
+                            {!componente.Actividades?.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: "12px" }}>Este Rubro de Calificacion no tiene actividades</td></tr>}
                           </tbody>
                         </table>
                       </div>
                     </div>
                   );
                 })}
-                {!selectedPlantilla.Componentes?.length && <div style={{ opacity: 0.8 }}>Esta plantilla todavía no tiene componentes.</div>}
+                {!selectedPlantilla.Componentes?.length && <div style={{ opacity: 0.8 }}>Esta plantilla todavia no tiene componentes.</div>}
               </div>
             </section>
           )}
@@ -1419,6 +1454,15 @@ export default function EvaluacionParametrizacionPage() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
 
 
 

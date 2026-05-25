@@ -457,6 +457,7 @@ Las indicaciones del docente tienen prioridad sobre la plantilla general.
 Si las indicaciones del docente piden usar un ejemplo específico, una página o un formato tomado del Documento de apoyo, debés aplicarlo explícitamente y de forma mandatoria en la respuesta.
 Si el docente solicita adecuación significativa, color, resaltado o cualquier condición especial, debe reflejarse explícitamente en el JSON final.
 Si el docente pide pintar o resaltar una sección en azul, devolvé colorResaltado = "azul" en el objeto correspondiente y agregá el marcador [AZUL] al inicio del texto visible.
+Si el docente indica página(s), ejercicio(s), capítulo(s) o sección(es) concretas del documento de apoyo, tomalas de forma literal y citá en el contenido generado la referencia exacta (por ejemplo: "página 12, ejercicio 4").
 Si no se aportan indicaciones y/o documento de apoyo, generá el planeamiento con los datos disponibles sin bloquear la salida.
 No ignorés esta sección.
 
@@ -496,6 +497,9 @@ Criterios obligatorios para construir la respuesta:
 15. En "estrategiasMediacion" no incluyás líneas que inicien con "Enfoque:".
 16. En "indicadoresEvaluacion" no iniciés ningún indicador con "Identifica y aplica".
 17. El campo "observaciones" debe quedar como string vacío: "".
+18. Evitá repetir siempre el mismo escenario (por ejemplo, municipalidad). Variá el actor y el contexto según materia, grado, tema y habilidades.
+19. En "Momento 1" incluí contexto específico con al menos: actor, objetivo, dos alternativas comparables y criterio explícito de decisión.
+20. En "Momento 2/3/4" evitá frases genéricas; describí acciones observables concretas que el estudiantado realizará en ese caso.
 
 Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
 
@@ -647,6 +651,7 @@ Las indicaciones del docente tienen prioridad sobre la plantilla general.
 Si las indicaciones del docente piden usar un ejemplo específico, una página o un formato tomado del Documento de apoyo, debés aplicarlo explícitamente en la respuesta.
 Si el docente solicita adecuación significativa, color, resaltado o cualquier condición especial, debe reflejarse explícitamente en el JSON final.
 Si el docente pide pintar o resaltar una sección en azul, devolvé colorResaltado = "azul" en el objeto correspondiente y agregá el marcador [AZUL] al inicio del texto visible.
+Si el docente indica página(s), ejercicio(s), capítulo(s) o sección(es) concretas del documento de apoyo, tomalas de forma literal y citá en el contenido generado la referencia exacta (por ejemplo: "página 12, ejercicio 4").
 No ignorés esta sección.
 
 Habilidades específicas seleccionadas:
@@ -660,6 +665,12 @@ ${clampPromptText(input.plantillaFormatoTexto || "No se aportó una plantilla de
 
 INSTRUCCIÓN PRIORITARIA SOBRE FORMATO:
 Si se aportó una plantilla o formato de salida, usalo como referencia principal para el orden, nombres de secciones, tablas, encabezados y nivel de detalle del planeamiento. El documento de apoyo es solo contexto; no reemplaza el formato de salida. Si también hay una plantilla IA seleccionada, combiná ambas: la Plantilla IA define las reglas permanentes y este archivo define el formato específico de esta generación. Mantené siempre JSON válido para que el sistema pueda guardar y exportar el planeamiento.
+
+REGLAS DE CALIDAD Y DIVERSIDAD (OBLIGATORIAS):
+- Evitá repetir siempre el mismo caso contextual (por ejemplo municipalidad). Variá el actor y el contexto según materia, grado, tema y habilidades.
+- En Momento 1 incluí: actor real, objetivo, dos alternativas comparables y criterio explícito de decisión.
+- En Momento 2/3/4 redactá acciones observables concretas; evitá textos genéricos de plantilla.
+- Si el docente no pidió un caso específico, proponé uno original y coherente con los datos de entrada.
 
 Reglas de construcción:
 ${clampPromptText(row.ReglasConstruccion, 12000)}
@@ -745,13 +756,21 @@ function normalizarParaBusqueda(value: any) {
 
 function permiteMultiplesIndicadoresPorHabilidad(indicaciones: string) {
   const texto = normalizarParaBusqueda(indicaciones);
-  if (!texto || !texto.includes("indicador")) return false;
+  if (!texto) return false;
+  const mencionaObjetivo = texto.includes("indicador")
+    || texto.includes("indicado")
+    || texto.includes("habilidad");
+  if (!mencionaObjetivo) return false;
   return (
     texto.includes("mas de un") ||
     texto.includes("más de un") ||
     texto.includes("varios") ||
     texto.includes("multiples") ||
     texto.includes("múltiples") ||
+    texto.includes("adicional") ||
+    texto.includes("genere") ||
+    texto.includes("genera") ||
+    texto.includes("dame") ||
     /\b2\b|\b3\b|\b4\b|\bdos\b|\btres\b|\bcuatro\b/.test(texto)
   );
 }
@@ -766,17 +785,40 @@ function limpiarEstrategiasMediacion(estrategias: any[]) {
     });
 }
 
+function hashTextoBase(value: string) {
+  let h = 0;
+  const s = String(value || "");
+  for (let i = 0; i < s.length; i += 1) {
+    h = ((h << 5) - h) + s.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h);
+}
+
 function construirProblemaRealMomento1(habilidades: any[], materiaNombre?: string, grado?: string, tema?: string) {
   const descripciones = (Array.isArray(habilidades) ? habilidades : [])
     .map((h: any) => String(h?.DescripcionHabilidad || h || "").trim())
-    .map((h) => h.replace(/^[\-\*\u2022]\s*/, "").replace(/^habilidad\s+/i, ""))
+    .map((h) => h
+      .replace(/^[\-\*\u2022]\s*/, "")
+      .replace(/^\d+(\.\d+)?\s*[:.-]?\s*/, "")
+      .replace(/^habilidad\s+/i, ""))
     .filter(Boolean);
-  const foco = descripciones.length
-    ? descripciones.slice(0, 2).join(" y ")
-    : tema || "los aprendizajes seleccionados";
+  const focoPrincipal = descripciones[0] || tema || "los aprendizajes seleccionados";
+  const focoSecundario = descripciones[1] || "aplicar procedimientos matemáticos con claridad";
   const materia = materiaNombre || "la asignatura";
   const nivel = grado ? ` de ${grado}` : "";
-  return `La municipalidad de la comunidad necesita tomar una decisión a partir de una situación real vinculada con ${foco}. El estudiantado debe analizar la información disponible, representar los datos o relaciones necesarias, resolver el reto y justificar una recomendación viable para el contexto${nivel} en ${materia}.`;
+  const llave = `${materia}|${tema || ""}|${nivel}|${focoPrincipal}|${focoSecundario}`;
+  const idx = hashTextoBase(llave) % 6;
+  const escenarios = [
+    "el comité de infraestructura del colegio debe escoger entre dos propuestas para optimizar iluminación y seguridad en zonas de tránsito estudiantil",
+    "la asociación de desarrollo local debe priorizar un plan de mejora de espacios deportivos con presupuesto limitado",
+    "la cooperativa estudiantil debe decidir entre dos esquemas de compra y distribución de materiales para ferias académicas",
+    "la dirección del centro educativo debe comparar alternativas para el uso eficiente del agua en servicios sanitarios y áreas verdes",
+    "el equipo organizador de la feria científica debe seleccionar el plan logístico más eficiente entre dos propuestas operativas",
+    "el consejo de transporte escolar debe evaluar dos rutas de traslado y su impacto en tiempo, costo y cobertura"
+  ];
+  const escenario = escenarios[idx];
+  return `En este caso, ${escenario}. Cada alternativa presenta datos numéricos distintos (cantidades, costos unitarios, tiempos o consumos) que requieren modelación matemática. Para resolver el reto, el grupo deberá representar la situación mediante expresiones vinculadas con ${focoPrincipal}, aplicar ${focoSecundario}, comparar resultados y justificar cuál opción ofrece mejores condiciones de eficiencia y viabilidad. Como producto final, elaborarán una recomendación técnica argumentada para el contexto${nivel} en ${materia}, explicando procedimiento, resultados y conclusión con claridad.`;
 }
 
 function asegurarMomento1Primero(estrategias: string[], input?: { habilidades?: any[]; materiaNombre?: string; grado?: string; tema?: string }) {
@@ -795,32 +837,103 @@ function asegurarMomento1Primero(estrategias: string[], input?: { habilidades?: 
   return [momento1Texto, ...resto];
 }
 
-function ajustarIndicadoresPorHabilidad(input: { indicadoresEntrada: string[]; habilidades: any[]; permitirMultiples: boolean }) {
-  const indicadores = (input.indicadoresEntrada || []).map((i) => limpiarPrefijoIndicador(i)).filter(Boolean);
+function construirMomentoEspecifico(numero: 2 | 3 | 4, input?: { habilidades?: any[]; materiaNombre?: string; grado?: string; tema?: string }) {
+  const descripciones = (Array.isArray(input?.habilidades) ? input?.habilidades : [])
+    .map((h: any) => String(h?.DescripcionHabilidad || h || "").trim())
+    .map((h) => h
+      .replace(/^[\-\*\u2022]\s*/, "")
+      .replace(/^\d+(\.\d+)?\s*[:.-]?\s*/, "")
+      .replace(/^habilidad\s+/i, ""))
+    .filter(Boolean);
+  const h1 = descripciones[0] || "la habilidad principal";
+  const h2 = descripciones[1] || "la habilidad complementaria";
+
+  if (numero === 2) {
+    return `Momento 2: Trabajo estudiantil. En equipos, el estudiantado organiza los datos del caso (cantidades, costos y condiciones), plantea expresiones algebraicas para cada propuesta y simplifica los términos aplicando procedimientos vinculados con ${h1}. Luego contrasta resultados parciales, verifica unidades, interpreta el significado de cada operación y registra evidencia del proceso en una tabla de análisis del Plan A y Plan B.`;
+  }
+  if (numero === 3) {
+    return `Momento 3: Discusión e intercambio. Cada equipo socializa su modelación, explica cómo aplicó ${h2} para sustentar sus resultados y responde preguntas de contraste sobre supuestos, errores de cálculo y validez del procedimiento. Con mediación docente, se comparan estrategias, se corrigen inconsistencias y se consolidan criterios comunes para decidir la propuesta más conveniente.`;
+  }
+  return `Momento 4: Cierre y formalización. De forma individual, cada estudiante redacta una recomendación técnica breve para la municipalidad, justificando la decisión final con evidencia matemática (expresión usada, simplificación realizada, resultado obtenido e interpretación). Se sistematizan los aprendizajes logrados, se explicitan los errores frecuentes detectados y se define una meta de mejora para futuras resoluciones de problemas contextualizados.`;
+}
+
+function asegurarMomentosEspecificos(estrategias: string[], input?: { habilidades?: any[]; materiaNombre?: string; grado?: string; tema?: string }) {
+  const base = (Array.isArray(estrategias) ? estrategias : []).map((e) => String(e || "").trim()).filter(Boolean);
+
+  const idx2 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 2:"));
+  const idx3 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 3:"));
+  const idx4 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 4:"));
+
+  const t2 = idx2 >= 0 ? base[idx2] : "";
+  const t3 = idx3 >= 0 ? base[idx3] : "";
+  const t4 = idx4 >= 0 ? base[idx4] : "";
+
+  const gen2 = !t2 || normalizarParaBusqueda(t2).length < 120;
+  const gen3 = !t3 || normalizarParaBusqueda(t3).length < 120;
+  const gen4 = !t4 || normalizarParaBusqueda(t4).length < 120;
+
+  const r2 = gen2 ? construirMomentoEspecifico(2, input) : t2;
+  const r3 = gen3 ? construirMomentoEspecifico(3, input) : t3;
+  const r4 = gen4 ? construirMomentoEspecifico(4, input) : t4;
+
+  const resto = base.filter((_, i) => i !== idx2 && i !== idx3 && i !== idx4);
+  return [...resto, r2, r3, r4];
+}
+
+function ajustarIndicadoresPorHabilidad(input: { indicadoresEntrada: string[]; habilidades: any[]; permitirMultiples: boolean; indicacionesDocente?: string }) {
   const habilidades = Array.isArray(input.habilidades) ? input.habilidades : [];
-  const cantidadObjetivo = Math.max(1, habilidades.length || indicadores.length || 1);
+  const cantidadObjetivo = Math.max(1, habilidades.length || 1);
   const baseDesdeHabilidad = habilidades.map((h: any) => {
     const descripcion = String(h?.DescripcionHabilidad || "").trim() || "la habilidad seleccionada";
-    return `Resuelve situaciones contextualizadas relacionadas con ${descripcion}, explicando su procedimiento de forma clara.`;
+    return convertirInicioATerceraPersonaSingular(descripcion);
   });
+  const indicaciones = normalizarParaBusqueda(String(input.indicacionesDocente || ""));
+  const cantidadPorHabilidad = Array.from({ length: cantidadObjetivo }, () => 1);
 
-  if (!input.permitirMultiples) {
-    if (indicadores.length >= cantidadObjetivo) return indicadores.slice(0, cantidadObjetivo);
-    return [...indicadores, ...baseDesdeHabilidad].slice(0, cantidadObjetivo);
+  // Permite instrucciones como:
+  // - "tomá el indicador 4 y generá 3 indicadores"
+  // - "para la habilidad 2, dame 4 indicadores"
+  // - "indicador 3 con 2 adicionales"
+  // - "tome el indicado 4 y genere 3 indicadores (2 adicionales)"
+  const tokenObjetivo = "(?:indicador(?:es)?|indicado(?:r)?|habilidad(?:es)?)";
+  for (let i = 1; i <= cantidadObjetivo; i += 1) {
+    const p1 = new RegExp(`${tokenObjetivo}\\s*${i}\\b[\\s\\S]{0,120}?(\\d{1,2})\\s+indicadores?`);
+    const p2 = new RegExp(`(\\d{1,2})\\s+indicadores?[\\s\\S]{0,120}?${tokenObjetivo}\\s*${i}\\b`);
+    const p3 = new RegExp(`${tokenObjetivo}\\s*${i}\\b[\\s\\S]{0,120}?(\\d{1,2})\\s+adicional(?:es)?`);
+    const p4 = new RegExp(`${tokenObjetivo}\\s*${i}\\b[\\s\\S]{0,120}?\\((\\d{1,2})\\s+adicional(?:es)?\\)`);
+    const m1 = indicaciones.match(p1);
+    const m2 = indicaciones.match(p2);
+    const m3 = indicaciones.match(p3);
+    const m4 = indicaciones.match(p4);
+    if (m1?.[1]) cantidadPorHabilidad[i - 1] = Math.max(1, Math.min(10, Number(m1[1])));
+    else if (m2?.[1]) cantidadPorHabilidad[i - 1] = Math.max(1, Math.min(10, Number(m2[1])));
+    else if (m3?.[1]) cantidadPorHabilidad[i - 1] = Math.max(1, Math.min(10, Number(m3[1]) + 1));
+    else if (m4?.[1]) cantidadPorHabilidad[i - 1] = Math.max(1, Math.min(10, Number(m4[1]) + 1));
   }
 
-  const baseMultiples = indicadores.length ? indicadores : baseDesdeHabilidad;
-  const porHabilidad = Math.max(1, Math.ceil(baseMultiples.length / cantidadObjetivo));
-  const numerados: string[] = [];
+  function construirVariacionIndicador(base: string, indice: number) {
+    const limpio = String(base || "").trim().replace(/\.$/, "");
+    if (indice === 1) return `${limpio}, justificando el procedimiento y la representación utilizada.`;
+    if (indice === 2) return `${limpio} en una situación contextualizada con datos distintos y validando el resultado.`;
+    if (indice === 3) return `${limpio}, comparando estrategias y explicando la más eficiente según el contexto.`;
+    return `${limpio}, comunicando con claridad los pasos, resultados y criterios de decisión.`;
+  }
+
+  const salida: string[] = [];
+
   for (let i = 0; i < cantidadObjetivo; i += 1) {
-    for (let j = 0; j < porHabilidad; j += 1) {
-      const idx = i * porHabilidad + j;
-      const texto = baseMultiples[idx];
-      if (!texto) continue;
-      numerados.push(`${i + 1}.${j + 1} ${texto.replace(/^\d+(\.\d+)?\s+/, "")}`);
+    const descripcion = String(habilidades[i]?.DescripcionHabilidad || "").trim() || "la habilidad seleccionada";
+    const base = convertirInicioATerceraPersonaSingular(descripcion);
+    const limpio = String(base).replace(/^\d+(\.\d+)?\s*[\)\.\-:]?\s*/, "").trim();
+    const totalSolicitado = Math.max(1, Number(cantidadPorHabilidad[i] || 1));
+    const total = input.permitirMultiples ? totalSolicitado : 1;
+    for (let j = 1; j <= total; j += 1) {
+      const texto = j === 1 ? limpio : construirVariacionIndicador(limpio, j - 1);
+      salida.push(`${i + 1}.${j} ${texto}`);
     }
   }
-  return numerados.length ? numerados : baseDesdeHabilidad.map((t, i) => `${i + 1}.1 ${t}`);
+
+  return salida.length ? salida : baseDesdeHabilidad.map((t, i) => `${i + 1}.1 ${t}`);
 }
 
 function requiereUsoMandatorioDocumento(indicacionesDocente: string, documentoApoyoTexto?: string) {
@@ -843,6 +956,7 @@ function limpiarPrefijoAprendizaje(value: any) {
   return String(value || "")
     .trim()
     .replace(/^[\-\*\u2022]\s*/, "")
+    .replace(/^\d+(\.\d+)?\s*[\)\.\-:]?\s*/, "")
     .replace(/^habilidad\s+/i, "");
 }
 
@@ -853,6 +967,44 @@ function limpiarPrefijoIndicador(value: any) {
     .replace(/^indicador\s+\d+(\.\d+)?\s*[:.-]?\s*/i, "")
     .replace(/^identifica\s+y\s+aplica\s+/i, "")
     .replace(/\bhabilidad\s+(\d+\s*:)/gi, "$1");
+}
+
+function convertirInicioATerceraPersonaSingular(texto: string) {
+  const raw = String(texto || "").trim();
+  if (!raw) return raw;
+
+  const match = raw.match(/^([A-Za-zÁÉÍÓÚáéíóúÑñ]+)(\b.*)$/);
+  if (!match) return raw;
+
+  const verbo = match[1];
+  const resto = match[2] || "";
+  const lower = verbo.toLowerCase();
+
+  let convertido = verbo;
+  if (/(ar)$/.test(lower)) {
+    convertido = `${verbo.slice(0, -2)}a`;
+  } else if (/(er|ir)$/.test(lower)) {
+    convertido = `${verbo.slice(0, -2)}e`;
+  }
+
+  const capitalizado = convertido.charAt(0).toUpperCase() + convertido.slice(1).toLowerCase();
+  return `${capitalizado}${resto}`.trim();
+}
+
+function corregirErroresOrtograficosTexto(value: any) {
+  let text = String(value || "");
+  if (!text) return text;
+  text = text.replace(/\bcontrue\b/gi, "Construye");
+  text = text.replace(/\bconstrue\b/gi, "Construye");
+  text = text.replace(/\bconstruie\b/gi, "Construye");
+  return text;
+}
+
+function corregirErroresOrtograficosLista(values: any[]) {
+  return (Array.isArray(values) ? values : [])
+    .map((item) => corregirErroresOrtograficosTexto(item))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
 }
 
 function pideAdecuacionSignificativa(indicacionesDocente: string) {
@@ -916,12 +1068,23 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
       tema: input.tema
     }
   );
+  resultado.estrategiasMediacion = asegurarMomentosEspecificos(resultado.estrategiasMediacion, {
+    habilidades: input.habilidades,
+    materiaNombre: input.materiaNombre,
+    grado: input.grado,
+    tema: input.tema
+  });
 
   resultado.indicadoresEvaluacion = ajustarIndicadoresPorHabilidad({
     indicadoresEntrada: splitLines(resultado.indicadoresEvaluacion),
     habilidades: input.habilidades,
-    permitirMultiples
+    permitirMultiples,
+    indicacionesDocente
   });
+
+  resultado.aprendizajesEsperados = corregirErroresOrtograficosLista(splitLines(resultado.aprendizajesEsperados));
+  resultado.indicadoresEvaluacion = corregirErroresOrtograficosLista(splitLines(resultado.indicadoresEvaluacion));
+  resultado.estrategiasMediacion = corregirErroresOrtograficosLista(splitLines(resultado.estrategiasMediacion));
 
   resultado.observaciones = "";
 
@@ -1637,6 +1800,23 @@ function getUploadedFile(req: any, fieldName: string) {
   return files?.[fieldName]?.[0] || undefined;
 }
 
+function getUploadedFiles(req: any, fieldName: string) {
+  const files = req.files as Express.Multer.File[] | Record<string, Express.Multer.File[]> | undefined;
+  if (Array.isArray(files)) {
+    const normalized = fieldName.replace(/\[\]$/, "");
+    return files.filter((file) => {
+      const current = String(file.fieldname || "");
+      return current === fieldName || current === normalized || current === `${normalized}[]`;
+    });
+  }
+  const normalized = fieldName.replace(/\[\]$/, "");
+  return [
+    ...(files?.[fieldName] || []),
+    ...(files?.[normalized] || []),
+    ...(files?.[`${normalized}[]`] || [])
+  ];
+}
+
 function isDocxFile(file?: Express.Multer.File) {
   if (!file?.buffer) return false;
   const nombre = file.originalname || "";
@@ -1795,6 +1975,35 @@ function extractDocumentoApoyoText(file?: Express.Multer.File) {
   });
 }
 
+async function extractDocumentosApoyoText(files: Express.Multer.File[]) {
+  const documentos = Array.isArray(files) ? files : [];
+  if (!documentos.length) return { nombres: [] as string[], texto: "" };
+
+  const partes: string[] = [];
+  const nombres: string[] = [];
+  const maxTotal = 16000;
+  let usado = 0;
+
+  for (const file of documentos) {
+    const contenido = await extractDocumentoApoyoText(file);
+    if (contenido.nombre) nombres.push(contenido.nombre);
+    if (!contenido.texto) continue;
+
+    const bloque = `Archivo: ${contenido.nombre || "documento_apoyo"}\n${contenido.texto}`.trim();
+    const restante = Math.max(0, maxTotal - usado);
+    if (!restante) break;
+    const recortado = bloque.slice(0, restante);
+    if (!recortado) continue;
+    partes.push(recortado);
+    usado += recortado.length;
+  }
+
+  return {
+    nombres,
+    texto: partes.join("\n\n---\n\n").trim()
+  };
+}
+
 function extractPlantillaFormatoText(file?: Express.Multer.File) {
   return extractUploadedText(file, {
     defaultName: "plantilla_formato",
@@ -1881,8 +2090,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     console.log(`[planeamiento-ia] generar-planeamiento: carga de habilidades en ${Date.now() - t0}ms`);
 
     const effectiveMateria = materiaNombre || habilidades.recordset[0]?.MateriaNombre || "Materia";
-    const documentoApoyoFile = getUploadedFile(req, "documentoApoyo");
-    const documentoApoyo = await extractDocumentoApoyoText(documentoApoyoFile);
+    const documentoApoyoFiles = getUploadedFiles(req, "documentoApoyo");
+    const documentoApoyo = await extractDocumentosApoyoText(documentoApoyoFiles);
     const plantillaFormatoFile = getUploadedFile(req, "plantillaFormato");
     const plantillaFormato = await extractPlantillaFormatoText(plantillaFormatoFile);
     const plantillaFormatoDocx = cachePlantillaFormatoDocx(plantillaFormatoFile);
@@ -1895,7 +2104,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       semanas,
       habilidades: habilidades.recordset,
       documentoApoyoTexto: documentoApoyo.texto,
-      documentoApoyoNombre: documentoApoyo.nombre || undefined,
+      documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
       plantillaFormatoTexto: plantillaFormato.texto,
       plantillaFormatoNombre: plantillaFormato.nombre || undefined,
       plantillaPromptIAId,
@@ -1916,7 +2125,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       semanas,
       habilidades: habilidades.recordset,
       documentoApoyoTexto: documentoApoyo.texto,
-      documentoApoyoNombre: documentoApoyo.nombre || undefined,
+      documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
       plantillaFormatoTexto: plantillaFormato.texto,
       plantillaFormatoNombre: plantillaFormato.nombre || undefined,
       indicacionesDocente
@@ -1935,7 +2144,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     const resultado = {
       ...resultadoBase,
       nombre: buildPlaneamientoNombre({ mes, grado, materiaNombre: effectiveMateria }),
-      documentoApoyoNombre: documentoApoyo.nombre || null,
+      documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : null,
       plantillaFormatoNombre: plantillaFormato.nombre || null,
       plantillaFormatoCacheId: plantillaFormatoDocx?.cacheId || null,
       plantillaFormatoDocx: plantillaFormatoDocx
@@ -1979,7 +2188,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         semanas,
         habilidadesIds,
         plantillaPromptIAId: promptData.plantillaPromptIAId,
-        documentoApoyoNombre: documentoApoyo.nombre || null,
+        documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : null,
         plantillaFormatoNombre: plantillaFormato.nombre || null
       }))
       .input("promptGenerado", sql.NVarChar(sql.MAX), prompt)
@@ -2013,7 +2222,7 @@ router.post("/guardar-planeamiento", async (req, res) => {
     const resultado = hydratePlantillaFormatoDocx(req.body.resultado || {});
     const fechaInicio = normalizeNullableText(req.body.fechaInicio);
     const fechaFin = normalizeNullableText(req.body.fechaFin);
-    const observaciones = normalizeNullableText(req.body.observaciones || resultado.advertencia || "Borrador generado con apoyo de IA");
+    const observaciones = normalizeNullableText(req.body.observaciones || "");
     const usuarioId = getAuth(req).usuarioId || getAuth(req).userId || null;
 
     const pool = await getPool();
@@ -2101,7 +2310,12 @@ function safeFileName(value: string) {
 }
 
 function splitLines(value: any) {
-  if (Array.isArray(value)) return value.map((x) => String(x || "").trim()).filter(Boolean);
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((x) => String(x || "").split(/\r?\n+/))
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
   return String(value || "")
     .split(/\r?\n+/)
     .map((line) => line.trim())
@@ -2141,13 +2355,32 @@ function simpleParagraph(text: string, opts: { bold?: boolean; size?: number; al
   });
 }
 
-function textParagraphs(items: any[], fallback: string, opts: { bulletPrefix?: string; size?: number } = {}) {
+function textParagraphs(items: any[], fallback: string, opts: { bulletPrefix?: string; size?: number; numbered?: boolean } = {}) {
   const values = Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
   const source = values.length ? values : [fallback];
-  return source.map((item, index) => simpleParagraph(`${opts.bulletPrefix || ""}${item}`, {
+  return source.map((item, index) => simpleParagraph(`${opts.numbered ? `${index + 1}. ` : (opts.bulletPrefix || "")}${item}`, {
     size: opts.size || 19,
     bold: !values.length && index === 0 ? false : undefined
   }));
+}
+
+function textParagraphsEstrategiasMomentos(items: any[], fallback: string, size = 19) {
+  const values = Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  const source = values.length ? values : [fallback];
+  const paragraphs: Paragraph[] = [];
+  source.forEach((item, idx) => {
+    const m = String(item || "").match(/^\s*(Momento\s+\d+\s*:[^\.]*\.)\s*(.*)$/i);
+    if (m) {
+      const titulo = String(m[1] || "").trim();
+      const cuerpo = String(m[2] || "").trim();
+      paragraphs.push(simpleParagraph(titulo, { bold: true, size }));
+      if (cuerpo) paragraphs.push(simpleParagraph(cuerpo, { size }));
+      if (idx < source.length - 1) paragraphs.push(simpleParagraph("", { size }));
+      return;
+    }
+    paragraphs.push(simpleParagraph(`- ${item}`, { size }));
+  });
+  return paragraphs;
 }
 
 function limpiarMarcadorColor(text: string) {
@@ -2251,10 +2484,31 @@ function xmlFieldParagraph(label: string, value: any, opts: { size?: number } = 
   return `<w:p>${xmlTextRun(label, { bold: true, size: opts.size || 20 })}${xmlTextRun(String(value || ""), { size: opts.size || 20 })}</w:p>`;
 }
 
-function xmlParagraphsFromList(items: any[], fallback: string, opts: { bulletPrefix?: string; size?: number } = {}) {
+function xmlParagraphsFromList(items: any[], fallback: string, opts: { bulletPrefix?: string; size?: number; numbered?: boolean } = {}) {
   const values = Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
   const source = values.length ? values : [fallback];
-  return source.filter((item) => String(item || "").trim()).map((item) => xmlParagraph(`${opts.bulletPrefix || ""}${item}`, { size: opts.size || 19 }));
+  return source
+    .filter((item) => String(item || "").trim())
+    .map((item, index) => xmlParagraph(`${opts.numbered ? `${index + 1}. ` : (opts.bulletPrefix || "")}${item}`, { size: opts.size || 19 }));
+}
+
+function xmlParagraphsEstrategiasMomentos(items: any[], fallback: string, size = 19) {
+  const values = Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  const source = values.length ? values : [fallback];
+  const out: string[] = [];
+  source.forEach((item, idx) => {
+    const m = String(item || "").match(/^\s*(Momento\s+\d+\s*:[^\.]*\.)\s*(.*)$/i);
+    if (m) {
+      const titulo = String(m[1] || "").trim();
+      const cuerpo = String(m[2] || "").trim();
+      out.push(xmlParagraph(titulo, { bold: true, size }));
+      if (cuerpo) out.push(xmlParagraph(cuerpo, { size }));
+      if (idx < source.length - 1) out.push(xmlParagraph("", { size }));
+      return;
+    }
+    out.push(xmlParagraph(`- ${item}`, { size }));
+  });
+  return out;
 }
 
 function replaceCellBody(tcXml: string, paragraphsXml: string[]) {
@@ -2327,9 +2581,9 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
     ? competenciasBase.map((competencia) => input.contenido.competenciasGenerales.some((item: string) => normalizarParaBusqueda(item).includes(normalizarParaBusqueda(competencia).slice(0, 24))))
     : competenciasBase.map(() => true);
 
-  const estrategiasXml = [
-    ...xmlParagraphsFromList(input.contenido.estrategias, input.row.Observaciones || "Sin estrategias registradas", { bulletPrefix: "- ", size: 19 })
-  ];
+    const estrategiasXml = [
+      ...xmlParagraphsEstrategiasMomentos(input.contenido.estrategias, input.row.Observaciones || "Sin estrategias registradas", 19)
+    ];
 
   if (input.contenido.cotidiano.length || input.contenido.tareas.length || input.contenido.evaluacion.length || input.contenido.recursos.length) {
     estrategiasXml.push(xmlParagraph("Seguimiento sugerido", { bold: true, size: 19 }));
@@ -2369,7 +2623,7 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
       return replaceRowsInTable(tableXml, [
         null,
         (rowXml) => replaceCellsInRow(rowXml, [
-          (cellXml) => replaceCellBody(cellXml, xmlParagraphsFromList(input.contenido.aprendizajes, "Sin aprendizajes registrados", { bulletPrefix: "- ", size: 19 })),
+          (cellXml) => replaceCellBody(cellXml, xmlParagraphsFromList(input.contenido.aprendizajes, "Sin aprendizajes registrados", { numbered: true, size: 19 })),
           (cellXml) => replaceCellBody(cellXml, estrategiasXml),
           (cellXml) => replaceCellBody(cellXml, input.contenido.indicadores.length
             ? input.contenido.indicadores.map((item: string) => xmlParagraph(limpiarPrefijoIndicador(item), { size: 19 }))
@@ -2479,7 +2733,7 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
     const resultado = hydratePlantillaFormatoDocx(req.body.resultado || {});
     const fechaInicio = normalizeNullableText(req.body.fechaInicio);
     const fechaFin = normalizeNullableText(req.body.fechaFin);
-    const observaciones = normalizeNullableText(req.body.observaciones || resultado.advertencia || "Borrador generado con apoyo de IA");
+    const observaciones = normalizeNullableText(req.body.observaciones || "");
 
     const pool = await getPool();
     const materiaNombreOficial = await getMateriaNombreOficial(pool, institucionId, materiaId);
@@ -2754,7 +3008,7 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
       : competenciasBase.map(() => true);
 
     const estrategiasChildren = [
-      ...textParagraphs(contenido.estrategias, row.Observaciones || "Sin estrategias registradas", { bulletPrefix: "- ", size: 19 })
+      ...textParagraphsEstrategiasMomentos(contenido.estrategias, row.Observaciones || "Sin estrategias registradas", 19)
     ];
 
     if (contenido.cotidiano.length || contenido.tareas.length || contenido.evaluacion.length || contenido.recursos.length) {
@@ -2825,7 +3079,7 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
           }),
           new TableRow({
             children: [
-              templateCell(textParagraphs(contenido.aprendizajes, "Sin aprendizajes registrados", { bulletPrefix: "- ", size: 19 }), { width: 2830 }),
+              templateCell(textParagraphs(contenido.aprendizajes, "Sin aprendizajes registrados", { numbered: true, size: 19 }), { width: 2830 }),
               templateCell(estrategiasChildren, { width: 8222 }),
               templateCell(
                 contenido.indicadores.length

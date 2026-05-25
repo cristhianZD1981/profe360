@@ -15,11 +15,12 @@ const ADMINISTRATIVO_ROLES = [
   "ADMINISTRATIVO"
 ];
 
-const PROFESOR_ROLES = [
+const GESTION_PROFE_ROLES = ["PROFESOR"];
+
+const REPORTE_CERTIFICACIONES_ROLES = [
   "SUPER_ADMIN",
   "ADMIN_INSTITUCIONAL",
   "ADMINISTRATIVO",
-  "PROFESOR",
   "PROFESOR_GUIA"
 ];
 
@@ -62,9 +63,9 @@ const items: MenuItem[] = [
   {
     label: "Gestión del Profe",
     path: "/gestion-profe",
-    allowedRoles: PROFESOR_ROLES
+    allowedRoles: GESTION_PROFE_ROLES
   },
-  { label: "Reportes", path: "/reportes" }
+  { label: "Reporte y Certificaciones", path: "/reportes", allowedRoles: REPORTE_CERTIFICACIONES_ROLES }
 ];
 
 function normalizeRole(role: string) {

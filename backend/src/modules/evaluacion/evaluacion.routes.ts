@@ -649,7 +649,7 @@ router.get("/plantillas", async (req, res) => {
       const institucionId = getInstitutionId(req, res);
       if (institucionId === null) return;
       request.input("institucionId", sql.Int, institucionId);
-      filtroInstitucion = "AND ep.InstitucionId = @institucionId";
+      filtroInstitucion = "AND (ep.InstitucionId = @institucionId OR ISNULL(ep.EsPublica, 1) = 1)";
     } else if (toOptionalNumber(req.query.institucionId)) {
       request.input("institucionId", sql.Int, toOptionalNumber(req.query.institucionId));
       filtroInstitucion = "AND ep.InstitucionId = @institucionId";
@@ -1078,7 +1078,7 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla origen no encontrada" });
-    if (!(await canReadPlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para copiar esta plantilla");
+    if (!(await canReadPlantilla(pool, req, plantilla))) return forbidden(res, "No tenes permisos para copiar esta plantilla");
 
     const institucionDestinoId = isSuperAdmin(req)
       ? toOptionalNumber(req.body.institucionId) || Number(plantilla.InstitucionId)
@@ -1163,57 +1163,77 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
 
     const nuevaPlantillaId = Number(nuevaPlantilla.recordset[0].EvaluacionPlantillaId);
 
-    const componentesOrigen = await pool.request()
+    await new sql.Request(transaction)
       .input("plantillaId", sql.Int, plantillaId)
+      .input("nuevaPlantillaId", sql.Int, nuevaPlantillaId)
       .query(`
-        SELECT EvaluacionComponenteId, Descripcion, Porcentaje, Orden, Activo, ISNULL(PermitePlaneamiento, 0) AS PermitePlaneamiento, TipoSeguimiento
-        FROM dbo.EvaluacionComponente
-        WHERE EvaluacionPlantillaId = @plantillaId
-        ORDER BY Orden, EvaluacionComponenteId
+        DECLARE @ComponentesMap TABLE
+        (
+          OrigenComponenteId INT NOT NULL,
+          NuevoComponenteId INT NOT NULL
+        );
+
+        MERGE dbo.EvaluacionComponente AS target
+        USING
+        (
+          SELECT
+            EvaluacionComponenteId AS OrigenComponenteId,
+            Descripcion,
+            Porcentaje,
+            Orden,
+            Activo,
+            ISNULL(PermitePlaneamiento, 0) AS PermitePlaneamiento,
+            TipoSeguimiento
+          FROM dbo.EvaluacionComponente
+          WHERE EvaluacionPlantillaId = @plantillaId
+        ) AS src
+        ON 1 = 0
+        WHEN NOT MATCHED THEN
+          INSERT
+          (
+            EvaluacionPlantillaId,
+            Descripcion,
+            Porcentaje,
+            Orden,
+            Activo,
+            PermitePlaneamiento,
+            TipoSeguimiento
+          )
+          VALUES
+          (
+            @nuevaPlantillaId,
+            src.Descripcion,
+            src.Porcentaje,
+            src.Orden,
+            src.Activo,
+            src.PermitePlaneamiento,
+            src.TipoSeguimiento
+          )
+        OUTPUT src.OrigenComponenteId, inserted.EvaluacionComponenteId
+          INTO @ComponentesMap (OrigenComponenteId, NuevoComponenteId);
+
+        INSERT INTO dbo.EvaluacionActividad
+        (
+          EvaluacionComponenteId,
+          Descripcion,
+          Porcentaje,
+          Fecha,
+          Orden,
+          UsaIndicadoresPlaneamiento,
+          Activo
+        )
+        SELECT
+          map.NuevoComponenteId,
+          act.Descripcion,
+          act.Porcentaje,
+          act.Fecha,
+          act.Orden,
+          ISNULL(act.UsaIndicadoresPlaneamiento, 0),
+          act.Activo
+        FROM dbo.EvaluacionActividad act
+        INNER JOIN @ComponentesMap map
+          ON map.OrigenComponenteId = act.EvaluacionComponenteId;
       `);
-
-    for (const componente of componentesOrigen.recordset) {
-      const insertarComponente = await new sql.Request(transaction)
-        .input("plantillaId", sql.Int, nuevaPlantillaId)
-        .input("descripcion", sql.NVarChar(150), componente.Descripcion)
-        .input("porcentaje", sql.Decimal(10, 2), Number(componente.Porcentaje || 0))
-        .input("orden", sql.Int, Number(componente.Orden || 1))
-        .input("activo", sql.Bit, !!componente.Activo)
-        .input("permitePlaneamiento", sql.Bit, !!componente.PermitePlaneamiento)
-        .input("tipoSeguimiento", sql.NVarChar(40), componente.TipoSeguimiento || null)
-        .query(`
-          INSERT INTO dbo.EvaluacionComponente
-          (EvaluacionPlantillaId, Descripcion, Porcentaje, Orden, Activo, PermitePlaneamiento, TipoSeguimiento)
-          OUTPUT INSERTED.EvaluacionComponenteId
-          VALUES (@plantillaId, @descripcion, @porcentaje, @orden, @activo, @permitePlaneamiento, @tipoSeguimiento)
-        `);
-
-      const nuevoComponenteId = Number(insertarComponente.recordset[0].EvaluacionComponenteId);
-
-      const actividadesOrigen = await pool.request()
-        .input("componenteId", sql.Int, Number(componente.EvaluacionComponenteId))
-        .query(`
-          SELECT Descripcion, Porcentaje, Fecha, Orden, Activo
-          FROM dbo.EvaluacionActividad
-          WHERE EvaluacionComponenteId = @componenteId
-          ORDER BY Orden, EvaluacionActividadId
-        `);
-
-      for (const actividad of actividadesOrigen.recordset) {
-        await new sql.Request(transaction)
-          .input("componenteId", sql.Int, nuevoComponenteId)
-          .input("descripcion", sql.NVarChar(150), actividad.Descripcion)
-          .input("porcentaje", sql.Decimal(10, 2), Number(actividad.Porcentaje || 0))
-          .input("fecha", sql.Date, actividad.Fecha || null)
-          .input("orden", sql.Int, Number(actividad.Orden || 1))
-          .input("activo", sql.Bit, !!actividad.Activo)
-          .query(`
-            INSERT INTO dbo.EvaluacionActividad
-            (EvaluacionComponenteId, Descripcion, Porcentaje, Fecha, Orden, Activo)
-            VALUES (@componenteId, @descripcion, @porcentaje, @fecha, @orden, @activo)
-          `);
-      }
-    }
 
     await transaction.commit();
 
@@ -1221,8 +1241,8 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
     return created(res, detalle, "Plantilla copiada correctamente");
   } catch (error) {
     try { await transaction.rollback(); } catch {}
-    console.error("Error copiando plantilla de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo copiar la plantilla de evaluaciÃ³n" });
+    console.error("Error copiando plantilla de evaluacion:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo copiar la plantilla de evaluacion" });
   }
 });
 

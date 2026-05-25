@@ -1286,6 +1286,7 @@ router.get("/plantillas", async (req, res) => {
     if (!assertCanAccess(req, res)) return;
 
     const pool = await getPool();
+    await ensureReporteEnvioBitacoraTable(pool);
     await ensureEval360ActividadPlaneamientoColumns(pool);
     await ensureEval360SeguimientoRecuperacionColumns(pool);
     await ensurePlantillaVisibilityColumns(pool);
@@ -1524,14 +1525,53 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
     const estructuraExistente = existente.recordset[0] || null;
 
-    if (estructuraExistente && Number(estructuraExistente.PlantillaBaseId || 0) > 0) {
-      await sincronizarEstructuraConPlantillaSiFaltan(pool, Number(estructuraExistente.EstructuraGrupoId), Number(estructuraExistente.PlantillaBaseId));
+    if (estructuraExistente && !plantillaId) {
+      await sincronizarEstructuraConPlantillaSiFaltan(pool, Number(estructuraExistente.EstructuraGrupoId), Number(estructuraExistente.PlantillaBaseId || 0));
       const data = await getEstructuraCompleta(pool, Number(estructuraExistente.EstructuraGrupoId));
-      return ok(res, { ...data, creada: false }, "Ya existe una estructura de evaluaciÃ³n para este grupo");
+      return ok(res, { ...data, creada: false }, "Ya existe una estructura de evaluacion para este grupo");
     }
 
-    if (estructuraExistente && !plantillaId) {
-      return badRequest(res, "SeleccionÃ¡ una plantilla de evaluaciÃ³n para asignarla a esta secciÃ³n");
+    if (estructuraExistente && plantillaId && Number(estructuraExistente.PlantillaBaseId || 0) !== Number(plantillaId)) {
+      const calificacionesExistentes = await pool.request()
+        .input("estructuraGrupoId", sql.Int, Number(estructuraExistente.EstructuraGrupoId))
+        .query(`
+          SELECT
+            CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM dbo.Eval360_NotaActividad na
+                INNER JOIN dbo.Eval360_Actividad act ON act.ActividadId = na.ActividadId
+                WHERE act.EstructuraGrupoId = @estructuraGrupoId
+                  AND (
+                    (na.PuntosObtenidos IS NOT NULL AND na.PuntosObtenidos > 0)
+                    OR (na.PorcentajeObtenido IS NOT NULL AND na.PorcentajeObtenido > 0)
+                  )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM dbo.Eval360_SeguimientoIndicador si
+                INNER JOIN dbo.Eval360_Actividad act ON act.ActividadId = si.ActividadId
+                WHERE act.EstructuraGrupoId = @estructuraGrupoId
+                  AND ISNULL(si.ValorSeleccionado, 0) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM dbo.Eval360_EstructuraGrupo eg
+                INNER JOIN dbo.AsistenciaRegistro ar
+                  ON ar.GrupoId = eg.GrupoId
+                 AND ar.MateriaId = eg.MateriaId
+                 AND ar.AnioLectivoId = eg.AnioLectivoId
+                 AND ar.PeriodoId = eg.PeriodoId
+                WHERE eg.EstructuraGrupoId = @estructuraGrupoId
+              )
+              THEN 1
+              ELSE 0
+            END AS TieneCalificaciones
+        `);
+
+      if (Number(calificacionesExistentes.recordset[0]?.TieneCalificaciones || 0) === 1) {
+        return badRequest(res, "No se puede cambiar la plantilla porque ya existen rubros calificados");
+      }
     }
 
     const plantillaRequest = pool.request()
@@ -3898,6 +3938,82 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
   }
 }
 
+async function ensureReporteEnvioBitacoraTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.ReporteEnvioBitacora', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.ReporteEnvioBitacora (
+        ReporteEnvioBitacoraId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        Modulo NVARCHAR(40) NOT NULL,
+        RegistroClave NVARCHAR(200) NOT NULL,
+        GrupoId INT NULL,
+        MateriaId INT NULL,
+        PeriodoId INT NULL,
+        AnioLectivoId INT NULL,
+        EstudianteId INT NULL,
+        Fecha DATE NULL,
+        CorreoEnviado BIT NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_Correo DEFAULT(0),
+        WaEnviado BIT NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_Wa DEFAULT(0),
+        UltimoEnvioAt DATETIME2 NULL,
+        UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_UpdatedAt DEFAULT(SYSDATETIME()),
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_CreatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE UNIQUE INDEX UX_ReporteEnvioBitacora_ModuloClave ON dbo.ReporteEnvioBitacora(Modulo, RegistroClave);
+      CREATE INDEX IX_ReporteEnvioBitacora_Filtros ON dbo.ReporteEnvioBitacora(GrupoId, MateriaId, PeriodoId, AnioLectivoId, EstudianteId, Fecha);
+    END
+  `);
+}
+
+async function upsertReporteEnvioBitacora(pool: any, payload: {
+  modulo: string;
+  registroClave: string;
+  grupoId?: number | null;
+  materiaId?: number | null;
+  periodoId?: number | null;
+  anioLectivoId?: number | null;
+  estudianteId?: number | null;
+  fecha?: string | null;
+  correoEnviado?: boolean;
+  waEnviado?: boolean;
+}) {
+  await pool.request()
+    .input("modulo", sql.NVarChar(40), String(payload.modulo || "").trim().toUpperCase())
+    .input("registroClave", sql.NVarChar(200), String(payload.registroClave || "").trim())
+    .input("grupoId", sql.Int, payload.grupoId || null)
+    .input("materiaId", sql.Int, payload.materiaId || null)
+    .input("periodoId", sql.Int, payload.periodoId || null)
+    .input("anioLectivoId", sql.Int, payload.anioLectivoId || null)
+    .input("estudianteId", sql.Int, payload.estudianteId || null)
+    .input("fecha", sql.Date, payload.fecha || null)
+    .input("correoEnviado", sql.Bit, payload.correoEnviado ? 1 : 0)
+    .input("waEnviado", sql.Bit, payload.waEnviado ? 1 : 0)
+    .query(`
+      MERGE dbo.ReporteEnvioBitacora AS target
+      USING (
+        SELECT
+          @modulo AS Modulo,
+          @registroClave AS RegistroClave
+      ) AS source
+      ON target.Modulo = source.Modulo
+         AND target.RegistroClave = source.RegistroClave
+      WHEN MATCHED THEN
+        UPDATE SET
+          GrupoId = COALESCE(@grupoId, target.GrupoId),
+          MateriaId = COALESCE(@materiaId, target.MateriaId),
+          PeriodoId = COALESCE(@periodoId, target.PeriodoId),
+          AnioLectivoId = COALESCE(@anioLectivoId, target.AnioLectivoId),
+          EstudianteId = COALESCE(@estudianteId, target.EstudianteId),
+          Fecha = COALESCE(@fecha, target.Fecha),
+          CorreoEnviado = CASE WHEN @correoEnviado = 1 THEN 1 ELSE target.CorreoEnviado END,
+          WaEnviado = CASE WHEN @waEnviado = 1 THEN 1 ELSE target.WaEnviado END,
+          UltimoEnvioAt = CASE WHEN @correoEnviado = 1 OR @waEnviado = 1 THEN SYSDATETIME() ELSE target.UltimoEnvioAt END,
+          UpdatedAt = SYSDATETIME()
+      WHEN NOT MATCHED THEN
+        INSERT (Modulo, RegistroClave, GrupoId, MateriaId, PeriodoId, AnioLectivoId, EstudianteId, Fecha, CorreoEnviado, WaEnviado, UltimoEnvioAt, UpdatedAt, CreatedAt)
+        VALUES (@modulo, @registroClave, @grupoId, @materiaId, @periodoId, @anioLectivoId, @estudianteId, @fecha, @correoEnviado, @waEnviado, CASE WHEN @correoEnviado = 1 OR @waEnviado = 1 THEN SYSDATETIME() ELSE NULL END, SYSDATETIME(), SYSDATETIME());
+    `);
+}
+
 function getEstadoLabelSeguimiento(estado: string) {
   if (estado === "NO_ENTREGADO") return "No entregado";
   if (estado === "AUSENTE") return "Ausente";
@@ -4337,10 +4453,20 @@ router.get("/seguimiento/contexto", async (req, res) => {
               ng.Nombre AS NivelNombre,
               a.EstructuraGrupoDetalleId,
               a.Nombre AS ActividadNombre,
-              a.Fuente
+              a.Fuente,
+              ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+              ISNULL(reb.WaEnviado, 0) AS WaEnviado
             FROM dbo.Eval360_SeguimientoIndicador s
             INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = s.ActividadId
             INNER JOIN dbo.Eval360_NivelDesempenoGrupo ng ON ng.NivelDesempenoGrupoId = s.NivelDesempenoGrupoId
+            LEFT JOIN dbo.ReporteEnvioBitacora reb
+              ON reb.Modulo IN (N'COTIDIANO_INDICADOR', N'TAREAS_INDICADOR')
+             AND reb.RegistroClave = CONCAT(
+               N'COTI_IND|',
+               CONVERT(varchar(20), s.ActividadId), N'|',
+               CONVERT(varchar(20), s.IndicadorGrupoId), N'|',
+               CONVERT(varchar(20), s.EstudianteId)
+             )
             WHERE a.EstructuraGrupoId = @estructuraGrupoId
               AND ISNULL(a.Activo, 1) = 1
           `),
@@ -4391,9 +4517,18 @@ router.get("/seguimiento/contexto", async (req, res) => {
               n.PuntosMaximos,
               n.NotaObtenida,
               n.PorcentajeObtenido,
-              n.Observacion
+              n.Observacion,
+              ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+              ISNULL(reb.WaEnviado, 0) AS WaEnviado
             FROM dbo.Eval360_NotaActividad n
             INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = n.ActividadId
+            LEFT JOIN dbo.ReporteEnvioBitacora reb
+              ON reb.Modulo IN (N'COTIDIANO_ACTIVIDAD', N'TAREAS_ACTIVIDAD')
+             AND reb.RegistroClave = CONCAT(
+               N'COTI_ACT|',
+               CONVERT(varchar(20), n.ActividadId), N'|',
+               CONVERT(varchar(20), n.EstudianteId)
+             )
             WHERE a.EstructuraGrupoId = @estructuraGrupoId
               AND ISNULL(a.Activo, 1) = 1
           `),
@@ -4410,12 +4545,25 @@ router.get("/seguimiento/contexto", async (req, res) => {
               ar.Estado,
               ar.MinutosTardia,
               ar.Observacion,
+              ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+              ISNULL(reb.WaEnviado, 0) AS WaEnviado,
               CASE WHEN COL_LENGTH('dbo.AsistenciaRegistro', 'HorarioGrupoId') IS NULL THEN NULL ELSE TRY_CONVERT(int, ar.HorarioGrupoId) END AS HorarioGrupoId,
               hg.BloqueHorarioId,
               bh.Nombre AS BloqueNombre,
               CONVERT(varchar(5), bh.HoraInicio, 108) AS HoraInicio,
               CONVERT(varchar(5), bh.HoraFin, 108) AS HoraFin
             FROM dbo.AsistenciaRegistro ar
+            LEFT JOIN dbo.ReporteEnvioBitacora reb
+              ON reb.Modulo = N'ASISTENCIA'
+             AND reb.RegistroClave = CONCAT(
+               N'ASIS|',
+               CONVERT(varchar(20), ar.GrupoId), N'|',
+               CONVERT(varchar(20), ar.MateriaId), N'|',
+               CONVERT(varchar(20), ar.PeriodoId), N'|',
+               CONVERT(varchar(10), ar.Fecha, 23), N'|',
+               CONVERT(varchar(20), ar.EstudianteId), N'|',
+               CONVERT(varchar(20), ISNULL(ar.HorarioGrupoId, 0))
+             )
             LEFT JOIN dbo.HorarioGrupo hg ON COL_LENGTH('dbo.AsistenciaRegistro', 'HorarioGrupoId') IS NOT NULL AND hg.HorarioGrupoId = ar.HorarioGrupoId
             LEFT JOIN dbo.BloqueHorario bh ON bh.BloqueHorarioId = hg.BloqueHorarioId
             WHERE ar.GrupoId = @grupoId
@@ -4666,6 +4814,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
   try {
     if (!assertCanAccess(req, res)) return;
+    await ensureReporteEnvioBitacoraTable(pool);
 
     const estructuraGrupoId = toRequiredNumber(req.body.estructuraGrupoId, "estructuraGrupoId", res);
     const estructuraGrupoDetalleId = toRequiredNumber(req.body.estructuraGrupoDetalleId, "estructuraGrupoDetalleId", res);
@@ -5009,6 +5158,33 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
       }
     }
 
+    const estadoEnvioPorEstudiante = new Map<number, { correoEnviado: boolean; waEnviado: boolean }>();
+    for (const notif of resultadosNotificacion) {
+      if (notif?.enviado !== true) continue;
+      const estudianteId = Number(notif?.estudianteId || 0);
+      if (!estudianteId) continue;
+      const prev = estadoEnvioPorEstudiante.get(estudianteId) || { correoEnviado: false, waEnviado: false };
+      if (notif?.canal === "correo") prev.correoEnviado = true;
+      if (notif?.canal === "whatsapp") prev.waEnviado = true;
+      estadoEnvioPorEstudiante.set(estudianteId, prev);
+    }
+    for (const aviso of notificacionesPendientes) {
+      const estadoEnvio = estadoEnvioPorEstudiante.get(Number(aviso.estudianteId)) || { correoEnviado: false, waEnviado: false };
+      const esTareas = normalizeKey(tipoUso).includes("TAREA");
+      await upsertReporteEnvioBitacora(pool, {
+        modulo: esTareas ? "TAREAS_INDICADOR" : "COTIDIANO_INDICADOR",
+        registroClave: `COTI_IND|${actividadId}|${indicadorGrupoId}|${aviso.estudianteId}`,
+        grupoId: Number(estructura?.GrupoId || 0) || null,
+        materiaId: Number(estructura?.MateriaId || 0) || null,
+        periodoId: Number(estructura?.PeriodoId || 0) || null,
+        anioLectivoId: Number(estructura?.AnioLectivoId || 0) || null,
+        estudianteId: Number(aviso.estudianteId || 0) || null,
+        fecha: new Date().toISOString().slice(0, 10),
+        correoEnviado: estadoEnvio.correoEnviado,
+        waEnviado: estadoEnvio.waEnviado
+      });
+    }
+
     return ok(res, { actividadId, notificaciones: resultadosNotificacion }, "Evaluación guardada correctamente");
   } catch (error) {
     try { await transaction.rollback(); } catch {}
@@ -5023,6 +5199,7 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
   try {
     if (!assertCanAccess(req, res)) return;
+    await ensureReporteEnvioBitacoraTable(pool);
 
     const estructuraGrupoId = toRequiredNumber(req.body.estructuraGrupoId, "estructuraGrupoId", res);
     const estructuraGrupoDetalleId = toRequiredNumber(req.body.estructuraGrupoDetalleId, "estructuraGrupoDetalleId", res);
@@ -5267,6 +5444,33 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
         }
       }
+    }
+
+    const estadoEnvioPorEstudiante = new Map<number, { correoEnviado: boolean; waEnviado: boolean }>();
+    for (const notif of resultadosNotificacion) {
+      if (notif?.enviado !== true) continue;
+      const estudianteId = Number(notif?.estudianteId || 0);
+      if (!estudianteId) continue;
+      const prev = estadoEnvioPorEstudiante.get(estudianteId) || { correoEnviado: false, waEnviado: false };
+      if (notif?.canal === "correo") prev.correoEnviado = true;
+      if (notif?.canal === "whatsapp") prev.waEnviado = true;
+      estadoEnvioPorEstudiante.set(estudianteId, prev);
+    }
+    for (const aviso of notificacionesPendientes) {
+      const estadoEnvio = estadoEnvioPorEstudiante.get(Number(aviso.estudianteId)) || { correoEnviado: false, waEnviado: false };
+      const esTareas = normalizeKey(actividad?.Fuente || actividad?.Nombre || "").includes("TAREA");
+      await upsertReporteEnvioBitacora(pool, {
+        modulo: esTareas ? "TAREAS_ACTIVIDAD" : "COTIDIANO_ACTIVIDAD",
+        registroClave: `COTI_ACT|${actividadId}|${aviso.estudianteId}`,
+        grupoId: Number(estructura?.GrupoId || 0) || null,
+        materiaId: Number(estructura?.MateriaId || 0) || null,
+        periodoId: Number(estructura?.PeriodoId || 0) || null,
+        anioLectivoId: Number(estructura?.AnioLectivoId || 0) || null,
+        estudianteId: Number(aviso.estudianteId || 0) || null,
+        fecha: new Date().toISOString().slice(0, 10),
+        correoEnviado: estadoEnvio.correoEnviado,
+        waEnviado: estadoEnvio.waEnviado
+      });
     }
 
     return ok(res, { guardados, actividadId, puntosMaximos, notificaciones: resultadosNotificacion }, "Evaluación guardada correctamente");

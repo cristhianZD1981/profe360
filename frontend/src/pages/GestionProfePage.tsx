@@ -25,6 +25,8 @@ type GrupoProfesor = {
   EvaluacionPlantillaId?: number | null;
   EvaluacionPlantillaNombre?: string | null;
   EvaluacionPlantillaEstado?: string | null;
+  TieneEstructuraEvaluacion?: boolean | number | null;
+  TieneCalificacionesEvaluacion?: boolean | number | null;
 };
 
 type EstudianteGrupo = {
@@ -531,9 +533,11 @@ type AsistenciaDraft = Record<string, {
   observacion: string;
   notificarEncargado?: boolean;
 }>;
+type AsistenciaNotificacionEstado = Record<string, { correoEnviado?: boolean; waEnviado?: boolean }>;
 
 type NoteDrafts = Record<string, string>;
 type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "reportes";
+type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS";
 
 
 type HorarioBloque = {
@@ -556,6 +560,35 @@ type HorarioEntrada = {
 };
 
 type EstadoAsistencia = "PRESENTE" | "AUSENTE_JUSTIFICADA" | "AUSENTE_INJUSTIFICADA" | "TARDIA_MENOR_10" | "TARDIA_MAYOR_10";
+type AuditoriaEnvioFila = {
+  ReporteEnvioBitacoraId: number;
+  Modulo: string;
+  ModuloNombre: string;
+  RegistroClave: string;
+  Fecha: string;
+  CorreoEnviado: boolean;
+  WaEnviado: boolean;
+  UltimoEnvioAt?: string | null;
+  EstudianteId?: number | null;
+  Identificacion?: string | null;
+  Nombre?: string | null;
+  PrimerApellido?: string | null;
+  SegundoApellido?: string | null;
+};
+type BoletaConductaReporte = {
+  BoletaConductaId: number;
+  Consecutivo: number;
+  Fecha: string;
+  Seccion?: string | null;
+  NombreFuncionario?: string | null;
+  EstudianteId?: number | null;
+  Identificacion?: string | null;
+  Nombre?: string | null;
+  PrimerApellido?: string | null;
+  SegundoApellido?: string | null;
+  TotalEnviosCorreo?: number | null;
+  TotalEnviosExitosos?: number | null;
+};
 
 const initialPlaneamientoForm: PlaneamientoForm = {
   nombre: "",
@@ -584,6 +617,19 @@ const secondaryButtonStyle: React.CSSProperties = {
   cursor: "pointer"
 };
 
+function getGestionPanelButtonStyle(panel: ActivePanel): React.CSSProperties {
+  const base: React.CSSProperties = {
+    ...secondaryButtonStyle,
+    fontWeight: 800
+  };
+  if (panel === "planeamientos") return { ...base, background: "#ecfeff", borderColor: "#67e8f9", color: "#0e7490" };
+  if (panel === "seguimiento") return { ...base, background: "#ecfccb", borderColor: "#bef264", color: "#3f6212" };
+  if (panel === "examenes_tabla") return { ...base, background: "#fff7ed", borderColor: "#fdba74", color: "#9a3412" };
+  if (panel === "notas") return { ...base, background: "#f3e8ff", borderColor: "#d8b4fe", color: "#6b21a8" };
+  if (panel === "reportes") return { ...base, background: "#fef9c3", borderColor: "#fde047", color: "#854d0e" };
+  return base;
+}
+
 const inputNotaStyle: React.CSSProperties = {
   width: "90px",
   minWidth: "90px",
@@ -593,6 +639,26 @@ const inputNotaStyle: React.CSSProperties = {
   textAlign: "right",
   background: "#122033",
   color: "#f8fafc"
+};
+
+const requiredBadgeStyle: React.CSSProperties = {
+  padding: "2px 8px",
+  borderRadius: "999px",
+  background: "#dcfce7",
+  border: "1px solid #86efac",
+  color: "#166534",
+  fontSize: "11px",
+  fontWeight: 900
+};
+
+const optionalBadgeStyle: React.CSSProperties = {
+  padding: "2px 8px",
+  borderRadius: "999px",
+  background: "#fef3c7",
+  border: "1px solid #fcd34d",
+  color: "#92400e",
+  fontSize: "11px",
+  fontWeight: 900
 };
 const stickyTableHeaderStyle: React.CSSProperties = {
   minWidth: "220px",
@@ -996,6 +1062,7 @@ export default function GestionProfePage() {
   const [savingNotas, setSavingNotas] = useState(false);
   const [eval360Plantillas, setEval360Plantillas] = useState<Eval360Plantilla[]>([]);
   const [eval360PlantillaId, setEval360PlantillaId] = useState("");
+  const [mostrarSelectorCambioPlantilla, setMostrarSelectorCambioPlantilla] = useState(false);
   const [eval360Estructura, setEval360Estructura] = useState<Eval360EstructuraData | null>(null);
   const [eval360DetallesDraft, setEval360DetallesDraft] = useState<Eval360Detalle[]>([]);
   const [loadingEval360, setLoadingEval360] = useState(false);
@@ -1030,10 +1097,17 @@ export default function GestionProfePage() {
   const [habilidadesIa, setHabilidadesIa] = useState<PlaneamientoHabilidad[]>([]);
   const [loadingHabilidadesIa, setLoadingHabilidadesIa] = useState(false);
   const [generatingPlaneamientoIa, setGeneratingPlaneamientoIa] = useState(false);
+  const [generatingPlaneamientoIaProgress, setGeneratingPlaneamientoIaProgress] = useState(0);
+  const generatingPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [savingPlaneamientoIa, setSavingPlaneamientoIa] = useState(false);
+  const [savingPlaneamientoIaProgress, setSavingPlaneamientoIaProgress] = useState(0);
+  const savingPlaneamientoIaTimerRef = useRef<number | null>(null);
+  const [deletingPlaneamientoId, setDeletingPlaneamientoId] = useState<number | null>(null);
+  const [deletingPlaneamientoProgress, setDeletingPlaneamientoProgress] = useState(0);
+  const deletingPlaneamientoTimerRef = useRef<number | null>(null);
   const [ultimoPlaneamientoIa, setUltimoPlaneamientoIa] = useState<PlaneamientoIaResultado | null>(null);
   const [editingPlaneamientoIaId, setEditingPlaneamientoIaId] = useState<number | null>(null);
-  const [documentoApoyoIa, setDocumentoApoyoIa] = useState<File | null>(null);
+  const [documentoApoyoIa, setDocumentoApoyoIa] = useState<File[]>([]);
   const [plantillaFormatoIa, setPlantillaFormatoIa] = useState<File | null>(null);
   const [plantillasPlaneamientoIa, setPlantillasPlaneamientoIa] = useState<PlantillaPromptIA[]>([]);
   const [plantillaPlaneamientoIaId, setPlantillaPlaneamientoIaId] = useState<string>("");
@@ -1041,17 +1115,38 @@ export default function GestionProfePage() {
   const [planeamientoIaFormOpen, setPlaneamientoIaFormOpen] = useState(false);
   const [asistenciaFecha, setAsistenciaFecha] = useState(() => new Date().toISOString().slice(0, 10));
   const [asistenciaDrafts, setAsistenciaDrafts] = useState<AsistenciaDraft>({});
+  const [asistenciaDraftsBase, setAsistenciaDraftsBase] = useState<AsistenciaDraft>({});
+  const [asistenciaNotificaciones, setAsistenciaNotificaciones] = useState<AsistenciaNotificacionEstado>({});
+  const [asistenciaYaCalificada, setAsistenciaYaCalificada] = useState(false);
   const [asistenciaLecciones, setAsistenciaLecciones] = useState<AsistenciaLeccion[]>([]);
   const [resumenAsistencia, setResumenAsistencia] = useState<ResumenAsistencia[]>([]);
   const [loadingAsistencia, setLoadingAsistencia] = useState(false);
   const [savingAsistencia, setSavingAsistencia] = useState(false);
+  const [savingAsistenciaProgress, setSavingAsistenciaProgress] = useState(0);
+  const [savedAsistencia, setSavedAsistencia] = useState(false);
+  const savingAsistenciaTimerRef = useRef<number | null>(null);
   const [seguimientoContexto, setSeguimientoContexto] = useState<SeguimientoEvaluacionContexto | null>(null);
   const [loadingSeguimiento, setLoadingSeguimiento] = useState(false);
   const [savingSeguimiento, setSavingSeguimiento] = useState(false);
+  const [savingSeguimientoModo, setSavingSeguimientoModo] = useState<"actividad" | "indicador" | null>(null);
+  const [savingSeguimientoProgress, setSavingSeguimientoProgress] = useState(0);
+  const [savedSeguimientoModo, setSavedSeguimientoModo] = useState<"actividad" | "indicador" | null>(null);
+  const savingSeguimientoTimerRef = useRef<number | null>(null);
   const [loadingHorario, setLoadingHorario] = useState(false);
   const [horarioVisible, setHorarioVisible] = useState(false);
   const [horarioBloques, setHorarioBloques] = useState<HorarioBloque[]>([]);
   const [horarioEntradas, setHorarioEntradas] = useState<HorarioEntrada[]>([]);
+  const [auditoriaEnviosDesde, setAuditoriaEnviosDesde] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [auditoriaEnviosHasta, setAuditoriaEnviosHasta] = useState(() => new Date().toISOString().slice(0, 10));
+  const [auditoriaEnvios, setAuditoriaEnvios] = useState<AuditoriaEnvioFila[]>([]);
+  const [tipoReporteGestion, setTipoReporteGestion] = useState<TipoReporteGestion>("NOTAS");
+  const [boletasConductaReporte, setBoletasConductaReporte] = useState<BoletaConductaReporte[]>([]);
+  const [loadingBoletasReporte, setLoadingBoletasReporte] = useState(false);
+  const [loadingAuditoriaEnvios, setLoadingAuditoriaEnvios] = useState(false);
   const [seguimientoTipo, setSeguimientoTipo] = useState<string>("");
   const [seguimientoPlaneamientoId, setSeguimientoPlaneamientoId] = useState<string>("");
   const [seguimientoEstadoFiltro, setSeguimientoEstadoFiltro] = useState<string>("NO_CALIFICADO");
@@ -1122,6 +1217,19 @@ export default function GestionProfePage() {
   const [notasDetalleAbierto, setNotasDetalleAbierto] = useState<string>("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    return () => {
+      if (savingSeguimientoTimerRef.current !== null) {
+        window.clearInterval(savingSeguimientoTimerRef.current);
+        savingSeguimientoTimerRef.current = null;
+      }
+      if (savingAsistenciaTimerRef.current !== null) {
+        window.clearInterval(savingAsistenciaTimerRef.current);
+        savingAsistenciaTimerRef.current = null;
+      }
+    };
+  }, []);
   const detalleGrupoRef = useRef<HTMLElement | null>(null);
 
   const gruposOrdenados = useMemo(() => {
@@ -1422,6 +1530,38 @@ export default function GestionProfePage() {
   const seguimientoIndicadorSeleccionado = useMemo(() => {
     return seguimientoIndicadoresFiltrados.find((item) => String(item.IndicadorGrupoId) === String(seguimientoIndicadorId)) || seguimientoIndicadoresFiltrados[0] || null;
   }, [seguimientoIndicadoresFiltrados, seguimientoIndicadorId]);
+
+  const seguimientoPasosEvaluacion = useMemo(() => {
+    if (!seguimientoTipo) {
+      return [
+        "Selecciona el Rubro a Calificar.",
+        "Verifica el listado de estudiantes y el periodo.",
+        "Completa las calificaciones y guarda."
+      ];
+    }
+
+    if (isTipoAsistenciaSeguimiento(seguimientoTipo)) {
+      return [
+        "Selecciona la fecha de asistencia.",
+        "Marca el estado por leccion para cada estudiante.",
+        "Guarda la asistencia para aplicar el calculo del rubro."
+      ];
+    }
+
+    if (seguimientoModoActividadDirecta) {
+      return [
+        "Selecciona la actividad evaluativa del rubro.",
+        "Define los puntos maximos y registra los puntos obtenidos.",
+        "Presiona Calificar para guardar la evaluacion."
+      ];
+    }
+
+    return [
+      "Selecciona el indicador del rubro.",
+      "Marca el nivel por estudiante (Inicial, Intermedio, Avanzado o No entregado/Ausente).",
+      "Presiona Calificar para guardar la evaluacion."
+    ];
+  }, [seguimientoTipo, seguimientoModoActividadDirecta]);
 
   const seguimientoResumenSeccion = useMemo(() => {
     const indicadores = (seguimientoContexto?.indicadores || []).filter((indicador) => {
@@ -1919,6 +2059,58 @@ export default function GestionProfePage() {
     };
   }, [detalle, noteDrafts, resumenAsistencia]);
 
+  const resumenReportesPorTipo = useMemo(() => {
+    const estudiantes = detalle?.estudiantes || [];
+    const actividades = seguimientoContexto?.actividades || [];
+    const notasActividades = seguimientoContexto?.notasActividades || [];
+    const detalles = seguimientoContexto?.detalles || [];
+    const detallePorId = new Map<number, SeguimientoEvaluacionDetalle>();
+    for (const item of detalles) detallePorId.set(Number(item.EstructuraGrupoDetalleId), item);
+
+    const filtrarActividades = (tipo: "COTIDIANO" | "TAREAS" | "EXAMENES") => {
+      return actividades.filter((actividad) => {
+        const detalleItem = detallePorId.get(Number(actividad.EstructuraGrupoDetalleId));
+        const tipoBase = normalizarSeguimientoKey(detalleItem?.TipoSeguimiento || detalleItem?.ComponenteCatalogoNombre || actividad.Fuente || "");
+        if (tipo === "COTIDIANO") return tipoBase.includes("COTIDIAN");
+        if (tipo === "TAREAS") return tipoBase.includes("TAREA");
+        return tipoBase.includes("EXAMEN") || tipoBase.includes("PRUEBA") || tipoBase.includes("TABLA") || tipoBase.includes("ESPECIFIC");
+      });
+    };
+
+    const construir = (tipo: "COTIDIANO" | "TAREAS" | "EXAMENES") => {
+      const acts = filtrarActividades(tipo);
+      const ids = new Set(acts.map((a) => Number(a.ActividadId)));
+      const filas = estudiantes.map((estudiante) => {
+        const notas = notasActividades.filter((n) => Number(n.EstudianteId) === Number(estudiante.EstudianteId) && ids.has(Number(n.ActividadId)));
+        const evaluadas = notas.filter((n) => n.PuntosObtenidos !== null && n.PuntosObtenidos !== undefined);
+        const promedio = evaluadas.length
+          ? evaluadas.reduce((acc, n) => acc + Number(n.PorcentajeObtenido || n.NotaObtenida || 0), 0) / evaluadas.length
+          : 0;
+        return {
+          EstudianteId: estudiante.EstudianteId,
+          NombreCompleto: getFullName(estudiante),
+          Identificacion: estudiante.Identificacion,
+          ActividadesRegistradas: evaluadas.length,
+          TotalActividades: acts.length,
+          Promedio: promedio
+        };
+      });
+      return { filas, totalActividades: acts.length };
+    };
+
+    return {
+      cotidiano: construir("COTIDIANO"),
+      tareas: construir("TAREAS"),
+      examenes: construir("EXAMENES")
+    };
+  }, [detalle?.estudiantes, seguimientoContexto?.actividades, seguimientoContexto?.detalles, seguimientoContexto?.notasActividades]);
+
+  const boletasConductaFiltradas = useMemo(() => {
+    const grupoNombre = String(selected?.GrupoNombre || "").trim().toUpperCase();
+    if (!grupoNombre) return boletasConductaReporte;
+    return boletasConductaReporte.filter((item) => String(item.Seccion || "").trim().toUpperCase() === grupoNombre);
+  }, [boletasConductaReporte, selected?.GrupoNombre]);
+
   function exportarReporteCsv() {
     if (!detalle || resumenReportes.filas.length === 0) return;
 
@@ -2107,6 +2299,153 @@ export default function GestionProfePage() {
     return drafts;
   }
 
+  function escapeHtmlExport(value: any) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function exportarTablaGenericaExcel(fileName: string, titulo: string, headers: string[], rows: Array<Array<string | number>>) {
+    const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtmlExport(h)}</th>`).join("")}</tr>`;
+    const tbody = rows.map((row) => `<tr>${row.map((cell) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtmlExport(cell)}</td>`).join("")}</tr>`).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtmlExport(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
+    const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    descargarBlob(blob, `${fileName}.xls`);
+  }
+
+  function exportarTablaGenericaPdf(titulo: string, headers: string[], rows: Array<Array<string | number>>) {
+    const thead = `<tr>${headers.map((h) => `<th>${escapeHtmlExport(h)}</th>`).join("")}</tr>`;
+    const tbody = rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtmlExport(cell)}</td>`).join("")}</tr>`).join("");
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8" /><title>${escapeHtmlExport(titulo)}</title>
+<style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style>
+</head><body><h2>${escapeHtmlExport(titulo)}</h2><table>${thead}${tbody}</table><script>window.onload=function(){window.print();}</script></body></html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  function exportarReporteActualExcel() {
+    if (!selected) return;
+    if (tipoReporteGestion === "NOTAS") return void exportarReporteExcel();
+    if (tipoReporteGestion === "MENSAJES") return void exportarAuditoriaEnviosExcel();
+
+    const base = `${selected.GrupoNombre}-${selected.MateriaNombre}`.replace(/\s+/g, "-");
+    if (tipoReporteGestion === "ASISTENCIA") {
+      const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37"];
+      const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2)]);
+      return exportarTablaGenericaExcel(`reporte-asistencia-${base}`, "Reporte de Asistencia", headers, rows);
+    }
+    if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
+      const fuente = tipoReporteGestion === "COTIDIANO" ? resumenReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? resumenReportesPorTipo.tareas : resumenReportesPorTipo.examenes;
+      const headers = ["Estudiante", "Identificación", "Actividades registradas", "Total actividades", "Promedio"];
+      const rows = fuente.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.ActividadesRegistradas, f.TotalActividades, Number(f.Promedio || 0).toFixed(2)]);
+      return exportarTablaGenericaExcel(`reporte-${tipoReporteGestion.toLowerCase()}-${base}`, `Reporte de ${tipoReporteGestion}`, headers, rows);
+    }
+    if (tipoReporteGestion === "BOLETAS") {
+      const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
+      const rows = boletasConductaFiltradas.map((b) => [String(Number(b.Consecutivo || 0)).padStart(4, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
+      return exportarTablaGenericaExcel(`reporte-boletas-${base}`, "Reporte de Boletas", headers, rows);
+    }
+  }
+
+  function exportarReporteActualPdf() {
+    if (!selected) return;
+    if (tipoReporteGestion === "NOTAS") return void exportarReportePdf();
+
+    if (tipoReporteGestion === "MENSAJES") {
+      const headers = ["Fecha", "Módulo", "Estudiante", "Identificación", "Correo", "WA", "Último envío"];
+      const rows = auditoriaEnvios.map((f) => [f.Fecha ? String(f.Fecha).slice(0, 10) : "", f.ModuloNombre || f.Modulo, [f.Nombre, f.PrimerApellido, f.SegundoApellido].filter(Boolean).join(" "), f.Identificacion || "", f.CorreoEnviado ? "Enviado" : "No", f.WaEnviado ? "Enviado" : "No", f.UltimoEnvioAt ? String(f.UltimoEnvioAt).slice(0, 19).replace("T", " ") : ""]);
+      return exportarTablaGenericaPdf("Reporte de mensajes enviados", headers, rows);
+    }
+
+    if (tipoReporteGestion === "ASISTENCIA") {
+      const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37"];
+      const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2)]);
+      return exportarTablaGenericaPdf("Reporte de Asistencia", headers, rows);
+    }
+    if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
+      const fuente = tipoReporteGestion === "COTIDIANO" ? resumenReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? resumenReportesPorTipo.tareas : resumenReportesPorTipo.examenes;
+      const headers = ["Estudiante", "Identificación", "Actividades registradas", "Total actividades", "Promedio"];
+      const rows = fuente.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.ActividadesRegistradas, f.TotalActividades, Number(f.Promedio || 0).toFixed(2)]);
+      return exportarTablaGenericaPdf(`Reporte de ${tipoReporteGestion}`, headers, rows);
+    }
+    if (tipoReporteGestion === "BOLETAS") {
+      const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
+      const rows = boletasConductaFiltradas.map((b) => [String(Number(b.Consecutivo || 0)).padStart(4, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
+      return exportarTablaGenericaPdf("Reporte de Boletas", headers, rows);
+    }
+  }
+
+  async function cargarAuditoriaEnvios(item = selected) {
+    if (!item) return;
+    setLoadingAuditoriaEnvios(true);
+    try {
+      const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}/reportes/auditoria-envios`, {
+        params: {
+          anioLectivoId: item.AnioLectivoId,
+          periodoId: item.PeriodoId,
+          desde: auditoriaEnviosDesde,
+          hasta: auditoriaEnviosHasta
+        }
+      });
+      const data = response.data?.data || {};
+      setAuditoriaEnvios(Array.isArray(data.filas) ? data.filas : []);
+    } catch (error: any) {
+      console.error("Error cargando auditoría de envíos:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar la auditoría de envíos");
+    } finally {
+      setLoadingAuditoriaEnvios(false);
+    }
+  }
+
+  async function exportarAuditoriaEnviosExcel() {
+    if (!selected) return;
+    try {
+      const response = await api.get(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/reportes/auditoria-envios/excel`, {
+        params: {
+          anioLectivoId: selected.AnioLectivoId,
+          periodoId: selected.PeriodoId,
+          desde: auditoriaEnviosDesde,
+          hasta: auditoriaEnviosHasta
+        },
+        responseType: "blob"
+      });
+      descargarBlob(response.data, `auditoria-envios-${selected.GrupoNombre}-${selected.MateriaNombre}-${auditoriaEnviosDesde}-a-${auditoriaEnviosHasta}.xlsx`);
+    } catch (error: any) {
+      console.error("Error exportando auditoría de envíos:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo exportar la auditoría de envíos");
+    }
+  }
+
+  async function cargarBoletasConductaReporte() {
+    setLoadingBoletasReporte(true);
+    try {
+      const response = await api.get("/reportes/boletas-conducta");
+      const data = response.data?.data || response.data || [];
+      setBoletasConductaReporte(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      console.error("Error cargando boletas de conducta:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar el reporte de boletas");
+    } finally {
+      setLoadingBoletasReporte(false);
+    }
+  }
+
+  function asistenciaDraftComparable(draft?: { estado: EstadoAsistencia; minutosTardia: string; observacion: string; notificarEncargado?: boolean }) {
+    const estado = draft?.estado || "PRESENTE";
+    const minutos = draft?.minutosTardia === "" || draft?.minutosTardia == null ? 0 : Number(draft.minutosTardia);
+    return {
+      estado,
+      minutosTardia: Number.isFinite(minutos) ? minutos : 0,
+      observacion: String(draft?.observacion || "").trim()
+    };
+  }
+
 function estadoAsistenciaLabel(estado: EstadoAsistencia) {
     switch (estado) {
       case "PRESENTE": return "Presente";
@@ -2151,6 +2490,9 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
   }
   if (estado === "TARDIA_MENOR_10") {
     return String(porNivel(2)?.Cuerpo || "").trim();
+  }
+  if (estado === "TARDIA_MAYOR_10") {
+    return String(porNivel(3)?.Cuerpo || "").trim();
   }
   return "";
 }
@@ -2531,6 +2873,7 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       return;
     }
     setSavingSeguimiento(true);
+    startSeguimientoSaving("actividad");
     setMessage("");
     setErrorMessage("");
     try {
@@ -2893,6 +3236,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setResumenAsistencia([]);
     setEval360Plantillas([]);
     setEval360PlantillaId("");
+    setMostrarSelectorCambioPlantilla(false);
     setEval360Estructura(null);
     setEval360DetallesDraft([]);
     setEval360Indicadores([]);
@@ -2929,7 +3273,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setUltimoPlaneamientoIa(null);
     setEditingPlaneamientoIaId(null);
     setPlaneamientoIaFormOpen(false);
-    setDocumentoApoyoIa(null);
+    setDocumentoApoyoIa([]);
     setPlantillaFormatoIa(null);
     setActivePanel("");
     setMessage("");
@@ -3061,6 +3405,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setEval360DetallesDraft(Array.isArray(data?.detalles) ? data.detalles : []);
       setMessage(response?.data?.message || "Estructura de evaluación creada correctamente");
       await loadEval360Data(selected);
+      await loadGrupos(q);
     } catch (error: any) {
       console.error("Error creando estructura Eval360:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo crear la estructura de evaluación");
@@ -3297,6 +3642,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     return Number(((Number(nota || 0) / 100) * pe).toFixed(2));
   }
 
+  function startSeguimientoSaving(modo: "actividad" | "indicador") {
+    setSavingSeguimientoModo(modo);
+    setSavedSeguimientoModo(null);
+    setSavingSeguimientoProgress(8);
+    if (savingSeguimientoTimerRef.current !== null) {
+      window.clearInterval(savingSeguimientoTimerRef.current);
+      savingSeguimientoTimerRef.current = null;
+    }
+    savingSeguimientoTimerRef.current = window.setInterval(() => {
+      setSavingSeguimientoProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 380);
+  }
+
+  function stopSeguimientoSaving(success: boolean, modo: "actividad" | "indicador") {
+    if (savingSeguimientoTimerRef.current !== null) {
+      window.clearInterval(savingSeguimientoTimerRef.current);
+      savingSeguimientoTimerRef.current = null;
+    }
+    if (success) {
+      setSavingSeguimientoProgress(100);
+      setSavedSeguimientoModo(modo);
+      window.setTimeout(() => setSavingSeguimientoProgress(0), 600);
+    } else {
+      setSavingSeguimientoProgress(0);
+    }
+    setSavingSeguimientoModo(null);
+  }
+
   async function guardarSeguimientoActividad() {
     if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || !seguimientoActividadSeleccionada) {
       setErrorMessage("Seleccioná el grupo, la plantilla, el componente y la actividad para guardar");
@@ -3358,9 +3731,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         [String(seguimientoActividadSeleccionada.ActividadId)]: String(puntosMaximos)
       }));
       await loadSeguimientoEvaluacion(selected);
+      stopSeguimientoSaving(true, "actividad");
     } catch (error: any) {
       console.error("Error guardando actividad:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar la actividad");
+      stopSeguimientoSaving(false, "actividad");
     } finally {
       setSavingSeguimiento(false);
     }
@@ -3395,6 +3770,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     setSavingSeguimiento(true);
+    startSeguimientoSaving("indicador");
     setMessage("");
     setErrorMessage("");
 
@@ -3417,9 +3793,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setMessage(fallidos > 0 ? `${baseMessage}. Correos enviados: ${enviados}. Fallidos: ${fallidos}.${primerError ? ` Error: ${primerError}` : ""}` : baseMessage);
       await loadSeguimientoEvaluacion(selected);
       if (activePanel === "notas") await loadDetalle(selected);
+      stopSeguimientoSaving(true, "indicador");
     } catch (error: any) {
       console.error("Error guardando seguimiento:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar el seguimiento");
+      stopSeguimientoSaving(false, "indicador");
     } finally {
       setSavingSeguimiento(false);
     }
@@ -4086,16 +4464,35 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
     setMessage("");
     setErrorMessage("");
+    setDeletingPlaneamientoId(id);
+    setDeletingPlaneamientoProgress(8);
+    if (deletingPlaneamientoTimerRef.current !== null) {
+      window.clearInterval(deletingPlaneamientoTimerRef.current);
+      deletingPlaneamientoTimerRef.current = null;
+    }
+    deletingPlaneamientoTimerRef.current = window.setInterval(() => {
+      setDeletingPlaneamientoProgress((prev) => (prev >= 92 ? 92 : prev + 7));
+    }, 260);
 
     try {
       const response = await api.delete(`/gestion-profe/planeamientos/${id}`);
       const result = response.data?.data || {};
       setMessage(result.message || "Planeamiento desactivado correctamente");
+      setDeletingPlaneamientoProgress(100);
       if (editingPlaneamientoId === id) resetPlaneamientoForm();
       removerPlaneamientoLocal(id);
     } catch (error: any) {
       console.error("Error desactivando planeamiento:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo desactivar el planeamiento");
+      setDeletingPlaneamientoProgress(0);
+    } finally {
+      if (deletingPlaneamientoTimerRef.current !== null) {
+        window.clearInterval(deletingPlaneamientoTimerRef.current);
+        deletingPlaneamientoTimerRef.current = null;
+      }
+      setTimeout(() => {
+        setDeletingPlaneamientoId((curr) => (curr === id ? null : curr));
+      }, 250);
     }
   }
 
@@ -4124,6 +4521,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
     setMessage("");
     setErrorMessage("");
+    setDeletingPlaneamientoId(id);
+    setDeletingPlaneamientoProgress(8);
+    if (deletingPlaneamientoTimerRef.current !== null) {
+      window.clearInterval(deletingPlaneamientoTimerRef.current);
+      deletingPlaneamientoTimerRef.current = null;
+    }
+    deletingPlaneamientoTimerRef.current = window.setInterval(() => {
+      setDeletingPlaneamientoProgress((prev) => (prev >= 92 ? 92 : prev + 7));
+    }, 260);
 
     try {
       const response = await api.delete(`/gestion-profe/planeamientos/${id}/eliminar-definitivo`, {
@@ -4136,11 +4542,21 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           ? "Planeamiento eliminado para todas las secciones del grado"
           : "Planeamiento eliminado correctamente")
       );
+      setDeletingPlaneamientoProgress(100);
       if (editingPlaneamientoId === id) resetPlaneamientoForm();
       await loadPlaneamientos(selected, { mostrarLoading: false });
     } catch (error: any) {
       console.error("Error eliminando planeamiento:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el planeamiento");
+      setDeletingPlaneamientoProgress(0);
+    } finally {
+      if (deletingPlaneamientoTimerRef.current !== null) {
+        window.clearInterval(deletingPlaneamientoTimerRef.current);
+        deletingPlaneamientoTimerRef.current = null;
+      }
+      setTimeout(() => {
+        setDeletingPlaneamientoId((curr) => (curr === id ? null : curr));
+      }, 250);
     }
   }
 
@@ -4490,6 +4906,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     setGeneratingPlaneamientoIa(true);
+    setGeneratingPlaneamientoIaProgress(8);
+    if (generatingPlaneamientoIaTimerRef.current !== null) {
+      window.clearInterval(generatingPlaneamientoIaTimerRef.current);
+      generatingPlaneamientoIaTimerRef.current = null;
+    }
+    generatingPlaneamientoIaTimerRef.current = window.setInterval(() => {
+      setGeneratingPlaneamientoIaProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 300);
     setMessage("");
     setErrorMessage("");
     setUltimoPlaneamientoIa(null);
@@ -4513,7 +4937,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       formData.append("semanas", String(Number(planeamientoIaForm.semanas || 4)));
       if (plantillaPlaneamientoIaId) formData.append("plantillaPromptIAId", plantillaPlaneamientoIaId);
       habilidadesIds.forEach((id) => formData.append("habilidadesIds[]", String(id)));
-      if (documentoApoyoIa) formData.append("documentoApoyo", documentoApoyoIa);
+      documentoApoyoIa.forEach((file) => formData.append("documentoApoyo", file));
       if (plantillaFormatoIa) formData.append("plantillaFormato", plantillaFormatoIa);
 
       const generarResponse = await api.post("/planeamiento-ia/generar-planeamiento", formData, {
@@ -4523,6 +4947,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const generadoData = generarResponse.data?.data || generarResponse.data || {};
       const resultado: PlaneamientoIaResultado = normalizePlaneamientoIaResultado(generadoData.resultado || generadoData);
       setUltimoPlaneamientoIa(resultado);
+      setGeneratingPlaneamientoIaProgress(100);
       setMessage("Planeamiento generado. Revisá y ajustá la propuesta antes de guardarla.");
     } catch (error: any) {
       console.error("Error generando planeamiento con IA:", error);
@@ -4533,6 +4958,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           : (error?.response?.data?.message || "No se pudo generar el planeamiento con IA")
       );
     } finally {
+      if (generatingPlaneamientoIaTimerRef.current !== null) {
+        window.clearInterval(generatingPlaneamientoIaTimerRef.current);
+        generatingPlaneamientoIaTimerRef.current = null;
+      }
       setGeneratingPlaneamientoIa(false);
     }
   }
@@ -4545,7 +4974,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function updateResultadoIaArray(field: keyof PlaneamientoIaResultado, value: string) {
-    const lines = value.split("\\n").map((line) => line.trim()).filter(Boolean);
+    const lines = value.split(/\r?\n+/).map((line) => line.trim()).filter(Boolean);
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
       [field]: lines
@@ -4586,6 +5015,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     setSavingPlaneamientoIa(true);
+    setSavingPlaneamientoIaProgress(8);
+    if (savingPlaneamientoIaTimerRef.current !== null) {
+      window.clearInterval(savingPlaneamientoIaTimerRef.current);
+      savingPlaneamientoIaTimerRef.current = null;
+    }
+    savingPlaneamientoIaTimerRef.current = window.setInterval(() => {
+      setSavingPlaneamientoIaProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 320);
     setMessage("");
     setErrorMessage("");
 
@@ -4616,9 +5053,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         fechaInicio: planeamientoIaForm.fechaInicio || null,
         fechaFin: planeamientoIaForm.fechaFin || null,
         observaciones: [
-          ultimoPlaneamientoIa.advertencia || "Borrador generado con apoyo de IA",
-          ultimoPlaneamientoIa.observaciones || "",
-          planeamientoIaForm.indicaciones ? `Indicaciones dadas a la IA: ${planeamientoIaForm.indicaciones}` : ""
+          ultimoPlaneamientoIa.observaciones || ""
         ].filter(Boolean).join("\\n\\n"),
         resultado: resultadoNormalizado
         };
@@ -4644,8 +5079,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       }
       setUltimoPlaneamientoIa(null);
       setEditingPlaneamientoIaId(null);
-      setDocumentoApoyoIa(null);
+      setDocumentoApoyoIa([]);
       setPlantillaFormatoIa(null);
+      setSavingPlaneamientoIaProgress(100);
+      setPlaneamientoIaFormOpen(false);
 
       if (selected && gruposSeleccionados.some((grupo) => Number(grupo.GrupoId) === Number(selected.GrupoId)) && Number(selected.MateriaId) === materiaId) {
         await loadPlaneamientos(selected);
@@ -4656,7 +5093,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     } catch (error: any) {
       console.error("Error guardando planeamiento generado:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar el planeamiento generado");
+      setSavingPlaneamientoIaProgress(0);
     } finally {
+      if (savingPlaneamientoIaTimerRef.current !== null) {
+        window.clearInterval(savingPlaneamientoIaTimerRef.current);
+        savingPlaneamientoIaTimerRef.current = null;
+      }
       setSavingPlaneamientoIa(false);
     }
   }
@@ -4678,8 +5120,21 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const data = response.data?.data || response.data || {};
       const estudiantes = detalle?.estudiantes || data.estudiantes || [];
       const lecciones = Array.isArray(data.lecciones) ? data.lecciones : [];
+      const registros = Array.isArray(data.registros) ? data.registros : [];
       setAsistenciaLecciones(lecciones);
-      setAsistenciaDrafts(buildAsistenciaDrafts(estudiantes, Array.isArray(data.registros) ? data.registros : [], lecciones));
+      const drafts = buildAsistenciaDrafts(estudiantes, registros, lecciones);
+      setAsistenciaDrafts(drafts);
+      setAsistenciaDraftsBase(drafts);
+      setAsistenciaYaCalificada(registros.length > 0);
+      const notificacionesCargadas: AsistenciaNotificacionEstado = {};
+      for (const registro of registros) {
+        const key = asistenciaDraftKey(Number(registro?.EstudianteId || 0), Number(registro?.HorarioGrupoId || 0));
+        notificacionesCargadas[key] = {
+          correoEnviado: Boolean(registro?.CorreoEnviado),
+          waEnviado: Boolean(registro?.WaEnviado)
+        };
+      }
+      setAsistenciaNotificaciones(notificacionesCargadas);
       setResumenAsistencia(Array.isArray(data.resumen) ? data.resumen : []);
     } catch (error: any) {
       console.error("Error cargando asistencia:", error);
@@ -4697,17 +5152,32 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       leccionesUsar.map((leccion) => {
         const key = asistenciaDraftKey(estudiante.EstudianteId, leccion.HorarioGrupoId);
         const draft = asistenciaDrafts[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
+        const draftBase = asistenciaDraftsBase[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
+        const actual = asistenciaDraftComparable(draft);
+        const base = asistenciaDraftComparable(draftBase);
+        const changed = actual.estado !== base.estado
+          || actual.minutosTardia !== base.minutosTardia
+          || actual.observacion !== base.observacion
+          || Boolean(draft.notificarEncargado);
+        if (!changed) return null;
         return {
+          key,
           estudianteId: estudiante.EstudianteId,
           horarioGrupoId: leccion.HorarioGrupoId || null,
           bloqueHorarioId: leccion.BloqueHorarioId || null,
-          estado: draft.estado,
-          minutosTardia: draft.minutosTardia === "" ? 0 : Number(draft.minutosTardia),
-          observacion: draft.observacion || null,
+          estado: actual.estado,
+          minutosTardia: actual.minutosTardia,
+          observacion: actual.observacion || null,
           notificarEncargado: Boolean(draft.notificarEncargado)
         };
       })
-    );
+    ).filter(Boolean) as any[];
+
+    if (registros.length === 0) {
+      setMessage("No hay cambios en asistencia para guardar");
+      setSavedAsistencia(asistenciaYaCalificada);
+      return;
+    }
 
     const invalid = registros.find((item) => !Number.isFinite(item.minutosTardia) || item.minutosTardia < 0);
     if (invalid) {
@@ -4716,6 +5186,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     setSavingAsistencia(true);
+    setSavedAsistencia(false);
+    setSavingAsistenciaProgress(8);
+    if (savingAsistenciaTimerRef.current !== null) {
+      window.clearInterval(savingAsistenciaTimerRef.current);
+      savingAsistenciaTimerRef.current = null;
+    }
+    savingAsistenciaTimerRef.current = window.setInterval(() => {
+      setSavingAsistenciaProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 320);
     setMessage("");
     setErrorMessage("");
 
@@ -4724,16 +5203,66 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
         fecha: asistenciaFecha,
-        registros
+        registros: registros.map((item) => ({
+          estudianteId: item.estudianteId,
+          horarioGrupoId: item.horarioGrupoId,
+          bloqueHorarioId: item.bloqueHorarioId,
+          estado: item.estado,
+          minutosTardia: item.minutosTardia,
+          observacion: item.observacion,
+          notificarEncargado: item.notificarEncargado
+        }))
       });
       const result = response.data?.data || {};
+      const notificacionesEstado: AsistenciaNotificacionEstado = {};
+      for (const item of registros) {
+        const k = String(item.key || asistenciaDraftKey(item.estudianteId, item.horarioGrupoId));
+        notificacionesEstado[k] = { correoEnviado: false, waEnviado: false };
+      }
+      const notificaciones = Array.isArray(result?.notificaciones) ? result.notificaciones : [];
+      for (const notif of notificaciones) {
+        if (notif?.enviado !== true) continue;
+        const estudianteId = Number(notif?.estudianteId || 0);
+        if (!estudianteId) continue;
+        for (const item of registros) {
+          if (Number(item.estudianteId) !== estudianteId || !item.notificarEncargado) continue;
+          const k = String(item.key || asistenciaDraftKey(item.estudianteId, item.horarioGrupoId));
+          const prev = notificacionesEstado[k] || {};
+          if (notif?.canal === "correo") prev.correoEnviado = true;
+          if (notif?.canal === "whatsapp") prev.waEnviado = true;
+          notificacionesEstado[k] = prev;
+        }
+      }
+      // Respaldo visual: si se marcó informar y no llegó detalle por canal,
+      // mostramos el/los medios disponibles del estudiante para que sí aparezca en la columna final.
+      for (const item of registros) {
+        if (!item?.notificarEncargado) continue;
+        const k = String(item.key || asistenciaDraftKey(item.estudianteId, item.horarioGrupoId));
+        const prev = notificacionesEstado[k] || {};
+        if (!prev.correoEnviado && !prev.waEnviado) {
+          const estudianteFila = (detalle?.estudiantes || []).find((e) => Number(e.EstudianteId) === Number(item.estudianteId));
+          prev.correoEnviado = Boolean(getCorreoHabilitadoEstudiante(estudianteFila as any));
+          prev.waEnviado = Boolean(getTelefonoWhatsAppHabilitado(estudianteFila as any));
+          notificacionesEstado[k] = prev;
+        }
+      }
+      setAsistenciaNotificaciones(notificacionesEstado);
       setMessage(result.message || "Asistencia guardada correctamente");
+      setSavingAsistenciaProgress(100);
+      setSavedAsistencia(true);
+      setAsistenciaYaCalificada(true);
       setResumenAsistencia(Array.isArray(result.resumen) ? result.resumen : []);
       await loadAsistencia(selected, asistenciaFecha);
+      await loadGrupos(q);
     } catch (error: any) {
       console.error("Error guardando asistencia:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar la asistencia");
+      setSavingAsistenciaProgress(0);
     } finally {
+      if (savingAsistenciaTimerRef.current !== null) {
+        window.clearInterval(savingAsistenciaTimerRef.current);
+        savingAsistenciaTimerRef.current = null;
+      }
       setSavingAsistencia(false);
     }
   }
@@ -4796,6 +5325,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     loadPlantillasPlaneamientoIa();
     loadEval360PlantillasIaIndicadores();
   }, []);
+
+  useEffect(() => {
+    if (activePanel === "reportes" && selected) {
+      cargarAuditoriaEnvios(selected);
+    }
+  }, [activePanel, selected?.GrupoId, selected?.MateriaId, selected?.PeriodoId, selected?.AnioLectivoId]);
 
   async function loadMiHorario(item = selected) {
     const itemHorario = item || selected || gruposOrdenados[0];
@@ -5205,6 +5740,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "12px" }}>
             {gruposOrdenados.map((item) => {
               const isSelected = selected?.AsignacionDocenteId === item.AsignacionDocenteId;
+              const tienePlantilla = !!item.EvaluacionPlantillaNombre;
+              const tieneCalificaciones = Boolean(Number(item.TieneCalificacionesEvaluacion || 0));
+              const puedeCambiarPlantilla = tienePlantilla && !tieneCalificaciones;
               return (
                 <button
                   key={item.AsignacionDocenteId}
@@ -5222,6 +5760,40 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <strong>{item.GrupoNombre}</strong>
                   <span>{item.MateriaCodigo ? `${item.MateriaCodigo} - ` : ""}{item.MateriaNombre}</span>
                   <span style={{ opacity: 0.75 }}>{item.AnioNombre} / {item.PeriodoNombre}</span>
+                  {!tienePlantilla ? (
+                    <span style={{ color: "#b91c1c", fontWeight: 700 }}>Sin plantilla activa</span>
+                  ) : puedeCambiarPlantilla ? (
+                    <span style={{ color: "#166534", fontWeight: 700 }}>
+                      Plantilla de evaluacion:{" "}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={async (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          await loadDetalle(item);
+                          setActivePanel("seguimiento");
+                          setMostrarSelectorCambioPlantilla(true);
+                        }}
+                        onKeyDown={async (event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          await loadDetalle(item);
+                          setActivePanel("seguimiento");
+                          setMostrarSelectorCambioPlantilla(true);
+                        }}
+                        style={{ color: "#166534", textDecoration: "underline", cursor: "pointer" }}
+                        title="Cambiar plantilla"
+                      >
+                        {item.EvaluacionPlantillaNombre}
+                      </span>
+                    </span>
+                  ) : (
+                    <span style={{ opacity: 0.75 }}>
+                      Plantilla de evaluacion: {item.EvaluacionPlantillaNombre}
+                    </span>
+                  )}
                   <span style={{ opacity: 0.75 }}>Estudiantes: {item.TotalEstudiantes || 0}</span>
                   {loadingDetalle && loadingDetalleCardId === item.AsignacionDocenteId ? (
                     <span style={{ marginTop: "6px", color: "#1d4ed8", fontWeight: 800 }}>Cargando sesión...</span>
@@ -5291,11 +5863,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             })()}
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
-              <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
-              <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : secondaryButtonStyle} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Espesificaciones y Examenes</button>
-              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
-              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : secondaryButtonStyle} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); }}>Reportes</button>
+              <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : getGestionPanelButtonStyle("planeamientos")} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
+              <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : getGestionPanelButtonStyle("seguimiento")} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
+              <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : getGestionPanelButtonStyle("examenes_tabla")} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Espesificaciones y Examenes</button>
+              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
+              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); }}>Reportes</button>
             </div>
 
 
@@ -5615,10 +6187,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </button>
                 </div>
 
-                {(!seguimientoContexto?.estructura || !seguimientoContexto?.estructura?.PlantillaBaseId) ? (
+                {(!seguimientoContexto?.estructura || !seguimientoContexto?.estructura?.PlantillaBaseId || mostrarSelectorCambioPlantilla) ? (
                   <div style={{ display: "grid", gap: "12px", padding: "14px", background: "white", border: "1px solid #e2e8f0", borderRadius: "14px" }}>
-                    <strong>Primera vez en este grupo</strong>
-                    <span style={{ color: "#475569" }}>Seleccioná la plantilla de parametrización de evaluación que se va a usar para esta sección. Esta asignación queda guardada para el grupo, materia, año y periodo seleccionados.</span>
+                    <strong>{mostrarSelectorCambioPlantilla ? "Cambiar plantilla de evaluacion" : "Primera vez en este grupo"}</strong>
+                    <span style={{ color: "#475569" }}>
+                      {mostrarSelectorCambioPlantilla
+                        ? "Selecciona la nueva plantilla que se va a usar en esta seccion."
+                        : "Seleccioná la plantilla de parametrización de evaluación que se va a usar para esta sección. Esta asignación queda guardada para el grupo, materia, año y periodo seleccionados."}
+                    </span>
                     <label style={{ display: "grid", gap: "6px" }}>
                       <span style={{ color: "#0f172a", fontWeight: 700 }}>Plantilla</span>
                       <select style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px" }} value={eval360PlantillaId} onChange={(event) => setEval360PlantillaId(event.target.value)} disabled={savingEval360 || loadingSeguimiento}>
@@ -5628,8 +6204,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         ))}
                       </select>
                     </label>
-                    <button type="button" className="primary-btn" onClick={async () => { await crearEval360DesdePlantilla(); await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); }} disabled={!eval360PlantillaId || savingEval360 || !selected}>
-                      {savingEval360 ? "Asignando..." : "Asignar plantilla"}
+                    <button type="button" className="primary-btn" onClick={async () => { await crearEval360DesdePlantilla(); setMostrarSelectorCambioPlantilla(false); await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); }} disabled={!eval360PlantillaId || savingEval360 || !selected}>
+                      {savingEval360 ? (mostrarSelectorCambioPlantilla ? "Cambiando..." : "Asignando...") : (mostrarSelectorCambioPlantilla ? "Cambiar plantilla" : "Asignar plantilla")}
                     </button>
                   </div>
                 ) : (
@@ -5655,7 +6231,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px" }}>
                       <label style={{ display: "grid", gap: "6px" }}>
-                        <span style={{ color: "#0f172a", fontWeight: 700 }}>Ítem a evaluar</span>
+                        <span style={{ color: "#7c2d12", fontWeight: 900, fontSize: "16px", letterSpacing: "0.2px" }}>Rubro a Calificar</span>
                         <select style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px" }} value={seguimientoTipo} onChange={(event) => { setSeguimientoTipo(event.target.value); setSeguimientoIndicadorId(""); }}>
                           <option value="">Seleccionar</option>
                           {seguimientoComponentes.map((item) => (
@@ -5687,6 +6263,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       </label>
                     </div>
 
+                    <div style={{ display: "grid", gap: "8px", padding: "12px", background: "#fff7ed", border: "1px solid #fdba74", borderRadius: "12px" }}>
+                      <strong style={{ color: "#9a3412" }}>Paso a paso para evaluar este rubro</strong>
+                      <ol style={{ margin: 0, paddingLeft: "18px", color: "#7c2d12", fontWeight: 600 }}>
+                        {seguimientoPasosEvaluacion.map((paso, index) => (
+                          <li key={`paso-seg-${index}`} style={{ marginBottom: "4px" }}>{paso}</li>
+                        ))}
+                      </ol>
+                    </div>
+
                     {isTipoAsistenciaSeguimiento(seguimientoTipo) ? (
                       <div style={{ display: "grid", gap: "12px" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "end" }}>
@@ -5697,14 +6282,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               value={asistenciaFecha}
                               onChange={(event) => {
                                 setAsistenciaFecha(event.target.value);
+                                setSavedAsistencia(false);
+                                setAsistenciaNotificaciones({});
                                 if (selected) loadAsistencia(selected, event.target.value);
                               }}
                               style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px", fontWeight: 800 }}
                             />
                           </label>
-                          <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia || !detalle?.estudiantes?.length}>
-                            {savingAsistencia ? "Guardando..." : "Guardar asistencia"}
-                          </button>
                         </div>
 
                         <div style={{ padding: "12px", borderRadius: "12px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#0f172a" }}>
@@ -5750,6 +6334,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     <th style={{ minWidth: "120px", padding: "10px" }} title="Minutos de tardía (solo cuando corresponde)">Minutos tardóa</th>
                                     <th style={{ minWidth: "220px", padding: "10px" }}>Observación</th>
                                     <th style={{ minWidth: "120px", padding: "10px" }} title="Marcar para notificar al encargado del estudiante">Informar al encargado</th>
+                                    <th style={{ minWidth: "160px", padding: "10px" }}>Estado envío</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -5800,12 +6385,38 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                           <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
                                             <input type="checkbox" title="Informar al encargado" aria-label="Informar al encargado" checked={Boolean(draft.notificarEncargado)} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "notificarEncargado", e.target.checked)} style={{ accentColor: "#2563eb", width: "18px", height: "18px" }} />
                                           </td>
+                                          <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", color: "#166534", fontWeight: 700, fontSize: "12px" }}>
+                                            {(() => {
+                                              const estadoNotif = asistenciaNotificaciones[key];
+                                              if (!estadoNotif) return "";
+                                              const etiquetas: string[] = [];
+                                              if (estadoNotif.correoEnviado) etiquetas.push("Correo enviado");
+                                              if (estadoNotif.waEnviado) etiquetas.push("WA enviado");
+                                              return etiquetas.join(" / ");
+                                            })()}
+                                          </td>
                                         </tr>
                                       );
                                     })
                                   )}
                                 </tbody>
                               </table>
+                            </div>
+                            <div style={{ display: "grid", gap: "8px", justifyItems: "start", marginTop: "6px" }}>
+                              <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={handleSaveAsistencia}
+                                disabled={savingAsistencia || loadingAsistencia || !detalle?.estudiantes?.length}
+                                style={savedAsistencia ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
+                              >
+                                {savingAsistencia ? "Guardando..." : (savedAsistencia ? "Guardado" : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia"))}
+                              </button>
+                              {savingAsistencia ? (
+                                <div style={{ width: "280px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+                                  <div style={{ width: `${savingAsistenciaProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         )}
@@ -5926,7 +6537,22 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 </tbody>
                               </table>
                             </div>
-                            <button type="button" className="primary-btn" onClick={guardarSeguimientoActividad} disabled={savingSeguimiento || !seguimientoActividadSeleccionada || Number(String(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)).replace(",", ".")) <= 0}>{savingSeguimiento ? "Guardando..." : "Guardar evaluación"}</button>
+                            <div style={{ display: "grid", gap: "8px", justifyItems: "start", marginTop: "6px" }}>
+                              <button
+                                type="button"
+                                className="primary-btn"
+                                onClick={guardarSeguimientoActividad}
+                                disabled={savingSeguimiento || !seguimientoActividadSeleccionada || Number(String(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)).replace(",", ".")) <= 0}
+                                style={savedSeguimientoModo === "actividad" ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
+                              >
+                                {savingSeguimiento && savingSeguimientoModo === "actividad" ? "Guardando..." : (savedSeguimientoModo === "actividad" ? "Guardado" : "Calificar")}
+                              </button>
+                              {savingSeguimiento && savingSeguimientoModo === "actividad" ? (
+                                <div style={{ width: "280px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+                                  <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         ) : (
                           <div style={{ padding: "14px", background: "white", border: "1px dashed #cbd5e1", borderRadius: "14px", color: "#475569" }}>No hay actividades configuradas para este componente.</div>
@@ -6171,9 +6797,22 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               </table>
                             </div>
                             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-                              <button type="button" className="primary-btn" onClick={guardarSeguimientoIndicador} disabled={savingSeguimiento || !seguimientoIndicadorSeleccionado}>
-                                {savingSeguimiento ? "Guardando..." : "Guardar evaluación"}
-                              </button>
+                              <div style={{ display: "grid", gap: "8px", justifyItems: "start", marginTop: "6px" }}>
+                                <button
+                                  type="button"
+                                  className="primary-btn"
+                                  onClick={guardarSeguimientoIndicador}
+                                  disabled={savingSeguimiento || !seguimientoIndicadorSeleccionado}
+                                  style={savedSeguimientoModo === "indicador" ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
+                                >
+                                  {savingSeguimiento && savingSeguimientoModo === "indicador" ? "Guardando..." : (savedSeguimientoModo === "indicador" ? "Guardado" : "Calificar")}
+                                </button>
+                                {savingSeguimiento && savingSeguimientoModo === "indicador" ? (
+                                  <div style={{ width: "280px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+                                    <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                                  </div>
+                                ) : null}
+                              </div>
                               <span style={{ color: "#475569" }}>Inicial = 1, Intermedio = 2, Avanzado = 3, {normalizarSeguimientoKey(seguimientoTipo).includes("TAREA") ? "No entregado" : "Ausente"} = 0</span>
                             </div>
                           </div>
@@ -6383,12 +7022,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         value={asistenciaFecha}
                         onChange={(e) => {
                           setAsistenciaFecha(e.target.value);
+                          setAsistenciaNotificaciones({});
                           if (selected) loadAsistencia(selected, e.target.value);
                         }}
                       />
                     </label>
                     <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia}>
-                      {savingAsistencia ? "Guardando asistencia..." : "Guardar asistencia"}
+                      {savingAsistencia ? "Guardando asistencia..." : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia")}
                     </button>
                   </div>
                 </div>
@@ -6509,7 +7149,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             busquedaTexto: "",
                             habilidadesIds: []
                           }));
-                          setDocumentoApoyoIa(null);
+                          setDocumentoApoyoIa([]);
                           setPlantillaFormatoIa(null);
                           setEditingPlaneamientoIaId(null);
                           setUltimoPlaneamientoIa(null);
@@ -6520,6 +7160,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       {planeamientoIaFormOpen ? "Ocultar generación IA" : "Agregar planeamiento con IA"}
                     </button>
                   </div>
+                </div>
+
+                <div style={{ ...helperDarkBoxStyle, display: "grid", gap: "8px" }}>
+                  <strong>Paso a paso</strong>
+                  <div>1. Hacé clic en `Agregar planeamiento con IA` para abrir el formulario.</div>
+                  <div>2. Completá contexto, habilidades e indicaciones (si aplica) y generá el borrador.</div>
+                  <div>3. Revisá el resultado, ajustá lo necesario y guardá el planeamiento.</div>
+                  <div>4. En la sección de indicadores, generá y validá los niveles (inicial, intermedio y avanzado).</div>
+                  <div>5. Confirmá que los indicadores queden activos para usarlos luego en Evaluaciones y Reportes.</div>
                 </div>
 
 
@@ -6596,7 +7245,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       </div>
                     </label>
                     <div style={{ color: "#e5eefb" }}>
-                      <div style={{ fontWeight: 700, marginBottom: "6px" }}>Secciones</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                        <span style={{ fontWeight: 700 }}>Secciones</span>
+                        <span style={requiredBadgeStyle}>Requerido</span>
+                      </div>
                       <div
                         style={{
                           background: "#1f324a",
@@ -6693,7 +7345,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </div>
 
                     <label style={{ color: "#e5eefb" }}>
-                      Plantilla IA
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span>Plantilla IA</span>
+                        <span style={requiredBadgeStyle}>Requerido</span>
+                      </span>
                       <select
                         value={plantillaPlaneamientoIaId}
                         onChange={(e) => setPlantillaPlaneamientoIaId(e.target.value)}
@@ -6713,7 +7368,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </label>
 
                     <label style={{ color: "#e5eefb" }}>
-                      Plantilla o formato de salida (opcional)
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span>Plantilla o formato de salida</span>
+                        <span style={optionalBadgeStyle}>Opcional</span>
+                      </span>
                       <input
                         type="file"
                         accept=".docx,.txt,.csv,.json,.md"
@@ -6746,7 +7404,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     <strong style={{ color: "#e5eefb" }}>2. Período y alcance</strong>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
                     <label style={{ color: "#e5eefb" }}>
-                      Mes o meses
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span>Mes o meses</span>
+                        <span style={requiredBadgeStyle}>Requerido</span>
+                      </span>
                       <select
                         multiple
                         value={mesesSeleccionadosIa}
@@ -6798,19 +7459,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </div>
                   </div>
 
-                  <label style={{ color: "#e5eefb" }}>
-                    Mes, tema o énfasis del planeamiento
-                    <input
-                      value={planeamientoIaForm.tema}
-                      onChange={(e) => updatePlaneamientoIaField("tema", e.target.value)}
-                      placeholder="Ejemplo: Abril, Ley de senos, Funciones, Estadéstica..."
-                      style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
-                    />
-                  </label>
-
                   <div style={{ display: "grid", gap: "8px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-                      <strong>3. Seleccioná las habilidades</strong>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <strong>3. Seleccioná las habilidades</strong>
+                        <span style={requiredBadgeStyle}>Requerido</span>
+                        <span style={{ padding: "2px 10px", borderRadius: "999px", background: "#164e63", border: "1px solid #22d3ee", color: "#67e8f9", fontWeight: 800, fontSize: "12px" }}>
+                          {planeamientoIaForm.habilidadesIds.length} seleccionadas
+                        </span>
+                      </div>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                         <button type="button" style={secondaryButtonStyle} onClick={seleccionarTodasHabilidadesIa} disabled={habilidadesFiltradasIa.length === 0}>
                           Seleccionar todas
@@ -6876,7 +7533,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </div>
 
                   <div style={{ display: "grid", gap: "10px" }}>
-                    <strong style={{ color: "#e5eefb" }}>4. Indicaciones opcionales</strong>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                      <strong style={{ color: "#e5eefb" }}>4. Indicaciones</strong>
+                      <span style={optionalBadgeStyle}>Opcional</span>
+                    </div>
                     <label style={{ color: "#e5eefb" }}>
                       Indicaciones, consideraciones o premisas para la IA
                       <textarea
@@ -6889,30 +7549,51 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </label>
 
                     <label style={{ color: "#e5eefb" }}>
-                      Documento de apoyo para la IA
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span>Documento de apoyo para la IA</span>
+                        <span style={optionalBadgeStyle}>Opcional</span>
+                      </span>
                       <input
                         type="file"
+                        multiple
                         accept=".txt,.csv,.json,.md,.pdf,.doc,.docx"
                         onChange={(e) => {
-                          const file = e.target.files?.[0] || null;
-                          if (file && file.size > 10 * 1024 * 1024) {
-                            setDocumentoApoyoIa(null);
+                          const files = Array.from(e.target.files || []);
+                          const maxSize = 10 * 1024 * 1024;
+                          const excedido = files.find((file) => file.size > maxSize);
+                          if (excedido) {
+                            setDocumentoApoyoIa([]);
                             e.target.value = "";
-                            setErrorMessage("El documento de apoyo no puede superar 10 MB");
+                            setErrorMessage(`El archivo ${excedido.name} supera 10 MB`);
                             return;
                           }
-                          setDocumentoApoyoIa(file);
-                          if (file) setErrorMessage("");
+                          setDocumentoApoyoIa(files);
+                          if (files.length) setErrorMessage("");
                         }}
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
                       />
                       <small style={{ color: "#b8c7da" }}>
-                        Usalo solo si necesitás que la IA tome ejemplos, premisas o ejercicios de un documento específico.
+                        Podés subir varios documentos y pedir páginas/ejercicios concretos (por ejemplo: página 12, ejercicio 4).
                       </small>
-                      {documentoApoyoIa && (
-                        <small style={{ display: "block", color: "#67e8f9", marginTop: "4px" }}>
-                          Documento seleccionado: {documentoApoyoIa.name}
-                        </small>
+                      {documentoApoyoIa.length > 0 && (
+                        <div style={{ marginTop: "6px", display: "grid", gap: "4px" }}>
+                          <small style={{ color: "#67e8f9" }}>
+                            Documentos seleccionados: {documentoApoyoIa.length}
+                          </small>
+                          {documentoApoyoIa.map((file, index) => (
+                            <small key={`${file.name}-${index}`} style={{ color: "#b8c7da", display: "flex", gap: "8px", alignItems: "center" }}>
+                              <span>{file.name}</span>
+                              <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={() => setDocumentoApoyoIa((prev) => prev.filter((_, i) => i !== index))}
+                                style={{ padding: "2px 8px", fontSize: "12px" }}
+                              >
+                                Quitar
+                              </button>
+                            </small>
+                          ))}
+                        </div>
                       )}
                     </label>
                   </div>
@@ -6921,10 +7602,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     <button type="button" className="primary-btn" onClick={generarPlaneamientoConIa} disabled={generatingPlaneamientoIa}>
                       {generatingPlaneamientoIa ? "Generando propuesta..." : "Generar propuesta con IA"}
                     </button>
-                    <span style={{ color: "#475569" }}>
-                      Seleccionadas: {planeamientoIaForm.habilidadesIds.length}
-                    </span>
                   </div>
+                  {generatingPlaneamientoIa ? (
+                    <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                      <div style={{ width: `${generatingPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                    </div>
+                  ) : null}
 
                   {(generatingPlaneamientoIa || errorMessage || message) && (
                     <div
@@ -7095,13 +7778,20 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         />
                       </label>
 
-                      <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                        <button type="button" className="primary-btn" onClick={guardarPlaneamientoIaGenerado} disabled={savingPlaneamientoIa}>
-                          {savingPlaneamientoIa ? "Guardando..." : (editingPlaneamientoIaId ? "Actualizar planeamiento" : "Guardar planeamiento")}
-                        </button>
-                        <button type="button" style={secondaryButtonStyle} onClick={() => { setUltimoPlaneamientoIa(null); setEditingPlaneamientoIaId(null); }} disabled={savingPlaneamientoIa}>
-                          Descartar
-                        </button>
+                      <div style={{ display: "grid", gap: "8px", justifyItems: "start" }}>
+                        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                          <button type="button" className="primary-btn" onClick={guardarPlaneamientoIaGenerado} disabled={savingPlaneamientoIa}>
+                            {savingPlaneamientoIa ? "Guardando..." : (editingPlaneamientoIaId ? "Actualizar planeamiento" : "Guardar planeamiento")}
+                          </button>
+                          <button type="button" style={secondaryButtonStyle} onClick={() => { setUltimoPlaneamientoIa(null); setEditingPlaneamientoIaId(null); }} disabled={savingPlaneamientoIa}>
+                            Descartar
+                          </button>
+                        </div>
+                        {savingPlaneamientoIa ? (
+                          <div style={{ width: "300px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                            <div style={{ width: `${savingPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #22d3ee 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   )}
@@ -7204,8 +7894,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                                     <button type="button" className="primary-btn" onClick={() => exportarPlaneamientoWord(planeamiento)}>Generar plantilla Word</button>
                                     <button type="button" style={secondaryButtonStyle} onClick={() => openEditPlaneamiento(planeamiento)}>Editar</button>
-                                    <button type="button" style={secondaryButtonStyle} onClick={() => handleDeletePlaneamiento(planeamiento.PlaneamientoId)}>Desactivar</button>
-                                    <button type="button" style={{ ...secondaryButtonStyle, color: "#fecaca", borderColor: "#7f1d1d" }} onClick={() => handleHardDeletePlaneamiento(planeamiento.PlaneamientoId)}>Eliminar</button>
+                                    <button type="button" style={secondaryButtonStyle} onClick={() => handleDeletePlaneamiento(planeamiento.PlaneamientoId)} disabled={deletingPlaneamientoId === planeamientoId}>{deletingPlaneamientoId === planeamientoId ? "Procesando..." : "Desactivar"}</button>
+                                    <button type="button" style={{ ...secondaryButtonStyle, color: "#fecaca", borderColor: "#7f1d1d" }} onClick={() => handleHardDeletePlaneamiento(planeamiento.PlaneamientoId)} disabled={deletingPlaneamientoId === planeamientoId}>{deletingPlaneamientoId === planeamientoId ? "Eliminando..." : "Eliminar"}</button>
                                     <button
                                       type="button"
                                       style={{ ...secondaryButtonStyle, color: "#dbeafe", borderColor: "#60a5fa" }}
@@ -7214,6 +7904,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                       {panelOpen ? "Ocultar indicadores IA" : (tieneIndicadoresGenerados ? "Ver Indicadores Generados con IA" : "Generar Indicadores con IA")}
                                     </button>
                                   </div>
+                                  {deletingPlaneamientoId === planeamientoId ? (
+                                    <div style={{ marginTop: "8px", width: "280px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                                      <div style={{ width: `${deletingPlaneamientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #ef4444 0%, #f59e0b 100%)", transition: "width 240ms ease" }} />
+                                    </div>
+                                  ) : null}
                                 </td>
                               </tr>
 
@@ -8143,29 +8838,37 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
             {activePanel === "reportes" && (
               <div style={{ display: "grid", gap: "16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
-                  <div>
+                <div style={{ display: "flex", justifyContent: "flex-start", gap: "12px", flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <div style={{ display: "grid", gap: "6px" }}>
                     <h4 style={{ marginBottom: "4px" }}>Reportes del grupo</h4>
                     <p style={{ margin: 0, opacity: 0.75 }}>
-                      Resumen de notas, acumulado evaluado y asistencia según Artículo 37.
+                      Seleccioná el tipo de reporte por sección para consultar y exportar información.
                     </p>
-                  </div>
-                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                    <button type="button" style={secondaryButtonStyle} onClick={() => selected && loadAsistencia(selected)} disabled={loadingAsistencia}>
-                      {loadingAsistencia ? "Actualizando..." : "Actualizar asistencia"}
-                    </button>
-                    <button type="button" style={secondaryButtonStyle} onClick={exportarReporteCsv} disabled={resumenReportes.filas.length === 0}>
-                      Exportar CSV
-                    </button>
-                    <button type="button" className="primary-btn" onClick={exportarReporteExcel} disabled={resumenReportes.filas.length === 0 || !selected}>
-                      Exportar Excel
-                    </button>
-                    <button type="button" className="primary-btn" onClick={exportarReportePdf} disabled={resumenReportes.filas.length === 0 || !selected}>
-                      PDF / Imprimir
-                    </button>
+                    <div style={{ display: "grid", gap: "6px", minWidth: "300px" }}>
+                      <span style={{ fontWeight: 700 }}>Tipo de reporte</span>
+                      <select value={tipoReporteGestion} onChange={(e) => setTipoReporteGestion(e.target.value as TipoReporteGestion)}>
+                        <option value="ASISTENCIA">Reporte de Asistencia</option>
+                        <option value="COTIDIANO">Reporte de Cotidiano</option>
+                        <option value="TAREAS">Reporte de Tareas</option>
+                        <option value="EXAMENES">Reporte de Exámenes</option>
+                        <option value="MENSAJES">Reporte de mensajes enviados</option>
+                        <option value="BOLETAS">Reporte de Boletas</option>
+                        <option value="NOTAS">Reporte de Notas</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button type="button" className="primary-btn" onClick={exportarReporteActualExcel} disabled={!selected}>
+                    Exportar Excel
+                  </button>
+                  <button type="button" className="primary-btn" onClick={exportarReporteActualPdf} disabled={!selected}>
+                    Exportar PDF
+                  </button>
+                </div>
 
+                {tipoReporteGestion === "NOTAS" && (
+                  <>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}>
                   <div style={cardStyle}>
                     <strong>Estudiantes</strong>
@@ -8219,6 +8922,245 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 <div style={helperDarkBoxStyle}>
                   <strong>Nota:</strong> el porcentaje de asistencia se calcula con las reglas del Artículo 37 usando las ausencias injustificadas equivalentes registradas hasta el momento.
                 </div>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button type="button" style={secondaryButtonStyle} onClick={exportarReporteCsv} disabled={resumenReportes.filas.length === 0}>
+                    Exportar CSV
+                  </button>
+                </div>
+                  </>
+                )}
+
+                {tipoReporteGestion === "ASISTENCIA" && (
+                  <div style={{ overflowX: "auto" }}>
+                    <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => selected && loadAsistencia(selected)} disabled={loadingAsistencia}>
+                        {loadingAsistencia ? "Actualizando..." : "Actualizar asistencia"}
+                      </button>
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Estudiante</th>
+                          <th>Identificación</th>
+                          <th>Total lecciones</th>
+                          <th>Ausencias equivalentes</th>
+                          <th>% ausencias</th>
+                          <th>% asistencia Art. 37</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resumenReportes.filas.map((fila) => (
+                          <tr key={fila.EstudianteId}>
+                            <td>{fila.NombreCompleto}</td>
+                            <td>{fila.Identificacion}</td>
+                            <td>{fila.TotalLecciones}</td>
+                            <td>{fila.AusenciasEquivalentes.toFixed(2)}</td>
+                            <td>{formatPercent(fila.PorcentajeAusencias)}</td>
+                            <td><strong>{formatPercent(fila.PorcentajeAsistencia)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {tipoReporteGestion === "COTIDIANO" && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Estudiante</th>
+                          <th>Identificación</th>
+                          <th>Actividades registradas</th>
+                          <th>Total actividades</th>
+                          <th>Promedio</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resumenReportesPorTipo.cotidiano.filas.map((fila) => (
+                          <tr key={fila.EstudianteId}>
+                            <td>{fila.NombreCompleto}</td>
+                            <td>{fila.Identificacion}</td>
+                            <td>{fila.ActividadesRegistradas}</td>
+                            <td>{fila.TotalActividades}</td>
+                            <td><strong>{formatPercent(fila.Promedio)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {tipoReporteGestion === "TAREAS" && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Estudiante</th>
+                          <th>Identificación</th>
+                          <th>Actividades registradas</th>
+                          <th>Total actividades</th>
+                          <th>Promedio</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resumenReportesPorTipo.tareas.filas.map((fila) => (
+                          <tr key={fila.EstudianteId}>
+                            <td>{fila.NombreCompleto}</td>
+                            <td>{fila.Identificacion}</td>
+                            <td>{fila.ActividadesRegistradas}</td>
+                            <td>{fila.TotalActividades}</td>
+                            <td><strong>{formatPercent(fila.Promedio)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {tipoReporteGestion === "EXAMENES" && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Estudiante</th>
+                          <th>Identificación</th>
+                          <th>Actividades registradas</th>
+                          <th>Total actividades</th>
+                          <th>Promedio</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resumenReportesPorTipo.examenes.filas.map((fila) => (
+                          <tr key={fila.EstudianteId}>
+                            <td>{fila.NombreCompleto}</td>
+                            <td>{fila.Identificacion}</td>
+                            <td>{fila.ActividadesRegistradas}</td>
+                            <td>{fila.TotalActividades}</td>
+                            <td><strong>{formatPercent(fila.Promedio)}</strong></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {tipoReporteGestion === "BOLETAS" && (
+                  <div style={{ display: "grid", gap: "10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                      <div style={helperDarkBoxStyle}>
+                        Boletas de conducta de la sección seleccionada.
+                      </div>
+                      <button type="button" style={secondaryButtonStyle} onClick={cargarBoletasConductaReporte} disabled={loadingBoletasReporte}>
+                        {loadingBoletasReporte ? "Cargando..." : "Actualizar boletas"}
+                      </button>
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>N°</th>
+                            <th>Fecha</th>
+                            <th>Estudiante</th>
+                            <th>Sección</th>
+                            <th>Funcionario</th>
+                            <th>Envíos correo</th>
+                            <th>Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {boletasConductaFiltradas.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} style={{ textAlign: "center", padding: "12px" }}>
+                                No hay boletas registradas para esta sección.
+                              </td>
+                            </tr>
+                          ) : boletasConductaFiltradas.map((item) => (
+                            <tr key={item.BoletaConductaId}>
+                              <td>{String(Number(item.Consecutivo || 0)).padStart(4, "0")}</td>
+                              <td>{String(item.Fecha || "").slice(0, 10)}</td>
+                              <td>{[item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre || ""].join(" ").replace(/\s+/g, " ").trim()}</td>
+                              <td>{item.Seccion || ""}</td>
+                              <td>{item.NombreFuncionario || ""}</td>
+                              <td>{Number(item.TotalEnviosExitosos || 0)} / {Number(item.TotalEnviosCorreo || 0)}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="primary-btn"
+                                  style={{ padding: "6px 10px" }}
+                                  onClick={() => window.open(`/boletas/conducta/${item.BoletaConductaId}`, "_blank")}
+                                >
+                                  Reimprimir
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {tipoReporteGestion === "MENSAJES" && (
+
+                <div style={{ ...helperDarkBoxStyle, display: "grid", gap: "10px", marginTop: "8px", padding: "12px", borderRadius: "12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "end" }}>
+                    <div>
+                      <h4 style={{ margin: 0 }}>Auditoría de envíos (Asistencia, Cotidiano y Tareas)</h4>
+                      <small style={{ color: "#cbd5e1" }}>Control de reportes enviados por correo y WhatsApp por estudiante.</small>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "end" }}>
+                      <label style={{ display: "grid", gap: "4px" }}>
+                        Desde
+                        <input type="date" value={auditoriaEnviosDesde} onChange={(e) => setAuditoriaEnviosDesde(e.target.value)} />
+                      </label>
+                      <label style={{ display: "grid", gap: "4px" }}>
+                        Hasta
+                        <input type="date" value={auditoriaEnviosHasta} onChange={(e) => setAuditoriaEnviosHasta(e.target.value)} />
+                      </label>
+                      <button type="button" className="primary-btn" onClick={() => cargarAuditoriaEnvios(selected)} disabled={loadingAuditoriaEnvios || !selected}>
+                        {loadingAuditoriaEnvios ? "Cargando..." : "Consultar"}
+                      </button>
+                      <button type="button" className="primary-btn" onClick={exportarAuditoriaEnviosExcel} disabled={!selected}>
+                        Exportar auditoría Excel
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Módulo</th>
+                          <th>Estudiante</th>
+                          <th>Identificación</th>
+                          <th>Correo</th>
+                          <th>WA</th>
+                          <th>Último envío</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditoriaEnvios.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} style={{ textAlign: "center", opacity: 0.75 }}>No hay registros en el rango seleccionado.</td>
+                          </tr>
+                        ) : auditoriaEnvios.map((fila) => (
+                          <tr key={fila.ReporteEnvioBitacoraId}>
+                            <td>{fila.Fecha ? String(fila.Fecha).slice(0, 10) : ""}</td>
+                            <td>{fila.ModuloNombre || fila.Modulo}</td>
+                            <td>{[fila.Nombre, fila.PrimerApellido, fila.SegundoApellido].filter(Boolean).join(" ")}</td>
+                            <td>{fila.Identificacion || ""}</td>
+                            <td style={{ color: fila.CorreoEnviado ? "#166534" : "#991b1b", fontWeight: 700 }}>{fila.CorreoEnviado ? "Enviado" : "No"}</td>
+                            <td style={{ color: fila.WaEnviado ? "#166534" : "#991b1b", fontWeight: 700 }}>{fila.WaEnviado ? "Enviado" : "No"}</td>
+                            <td>{fila.UltimoEnvioAt ? String(fila.UltimoEnvioAt).slice(0, 19).replace("T", " ") : ""}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                )}
               </div>
             )}
 
