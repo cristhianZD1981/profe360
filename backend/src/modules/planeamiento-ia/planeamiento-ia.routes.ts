@@ -754,6 +754,42 @@ function normalizarParaBusqueda(value: any) {
     .toLowerCase();
 }
 
+function normalizarPeriodicidadSeleccionada(value: any) {
+  const t = normalizarParaBusqueda(String(value || ""));
+  if (t.includes("semestre")) return "semestre";
+  if (t.includes("trimestre")) return "trimestre";
+  if (t.includes("bimestre")) return "bimestre";
+  if (t === "mes" || t.includes(" mes") || t.startsWith("mes ")) return "mes";
+  return "";
+}
+
+const COMPETENCIAS_BASE_PLANEAMIENTO = [
+  "Competencias para la ciudadanía responsable y solidaria",
+  "Competencias para la vida: sociales, emocionales y de aprendizaje",
+  "Competencias para el empleo digno y el emprendimiento"
+];
+
+function normalizarCompetenciaGeneralSeleccionada(value: any) {
+  const texto = normalizarParaBusqueda(String(value || ""));
+  const match = COMPETENCIAS_BASE_PLANEAMIENTO.find((item) => {
+    const base = normalizarParaBusqueda(item);
+    return base.includes(texto) || texto.includes(base);
+  });
+  return match || "";
+}
+
+function normalizarSeleccionesPlaneamientoResultado(resultado: any) {
+  const out = resultado && typeof resultado === "object" ? { ...resultado } : {};
+  const periodicidad = normalizarPeriodicidadSeleccionada(out.periodicidad);
+  const competenciaGeneral = normalizarCompetenciaGeneralSeleccionada(
+    out.competenciaGeneral || (Array.isArray(out.competenciasGenerales) ? out.competenciasGenerales[0] : "")
+  );
+  out.periodicidad = periodicidad;
+  out.competenciaGeneral = competenciaGeneral;
+  out.competenciasGenerales = competenciaGeneral ? [competenciaGeneral] : [];
+  return out;
+}
+
 function permiteMultiplesIndicadoresPorHabilidad(indicaciones: string) {
   const texto = normalizarParaBusqueda(indicaciones);
   if (!texto) return false;
@@ -2219,7 +2255,9 @@ router.post("/guardar-planeamiento", async (req, res) => {
     const materiaId = toRequiredInt(req.body.materiaId, "materiaId", res);
     if ([anioLectivoId, periodoId, grupoId, materiaId].some((v) => v === null)) return;
 
-    const resultado = hydratePlantillaFormatoDocx(req.body.resultado || {});
+    const resultado = normalizarSeleccionesPlaneamientoResultado(
+      hydratePlantillaFormatoDocx(req.body.resultado || {})
+    );
     const fechaInicio = normalizeNullableText(req.body.fechaInicio);
     const fechaFin = normalizeNullableText(req.body.fechaFin);
     const observaciones = normalizeNullableText(req.body.observaciones || "");
@@ -2452,9 +2490,9 @@ function mergedTemplateCell(text: string, columnSpan: number) {
   });
 }
 
-function periodicidadConMarca(periodoTexto: string) {
-  const normalizado = normalizarParaBusqueda(periodoTexto);
-  const mark = (key: string) => normalizado.includes(key) ? "X" : " ";
+function periodicidadConMarca(periodoTexto: string, periodicidadSeleccionada?: string) {
+  const seleccion = normalizarPeriodicidadSeleccionada(periodicidadSeleccionada || periodoTexto);
+  const mark = (key: string) => seleccion === key ? "X" : " ";
   return `( ${mark("mes")} ) mes  ( ${mark("bimestre")} ) bimestre  ( ${mark("trimestre")} ) trimestre  ( ${mark("semestre")} ) semestre`;
 }
 
@@ -2577,9 +2615,14 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
     "Competencias para la vida: sociales, emocionales y de aprendizaje",
     "Competencias para el empleo digno y el emprendimiento"
   ];
-  const competenciasSeleccionadas = input.contenido.competenciasGenerales?.length
-    ? competenciasBase.map((competencia) => input.contenido.competenciasGenerales.some((item: string) => normalizarParaBusqueda(item).includes(normalizarParaBusqueda(competencia).slice(0, 24))))
-    : competenciasBase.map(() => true);
+  const competenciaUnica = normalizarParaBusqueda(input.contenido.competenciaGeneral || "");
+  const competenciasSeleccionadas = competenciaUnica
+    ? competenciasBase.map((competencia) => normalizarParaBusqueda(competencia).includes(competenciaUnica) || competenciaUnica.includes(normalizarParaBusqueda(competencia)))
+    : (
+      input.contenido.competenciasGenerales?.length
+        ? competenciasBase.map((competencia) => input.contenido.competenciasGenerales.some((item: string) => normalizarParaBusqueda(item).includes(normalizarParaBusqueda(competencia).slice(0, 24))))
+        : competenciasBase.map(() => true)
+    );
 
     const estrategiasXml = [
       ...xmlParagraphsEstrategiasMomentos(input.contenido.estrategias, input.row.Observaciones || "Sin estrategias registradas", 19)
@@ -2606,7 +2649,7 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
         materia: input.row.MateriaNombre || "",
         anioEscolar: input.anioEscolar,
         cursoLectivo: input.cursoLectivo,
-        periodicidad: periodicidadConMarca(input.periodoTexto)
+        periodicidad: periodicidadConMarca(input.periodoTexto, input.contenido.periodicidad)
       }));
     }
 
@@ -2703,6 +2746,8 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
   return {
     nombre: String(resultado?.nombre || "Planeamiento didáctico"),
     enfoque: String(resultado?.enfoque || "Resolución de problemas, contextualización y mediación pedagógica basada en habilidades específicas"),
+    periodicidad: String(resultado?.periodicidad || ""),
+    competenciaGeneral: String(resultado?.competenciaGeneral || ""),
     aprendizajes: aprendizajes.length ? aprendizajes : semanas.map((s: any) => limpiarPrefijoAprendizaje(s?.habilidadBase || s?.proposito || "")).filter(Boolean),
     estrategias: estrategias.length ? estrategias : estrategiasFromWeeks,
     indicadores: indicadores.length ? indicadores : indicadoresFromWeeks.map(limpiarPrefijoIndicador).filter(Boolean),
@@ -2724,18 +2769,48 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
     if (institucionId === null) return;
 
     const planeamientoId = toRequiredInt(req.params.id, "planeamientoId", res);
-    const anioLectivoId = toRequiredInt(req.body.anioLectivoId, "anioLectivoId", res);
-    const periodoId = toRequiredInt(req.body.periodoId, "periodoId", res);
-    const grupoId = toRequiredInt(req.body.grupoId, "grupoId", res);
-    const materiaId = toRequiredInt(req.body.materiaId, "materiaId", res);
-    if ([planeamientoId, anioLectivoId, periodoId, grupoId, materiaId].some((v) => v === null)) return;
+    if (planeamientoId === null) return;
 
-    const resultado = hydratePlantillaFormatoDocx(req.body.resultado || {});
+    const resultado = normalizarSeleccionesPlaneamientoResultado(
+      hydratePlantillaFormatoDocx(req.body.resultado || {})
+    );
     const fechaInicio = normalizeNullableText(req.body.fechaInicio);
     const fechaFin = normalizeNullableText(req.body.fechaFin);
     const observaciones = normalizeNullableText(req.body.observaciones || "");
 
     const pool = await getPool();
+    const lookup = await pool.request()
+      .input("planeamientoId", sql.Int, planeamientoId)
+      .query(`
+        SELECT TOP 1
+          PlaneamientoId,
+          InstitucionId,
+          AnioLectivoId,
+          PeriodoId,
+          GrupoId,
+          MateriaId,
+          TRY_CAST(ResultadoIAJson AS NVARCHAR(MAX)) AS ResultadoIAJson
+        FROM dbo.Planeamiento
+        WHERE PlaneamientoId = @planeamientoId
+          AND Activo = 1
+      `);
+
+    if (!lookup.recordset[0]) {
+      return res.status(403).json({ ok: false, message: "No tenés permisos para editar este planeamiento" });
+    }
+    const planeamientoRow = lookup.recordset[0];
+    if (Number(planeamientoRow.InstitucionId) !== Number(institucionId)) {
+      return res.status(403).json({ ok: false, message: "No tenés permisos para editar este planeamiento" });
+    }
+
+    const anioLectivoId = Number(planeamientoRow.AnioLectivoId);
+    const periodoId = Number(planeamientoRow.PeriodoId);
+    const grupoId = Number(planeamientoRow.GrupoId);
+    const materiaId = Number(planeamientoRow.MateriaId);
+
+    const asignacion = await ensurePlaneamientoAsignacion(req, res, pool, { grupoId, materiaId, anioLectivoId, periodoId });
+    if (asignacion === false) return;
+
     const materiaNombreOficial = await getMateriaNombreOficial(pool, institucionId, materiaId);
     const nombre = buildPlaneamientoNombre({
       mes: req.body.mes || resultado.mes || resultado.Mes || req.body.mesPlaneamiento,
@@ -2746,32 +2821,6 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
     resultado.nombre = nombre;
     resultado.materiaNombre = materiaNombreOficial || req.body.materiaNombre || resultado.materiaNombre || resultado.MateriaNombre || "";
     resultado.MateriaNombre = resultado.materiaNombre;
-
-    const asignacion = await ensurePlaneamientoAsignacion(req, res, pool, { grupoId, materiaId, anioLectivoId, periodoId });
-    if (asignacion === false) return;
-
-    const lookup = await pool.request()
-      .input("planeamientoId", sql.Int, planeamientoId)
-      .input("institucionId", sql.Int, asignacion ? Number(asignacion.InstitucionId) : institucionId)
-      .input("anioLectivoId", sql.Int, anioLectivoId)
-      .input("periodoId", sql.Int, periodoId)
-      .input("grupoId", sql.Int, grupoId)
-      .input("materiaId", sql.Int, materiaId)
-      .query(`
-        SELECT TOP 1 PlaneamientoId, TRY_CAST(ResultadoIAJson AS NVARCHAR(MAX)) AS ResultadoIAJson
-        FROM dbo.Planeamiento
-        WHERE PlaneamientoId = @planeamientoId
-          AND InstitucionId = @institucionId
-          AND AnioLectivoId = @anioLectivoId
-          AND PeriodoId = @periodoId
-          AND GrupoId = @grupoId
-          AND MateriaId = @materiaId
-          AND Activo = 1
-      `);
-
-    if (!lookup.recordset[0]) {
-      return res.status(403).json({ ok: false, message: "No tenés permisos para editar este planeamiento" });
-    }
 
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
@@ -3003,9 +3052,14 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
       "Competencias para la vida: sociales, emocionales y de aprendizaje",
       "Competencias para el empleo digno y el emprendimiento"
     ];
-    const competenciasSeleccionadas = contenido.competenciasGenerales.length
-      ? competenciasBase.map((competencia) => contenido.competenciasGenerales.some((item: string) => normalizarParaBusqueda(item).includes(normalizarParaBusqueda(competencia).slice(0, 24))))
-      : competenciasBase.map(() => true);
+    const competenciaUnica = normalizarParaBusqueda(contenido.competenciaGeneral || "");
+    const competenciasSeleccionadas = competenciaUnica
+      ? competenciasBase.map((competencia) => normalizarParaBusqueda(competencia).includes(competenciaUnica) || competenciaUnica.includes(normalizarParaBusqueda(competencia)))
+      : (
+        contenido.competenciasGenerales.length
+          ? competenciasBase.map((competencia) => contenido.competenciasGenerales.some((item: string) => normalizarParaBusqueda(item).includes(normalizarParaBusqueda(competencia).slice(0, 24))))
+          : competenciasBase.map(() => true)
+      );
 
     const estrategiasChildren = [
       ...textParagraphsEstrategiasMomentos(contenido.estrategias, row.Observaciones || "Sin estrategias registradas", 19)
@@ -3046,7 +3100,7 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
             children: [
               templateCell([fieldParagraph("Año escolar: ", anioEscolar)], { width: 5285 }),
               templateCell([fieldParagraph("Curso lectivo: ", cursoLectivo)], { width: 2849 }),
-              templateCell([fieldParagraph("Periodicidad: ", periodicidadConMarca(periodoTexto))], { width: 5847 })
+              templateCell([fieldParagraph("Periodicidad: ", periodicidadConMarca(periodoTexto, contenido.periodicidad))], { width: 5847 })
             ]
           })
         ]

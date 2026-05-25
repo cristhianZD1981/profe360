@@ -132,6 +132,8 @@ type PlaneamientoIaResultado = {
   nombre?: string;
   enfoque?: string;
   advertencia?: string;
+  periodicidad?: string;
+  competenciaGeneral?: string;
   competenciasGenerales?: string[];
   aprendizajesEsperados?: string[];
   estrategiasMediacion?: string[] | string;
@@ -192,6 +194,8 @@ function normalizePlaneamientoIaResultado(input: any): PlaneamientoIaResultado {
     ...data,
     nombre: toTextValue(data.nombre),
     enfoque: toTextValue(data.enfoque),
+    periodicidad: toTextValue(data.periodicidad),
+    competenciaGeneral: toTextValue(data.competenciaGeneral),
     aprendizajesEsperados: toTextList(data.aprendizajesEsperados),
     estrategiasMediacion: toTextValue(data.estrategiasMediacion),
     indicadoresEvaluacion: toTextList(data.indicadoresEvaluacion),
@@ -228,6 +232,8 @@ type PlaneamientoIaForm = {
   tipoColegio: string;
   fechaInicio: string;
   fechaFin: string;
+  periodicidad: string;
+  competenciaGeneral: string;
   indicaciones: string;
   busquedaTexto: string;
   habilidadesIds: number[];
@@ -445,6 +451,8 @@ const initialPlaneamientoIaForm: PlaneamientoIaForm = {
   tipoColegio: "Académico",
   fechaInicio: "",
   fechaFin: "",
+  periodicidad: "",
+  competenciaGeneral: "",
   indicaciones: "",
   busquedaTexto: "",
   habilidadesIds: []
@@ -1067,6 +1075,8 @@ export default function GestionProfePage() {
   const [eval360DetallesDraft, setEval360DetallesDraft] = useState<Eval360Detalle[]>([]);
   const [loadingEval360, setLoadingEval360] = useState(false);
   const [savingEval360, setSavingEval360] = useState(false);
+  const [savingEval360Progress, setSavingEval360Progress] = useState(0);
+  const savingEval360TimerRef = useRef<number | null>(null);
   const [eval360PlantillasIaIndicadores, setEval360PlantillasIaIndicadores] = useState<PlantillaPromptIA[]>([]);
   const [eval360PlantillaIaIndicadorId, setEval360PlantillaIaIndicadorId] = useState("");
   const [eval360PlaneamientoId, setEval360PlaneamientoId] = useState("");
@@ -1075,9 +1085,13 @@ export default function GestionProfePage() {
   const [eval360Indicadores, setEval360Indicadores] = useState<Eval360Indicador[]>([]);
   const [loadingEval360Indicadores, setLoadingEval360Indicadores] = useState(false);
   const [generatingEval360Indicadores, setGeneratingEval360Indicadores] = useState(false);
+  const [generatingEval360IndicadoresProgress, setGeneratingEval360IndicadoresProgress] = useState(0);
+  const generatingEval360IndicadoresTimerRef = useRef<number | null>(null);
   const [savingEval360IndicadorId, setSavingEval360IndicadorId] = useState<number | null>(null);
   const [deletingEval360PlaneamientoId, setDeletingEval360PlaneamientoId] = useState<number | null>(null);
   const [savingEval360PlaneamientoCambiosId, setSavingEval360PlaneamientoCambiosId] = useState<number | null>(null);
+  const [savingEval360PlaneamientoCambiosProgress, setSavingEval360PlaneamientoCambiosProgress] = useState(0);
+  const savingEval360PlaneamientoCambiosTimerRef = useRef<number | null>(null);
   const [eval360IndicadoresPorPlaneamiento, setEval360IndicadoresPorPlaneamiento] = useState<Record<number, Eval360Indicador[]>>({});
   const [eval360PanelIndicadoresOpen, setEval360PanelIndicadoresOpen] = useState<Record<number, boolean>>({});
   const [eval360IndicacionesPorPlaneamiento, setEval360IndicacionesPorPlaneamiento] = useState<Record<number, string>>({});
@@ -3387,6 +3401,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     if (!selected) return;
 
     setSavingEval360(true);
+    setSavingEval360Progress(8);
+    if (savingEval360TimerRef.current !== null) {
+      window.clearInterval(savingEval360TimerRef.current);
+      savingEval360TimerRef.current = null;
+    }
+    savingEval360TimerRef.current = window.setInterval(() => {
+      setSavingEval360Progress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 280);
     setMessage("");
     setErrorMessage("");
 
@@ -3404,12 +3426,18 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setEval360Estructura(data || null);
       setEval360DetallesDraft(Array.isArray(data?.detalles) ? data.detalles : []);
       setMessage(response?.data?.message || "Estructura de evaluación creada correctamente");
+      setSavingEval360Progress(100);
       await loadEval360Data(selected);
       await loadGrupos(q);
     } catch (error: any) {
       console.error("Error creando estructura Eval360:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo crear la estructura de evaluación");
+      setSavingEval360Progress(0);
     } finally {
+      if (savingEval360TimerRef.current !== null) {
+        window.clearInterval(savingEval360TimerRef.current);
+        savingEval360TimerRef.current = null;
+      }
       setSavingEval360(false);
     }
   }
@@ -3958,6 +3986,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
     setGeneratingEval360Indicadores(true);
+    setGeneratingEval360IndicadoresProgress(8);
+    if (generatingEval360IndicadoresTimerRef.current !== null) {
+      window.clearInterval(generatingEval360IndicadoresTimerRef.current);
+      generatingEval360IndicadoresTimerRef.current = null;
+    }
+    generatingEval360IndicadoresTimerRef.current = window.setInterval(() => {
+      setGeneratingEval360IndicadoresProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 280);
     setGeneratingEval360PlaneamientoId(planeamientoId);
     setMessage("");
     setErrorMessage("");
@@ -3981,11 +4017,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: true }));
       setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: false }));
       setMessage(response?.data?.message || "Indicadores generados correctamente");
+      setGeneratingEval360IndicadoresProgress(100);
       await loadEval360Indicadores(Number(data.estructuraGrupoId || estructuraGrupoId || 0), planeamientoId);
     } catch (error: any) {
       console.error("Error generando indicadores Eval360:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudieron generar los indicadores desde el planeamiento");
+      setGeneratingEval360IndicadoresProgress(0);
     } finally {
+      if (generatingEval360IndicadoresTimerRef.current !== null) {
+        window.clearInterval(generatingEval360IndicadoresTimerRef.current);
+        generatingEval360IndicadoresTimerRef.current = null;
+      }
       setGeneratingEval360Indicadores(false);
       setGeneratingEval360PlaneamientoId(null);
     setSeguimientoContexto(null);
@@ -4129,6 +4171,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     setSavingEval360PlaneamientoCambiosId(planeamientoId);
+    setSavingEval360PlaneamientoCambiosProgress(8);
+    if (savingEval360PlaneamientoCambiosTimerRef.current !== null) {
+      window.clearInterval(savingEval360PlaneamientoCambiosTimerRef.current);
+      savingEval360PlaneamientoCambiosTimerRef.current = null;
+    }
+    savingEval360PlaneamientoCambiosTimerRef.current = window.setInterval(() => {
+      setSavingEval360PlaneamientoCambiosProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 280);
     setMessage("");
     setErrorMessage("");
 
@@ -4140,13 +4190,21 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         activo: indicador.Activo !== false && indicador.Activo !== 0
       })));
 
-      setMessage("Cambios de indicadores guardados correctamente");
+      setMessage("Indicadores guardados y panel oculto correctamente");
+      setSavingEval360PlaneamientoCambiosProgress(100);
       const estructuraGrupoId = Number(indicadoresActuales[0]?.EstructuraGrupoId || 0) || undefined;
       await loadEval360Indicadores(estructuraGrupoId, planeamientoId);
+      setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: true }));
+      setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: false }));
     } catch (error: any) {
       console.error("Error guardando cambios de indicadores Eval360:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudieron guardar los cambios de los indicadores");
+      setSavingEval360PlaneamientoCambiosProgress(0);
     } finally {
+      if (savingEval360PlaneamientoCambiosTimerRef.current !== null) {
+        window.clearInterval(savingEval360PlaneamientoCambiosTimerRef.current);
+        savingEval360PlaneamientoCambiosTimerRef.current = null;
+      }
       setSavingEval360PlaneamientoCambiosId(null);
     }
   }
@@ -4335,6 +4393,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           ...(parsed || {}),
           nombre: parsed?.nombre || item.Nombre || "Planeamiento didáctico",
           observaciones: parsed?.observaciones || item.Observaciones || ""
+        }));
+        setPlaneamientoIaForm((prev) => ({
+          ...prev,
+          periodicidad: String(parsed?.periodicidad || prev.periodicidad || ""),
+          competenciaGeneral: String(parsed?.competenciaGeneral || (Array.isArray(parsed?.competenciasGenerales) ? (parsed.competenciasGenerales[0] || "") : "") || prev.competenciaGeneral || "")
         }));
         setEditingPlaneamientoIaId(item.PlaneamientoId);
         setPlaneamientoIaFormOpen(true);
@@ -4905,6 +4968,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
+    if (!planeamientoIaForm.periodicidad) {
+      setErrorMessage("Seleccioná la periodicidad del planeamiento");
+      return;
+    }
+
+    if (!planeamientoIaForm.competenciaGeneral) {
+      setErrorMessage("Seleccioná una competencia general");
+      return;
+    }
+
     setGeneratingPlaneamientoIa(true);
     setGeneratingPlaneamientoIaProgress(8);
     if (generatingPlaneamientoIaTimerRef.current !== null) {
@@ -4946,6 +5019,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
       const generadoData = generarResponse.data?.data || generarResponse.data || {};
       const resultado: PlaneamientoIaResultado = normalizePlaneamientoIaResultado(generadoData.resultado || generadoData);
+      resultado.periodicidad = planeamientoIaForm.periodicidad;
+      resultado.competenciaGeneral = planeamientoIaForm.competenciaGeneral;
+      resultado.competenciasGenerales = planeamientoIaForm.competenciaGeneral ? [planeamientoIaForm.competenciaGeneral] : [];
       setUltimoPlaneamientoIa(resultado);
       setGeneratingPlaneamientoIaProgress(100);
       setMessage("Planeamiento generado. Revisá y ajustá la propuesta antes de guardarla.");
@@ -5014,6 +5090,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
+    if (!planeamientoIaForm.periodicidad) {
+      setErrorMessage("Seleccioná la periodicidad antes de guardar");
+      return;
+    }
+    if (!planeamientoIaForm.competenciaGeneral) {
+      setErrorMessage("Seleccioná una competencia general antes de guardar");
+      return;
+    }
+
     setSavingPlaneamientoIa(true);
     setSavingPlaneamientoIaProgress(8);
     if (savingPlaneamientoIaTimerRef.current !== null) {
@@ -5037,6 +5122,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           nombre: nombrePlaneamientoCorrecto,
           mes: mesesSeleccionadosTextoIa || "",
           grado: gradoSeleccionado,
+          periodicidad: planeamientoIaForm.periodicidad,
+          competenciaGeneral: planeamientoIaForm.competenciaGeneral,
+          competenciasGenerales: planeamientoIaForm.competenciaGeneral ? [planeamientoIaForm.competenciaGeneral] : [],
           materiaNombre: nombreMateriaSeleccionada,
           MateriaNombre: nombreMateriaSeleccionada
         };
@@ -6207,6 +6295,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     <button type="button" className="primary-btn" onClick={async () => { await crearEval360DesdePlantilla(); setMostrarSelectorCambioPlantilla(false); await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); }} disabled={!eval360PlantillaId || savingEval360 || !selected}>
                       {savingEval360 ? (mostrarSelectorCambioPlantilla ? "Cambiando..." : "Asignando...") : (mostrarSelectorCambioPlantilla ? "Cambiar plantilla" : "Asignar plantilla")}
                     </button>
+                    {savingEval360 ? (
+                      <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155", marginTop: "8px" }}>
+                        <div style={{ width: `${savingEval360Progress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: "14px" }}>
@@ -6859,6 +6952,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       <button type="button" className="primary-btn" onClick={crearEval360DesdePlantilla} disabled={savingEval360 || loadingEval360 || !selected}>
                         {savingEval360 ? "Creando estructura..." : "Crear copia editable para este grupo"}
                       </button>
+                      {savingEval360 ? (
+                        <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                          <div style={{ width: `${savingEval360Progress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                        </div>
+                      ) : null}
                       <span style={{ fontSize: "13px", color: "#1e3a8a" }}>
                         Si no elegís una plantilla, se usará la activa recomendada para este grupo, materia y periodo.
                       </span>
@@ -7438,6 +7536,41 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </label>
 
                     <label style={{ color: "#e5eefb" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span>Periodicidad</span>
+                        <span style={requiredBadgeStyle}>Requerido</span>
+                      </span>
+                      <select
+                        value={planeamientoIaForm.periodicidad}
+                        onChange={(e) => updatePlaneamientoIaField("periodicidad", e.target.value)}
+                        style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
+                      >
+                        <option value="">Seleccioná una opción</option>
+                        <option value="mes">Mes</option>
+                        <option value="bimestre">Bimestre</option>
+                        <option value="trimestre">Trimestre</option>
+                        <option value="semestre">Semestre</option>
+                      </select>
+                    </label>
+
+                    <label style={{ color: "#e5eefb" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span>Competencia general</span>
+                        <span style={requiredBadgeStyle}>Requerido</span>
+                      </span>
+                      <select
+                        value={planeamientoIaForm.competenciaGeneral}
+                        onChange={(e) => updatePlaneamientoIaField("competenciaGeneral", e.target.value)}
+                        style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
+                      >
+                        <option value="">Seleccioná una opción</option>
+                        <option value="Competencias para la ciudadanía responsable y solidaria">Competencias para la ciudadanía responsable y solidaria</option>
+                        <option value="Competencias para la vida: sociales, emocionales y de aprendizaje">Competencias para la vida: sociales, emocionales y de aprendizaje</option>
+                        <option value="Competencias para el empleo digno y el emprendimiento">Competencias para el empleo digno y el emprendimiento</option>
+                      </select>
+                    </label>
+
+                    <label style={{ color: "#e5eefb" }}>
                       Fecha inicio
                       <input
                         type="date"
@@ -7649,6 +7782,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           onChange={(e) => updateResultadoIaField("enfoque", e.target.value)}
                         />
                       </label>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "10px" }}>
+                        <label>
+                          Periodicidad
+                          <select
+                            value={planeamientoIaForm.periodicidad}
+                            onChange={(e) => updatePlaneamientoIaField("periodicidad", e.target.value)}
+                          >
+                            <option value="">Seleccioná una opción</option>
+                            <option value="mes">Mes</option>
+                            <option value="bimestre">Bimestre</option>
+                            <option value="trimestre">Trimestre</option>
+                            <option value="semestre">Semestre</option>
+                          </select>
+                        </label>
+                        <label>
+                          Competencia general
+                          <select
+                            value={planeamientoIaForm.competenciaGeneral}
+                            onChange={(e) => updatePlaneamientoIaField("competenciaGeneral", e.target.value)}
+                          >
+                            <option value="">Seleccioná una opción</option>
+                            <option value="Competencias para la ciudadanía responsable y solidaria">Competencias para la ciudadanía responsable y solidaria</option>
+                            <option value="Competencias para la vida: sociales, emocionales y de aprendizaje">Competencias para la vida: sociales, emocionales y de aprendizaje</option>
+                            <option value="Competencias para el empleo digno y el emprendimiento">Competencias para el empleo digno y el emprendimiento</option>
+                          </select>
+                        </label>
+                      </div>
 
                       <label>
                         Aprendizajes esperados
@@ -7942,6 +8103,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                               >
                                                 {savingEval360PlaneamientoCambiosId === planeamientoId ? "Guardando..." : "Guardar cambios"}
                                               </button>
+                                              {savingEval360PlaneamientoCambiosId === planeamientoId ? (
+                                                <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                                                  <div style={{ width: `${savingEval360PlaneamientoCambiosProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                                                </div>
+                                              ) : null}
                                               <button
                                                 type="button"
                                                 style={secondaryButtonStyle}
@@ -7964,6 +8130,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                                       {!tieneIndicadoresGenerados && (
                                         <>
+                                      <div style={{ padding: "10px 12px", borderRadius: "10px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", display: "grid", gap: "4px" }}>
+                                            <strong>Paso a paso</strong>
+                                            <div>1. Elegí la plantilla IA de indicadores (opcional).</div>
+                                            <div>2. Escribí indicaciones claras para la IA (opcional).</div>
+                                            <div>3. Presioná “Generar indicadores con IA”.</div>
+                                            <div>4. Revisá niveles (Avanzado, Intermedio, Inicial) y guardá cambios.</div>
+                                          </div>
                                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
                                             <label style={{ display: "grid", gap: "6px" }}>
                                               <span style={{ fontWeight: 700, color: "#0f172a" }}>Plantilla IA de indicadores</span>
@@ -7999,6 +8172,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                               {generatingEval360PlaneamientoId === planeamientoId ? "Generando indicadores..." : "Generar indicadores con IA"}
                                             </button>
                                           </div>
+                                          {generatingEval360PlaneamientoId === planeamientoId ? (
+                                            <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                                              <div style={{ width: `${generatingEval360IndicadoresProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                                            </div>
+                                          ) : null}
                                         </>
                                       )}
 
