@@ -4,6 +4,9 @@ import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest, forbidden } from "../../utils/http";
 
 const router = Router();
+const BOOTSTRAP_CACHE_TTL_MS = 10000;
+const bootstrapCache = new Map<string, { at: number; data: any }>();
+const bootstrapInFlight = new Map<string, Promise<any>>();
 
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
@@ -422,43 +425,64 @@ router.get("/catalogos", async (req, res) => {
       : getInstitutionId(req, res);
 
     if (institucionId === null) return;
+    const cacheKey = `evaluacion.catalogos|inst:${institucionId}`;
+    const cached = bootstrapCache.get(cacheKey);
+    if (cached && Date.now() - cached.at <= BOOTSTRAP_CACHE_TTL_MS) {
+      return ok(res, cached.data);
+    }
+    const inFlight = bootstrapInFlight.get(cacheKey);
+    if (inFlight) {
+      const shared = await inFlight;
+      return ok(res, shared);
+    }
 
-    const requestBase = () => pool.request().input("institucionId", sql.Int, institucionId);
+    const loadPromise = (async () => {
+      const requestBase = () => pool.request().input("institucionId", sql.Int, institucionId);
 
-    const [anios, periodos, materias, niveles] = await Promise.all([
-      requestBase().query(`
-        SELECT AnioLectivoId, Nombre, FechaInicio, FechaFin, Activo
-        FROM dbo.AnioLectivo
-        WHERE InstitucionId = @institucionId AND Activo = 1
-        ORDER BY FechaInicio DESC, Nombre
-      `),
-      requestBase().query(`
-        SELECT p.PeriodoId, p.AnioLectivoId, p.Nombre, p.NumeroOrden, p.FechaInicio, p.FechaFin, p.Activo, al.Nombre AS AnioNombre
-        FROM dbo.Periodo p
-        INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = p.AnioLectivoId
-        WHERE al.InstitucionId = @institucionId AND p.Activo = 1
-        ORDER BY al.FechaInicio DESC, p.NumeroOrden, p.Nombre
-      `),
-      requestBase().query(`
-        SELECT MateriaId, Codigo, Nombre, Descripcion, Activa AS Activo
-        FROM dbo.Materia
-        WHERE InstitucionId = @institucionId AND Activa = 1
-        ORDER BY Nombre
-      `),
-      requestBase().query(`
-        SELECT NivelDesempenoId, Descripcion, Valor, Activo
-        FROM dbo.NivelDesempeno
-        WHERE InstitucionId = @institucionId AND Activo = 1
-        ORDER BY Valor, Descripcion
-      `)
-    ]);
+      const [anios, periodos, materias, niveles] = await Promise.all([
+        requestBase().query(`
+          SELECT AnioLectivoId, Nombre, FechaInicio, FechaFin, Activo
+          FROM dbo.AnioLectivo
+          WHERE InstitucionId = @institucionId AND Activo = 1
+          ORDER BY FechaInicio DESC, Nombre
+        `),
+        requestBase().query(`
+          SELECT p.PeriodoId, p.AnioLectivoId, p.Nombre, p.NumeroOrden, p.FechaInicio, p.FechaFin, p.Activo, al.Nombre AS AnioNombre
+          FROM dbo.Periodo p
+          INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = p.AnioLectivoId
+          WHERE al.InstitucionId = @institucionId AND p.Activo = 1
+          ORDER BY al.FechaInicio DESC, p.NumeroOrden, p.Nombre
+        `),
+        requestBase().query(`
+          SELECT MateriaId, Codigo, Nombre, Descripcion, Activa AS Activo
+          FROM dbo.Materia
+          WHERE InstitucionId = @institucionId AND Activa = 1
+          ORDER BY Nombre
+        `),
+        requestBase().query(`
+          SELECT NivelDesempenoId, Descripcion, Valor, Activo
+          FROM dbo.NivelDesempeno
+          WHERE InstitucionId = @institucionId AND Activo = 1
+          ORDER BY Valor, Descripcion
+        `)
+      ]);
 
-    return ok(res, {
-      aniosLectivos: anios.recordset,
-      periodos: periodos.recordset,
-      materias: materias.recordset,
-      nivelesDesempeno: niveles.recordset
-    });
+      return {
+        aniosLectivos: anios.recordset,
+        periodos: periodos.recordset,
+        materias: materias.recordset,
+        nivelesDesempeno: niveles.recordset
+      };
+    })();
+    bootstrapInFlight.set(cacheKey, loadPromise);
+    let data: any;
+    try {
+      data = await loadPromise;
+    } finally {
+      bootstrapInFlight.delete(cacheKey);
+    }
+    bootstrapCache.set(cacheKey, { at: Date.now(), data });
+    return ok(res, data);
   } catch (error) {
     console.error("Error cargando catÃ¡logos de evaluaciÃ³n:", error);
     return res.status(500).json({ ok: false, message: "Error interno al cargar catÃ¡logos de evaluaciÃ³n" });
@@ -478,20 +502,41 @@ router.get("/niveles-desempeno", async (req, res) => {
 
     const incluirInactivos = String(req.query.incluirInactivos || "false") === "true";
     const q = normalizeText(req.query.q);
+    const cacheKey = `evaluacion.niveles|inst:${institucionId}|inact:${incluirInactivos ? 1 : 0}|q:${q.toLowerCase()}`;
+    const cached = bootstrapCache.get(cacheKey);
+    if (cached && Date.now() - cached.at <= BOOTSTRAP_CACHE_TTL_MS) {
+      return ok(res, cached.data);
+    }
+    const inFlight = bootstrapInFlight.get(cacheKey);
+    if (inFlight) {
+      const shared = await inFlight;
+      return ok(res, shared);
+    }
 
-    const result = await pool.request()
-      .input("institucionId", sql.Int, institucionId)
-      .input("q", sql.NVarChar(150), `%${q}%`)
-      .query(`
-        SELECT NivelDesempenoId, InstitucionId, Descripcion, Valor, Activo, CreatedAt, UpdatedAt
-        FROM dbo.NivelDesempeno
-        WHERE InstitucionId = @institucionId
-          AND (@q = N'%%' OR Descripcion LIKE @q)
-          ${incluirInactivos ? "" : "AND Activo = 1"}
-        ORDER BY Valor, Descripcion
-      `);
+    const loadPromise = (async () => {
+      const result = await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("q", sql.NVarChar(150), `%${q}%`)
+        .query(`
+          SELECT NivelDesempenoId, InstitucionId, Descripcion, Valor, Activo, CreatedAt, UpdatedAt
+          FROM dbo.NivelDesempeno
+          WHERE InstitucionId = @institucionId
+            AND (@q = N'%%' OR Descripcion LIKE @q)
+            ${incluirInactivos ? "" : "AND Activo = 1"}
+          ORDER BY Valor, Descripcion
+        `);
+      return result.recordset;
+    })();
+    bootstrapInFlight.set(cacheKey, loadPromise);
+    let rows: any[] = [];
+    try {
+      rows = await loadPromise;
+    } finally {
+      bootstrapInFlight.delete(cacheKey);
+    }
+    bootstrapCache.set(cacheKey, { at: Date.now(), data: rows });
 
-    return ok(res, result.recordset);
+    return ok(res, rows);
   } catch (error) {
     console.error("Error listando niveles de desempeÃ±o:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los niveles de desempeÃ±o" });
@@ -972,6 +1017,19 @@ router.delete("/plantillas/:id", async (req, res) => {
             @usosOut = @usos OUTPUT;
         END;
 
+        IF OBJECT_ID('dbo.Eval360_EstructuraGrupo', 'U') IS NOT NULL
+           AND COL_LENGTH('dbo.Eval360_EstructuraGrupo', 'PlantillaBaseId') IS NOT NULL
+        BEGIN
+          EXEC sp_executesql
+            N'SELECT @usosOut = @usosOut + COUNT(1)
+              FROM dbo.Eval360_EstructuraGrupo
+              WHERE PlantillaBaseId = @plantillaId
+                AND ISNULL(Activo, 1) = 1;',
+            N'@plantillaId INT, @usosOut INT OUTPUT',
+            @plantillaId = @plantillaId,
+            @usosOut = @usos OUTPUT;
+        END;
+
         SELECT @usos AS Usos;
       `);
 
@@ -983,24 +1041,17 @@ router.delete("/plantillas/:id", async (req, res) => {
     await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
       .query(`
-        UPDATE dbo.EvaluacionActividad
-        SET Activo = 0,
-            UpdatedAt = SYSDATETIME()
+        DELETE FROM dbo.EvaluacionActividad
         WHERE EvaluacionComponenteId IN (
           SELECT EvaluacionComponenteId
           FROM dbo.EvaluacionComponente
           WHERE EvaluacionPlantillaId = @plantillaId
         );
 
-        UPDATE dbo.EvaluacionComponente
-        SET Activo = 0,
-            UpdatedAt = SYSDATETIME()
+        DELETE FROM dbo.EvaluacionComponente
         WHERE EvaluacionPlantillaId = @plantillaId;
 
-        UPDATE dbo.EvaluacionPlantilla
-        SET Activo = 0,
-            Estado = N'INACTIVA',
-            UpdatedAt = SYSDATETIME()
+        DELETE FROM dbo.EvaluacionPlantilla
         WHERE EvaluacionPlantillaId = @plantillaId;
       `);
 

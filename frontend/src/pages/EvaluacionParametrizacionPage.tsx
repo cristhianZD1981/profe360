@@ -240,7 +240,7 @@ export default function EvaluacionParametrizacionPage() {
   const isSelectedPlantillaActiva = useMemo(() => {
     if (!selectedPlantilla) return false;
     const estado = String(selectedPlantilla.Estado || "").trim().toUpperCase();
-    return !!selectedPlantilla.Activo && estado === "ACTIVA";
+    return estado === "ACTIVA";
   }, [selectedPlantilla]);
 
   const canActivateSelectedPlantilla = useMemo(() => {
@@ -1243,6 +1243,7 @@ export default function EvaluacionParametrizacionPage() {
                     className="primary-btn"
                     onClick={() => handleActivarPlantilla(selectedPlantilla.EvaluacionPlantillaId)}
                     disabled={!canActivateSelectedPlantilla}
+                    style={!canActivateSelectedPlantilla ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
                     title={
                       !canManageSelectedPlantilla
                         ? "Solo podes activar plantillas creadas por vos"

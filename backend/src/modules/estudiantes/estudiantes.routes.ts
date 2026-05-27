@@ -8,6 +8,9 @@ import { hashPassword } from "../../utils/password";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
+const DASHBOARD_CACHE_TTL_MS = 20000;
+const dashboardCache = new Map<string, { at: number; data: any }>();
+const dashboardInFlight = new Map<string, Promise<any>>();
 const STUDENT_IMPORT_ROLES = [
   "SUPER_ADMIN",
   "ADMIN_INSTITUCIONAL",
@@ -1036,10 +1039,21 @@ router.get("/dashboard", async (req, res) => {
     if (!req.auth?.institucionId) {
       return badRequest(res, "El usuario no tiene institucion asignada");
     }
+    const institucionId = Number(req.auth.institucionId);
+    const cacheKey = `estudiantes.dashboard|inst:${institucionId}`;
+    const cached = dashboardCache.get(cacheKey);
+    if (cached && Date.now() - cached.at <= DASHBOARD_CACHE_TTL_MS) {
+      return ok(res, cached.data);
+    }
+    const inFlight = dashboardInFlight.get(cacheKey);
+    if (inFlight) {
+      const shared = await inFlight;
+      return ok(res, shared);
+    }
 
     const pool = await getPool();
-    const result = await pool.request()
-      .input("institucionId", sql.Int, req.auth.institucionId)
+    const queryPromise = pool.request()
+      .input("institucionId", sql.Int, institucionId)
       .query(`
         DECLARE @anioLectivoActualId INT;
 
@@ -1138,29 +1152,37 @@ router.get("/dashboard", async (req, res) => {
         WHERE e.InstitucionId = @institucionId
           AND e.Activo = 1;
       `);
-
-    const totales = result.recordsets[0]?.[0] || {};
-    const otros = result.recordsets[7]?.[0] || {};
-
-    return ok(res, {
-      totalActivos: Number(totales.TotalActivos || 0),
-      totalInactivos: Number(totales.TotalInactivos || 0),
-      totalGeneral: Number(totales.TotalGeneral || 0),
-      totalMatriculados: Number(totales.TotalMatriculados || 0),
-      porGrupo: result.recordsets[1] || [],
-      porSeccion: result.recordsets[2] || [],
-      porGenero: result.recordsets[3] || [],
-      porEspecialidad: result.recordsets[4] || [],
-      porNacionalidad: result.recordsets[5] || [],
-      porTipo: result.recordsets[6] || [],
-      otros: [
-        { Label: "Con adecuacion", Total: Number(otros.ConAdecuacion || 0) },
-        { Label: "Con discapacidad", Total: Number(otros.ConDiscapacidad || 0) },
-        { Label: "Con condicion medica", Total: Number(otros.ConCondicionMedica || 0) },
-        { Label: "WhatsApp autorizado", Total: Number(otros.WhatsAppAutorizado || 0) },
-        { Label: "Con ruta de transporte", Total: Number(otros.ConRutaTransporte || 0) }
-      ]
-    });
+    dashboardInFlight.set(cacheKey, queryPromise.then((result) => {
+      const totales = result.recordsets[0]?.[0] || {};
+      const otros = result.recordsets[7]?.[0] || {};
+      return {
+        totalActivos: Number(totales.TotalActivos || 0),
+        totalInactivos: Number(totales.TotalInactivos || 0),
+        totalGeneral: Number(totales.TotalGeneral || 0),
+        totalMatriculados: Number(totales.TotalMatriculados || 0),
+        porGrupo: result.recordsets[1] || [],
+        porSeccion: result.recordsets[2] || [],
+        porGenero: result.recordsets[3] || [],
+        porEspecialidad: result.recordsets[4] || [],
+        porNacionalidad: result.recordsets[5] || [],
+        porTipo: result.recordsets[6] || [],
+        otros: [
+          { Label: "Con adecuacion", Total: Number(otros.ConAdecuacion || 0) },
+          { Label: "Con discapacidad", Total: Number(otros.ConDiscapacidad || 0) },
+          { Label: "Con condicion medica", Total: Number(otros.ConCondicionMedica || 0) },
+          { Label: "WhatsApp autorizado", Total: Number(otros.WhatsAppAutorizado || 0) },
+          { Label: "Con ruta de transporte", Total: Number(otros.ConRutaTransporte || 0) }
+        ]
+      };
+    }));
+    let payload: any;
+    try {
+      payload = await dashboardInFlight.get(cacheKey);
+    } finally {
+      dashboardInFlight.delete(cacheKey);
+    }
+    dashboardCache.set(cacheKey, { at: Date.now(), data: payload });
+    return ok(res, payload);
   } catch (error) {
     console.error("Error cargando dashboard de estudiantes:", error);
     return res.status(500).json({

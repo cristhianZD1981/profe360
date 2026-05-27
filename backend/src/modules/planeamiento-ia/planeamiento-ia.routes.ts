@@ -2304,12 +2304,7 @@ router.post("/guardar-planeamiento", async (req, res) => {
         `);
 
       const planeamientoId = planeamientoResult.recordset[0].PlaneamientoId;
-      const indicadores = [
-        ...(Array.isArray(resultado.indicadoresEvaluacion) ? resultado.indicadoresEvaluacion : []),
-        ...(Array.isArray(resultado.semanas)
-          ? resultado.semanas.flatMap((s: any) => Array.isArray(s.indicadores) ? s.indicadores : [])
-          : [])
-      ];
+      const indicadores = splitLines(resultado.indicadoresEvaluacion);
 
       for (const indicador of indicadores) {
         const text = normalizeText(indicador);
@@ -2854,12 +2849,7 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
           WHERE PlaneamientoId = @planeamientoId
         `);
 
-      const indicadores = [
-        ...(Array.isArray(resultado.indicadoresEvaluacion) ? resultado.indicadoresEvaluacion : []),
-        ...(Array.isArray(resultado.semanas)
-          ? resultado.semanas.flatMap((s: any) => Array.isArray(s.indicadores) ? s.indicadores : [])
-          : [])
-      ];
+      const indicadores = splitLines(resultado.indicadoresEvaluacion);
 
       for (const indicador of indicadores) {
         const text = normalizeText(indicador);

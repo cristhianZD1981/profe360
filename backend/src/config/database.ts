@@ -83,4 +83,20 @@ export async function closePool() {
   }
 }
 
+export async function timedQuery<T = any>(label: string, fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  try {
+    return await fn();
+  } finally {
+    const ms = Date.now() - start;
+    if (ms >= 1000) {
+      console.warn(`[SQL][SLOW][${label}] ${ms}ms`);
+    } else if (ms >= 300) {
+      console.log(`[SQL][MID][${label}] ${ms}ms`);
+    } else {
+      console.log(`[SQL][FAST][${label}] ${ms}ms`);
+    }
+  }
+}
+
 export { sql };

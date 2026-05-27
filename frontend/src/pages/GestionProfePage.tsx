@@ -1,1062 +1,99 @@
 ﻿// @ts-nocheck
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
-
-type GrupoProfesor = {
-  AsignacionDocenteId: number;
-  UsuarioId: number;
-  InstitucionId: number;
-  GrupoId: number;
-  GrupoNombre: string;
-  GrupoNivel?: string | null;
-  GrupoJornada?: string | null;
-  MateriaId: number;
-  MateriaNombre: string;
-  MateriaCodigo?: string | null;
-  AnioLectivoId: number;
-  AnioNombre: string;
-  PeriodoId: number;
-  PeriodoNombre: string;
-  TipoAsignacion?: string | null;
-  ProfesorNombre?: string | null;
-  ProfesorPrimerApellido?: string | null;
-  ProfesorSegundoApellido?: string | null;
-  TotalEstudiantes: number;
-  EvaluacionPlantillaId?: number | null;
-  EvaluacionPlantillaNombre?: string | null;
-  EvaluacionPlantillaEstado?: string | null;
-  TieneEstructuraEvaluacion?: boolean | number | null;
-  TieneCalificacionesEvaluacion?: boolean | number | null;
-};
-
-type EstudianteGrupo = {
-  EstudianteId: number;
-  Identificacion: string;
-  Nombre: string;
-  PrimerApellido?: string | null;
-  SegundoApellido?: string | null;
-  Correo?: string | null;
-  Telefono?: string | null;
-  EncargadoPrincipalNombre?: string | null;
-  EncargadoPrincipalCorreo?: string | null;
-  EncargadoPrincipalTelefono?: string | null;
-  EncargadosWhatsAppDetalle?: string | null;
-  AutorizaWhatsAppEncargado?: boolean | number;
-  MatriculaId: number;
-  EstadoMatricula: string;
-};
-
-type Plantilla = {
-  EvaluacionPlantillaId: number;
-  Nombre: string;
-  DecimalesNota: number;
-  Estado: string;
-  PermitirProfesorEditar: boolean;
-};
-
-type Componente = {
-  EvaluacionComponenteId: number;
-  EvaluacionPlantillaId: number;
-  Descripcion: string;
-  Porcentaje: number;
-  Orden: number;
-  Activo: boolean;
-};
-
-type Actividad = {
-  EvaluacionActividadId: number;
-  EvaluacionComponenteId: number;
-  Descripcion: string;
-  Porcentaje: number;
-  Fecha?: string | null;
-  Orden: number;
-  Activo: boolean;
-  ComponentePorcentaje: number;
-  PorcentajeReal: number;
-};
-
-type Nota = {
-  EvaluacionNotaId: number;
-  EvaluacionActividadId: number;
-  EstudianteId: number;
-  GrupoId: number;
-  MateriaId: number;
-  PeriodoId: number;
-  Nota: number;
-  PorcentajeGanado: number;
-  Observacion?: string | null;
-};
-
-type NivelDesempeno = {
-  NivelDesempenoId: number;
-  Descripcion: string;
-  Valor: number;
-  Activo?: boolean;
-};
-
-
-
-type PlaneamientoHabilidad = {
-  PlaneamientoHabilidadId: number;
-  InstitucionId?: number | null;
-  MateriaId?: number | null;
-  MateriaNombre?: string | null;
-  TipoColegio?: string | null;
-  Ciclo?: string | null;
-  Grado?: string | null;
-  Mes?: string | null;
-  Area?: string | null;
-  NumeroHabilidad?: string | null;
-  DescripcionHabilidad: string;
-  DocumentoReferencia?: string | null;
-  Activo?: boolean;
-};
-
-type PlaneamientoIaResultadoSemana = {
-  semana?: number;
-  habilidadBase?: string;
-  proposito?: string;
-  mediacionPedagogica?: string[];
-  indicadores?: string[];
-  trabajoCotidiano?: string[];
-  tareas?: string[];
-  evaluacionSugerida?: {
-    cotidiano?: string;
-    tarea?: string;
-    prueba?: string;
-  };
-  recursos?: string[];
-};
-
-type PlaneamientoIaResultado = {
-  nombre?: string;
-  enfoque?: string;
-  advertencia?: string;
-  periodicidad?: string;
-  competenciaGeneral?: string;
-  competenciasGenerales?: string[];
-  aprendizajesEsperados?: string[];
-  estrategiasMediacion?: string[] | string;
-  estrategiaAdecuacionSignificativa?: {
-    aplica?: boolean;
-    colorResaltado?: string;
-    titulo?: string;
-    proposito?: string;
-    actividadAdaptada?: string;
-    apoyoDocente?: string;
-    recursoAjustado?: string;
-    productoEsperado?: string;
-    evaluacionAjustada?: string;
-    textoVisible?: string;
-  };
-  indicadoresEvaluacion?: string[];
-  trabajoCotidiano?: string[];
-  tareas?: string[];
-  evaluacionSugerida?: string[];
-  recursos?: string[];
-  reflexionesDocentes?: {
-    queFunciono?: string;
-    queNoFunciono?: string;
-    quePuedoMejorar?: string;
-  };
-  observaciones?: string;
-  semanas?: PlaneamientoIaResultadoSemana[];
-};
-
-function toTextList(value: any): string[] {
-  if (Array.isArray(value)) return value.map((item) => String(item ?? "").trim()).filter(Boolean);
-  if (typeof value === "string") {
-    return value
-      .split(/\r?\n+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function toTextValue(value: any): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map((item) => String(item ?? "")).join("\n");
-  if (value === null || value === undefined) return "";
-  return String(value);
-}
-
-function normalizePlaneamientoIaResultado(input: any): PlaneamientoIaResultado {
-  const data = (input && typeof input === "object") ? input : {};
-  const reflexiones = (data.reflexionesDocentes && typeof data.reflexionesDocentes === "object")
-    ? data.reflexionesDocentes
-    : {};
-  const adecuacion = (data.estrategiaAdecuacionSignificativa && typeof data.estrategiaAdecuacionSignificativa === "object")
-    ? data.estrategiaAdecuacionSignificativa
-    : {};
-
-  return {
-    ...data,
-    nombre: toTextValue(data.nombre),
-    enfoque: toTextValue(data.enfoque),
-    periodicidad: toTextValue(data.periodicidad),
-    competenciaGeneral: toTextValue(data.competenciaGeneral),
-    aprendizajesEsperados: toTextList(data.aprendizajesEsperados),
-    estrategiasMediacion: toTextValue(data.estrategiasMediacion),
-    indicadoresEvaluacion: toTextList(data.indicadoresEvaluacion),
-    trabajoCotidiano: toTextList(data.trabajoCotidiano),
-    tareas: toTextList(data.tareas),
-    evaluacionSugerida: toTextList(data.evaluacionSugerida),
-    recursos: toTextList(data.recursos),
-    observaciones: toTextValue(data.observaciones),
-    reflexionesDocentes: {
-      queFunciono: toTextValue(reflexiones.queFunciono),
-      queNoFunciono: toTextValue(reflexiones.queNoFunciono),
-      quePuedoMejorar: toTextValue(reflexiones.quePuedoMejorar)
-    },
-    estrategiaAdecuacionSignificativa: {
-      ...adecuacion,
-      aplica: !!adecuacion.aplica,
-      textoVisible: toTextValue(adecuacion.textoVisible),
-      titulo: toTextValue(adecuacion.titulo),
-      colorResaltado: toTextValue(adecuacion.colorResaltado)
-    }
-  };
-}
-
-type PlaneamientoIaForm = {
-  materiaId: string;
-  grado: string;
-  grupoId: string;
-  grupoIds: string[];
-  filtroTipo: "" | "mes" | "area";
-  mes: string;
-  area: string;
-  tema: string;
-  semanas: string;
-  tipoColegio: string;
-  fechaInicio: string;
-  fechaFin: string;
-  periodicidad: string;
-  competenciaGeneral: string;
-  indicaciones: string;
-  busquedaTexto: string;
-  habilidadesIds: number[];
-};
-
-type PlantillaPromptIA = {
-  Id: number;
-  TipoGeneracionIAId: number;
-  NombrePlantilla: string;
-  IndicacionesSistema?: string | null;
-  ContextoBase?: string | null;
-  ReglasConstruccion?: string | null;
-  EstructuraSalida?: string | null;
-  FormatoRespuesta?: string | null;
-  Activo?: boolean | number;
-};
-
-
-type Eval360Plantilla = {
-  EvaluacionPlantillaId: number;
-  Nombre: string;
-  MateriaNombre?: string | null;
-  AnioNombre?: string | null;
-  PeriodoNombre?: string | null;
-  Estado?: string | null;
-  TotalPorcentaje?: number | null;
-  PermitirProfesorEditar?: boolean;
-};
-
-type Eval360Detalle = {
-  EstructuraGrupoDetalleId?: number;
-  ComponenteCatalogoId: number;
-  Nombre: string;
-  Porcentaje: number;
-  Orden: number;
-  Activo?: boolean | number;
-  ComponenteCatalogoNombre?: string | null;
-};
-
-type Eval360Nivel = {
-  NivelDesempenoGrupoId?: number;
-  Nombre: string;
-  Valor: number;
-  Orden: number;
-  Activo?: boolean | number;
-};
-
-type Eval360Estructura = {
-  EstructuraGrupoId: number;
-  Nombre: string;
-  PlantillaBaseId?: number | null;
-  PlantillaBaseNombre?: string | null;
-  TotalPorcentaje?: number | null;
-  GrupoNombre?: string | null;
-  MateriaNombre?: string | null;
-  AnioNombre?: string | null;
-  PeriodoNombre?: string | null;
-};
-
-type Eval360EstructuraData = {
-  estructura: Eval360Estructura | null;
-  detalles: Eval360Detalle[];
-  niveles: Eval360Nivel[];
-  creada?: boolean;
-};
-
-
-type Eval360Indicador = {
-  IndicadorGrupoId: number;
-  EstructuraGrupoId: number;
-  PlaneamientoId?: number | null;
-  TipoUso: "Cotidiano" | "Tareas" | "TablaEspecificaciones" | string;
-  IndicadorBase: string;
-  IndicadorAvanzado: string;
-  IndicadorIntermedio: string;
-  IndicadorInicial: string;
-  Activo?: boolean | number;
-};
-
-
-type SeguimientoEvaluacionDetalle = Eval360Detalle & {
-  PermiteIndicadoresPlaneamiento?: boolean | number;
-  TipoIndicadorPlaneamiento?: string | null;
-  TipoSeguimiento?: string | null;
-  ComponenteCatalogoNombre?: string | null;
-};
-
-type SeguimientoActividad = {
-  ActividadId: number;
-  EstructuraGrupoId: number;
-  EstructuraGrupoDetalleId: number;
-  Nombre: string;
-  Descripcion?: string | null;
-  Fecha?: string | null;
-  PuntosMaximos: number;
-  PorcentajeDentroRubro?: number | null;
-  UsaIndicadoresPlaneamiento?: boolean | number;
-  Fuente?: string | null;
-  Activo?: boolean | number;
-};
-
-type SeguimientoNotaActividad = {
-  NotaActividadId: number;
-  ActividadId: number;
-  EstudianteId: number;
-  PuntosObtenidos?: number | null;
-  PuntosMaximos?: number | null;
-  NotaObtenida?: number | null;
-  PorcentajeObtenido?: number | null;
-  Observacion?: string | null;
-};
-
-type SeguimientoAsistenciaRegistro = {
-  AsistenciaRegistroId: number;
-  EstudianteId: number;
-  Fecha: string;
-  Estado: string;
-  MinutosTardia?: number | null;
-  Observacion?: string | null;
-  HorarioGrupoId?: number | null;
-  BloqueHorarioId?: number | null;
-  BloqueNombre?: string | null;
-  HoraInicio?: string | null;
-  HoraFin?: string | null;
-};
-
-type SeguimientoEvaluacionContexto = {
-  estructura: Eval360Estructura | null;
-  detalles: SeguimientoEvaluacionDetalle[];
-  plantillas: Eval360Plantilla[];
-  estudiantes: EstudianteGrupo[];
-  planeamientos: Array<Pick<Planeamiento, "PlaneamientoId" | "Nombre" | "FechaInicio" | "FechaFin" | "ResultadoIAJson"> & { Tema?: string | null }>;
-  indicadores: Array<Eval360Indicador & { PlaneamientoNombre?: string | null }>;
-  actividades: SeguimientoActividad[];
-  actividadIndicadores?: Array<{
-    ActividadId: number;
-    IndicadorGrupoId: number;
-    Activo?: boolean | number;
-    NumeroLecciones?: number | null;
-    Puntos?: number | null;
-    DetalleItemsJson?: string | null;
-  }>;
-  notasActividades: SeguimientoNotaActividad[];
-  asistenciaRegistros?: SeguimientoAsistenciaRegistro[];
-  mensajesSeguimiento?: Array<{
-    MensajeSeguimientoId: number;
-    TipoUso: string;
-    ValorNivel?: number | null;
-    Titulo?: string | null;
-    Cuerpo?: string | null;
-  }>;
-  seguimientos: Array<{
-    SeguimientoIndicadorId: number;
-    ActividadId: number;
-    IndicadorGrupoId: number;
-    EstudianteId: number;
-    NivelDesempenoGrupoId: number;
-    ValorSeleccionado: number;
-    Observacion?: string | null;
-    ActRecuperacion?: boolean | number | null;
-    ActRecuperacionTexto?: string | null;
-    NivelNombre: string;
-    EstructuraGrupoDetalleId: number;
-  }>;
-};
-
-type ExamenIaDraft = {
-  tablaId: string;
-  plantillaId: string;
-  seccionIds: string[];
-  archivoFormato: File | null;
-  indicaciones: string;
-  documentoApoyo: File | null;
-  nombre: string;
-  tipoColegio: string;
-  fuenteWord: string;
-  tamanoWord: string;
-};
-
-type ExamenIaCreado = {
-  id: string;
-  nombre: string;
-  materia: string;
-  grado: string;
-  periodo: string;
-  secciones: string[];
-  tablaNombre: string;
-  plantillaNombre: string;
-  indicaciones: string;
-  resultadoIA?: string;
-  creadoEn: string;
-};
-
-type SeguimientoEstado = "INICIAL" | "INTERMEDIO" | "AVANZADO" | "AUSENTE" | "NO_ENTREGADO";
-type SeguimientoDrafts = Record<string, SeguimientoEstado | "">;
-type SeguimientoInformarDraft = { informar: boolean; observacion: string };
-type SeguimientoInformarDrafts = Record<string, SeguimientoInformarDraft>;
-type SeguimientoRecuperacionDraft = { activa: boolean; texto: string };
-type SeguimientoRecuperacionDrafts = Record<string, SeguimientoRecuperacionDraft>;
-type SeguimientoExamenDraft = { puntosObtenidos: string; observacion: string };
-type SeguimientoExamenDrafts = Record<string, SeguimientoExamenDraft>;
-type SeguimientoActividadInformarDraft = { informar: boolean; observacion: string };
-type SeguimientoActividadInformarDrafts = Record<string, SeguimientoActividadInformarDraft>;
-type SeguimientoActividadPuntosMaximosDrafts = Record<string, string>;
-const initialPlaneamientoIaForm: PlaneamientoIaForm = {
-  materiaId: "",
-  grado: "",
-  grupoId: "",
-  grupoIds: [],
-  filtroTipo: "",
-  mes: "",
-  area: "",
-  tema: "",
-  semanas: "4",
-  tipoColegio: "Académico",
-  fechaInicio: "",
-  fechaFin: "",
-  periodicidad: "",
-  competenciaGeneral: "",
-  indicaciones: "",
-  busquedaTexto: "",
-  habilidadesIds: []
-};
-type Planeamiento = {
-  PlaneamientoId: number;
-  InstitucionId: number;
-  AnioLectivoId: number;
-  PeriodoId: number;
-  GrupoId: number;
-  MateriaId: number;
-  UsuarioId: number;
-  Nombre: string;
-  FechaInicio?: string | null;
-  FechaFin?: string | null;
-  Observaciones?: string | null;
-  ResultadoIAJson?: string | null;
-  Activo: boolean;
-  CreatedAt?: string | null;
-  UpdatedAt?: string | null;
-};
-
-type PlaneamientoIndicador = {
-  PlaneamientoIndicadorId?: number;
-  PlaneamientoId?: number;
-  Descripcion: string;
-  NivelDesempenoId?: number | null;
-  NivelDescripcion?: string | null;
-  NivelValor?: number | null;
-};
-
-type PlaneamientoForm = {
-  nombre: string;
-  fechaInicio: string;
-  fechaFin: string;
-  observaciones: string;
-  indicadores: PlaneamientoIndicador[];
-};
-
-type DetalleGrupo = {
-  asignacion: GrupoProfesor;
-  estudiantes: EstudianteGrupo[];
-  plantilla: Plantilla | null;
-  componentes: Componente[];
-  actividades: Actividad[];
-  notas: Nota[];
-};
-
-
-
-type AsistenciaRegistro = {
-  AsistenciaRegistroId?: number;
-  EstudianteId: number;
-  HorarioGrupoId?: number | null;
-  BloqueHorarioId?: number | null;
-  Estado: EstadoAsistencia;
-  MinutosTardia?: number | null;
-  Observacion?: string | null;
-};
-
-type ResumenAsistencia = {
-  EstudianteId: number;
-  Identificacion: string;
-  Nombre: string;
-  PrimerApellido?: string | null;
-  SegundoApellido?: string | null;
-  TotalLecciones: number;
-  AusenciasInjustificadasEquivalentes: number;
-  PorcentajeAusencias: number;
-  PorcentajeAsignadoArticulo37: number;
-};
-
-type AsistenciaLeccion = {
-  HorarioGrupoId: number;
-  BloqueHorarioId: number;
-  Nombre: string;
-  HoraInicio: string;
-  HoraFin: string;
-  OrdenVisual?: number | null;
-  DiaSemana?: number | null;
-};
-
-type AsistenciaDraft = Record<string, {
-  estado: EstadoAsistencia;
-  minutosTardia: string;
-  observacion: string;
-  notificarEncargado?: boolean;
-}>;
-type AsistenciaNotificacionEstado = Record<string, { correoEnviado?: boolean; waEnviado?: boolean }>;
-
-type NoteDrafts = Record<string, string>;
-type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "reportes";
-type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS";
-
-
-type HorarioBloque = {
-  BloqueHorarioId: number;
-  Nombre: string;
-  HoraInicio: string;
-  HoraFin: string;
-  OrdenVisual: number;
-};
-
-type HorarioEntrada = {
-  HorarioGrupoId: number;
-  BloqueHorarioId: number;
-  DiaSemana: number;
-  GrupoId: number;
-  GrupoNombre: string;
-  MateriaId: number;
-  MateriaNombre: string;
-  MateriaCodigo?: string | null;
-};
-
-type EstadoAsistencia = "PRESENTE" | "AUSENTE_JUSTIFICADA" | "AUSENTE_INJUSTIFICADA" | "TARDIA_MENOR_10" | "TARDIA_MAYOR_10";
-type AuditoriaEnvioFila = {
-  ReporteEnvioBitacoraId: number;
-  Modulo: string;
-  ModuloNombre: string;
-  RegistroClave: string;
-  Fecha: string;
-  CorreoEnviado: boolean;
-  WaEnviado: boolean;
-  UltimoEnvioAt?: string | null;
-  EstudianteId?: number | null;
-  Identificacion?: string | null;
-  Nombre?: string | null;
-  PrimerApellido?: string | null;
-  SegundoApellido?: string | null;
-};
-type BoletaConductaReporte = {
-  BoletaConductaId: number;
-  Consecutivo: number;
-  Fecha: string;
-  Seccion?: string | null;
-  NombreFuncionario?: string | null;
-  EstudianteId?: number | null;
-  Identificacion?: string | null;
-  Nombre?: string | null;
-  PrimerApellido?: string | null;
-  SegundoApellido?: string | null;
-  TotalEnviosCorreo?: number | null;
-  TotalEnviosExitosos?: number | null;
-};
-
-const initialPlaneamientoForm: PlaneamientoForm = {
-  nombre: "",
-  fechaInicio: "",
-  fechaFin: "",
-  observaciones: "",
-  indicadores: [{ Descripcion: "", NivelDesempenoId: null }]
-};
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: "16px",
-  padding: "14px",
-  background: "#ffffff",
-  color: "#e5eefb",
-  display: "grid",
-  gap: "8px"
-};
-
-const secondaryButtonStyle: React.CSSProperties = {
-  border: "1px solid #d1d5db",
-  borderRadius: "10px",
-  padding: "10px 14px",
-  background: "#ffffff",
-  color: "#e5eefb",
-  cursor: "pointer"
-};
-
-function getGestionPanelButtonStyle(panel: ActivePanel): React.CSSProperties {
-  const base: React.CSSProperties = {
-    ...secondaryButtonStyle,
-    fontWeight: 800
-  };
-  if (panel === "planeamientos") return { ...base, background: "#ecfeff", borderColor: "#67e8f9", color: "#0e7490" };
-  if (panel === "seguimiento") return { ...base, background: "#ecfccb", borderColor: "#bef264", color: "#3f6212" };
-  if (panel === "examenes_tabla") return { ...base, background: "#fff7ed", borderColor: "#fdba74", color: "#9a3412" };
-  if (panel === "notas") return { ...base, background: "#f3e8ff", borderColor: "#d8b4fe", color: "#6b21a8" };
-  if (panel === "reportes") return { ...base, background: "#fef9c3", borderColor: "#fde047", color: "#854d0e" };
-  return base;
-}
-
-const inputNotaStyle: React.CSSProperties = {
-  width: "90px",
-  minWidth: "90px",
-  border: "1px solid #94a3b8",
-  borderRadius: "8px",
-  padding: "8px 10px",
-  textAlign: "right",
-  background: "#122033",
-  color: "#f8fafc"
-};
-
-const requiredBadgeStyle: React.CSSProperties = {
-  padding: "2px 8px",
-  borderRadius: "999px",
-  background: "#dcfce7",
-  border: "1px solid #86efac",
-  color: "#166534",
-  fontSize: "11px",
-  fontWeight: 900
-};
-
-const optionalBadgeStyle: React.CSSProperties = {
-  padding: "2px 8px",
-  borderRadius: "999px",
-  background: "#fef3c7",
-  border: "1px solid #fcd34d",
-  color: "#92400e",
-  fontSize: "11px",
-  fontWeight: 900
-};
-const stickyTableHeaderStyle: React.CSSProperties = {
-  minWidth: "220px",
-  position: "sticky",
-  left: 0,
-  background: "#0f1b2d",
-  color: "#e5edf8",
-  zIndex: 2,
-  borderColor: "#334155"
-};
-
-const stickyTableCellStyle: React.CSSProperties = {
-  position: "sticky",
-  left: 0,
-  background: "#0f1b2d",
-  color: "#e5edf8",
-  zIndex: 1,
-  borderColor: "#334155",
-  fontWeight: 600
-};
-
-const helperDarkBoxStyle: React.CSSProperties = {
-  padding: "12px",
-  borderRadius: "12px",
-  background: "#0f1b2d",
-  border: "1px solid #334155",
-  color: "#e5edf8"
-};
-
-class PanelErrorBoundary extends React.Component<{ title?: string; children: React.ReactNode }, { hasError: boolean; message: string }> {
-  constructor(props: { title?: string; children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false, message: "" };
-  }
-
-  static getDerivedStateFromError(error: any) {
-    return { hasError: true, message: String(error?.message || error || "Error de renderizado") };
-  }
-
-  componentDidCatch(error: any) {
-    console.error("Error en panel:", this.props.title || "panel", error);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: "14px", border: "1px solid #fecaca", borderRadius: "12px", background: "#fff1f2", color: "#881337" }}>
-          <strong>No se pudo cargar este panel.</strong>
-          <div style={{ marginTop: "6px" }}>{this.state.message}</div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-
-function getFullName(item: { Nombre: string; PrimerApellido?: string | null; SegundoApellido?: string | null }) {
-  return [item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function getCorreoHabilitadoEstudiante(item: EstudianteGrupo) {
-  return String(item.Correo || item.EncargadoPrincipalCorreo || "").trim();
-}
-
-function getTelefonoWhatsAppHabilitado(item: EstudianteGrupo) {
-  if (!Boolean(item.AutorizaWhatsAppEncargado)) return "";
-  const detalle = String(item.EncargadosWhatsAppDetalle || "").trim();
-  if (detalle) return detalle;
-  return String(item.EncargadoPrincipalTelefono || "").trim();
-}
-
-function formatPercent(value?: number | string | null) {
-  const number = Number(value || 0);
-  return `${number.toFixed(2)}%`;
-}
-
-function normalizarSeguimientoKey(value: any) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase();
-}
-
-function getTipoSeguimientoFromDetalle(item?: Partial<SeguimientoEvaluacionDetalle> | null) {
-  const raw = `${item?.TipoSeguimiento || ""} ${item?.TipoIndicadorPlaneamiento || ""} ${item?.Nombre || ""} ${item?.ComponenteCatalogoNombre || ""}`;
-  const key = normalizarSeguimientoKey(raw);
-  if (key.includes("TAREA")) return "Tareas";
-  if (key.includes("COTIDIAN")) return "Cotidiano";
-  if (key.includes("ASIST")) return "Asistencia";
-  if (key.includes("EXAM") || key.includes("PRUEBA") || key.includes("EXAMEN") || key.includes("EVALUACION ESCRITA") || key.includes("SUMATIVA") || key.includes("INSTRUMENTO")) return "Exámenes";
-  return item?.Nombre || item?.ComponenteCatalogoNombre || "Otro";
-}
-
-function isTipoIndicadorSeguimiento(tipo: string) {
-  const key = normalizarSeguimientoKey(tipo);
-  return key.includes("COTIDIAN") || key.includes("TAREA");
-}
-
-function isTipoCotidianoSeguimiento(tipo: string) {
-  return normalizarSeguimientoKey(tipo).includes("COTIDIAN");
-}
-
-function isTipoAsistenciaSeguimiento(tipo: string) {
-  return normalizarSeguimientoKey(tipo).includes("ASIST");
-}
-
-function isTipoExamenSeguimiento(tipo: string) {
-  const key = normalizarSeguimientoKey(tipo);
-  return key.includes("EXAM") || key.includes("PRUEBA") || key.includes("SUMATIVA") || key.includes("INSTRUMENTO") || key.includes("EVALUACION ESCRITA");
-}
-
-function getSeguimientoActividadKey(actividadId: number | string, estudianteId: number | string) {
-  return String(actividadId) + "-" + String(estudianteId);
-}
-
-function getSeguimientoDraftKey(indicadorGrupoId: number | string, estudianteId: number | string, actividadId?: number | string) {
-  return `${actividadId || 0}-${indicadorGrupoId}-${estudianteId}`;
-}
-
-function getEstadoSeguimientoLabel(estado: SeguimientoEstado, tipo: string) {
-  if (estado === "INICIAL") return "Inicial";
-  if (estado === "INTERMEDIO") return "Intermedio";
-  if (estado === "AVANZADO") return "Avanzado";
-  return normalizarSeguimientoKey(tipo).includes("TAREA") ? "No entregado" : "Ausente";
-}
-
-function getEstadoSeguimientoValor(estado: SeguimientoEstado | "") {
-  if (estado === "INICIAL") return 1;
-  if (estado === "INTERMEDIO") return 2;
-  if (estado === "AVANZADO") return 3;
-  if (estado === "AUSENTE" || estado === "NO_ENTREGADO") return 0;
-  return null;
-}
-
-function getTooltipSeguimiento(indicador: Partial<Eval360Indicador>, estado: SeguimientoEstado, tipo: string) {
-  if (estado === "INICIAL") return indicador.IndicadorInicial || "Nivel inicial del indicador";
-  if (estado === "INTERMEDIO") return indicador.IndicadorIntermedio || "Nivel intermedio del indicador";
-  if (estado === "AVANZADO") return indicador.IndicadorAvanzado || "Nivel avanzado del indicador";
-  return normalizarSeguimientoKey(tipo).includes("TAREA")
-    ? "No entregado. No presenta evidencia para este indicador"
-    : "Ausente. No registra evidencia para este indicador";
-}
-
-function formatNota(value?: number | string | null, decimales = 2) {
-  if (value === null || value === undefined || value === "") return "";
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "";
-  return number.toFixed(decimales);
-}
-
-function buildNoteKey(estudianteId: number, actividadId: number) {
-  return `${estudianteId}-${actividadId}`;
-}
-
-function sanitizeNotaInput(value: string) {
-  const cleaned = value.replace(",", ".").replace(/[^0-9.]/g, "");
-  const parts = cleaned.split(".");
-  if (parts.length <= 2) return cleaned;
-  return `${parts[0]}.${parts.slice(1).join("")}`;
-}
-
-function clampNota(value: string) {
-  if (value.trim() === "") return "";
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "";
-  if (number < 0) return "0";
-  if (number > 100) return "100";
-  return value;
-}
-
-const MESES_ORDEN = [
-  "enero",
-  "febrero",
-  "marzo",
-  "abril",
-  "mayo",
-  "junio",
-  "julio",
-  "agosto",
-  "septiembre",
-  "octubre",
-  "noviembre",
-  "diciembre"
-];
-
-function normalizarTextoOrden(value: string) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase();
-}
-
-
-function normalizarGradoPlaneamiento(value: any) {
-  const original = String(value || "").trim();
-  if (!original) return "";
-
-  const limpio = normalizarTextoOrden(original);
-
-  const matchNivelSeccion = limpio.match(/^(7|8|9|10|11|12)(?:\s*[-_. ]\s*\d+)?/);
-  const nivelNumerico = matchNivelSeccion ? Number(matchNivelSeccion[1]) : null;
-
-  if (nivelNumerico === 7 || limpio.includes("setimo") || limpio.includes("septimo")) return "Séptimo";
-  if (nivelNumerico === 8 || limpio.includes("octavo")) return "Octavo";
-  if (nivelNumerico === 9 || limpio.includes("noveno")) return "Noveno";
-
-  // Undécimo y duodécimo contienen "décimo". Se validan antes de décimo
-  // para evitar que 11- o 12- se carguen como décimo.
-  if (
-    nivelNumerico === 12 ||
-    limpio.includes("duodecimo") ||
-    limpio.includes("duodecima") ||
-    limpio.includes("duo decimo") ||
-    limpio.includes("duo decima") ||
-    limpio.includes("duidecimo") ||
-    limpio.includes("duidecima")
-  ) return "Duodécimo";
-
-  if (nivelNumerico === 11 || limpio.includes("undecimo") || limpio.includes("undecima")) return "Undécimo";
-  if (nivelNumerico === 10 || limpio === "decimo" || limpio === "decima") return "Décimo";
-
-  return original;
-}
-
-function getGradoPlaneamientoFromGrupo(grupo: any) {
-  if (!grupo) return "";
-
-  // Primero se toma el nombre de la sección, porque ahí viene el valor real 12-3.
-  // GrupoNivel puede venir mal catalogado como Décimo en algunos datos históricos.
-  const candidatosPrioritarios = [
-    grupo?.GrupoNombre,
-    grupo?.NombreGrupo,
-    grupo?.nombreGrupo,
-    grupo?.Nombre,
-    grupo?.nombre,
-    grupo?.SeccionNombre,
-    grupo?.seccionNombre,
-    grupo?.Seccion,
-    grupo?.seccion,
-    grupo?.Grupo,
-    grupo?.grupo
-  ];
-
-  for (const valor of candidatosPrioritarios) {
-    const grado = normalizarGradoPlaneamiento(valor);
-    if (grado && grado !== String(valor || "").trim()) return grado;
-  }
-
-  const candidatosSecundarios = [
-    grupo?.GrupoNivel,
-    grupo?.Nivel,
-    grupo?.nivel
-  ];
-
-  for (const valor of candidatosSecundarios) {
-    const grado = normalizarGradoPlaneamiento(valor);
-    if (grado) return grado;
-  }
-
-  return "";
-}
-
-
-function getNombreSeccionPlaneamiento(grupo: any) {
-  const posibles = [
-    grupo?.GrupoNombre,
-    grupo?.NombreGrupo,
-    grupo?.nombreGrupo,
-    grupo?.Nombre,
-    grupo?.nombre,
-    grupo?.SeccionNombre,
-    grupo?.seccionNombre,
-    grupo?.Seccion,
-    grupo?.seccion,
-    grupo?.Grupo,
-    grupo?.grupo,
-    grupo?.GrupoNivel,
-    grupo?.Nivel,
-    grupo?.nivel
-  ];
-
-  for (const valor of posibles) {
-    const texto = String(valor ?? "").trim();
-    if (texto) return texto;
-  }
-
-  const id = grupo?.GrupoId ?? grupo?.grupoId ?? grupo?.Id ?? grupo?.id ?? "";
-  return id ? `Grupo ${id}` : "Sección sin nombre";
-}
-
-function getDetalleSeccionPlaneamiento(grupo: any) {
-  const nombre = getNombreSeccionPlaneamiento(grupo);
-  const periodo = String(grupo?.PeriodoNombre ?? grupo?.periodoNombre ?? grupo?.Periodo ?? grupo?.periodo ?? "").trim();
-  const anio = String(grupo?.AnioNombre ?? grupo?.anioNombre ?? grupo?.AnioLectivoNombre ?? grupo?.anioLectivoNombre ?? "").trim();
-  return [nombre, periodo, anio].filter(Boolean).join(" / ");
-}
-
-function ordenarMeses(a: string, b: string) {
-  const ia = MESES_ORDEN.indexOf(normalizarTextoOrden(a));
-  const ib = MESES_ORDEN.indexOf(normalizarTextoOrden(b));
-
-  if (ia !== -1 && ib !== -1) return ia - ib;
-  if (ia !== -1) return -1;
-  if (ib !== -1) return 1;
-
-  return String(a).localeCompare(String(b), "es", { numeric: true, sensitivity: "base" });
-}
-
-function deduplicarGruposProfesor(items: GrupoProfesor[]) {
-  const map = new Map<string, GrupoProfesor>();
-
-  for (const item of items || []) {
-    const key = [
-      item.GrupoId,
-      item.MateriaId,
-      item.AnioLectivoId,
-      item.PeriodoId
-    ].map((value) => String(value ?? "")).join("|");
-
-    if (!map.has(key)) {
-      map.set(key, item);
-    }
-  }
-
-  return Array.from(map.values());
-}
-
-function getGrupoOrdenParts(item: Pick<GrupoProfesor, "GrupoNombre" | "GrupoNivel" | "MateriaNombre">) {
-  const texto = `${item.GrupoNombre || ""} ${item.GrupoNivel || ""}`;
-  const matchSeccion = texto.match(/(\d{1,2})\s*[- ]\s*(\d{1,2})/);
-
-  if (matchSeccion) {
-    return {
-      nivel: Number(matchSeccion[1]),
-      seccion: Number(matchSeccion[2])
-    };
-  }
-
-  const matchNivel = texto.match(/\d{1,2}/);
-  return {
-    nivel: matchNivel ? Number(matchNivel[0]) : 999,
-    seccion: 999
-  };
-}
-
-function compararGruposProfesor(a: GrupoProfesor, b: GrupoProfesor) {
-  const ordenA = getGrupoOrdenParts(a);
-  const ordenB = getGrupoOrdenParts(b);
-
-  if (ordenA.nivel !== ordenB.nivel) return ordenA.nivel - ordenB.nivel;
-  if (ordenA.seccion !== ordenB.seccion) return ordenA.seccion - ordenB.seccion;
-
-  const grupoCompare = String(a.GrupoNombre || "").localeCompare(String(b.GrupoNombre || ""), "es", { numeric: true, sensitivity: "base" });
-  if (grupoCompare !== 0) return grupoCompare;
-
-  return String(a.MateriaNombre || "").localeCompare(String(b.MateriaNombre || ""), "es", { numeric: true, sensitivity: "base" });
-}
-
-function formatHoraHorario(value?: string | null) {
-  const texto = String(value || "").trim();
-  const match = texto.match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return texto;
-  return `${match[1].padStart(2, "0")}:${match[2]}`;
-}
-
-function getBloqueHorarioLabel(bloque: HorarioBloque) {
-  const nombre = String(bloque.Nombre || "").trim();
-  const inicio = formatHoraHorario(bloque.HoraInicio);
-  const fin = formatHoraHorario(bloque.HoraFin);
-  return inicio && fin ? `${nombre} (${inicio}-${fin})` : nombre;
-}
-
-function normalizarBloqueHorario(nombre?: string | null) {
-  return String(nombre || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function getTipoBloqueNoLectivo(nombre?: string | null) {
-  const texto = normalizarBloqueHorario(nombre);
-  if (texto.includes("almuerzo")) return "almuerzo";
-  if (texto.includes("recreo") || texto.includes("descanso")) return "recreo";
-  return "";
-}
+import {
+  type ActivePanel,
+  type Actividad,
+  type AsistenciaDraft,
+  type AsistenciaLeccion,
+  type AsistenciaNotificacionEstado,
+  type AsistenciaRegistro,
+  type AuditoriaEnvioFila,
+  type BoletaConductaReporte,
+  type Componente,
+  type DetalleGrupo,
+  type EstadoAsistencia,
+  type EstudianteGrupo,
+  type Eval360Detalle,
+  type Eval360Estructura,
+  type Eval360EstructuraData,
+  type Eval360Indicador,
+  type Eval360Nivel,
+  type Eval360Plantilla,
+  type ExamenIaCreado,
+  type ExamenIaDraft,
+  type GrupoProfesor,
+  type HorarioBloque,
+  type HorarioEntrada,
+  type NivelDesempeno,
+  type Nota,
+  type NoteDrafts,
+  type Planeamiento,
+  type PlaneamientoForm,
+  type PlaneamientoHabilidad,
+  type PlaneamientoIaForm,
+  type PlaneamientoIaResultado,
+  type PlaneamientoIndicador,
+  type Plantilla,
+  type PlantillaPromptIA,
+  type ResumenAsistencia,
+  type SeguimientoActividad,
+  type SeguimientoActividadInformarDraft,
+  type SeguimientoActividadInformarDrafts,
+  type SeguimientoActividadPuntosMaximosDrafts,
+  type SeguimientoAsistenciaRegistro,
+  type SeguimientoDrafts,
+  type SeguimientoEstado,
+  type SeguimientoEvaluacionContexto,
+  type SeguimientoEvaluacionDetalle,
+  type SeguimientoExamenDraft,
+  type SeguimientoExamenDrafts,
+  type SeguimientoInformarDraft,
+  type SeguimientoInformarDrafts,
+  type SeguimientoNotaActividad,
+  type TipoReporteGestion,
+  PanelErrorBoundary,
+  buildNoteKey,
+  cardStyle,
+  clampNota,
+  compararGruposProfesor,
+  deduplicarGruposProfesor,
+  formatNota,
+  formatPercent,
+  getBloqueHorarioLabel,
+  getCorreoHabilitadoEstudiante,
+  getDetalleSeccionPlaneamiento,
+  getEstadoSeguimientoLabel,
+  getEstadoSeguimientoValor,
+  getFullName,
+  getGestionPanelButtonStyle,
+  getGradoPlaneamientoFromGrupo,
+  getNombreSeccionPlaneamiento,
+  getSeguimientoActividadKey,
+  getSeguimientoDraftKey,
+  getTelefonoWhatsAppHabilitado,
+  getTipoBloqueNoLectivo,
+  getTipoSeguimientoFromDetalle,
+  getTooltipSeguimiento,
+  helperDarkBoxStyle,
+  initialPlaneamientoForm,
+  initialPlaneamientoIaForm,
+  inputNotaStyle,
+  isTipoAsistenciaSeguimiento,
+  isTipoCotidianoSeguimiento,
+  isTipoExamenSeguimiento,
+  isTipoIndicadorSeguimiento,
+  normalizarSeguimientoKey,
+  normalizePlaneamientoIaResultado,
+  normalizarGradoPlaneamiento,
+  optionalBadgeStyle,
+  ordenarMeses,
+  requiredBadgeStyle,
+  sanitizeNotaInput,
+  secondaryButtonStyle,
+  stickyTableCellStyle,
+  stickyTableHeaderStyle,
+} from "./GestionProfePage.helpers";
 
 export default function GestionProfePage() {
   const [grupos, setGrupos] = useState<GrupoProfesor[]>([]);
@@ -1089,12 +126,15 @@ export default function GestionProfePage() {
   const generatingEval360IndicadoresTimerRef = useRef<number | null>(null);
   const [savingEval360IndicadorId, setSavingEval360IndicadorId] = useState<number | null>(null);
   const [deletingEval360PlaneamientoId, setDeletingEval360PlaneamientoId] = useState<number | null>(null);
+  const [deletingEval360PlaneamientoProgress, setDeletingEval360PlaneamientoProgress] = useState(0);
+  const deletingEval360PlaneamientoTimerRef = useRef<number | null>(null);
   const [savingEval360PlaneamientoCambiosId, setSavingEval360PlaneamientoCambiosId] = useState<number | null>(null);
   const [savingEval360PlaneamientoCambiosProgress, setSavingEval360PlaneamientoCambiosProgress] = useState(0);
   const savingEval360PlaneamientoCambiosTimerRef = useRef<number | null>(null);
   const [eval360IndicadoresPorPlaneamiento, setEval360IndicadoresPorPlaneamiento] = useState<Record<number, Eval360Indicador[]>>({});
   const [eval360PanelIndicadoresOpen, setEval360PanelIndicadoresOpen] = useState<Record<number, boolean>>({});
   const [eval360IndicacionesPorPlaneamiento, setEval360IndicacionesPorPlaneamiento] = useState<Record<number, string>>({});
+  const [eval360GrupoIdsPorPlaneamiento, setEval360GrupoIdsPorPlaneamiento] = useState<Record<number, string[]>>({});
   const [eval360TiposUsoPorPlaneamiento, setEval360TiposUsoPorPlaneamiento] = useState<Record<number, string[]>>({});
   const [eval360IndicadoresMinimizados, setEval360IndicadoresMinimizados] = useState<Record<number, boolean>>({});
   const [generatingEval360PlaneamientoId, setGeneratingEval360PlaneamientoId] = useState<number | null>(null);
@@ -1231,9 +271,14 @@ export default function GestionProfePage() {
   const [notasDetalleAbierto, setNotasDetalleAbierto] = useState<string>("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const initialLoadStartedRef = useRef(false);
 
   useEffect(() => {
     return () => {
+      if (deletingEval360PlaneamientoTimerRef.current !== null) {
+        window.clearInterval(deletingEval360PlaneamientoTimerRef.current);
+        deletingEval360PlaneamientoTimerRef.current = null;
+      }
       if (savingSeguimientoTimerRef.current !== null) {
         window.clearInterval(savingSeguimientoTimerRef.current);
         savingSeguimientoTimerRef.current = null;
@@ -1544,6 +589,33 @@ export default function GestionProfePage() {
   const seguimientoIndicadorSeleccionado = useMemo(() => {
     return seguimientoIndicadoresFiltrados.find((item) => String(item.IndicadorGrupoId) === String(seguimientoIndicadorId)) || seguimientoIndicadoresFiltrados[0] || null;
   }, [seguimientoIndicadoresFiltrados, seguimientoIndicadorId]);
+
+  const seguimientoFaltanAsignacionesActividad = useMemo(() => {
+    if (!isTipoIndicadorSeguimiento(seguimientoTipo)) return false;
+    if (!seguimientoModoHibridoTareas) return false;
+    if (!seguimientoActividadSeleccionada?.ActividadId) return false;
+    if (seguimientoIndicadoresFiltrados.length > 0) return false;
+
+    const tipoKey = normalizarSeguimientoKey(seguimientoTipo).includes("TAREA") ? "TAREAS" : "COTIDIANO";
+    const indicadoresTipo = (seguimientoContexto?.indicadores || []).filter((indicador) => {
+      if (normalizarSeguimientoKey(indicador.TipoUso) !== tipoKey) return false;
+      if (seguimientoPlaneamientoId && String(indicador.PlaneamientoId || "") !== seguimientoPlaneamientoId) return false;
+      return true;
+    });
+    if (!indicadoresTipo.length) return false;
+
+    const asignadosActividad = new Set((seguimientoIndicadoresActividadAsignados || []).map((id) => Number(id)));
+    const tieneAsignadoEnActividad = indicadoresTipo.some((indicador) => asignadosActividad.has(Number(indicador.IndicadorGrupoId)));
+    return !tieneAsignadoEnActividad;
+  }, [
+    seguimientoTipo,
+    seguimientoModoHibridoTareas,
+    seguimientoActividadSeleccionada?.ActividadId,
+    seguimientoIndicadoresFiltrados.length,
+    seguimientoContexto?.indicadores,
+    seguimientoPlaneamientoId,
+    seguimientoIndicadoresActividadAsignados
+  ]);
 
   const seguimientoPasosEvaluacion = useMemo(() => {
     if (!seguimientoTipo) {
@@ -1926,6 +998,19 @@ export default function GestionProfePage() {
       .sort((a, b) => String(a.GrupoNombre).localeCompare(String(b.GrupoNombre), undefined, { numeric: true }));
   }, [grupos, planeamientoIaForm.materiaId, planeamientoIaForm.grado, selected?.MateriaId, selected?.GrupoNivel, selected?.GrupoNombre]);
 
+  const seccionesMismoGradoMateriaSeleccionado = useMemo(() => {
+    if (!selected) return [] as GrupoProfesor[];
+    const materiaId = Number(selected.MateriaId || 0);
+    const grado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(selected) || "");
+    return grupos
+      .filter((grupo) => {
+        if (Number(grupo.MateriaId || 0) !== materiaId) return false;
+        const grupoGrado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(grupo) || "");
+        return !grado || grupoGrado === grado;
+      })
+      .sort((a, b) => String(a.GrupoNombre).localeCompare(String(b.GrupoNombre), undefined, { numeric: true }));
+  }, [grupos, selected]);
+
   useEffect(() => {
     if (!planeamientoIaForm.materiaId || !planeamientoIaForm.grado) return;
 
@@ -1981,6 +1066,7 @@ export default function GestionProfePage() {
   }, [habilidadesIa, mesesSeleccionadosIa]);
 
   useEffect(() => {
+    if (activePanel !== "planeamientos") return;
     const materiaId = Number(planeamientoIaForm.materiaId || 0);
     const grado = normalizarGradoPlaneamiento(planeamientoIaForm.grado);
 
@@ -2001,7 +1087,7 @@ export default function GestionProfePage() {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [planeamientoIaForm.materiaId, planeamientoIaForm.grado]);
+  }, [activePanel, planeamientoIaForm.materiaId, planeamientoIaForm.grado]);
 
   const resumenGrupo = useMemo(() => {
     if (!detalle) return { totalPorcentaje: 0, totalNotas: 0 };
@@ -3238,10 +2324,44 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
   }
 
-  async function loadDetalle(item: GrupoProfesor) {
-    setLoadingDetalleCardId(item.AsignacionDocenteId);
+  async function loadPlantillasAsignables(item = selected) {
+    if (!item) return;
+    setLoadingEval360(true);
+    try {
+      const response = await api.get("/eval360/plantillas", {
+        params: {
+          anioLectivoId: item.AnioLectivoId,
+          periodoId: item.PeriodoId,
+          incluirInactivas: false
+        }
+      });
+      const plantillas = unwrapApiData(response) || [];
+      setEval360Plantillas(Array.isArray(plantillas) ? plantillas : []);
+    } catch (error: any) {
+      console.error("Error cargando plantillas asignables:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudieron cargar las plantillas disponibles");
+    } finally {
+      setLoadingEval360(false);
+    }
+  }
+
+  async function loadDetalle(item: GrupoProfesor, cargarContenidoCompleto = false) {
+    setLoadingDetalleCardId(cargarContenidoCompleto ? item.AsignacionDocenteId : null);
     setSelected(item);
-    setDetalle(null);
+    setDetalle({
+      asignacion: item,
+      estudiantes: [],
+      plantilla: item.EvaluacionPlantillaId ? {
+        EvaluacionPlantillaId: Number(item.EvaluacionPlantillaId),
+        Nombre: String(item.EvaluacionPlantillaNombre || ""),
+        DecimalesNota: 2,
+        Estado: String(item.EvaluacionPlantillaEstado || ""),
+        PermitirProfesorEditar: false
+      } : null,
+      componentes: [],
+      actividades: [],
+      notas: []
+    });
     setNoteDrafts({});
     setPlaneamientos([]);
     setPlaneamientoIndicadores([]);
@@ -3292,6 +2412,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setActivePanel("");
     setMessage("");
     setErrorMessage("");
+    if (!item.EvaluacionPlantillaId) {
+      void loadPlantillasAsignables(item);
+    }
+    if (!cargarContenidoCompleto) {
+      setLoadingDetalle(false);
+      return;
+    }
     setLoadingDetalle(true);
 
     try {
@@ -3304,10 +2431,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const data = response.data?.data || response.data || null;
       setDetalle(data);
       setNoteDrafts(buildDraftsFromDetalle(data));
-      void Promise.allSettled([
-        loadPlaneamientos(item),
-        loadSeguimientoEvaluacion(item)
-      ]);
     } catch (error: any) {
       console.error("Error cargando detalle del grupo:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar el detalle del grupo seleccionado");
@@ -3413,19 +2536,58 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setErrorMessage("");
 
     try {
-      const response = await api.post("/eval360/estructuras/crear-desde-plantilla", {
-        grupoId: selected.GrupoId,
-        materiaId: selected.MateriaId,
-        anioLectivoId: selected.AnioLectivoId,
-        periodoId: selected.PeriodoId,
-        plantillaId: eval360PlantillaId || null,
-        nombre: "Evaluación " + selected.GrupoNombre + " - " + selected.MateriaNombre + " - " + selected.PeriodoNombre
-      });
+      const gruposDestino = mostrarSelectorCambioPlantilla
+        ? [selected]
+        : seccionesMismoGradoMateriaSeleccionado.filter((g) => Number(g.MateriaId) === Number(selected.MateriaId));
 
-      const data = unwrapApiData(response);
-      setEval360Estructura(data || null);
-      setEval360DetallesDraft(Array.isArray(data?.detalles) ? data.detalles : []);
-      setMessage(response?.data?.message || "Estructura de evaluación creada correctamente");
+      if (!gruposDestino.length) {
+        setErrorMessage("No hay secciones disponibles para aplicar la plantilla");
+        setSavingEval360Progress(0);
+        return;
+      }
+
+      let principalData: any = null;
+      let aplicadas = 0;
+      const errores: string[] = [];
+
+      for (const grupo of gruposDestino) {
+        try {
+          const response = await api.post("/eval360/estructuras/crear-desde-plantilla", {
+            grupoId: grupo.GrupoId,
+            materiaId: grupo.MateriaId,
+            anioLectivoId: grupo.AnioLectivoId,
+            periodoId: grupo.PeriodoId,
+            plantillaId: eval360PlantillaId || null,
+            nombre: "Evaluación " + grupo.GrupoNombre + " - " + grupo.MateriaNombre + " - " + grupo.PeriodoNombre
+          });
+          const data = unwrapApiData(response);
+          aplicadas += 1;
+          if (Number(grupo.GrupoId) === Number(selected.GrupoId)) {
+            principalData = data;
+          }
+        } catch (error: any) {
+          errores.push(`${grupo.GrupoNombre}: ${error?.response?.data?.message || "No se pudo aplicar"}`);
+        }
+      }
+
+      if (principalData) {
+        setEval360Estructura(principalData || null);
+        setEval360DetallesDraft(Array.isArray(principalData?.detalles) ? principalData.detalles : []);
+      }
+
+      if (mostrarSelectorCambioPlantilla) {
+        setMessage(aplicadas > 0 ? `Plantilla cambiada correctamente en ${aplicadas}/1 sección` : "");
+      } else {
+        const totalDestino = gruposDestino.length;
+        setMessage(
+          aplicadas > 0
+            ? `Plantilla asignada en ${aplicadas}/${totalDestino} sección(es) del mismo grado`
+            : ""
+        );
+      }
+      if (errores.length) {
+        setErrorMessage("Algunas secciones no se pudieron aplicar: " + errores.join(" | "));
+      }
       setSavingEval360Progress(100);
       await loadEval360Data(selected);
       await loadGrupos(q);
@@ -3670,6 +2832,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     return Number(((Number(nota || 0) / 100) * pe).toFixed(2));
   }
 
+  function getMinimoPuntosPorPorcentajeActividad(actividad?: SeguimientoActividad | null) {
+    const raw = Number(actividad?.PorcentajeDentroRubro || 0);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    // Acepta ambos formatos: 20 o 0.20
+    return raw > 1 ? raw : (raw * 100);
+  }
+
+  function toNumeroComparacion(value: any) {
+    const cleaned = String(value ?? "")
+      .replace("%", "")
+      .replace(",", ".")
+      .replace(/[^\d.]/g, "")
+      .trim();
+    const num = Number(cleaned);
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  function getPendientesCalificarActividad(actividadId: number) {
+    const estudiantes = seguimientoContexto?.estudiantes || [];
+    let pendientes = 0;
+    for (const estudiante of estudiantes) {
+      const draft = getSeguimientoExamenDraft(actividadId, Number(estudiante.EstudianteId));
+      const texto = String(draft.puntosObtenidos || "").trim();
+      if (texto === "") pendientes += 1;
+    }
+    return pendientes;
+  }
+
   function startSeguimientoSaving(modo: "actividad" | "indicador") {
     setSavingSeguimientoModo(modo);
     setSavedSeguimientoModo(null);
@@ -3704,9 +2894,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
-    const puntosMaximos = Number(String(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)).replace(",", "."));
+    const puntosMaximos = toNumeroComparacion(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada));
     if (!Number.isFinite(puntosMaximos) || puntosMaximos <= 0) {
       setErrorMessage("Indicá la cantidad de puntos que vale la actividad");
+      return;
+    }
+    const minimoPorcentaje = toNumeroComparacion(getMinimoPuntosPorPorcentajeActividad(seguimientoActividadSeleccionada));
+    if (Number.isFinite(minimoPorcentaje) && minimoPorcentaje > 0 && puntosMaximos < minimoPorcentaje) {
+      window.alert(`El valor de "Puntos que vale" no puede ser menor al porcentaje del examen (${minimoPorcentaje.toFixed(2)}).`);
+      setErrorMessage(`El valor de "Puntos que vale" no puede ser menor al porcentaje del examen (${minimoPorcentaje.toFixed(2)}).`);
       return;
     }
 
@@ -3722,13 +2918,38 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       };
     });
 
+    const registrosConCambios = registros.filter((item) => {
+      const existente = (seguimientoContexto?.notasActividades || []).find((nota) =>
+        Number(nota.ActividadId) === Number(seguimientoActividadSeleccionada.ActividadId)
+        && Number(nota.EstudianteId) === Number(item.estudianteId)
+      );
+      const puntosPrevios = existente?.PuntosObtenidos === null || existente?.PuntosObtenidos === undefined ? null : Number(existente.PuntosObtenidos);
+      const observacionPrevia = String(existente?.Observacion || "").trim();
+      const observacionNueva = String(item.observacion || "").trim();
+      const cambioPuntos = !(puntosPrevios === null && item.puntosObtenidos === null) && Number(puntosPrevios ?? -999999) !== Number(item.puntosObtenidos ?? -999999);
+      const cambioObservacion = observacionPrevia !== observacionNueva;
+      const cambioInformar = Boolean(item.informarEncargado);
+      return cambioPuntos || cambioObservacion || cambioInformar;
+    });
+
     const invalid = registros.find((item) => item.puntosObtenidos !== null && (!Number.isFinite(Number(item.puntosObtenidos)) || !Number.isInteger(Number(item.puntosObtenidos)) || Number(item.puntosObtenidos) < 0 || Number(item.puntosObtenidos) > puntosMaximos));
     if (invalid) {
+      window.alert("Hay puntos obtenidos mayores a los puntos que vale la actividad. Ajustá los valores marcados en rojo.");
       setErrorMessage("Los puntos obtenidos deben ser números enteros entre 0 y " + puntosMaximos);
+      return;
+    }
+    const puntosMaximosPrevios = Number(seguimientoActividadSeleccionada.PuntosMaximos || 0);
+    const cambioPuntosMaximos = Number.isFinite(puntosMaximosPrevios)
+      ? Number(puntosMaximos.toFixed(2)) !== Number(puntosMaximosPrevios.toFixed(2))
+      : true;
+
+    if (!registrosConCambios.length && !cambioPuntosMaximos) {
+      setMessage("No hay cambios para guardar.");
       return;
     }
 
     setSavingSeguimiento(true);
+    startSeguimientoSaving("actividad");
     setMessage("");
     setErrorMessage("");
 
@@ -3738,7 +2959,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         estructuraGrupoDetalleId: seguimientoDetalleSeleccionado.EstructuraGrupoDetalleId,
         actividadId: seguimientoActividadSeleccionada.ActividadId,
         puntosMaximos,
-        registros
+        registros: registrosConCambios
       });
       setMessage(response?.data?.message || "Evaluación guardada correctamente");
       setSeguimientoContexto((prev) => prev ? {
@@ -3918,7 +3139,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         }
       });
       const data = unwrapApiData(response) || [];
-      const indicadores = Array.isArray(data) ? getEval360IndicadoresActivos(data) : [];
+      const indicadores = Array.isArray(data)
+        ? (planId ? data : getEval360IndicadoresActivos(data))
+        : [];
       setEval360Indicadores(indicadores);
       if (planId) {
         setEval360IndicadoresPorPlaneamiento((prev) => ({
@@ -3960,6 +3183,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       if (nextOpen) {
         loadEval360PlantillasIaIndicadores();
         loadEval360Indicadores(undefined, planeamientoId);
+        setEval360GrupoIdsPorPlaneamiento((actual) => {
+          if (actual[planeamientoId]?.length) return actual;
+          const defaults = selected?.GrupoId ? [String(selected.GrupoId)] : [];
+          return { ...actual, [planeamientoId]: defaults };
+        });
       }
       return {
         ...prev,
@@ -3975,11 +3203,27 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }));
   }
 
+  function getGrupoIdsGeneracionPlaneamiento(planeamientoId: number) {
+    const ids = (eval360GrupoIdsPorPlaneamiento[planeamientoId] || [])
+      .map((item) => Number(item))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    return Array.from(new Set(ids));
+  }
+
   async function generarEval360IndicadoresDesdePlaneamiento(planeamientoIdParam?: number) {
+    if (!selected) {
+      setErrorMessage("Seleccioná una sección antes de generar indicadores");
+      return;
+    }
     const estructuraGrupoId = Number(eval360Estructura?.estructura?.EstructuraGrupoId || 0);
     const planeamientoId = Number(planeamientoIdParam || eval360PlaneamientoId || 0);
     const tiposUso = ["Cotidiano", "Tareas", "TablaEspecificaciones"];
     const indicacionesDocente = planeamientoIdParam ? getEval360IndicacionesPlaneamiento(planeamientoId) : eval360IndicacionesIa;
+    const grupoIdsDestino = getGrupoIdsGeneracionPlaneamiento(planeamientoId);
+    if (!grupoIdsDestino.length) {
+      setErrorMessage("Seleccioná al menos una sección para generar los indicadores");
+      return;
+    }
 
     if (!planeamientoId) {
       setErrorMessage("Seleccioná un planeamiento guardado para tomar sus indicadores");
@@ -4004,6 +3248,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         planeamientoId,
         plantillaPromptIAId: eval360PlantillaIaIndicadorId || null,
         indicacionesDocente: indicacionesDocente || "",
+        grupoIds: grupoIdsDestino,
         tiposUso
       });
 
@@ -4016,7 +3261,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       }));
       setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: true }));
       setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: false }));
-      setMessage(response?.data?.message || "Indicadores generados correctamente");
+      const estructurasAplicadas = Number(data.estructurasAplicadas || 0);
+      const totalDestino = grupoIdsDestino.length;
+      setMessage(`Indicadores generados y asignados en ${estructurasAplicadas}/${totalDestino} secciones`);
       setGeneratingEval360IndicadoresProgress(100);
       await loadEval360Indicadores(Number(data.estructuraGrupoId || estructuraGrupoId || 0), planeamientoId);
     } catch (error: any) {
@@ -4030,12 +3277,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       }
       setGeneratingEval360Indicadores(false);
       setGeneratingEval360PlaneamientoId(null);
-    setSeguimientoContexto(null);
-    setSeguimientoTipo("");
-    setSeguimientoPlaneamientoId("");
-    setSeguimientoEstadoFiltro("NO_CALIFICADO");
-    setSeguimientoIndicadorId("");
-    setSeguimientoDrafts({});
     }
   }
 
@@ -4183,19 +3424,43 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setErrorMessage("");
 
     try {
-      await Promise.all(indicadoresActuales.map((indicador) => api.put("/eval360/indicadores/" + indicador.IndicadorGrupoId, {
+      const resultados = await Promise.allSettled(indicadoresActuales.map((indicador) => api.put("/eval360/indicadores/" + indicador.IndicadorGrupoId, {
         indicadorAvanzado: indicador.IndicadorAvanzado,
         indicadorIntermedio: indicador.IndicadorIntermedio,
         indicadorInicial: indicador.IndicadorInicial,
         activo: indicador.Activo !== false && indicador.Activo !== 0
       })));
 
-      setMessage("Indicadores guardados y panel oculto correctamente");
+      const guardados = resultados.filter((r) => r.status === "fulfilled").length;
+      const bloqueadosPorCalificacion = resultados.filter((r) =>
+        r.status === "rejected" && Number((r as any).reason?.response?.status || 0) === 409
+      ).length;
+      const fallos = resultados.length - guardados - bloqueadosPorCalificacion;
+
+      if (guardados > 0) {
+        setMessage(`Se guardaron ${guardados} indicadores en esta sección.`);
+      } else {
+        setMessage("");
+      }
+
+      if (bloqueadosPorCalificacion > 0 || fallos > 0) {
+        const partes: string[] = [];
+        if (bloqueadosPorCalificacion > 0) {
+          partes.push(`${bloqueadosPorCalificacion} no se editaron porque ya tienen calificación.`);
+        }
+        if (fallos > 0) {
+          partes.push(`${fallos} tuvieron error al guardar.`);
+        }
+        setErrorMessage(partes.join(" "));
+      }
+
       setSavingEval360PlaneamientoCambiosProgress(100);
       const estructuraGrupoId = Number(indicadoresActuales[0]?.EstructuraGrupoId || 0) || undefined;
       await loadEval360Indicadores(estructuraGrupoId, planeamientoId);
-      setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: true }));
-      setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: false }));
+      if (guardados > 0 && bloqueadosPorCalificacion === 0 && fallos === 0) {
+        setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: true }));
+        setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: false }));
+      }
     } catch (error: any) {
       console.error("Error guardando cambios de indicadores Eval360:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudieron guardar los cambios de los indicadores");
@@ -4243,15 +3508,39 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
-    const confirmed = window.confirm("¿Deseás eliminar todos los indicadores generados con IA de este planeamiento?");
-    if (!confirmed) return;
+    if (!selected) return;
+    const opcion = window.prompt(
+      "¿Cómo querés eliminar los indicadores?\n\n1 = Solo esta sección\n2 = Todas las secciones del mismo grado\n\nEscribí 1 o 2.",
+      "1"
+    );
+    if (opcion === null) return;
+
+    const valor = String(opcion).trim();
+    if (valor !== "1" && valor !== "2") {
+      setErrorMessage("Opción inválida. Escribí 1 o 2.");
+      return;
+    }
+
+    const grupoIdsDestino = valor === "2"
+      ? seccionesMismoGradoMateriaSeleccionado.map((item) => Number(item.GrupoId)).filter((id) => Number.isFinite(id) && id > 0)
+      : [Number(selected.GrupoId)];
 
     setDeletingEval360PlaneamientoId(planeamientoId);
+    setDeletingEval360PlaneamientoProgress(8);
+    if (deletingEval360PlaneamientoTimerRef.current !== null) {
+      window.clearInterval(deletingEval360PlaneamientoTimerRef.current);
+      deletingEval360PlaneamientoTimerRef.current = null;
+    }
+    deletingEval360PlaneamientoTimerRef.current = window.setInterval(() => {
+      setDeletingEval360PlaneamientoProgress((prev) => (prev >= 92 ? 92 : prev + 6));
+    }, 260);
     setMessage("");
     setErrorMessage("");
 
     try {
-      await api.delete("/eval360/indicadores/planeamiento/" + planeamientoId);
+      const response = await api.delete("/eval360/indicadores/planeamiento/" + planeamientoId, {
+        data: { grupoIds: grupoIdsDestino }
+      });
 
       setEval360IndicadoresPorPlaneamiento((prev) => ({
         ...prev,
@@ -4260,13 +3549,22 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
       setEval360Indicadores((prev) => prev.filter((item) => Number(item.PlaneamientoId || 0) !== Number(planeamientoId)));
       setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: false }));
-      setMessage("Indicadores eliminados correctamente. Ya podés generar indicadores con IA nuevamente.");
+      const data = unwrapApiData(response) || {};
+      const estructurasAplicadas = Number(data.estructurasAplicadas || 0);
+      const eliminados = Number(data.eliminados || 0);
+      setMessage(`Se eliminaron ${eliminados} indicadores en ${estructurasAplicadas} secciones.`);
+      setDeletingEval360PlaneamientoProgress(100);
       await loadEval360Indicadores(undefined, planeamientoId);
     } catch (error: any) {
       console.error("Error eliminando todos los indicadores Eval360:", error);
       const message = error?.response?.data?.message || "No se pudieron eliminar los indicadores";
       setErrorMessage(message);
+      setDeletingEval360PlaneamientoProgress(0);
     } finally {
+      if (deletingEval360PlaneamientoTimerRef.current !== null) {
+        window.clearInterval(deletingEval360PlaneamientoTimerRef.current);
+        deletingEval360PlaneamientoTimerRef.current = null;
+      }
       setDeletingEval360PlaneamientoId(null);
     }
   }
@@ -4318,7 +3616,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const indicadoresPorPlan = planeamientosData.map((planeamiento: Planeamiento) => {
         const planeamientoId = Number(planeamiento.PlaneamientoId || 0);
         if (!planeamientoId) return [planeamientoId, []] as [number, Eval360Indicador[]];
-        return [planeamientoId, indicadoresIncluidosPorPlan[planeamientoId] || []] as [number, Eval360Indicador[]];
+        const directos = indicadoresIncluidosPorPlan[planeamientoId] || [];
+        if (directos.length) return [planeamientoId, directos] as [number, Eval360Indicador[]];
+
+        const nombrePlan = String(planeamiento.Nombre || "").trim().toLowerCase();
+        if (!nombrePlan) return [planeamientoId, []] as [number, Eval360Indicador[]];
+        const porNombre = indicadoresIncluidos.filter((indicador: any) =>
+          String(indicador?.PlaneamientoNombreOrigen || "").trim().toLowerCase() === nombrePlan
+        );
+        return [planeamientoId, porNombre] as [number, Eval360Indicador[]];
       });
 
       setEval360IndicadoresPorPlaneamiento((prev) => ({
@@ -5206,7 +4512,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         }
       });
       const data = response.data?.data || response.data || {};
-      const estudiantes = detalle?.estudiantes || data.estudiantes || [];
+      const estudiantes = detalle?.estudiantes?.length ? detalle.estudiantes : (data.estudiantes || []);
+      if (Array.isArray(data.estudiantes) && data.estudiantes.length) {
+        setDetalle((prev) => prev ? { ...prev, estudiantes: data.estudiantes } : prev);
+      }
       const lecciones = Array.isArray(data.lecciones) ? data.lecciones : [];
       const registros = Array.isArray(data.registros) ? data.registros : [];
       setAsistenciaLecciones(lecciones);
@@ -5408,10 +4717,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   useEffect(() => {
+    if (initialLoadStartedRef.current) return;
+    initialLoadStartedRef.current = true;
     loadGrupos("");
     loadNivelesDesempeno();
-    loadPlantillasPlaneamientoIa();
-    loadEval360PlantillasIaIndicadores();
   }, []);
 
   useEffect(() => {
@@ -5860,6 +5169,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           event.preventDefault();
                           event.stopPropagation();
                           await loadDetalle(item);
+                          await loadPlantillasAsignables(item);
                           setActivePanel("seguimiento");
                           setMostrarSelectorCambioPlantilla(true);
                         }}
@@ -5868,6 +5178,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           event.preventDefault();
                           event.stopPropagation();
                           await loadDetalle(item);
+                          await loadPlantillasAsignables(item);
                           setActivePanel("seguimiento");
                           setMostrarSelectorCambioPlantilla(true);
                         }}
@@ -5905,7 +5216,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           </div>
 
           {selected && (
-            <button type="button" className="primary-btn" onClick={() => loadDetalle(selected)} disabled={loadingDetalle || savingNotas}>
+            <button type="button" className="primary-btn" onClick={() => loadDetalle(selected, true)} disabled={loadingDetalle || savingNotas}>
               {loadingDetalle ? "Actualizando..." : "Actualizar"}
             </button>
           )}
@@ -5921,11 +5232,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           <div style={{ display: "grid", gap: "16px", marginTop: "16px" }}>
             {(() => {
               const nombrePlantillaActiva = seguimientoContexto?.estructura?.PlantillaBaseNombre || eval360Estructura?.estructura?.PlantillaBaseNombre || detalle.plantilla?.Nombre || "";
-              const cargandoPlantilla = loadingDetalle || loadingSeguimiento;
+              const cargandoPlantilla = loadingSeguimiento;
               if (nombrePlantillaActiva || cargandoPlantilla) return null;
 
               return (
-                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", padding: "10px 12px", borderRadius: "12px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412" }}>
+                <div style={{ display: "grid", gap: "8px", padding: "10px 12px", borderRadius: "12px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412" }}>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                   <strong>Sin plantilla activa</strong>
                   <select
                     style={{ minWidth: "240px", color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "8px 10px", fontWeight: 700 }}
@@ -5933,7 +5245,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     onChange={(event) => setEval360PlantillaId(event.target.value)}
                     disabled={savingEval360 || loadingSeguimiento}
                   >
-                    <option value="">Seleccionar plantilla</option>
+                    <option value="">{loadingEval360 ? "Cargando plantillas..." : "Seleccionar plantilla"}</option>
                     {(seguimientoContexto?.plantillas || eval360Plantillas).map((plantilla) => (
                       <option key={plantilla.EvaluacionPlantillaId} value={plantilla.EvaluacionPlantillaId}>{plantilla.Nombre}</option>
                     ))}
@@ -5946,12 +5258,23 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   >
                     {savingEval360 ? "Asignando..." : "Asignar plantilla"}
                   </button>
+                  {savingEval360 ? (
+                    <div style={{ width: "260px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden", border: "1px solid #cbd5e1" }}>
+                      <div style={{ width: `${savingEval360Progress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                    </div>
+                  ) : null}
+                  </div>
+                  {message && /Plantilla asignada|Plantilla cambiada/i.test(message) ? (
+                    <div style={{ fontSize: "13px", color: "#166534", fontWeight: 700 }}>
+                      {message}
+                    </div>
+                  ) : null}
                 </div>
               );
             })()}
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : getGestionPanelButtonStyle("planeamientos")} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
+              <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : getGestionPanelButtonStyle("planeamientos")} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadPlantillasPlaneamientoIa(); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
               <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : getGestionPanelButtonStyle("seguimiento")} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
               <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : getGestionPanelButtonStyle("examenes_tabla")} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Espesificaciones y Examenes</button>
               <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
@@ -6535,7 +5858,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                         {seguimientoActividadSeleccionada ? (
                           <div style={{ display: "grid", gap: "12px" }}>
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px", padding: "12px", background: "white", border: "1px solid #e2e8f0", borderRadius: "14px" }}>
+                            {(() => {
+                              const puntosDraft = Number(String(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)).replace(",", "."));
+                              const minimo = getMinimoPuntosPorPorcentajeActividad(seguimientoActividadSeleccionada);
+                              const invalido = Number.isFinite(puntosDraft) && minimo > 0 && puntosDraft < minimo;
+                              return (
+                            <div style={{ display: "grid", gap: "8px" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px", padding: "12px", background: "white", border: invalido ? "2px solid #ef4444" : "1px solid #e2e8f0", borderRadius: "14px" }}>
                               <div>
                                 <strong>{seguimientoActividadSeleccionada.Nombre}</strong>
                                 <div style={{ color: "#475569" }}>Actividad tomada desde parametrizaciones</div>
@@ -6549,10 +5878,33 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   value={getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)}
                                   onChange={(event) => updateSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada.ActividadId, event.target.value)}
                                   placeholder="Ej: 35"
-                                  style={{ color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "8px", background: "#ffffff" }}
+                                  style={{
+                                    color: invalido ? "#b91c1c" : "#0f172a",
+                                    border: invalido ? "2px solid #ef4444" : "1px solid #94a3b8",
+                                    borderRadius: "8px",
+                                    padding: "8px",
+                                    background: invalido ? "#fef2f2" : "#ffffff",
+                                    fontWeight: invalido ? 700 : 500
+                                  }}
                                 />
+                                {invalido ? (
+                                  <small style={{ color: "#b91c1c", fontWeight: 700 }}>
+                                    Debe ser igual o mayor a {minimo.toFixed(2)}.
+                                  </small>
+                                ) : null}
+                                <small style={{ color: "#475569", fontWeight: 700 }}>
+                                  Validando examen: {seguimientoActividadSeleccionada.Nombre} (mínimo: {minimo.toFixed(2)})
+                                </small>
                               </label>
                             </div>
+                            {invalido ? (
+                              <div style={{ color: "#b91c1c", fontWeight: 800, background: "#fef2f2", border: "1px solid #ef4444", borderRadius: "10px", padding: "8px 10px" }}>
+                                No podés guardar: "Puntos que vale" ({Number.isFinite(puntosDraft) ? puntosDraft.toFixed(2) : "0.00"}) es menor al porcentaje de la prueba ({minimo.toFixed(2)}).
+                              </div>
+                            ) : null}
+                            </div>
+                              );
+                            })()}
                             <div style={{ overflowX: "auto", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "14px" }}>
                               <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
                                 <thead>
@@ -6571,11 +5923,19 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     const draft = getSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId);
                                     const aviso = getSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId);
                                     const puntosMaximosActividad = Number(String(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)).replace(",", "."));
+                                    const valorPuntos = String(draft.puntosObtenidos || "").trim() === "" ? NaN : Number(draft.puntosObtenidos);
+                                    const filaConError = Number.isFinite(valorPuntos) && Number.isFinite(puntosMaximosActividad) && valorPuntos > puntosMaximosActividad;
                                     const nota = calcularNotaExamen(draft.puntosObtenidos, puntosMaximosActividad);
                                     const porcentajeGanado = calcularPorcentajeGanadoExamen(nota, seguimientoActividadSeleccionada, seguimientoDetalleSeleccionado);
                                     const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                                     return (
-                                      <tr key={`exam-${estudiante.EstudianteId}`} style={{ background: zebraBg }}>
+                                      <tr
+                                        key={`exam-${estudiante.EstudianteId}`}
+                                        style={{
+                                          background: filaConError ? "#fef2f2" : zebraBg,
+                                          boxShadow: filaConError ? "inset 0 0 0 2px #ef4444" : "none"
+                                        }}
+                                      >
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>
                                           {getFullName(estudiante)}
                                           <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
@@ -6587,6 +5947,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                           </div>
                                         </td>
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
+                                          {(() => {
+                                            const excedido = filaConError;
+                                            return (
                                           <input
                                             type="text"
                                             inputMode="numeric"
@@ -6594,21 +5957,28 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                             value={draft.puntosObtenidos}
                                             onChange={(e) => {
                                               const limpio = String(e.target.value || "").replace(/\D+/g, "");
-                                              const maximo = Number.isFinite(puntosMaximosActividad) ? Math.max(0, Math.trunc(puntosMaximosActividad)) : 0;
                                               if (limpio === "") {
                                                 updateSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { puntosObtenidos: "" });
                                                 return;
                                               }
-                                              const valor = Number(limpio);
-                                              const acotado = Number.isFinite(valor) ? Math.min(valor, maximo) : 0;
                                               updateSeguimientoExamenDraft(
                                                 seguimientoActividadSeleccionada.ActividadId,
                                                 estudiante.EstudianteId,
-                                                { puntosObtenidos: String(acotado) }
+                                                { puntosObtenidos: String(limpio) }
                                               );
                                             }}
-                                            style={{ width: "130px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }}
+                                            style={{
+                                              width: "130px",
+                                              color: excedido ? "#b91c1c" : "#0f172a",
+                                              border: excedido ? "2px solid #ef4444" : "1px solid #94a3b8",
+                                              background: excedido ? "#fef2f2" : "#ffffff",
+                                              borderRadius: "8px",
+                                              padding: "7px",
+                                              fontWeight: excedido ? 700 : 500
+                                            }}
                                           />
+                                            );
+                                          })()}
                                         </td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>{Number(puntosMaximosActividad || 0).toFixed(2)}</td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{nota.toFixed(2)}</td>
@@ -6635,11 +6005,18 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 type="button"
                                 className="primary-btn"
                                 onClick={guardarSeguimientoActividad}
-                                disabled={savingSeguimiento || !seguimientoActividadSeleccionada || Number(String(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)).replace(",", ".")) <= 0}
+                                disabled={
+                                  savingSeguimiento
+                                  || !seguimientoActividadSeleccionada
+                                  || toNumeroComparacion(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)) <= 0
+                                }
                                 style={savedSeguimientoModo === "actividad" ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
                               >
-                                {savingSeguimiento && savingSeguimientoModo === "actividad" ? "Guardando..." : (savedSeguimientoModo === "actividad" ? "Guardado" : "Calificar")}
+                                {savingSeguimiento && savingSeguimientoModo === "actividad" ? "Guardando..." : (savedSeguimientoModo === "actividad" ? "Guardado" : "Guardar Calificaciones")}
                               </button>
+                              <span style={{ color: "#b45309", fontWeight: 700 }}>
+                                {getPendientesCalificarActividad(Number(seguimientoActividadSeleccionada.ActividadId || 0))} registros pendientes de calificar
+                              </span>
                               {savingSeguimiento && savingSeguimientoModo === "actividad" ? (
                                 <div style={{ width: "280px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
                                   <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
@@ -6770,8 +6147,27 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                         <label style={{ display: "grid", gap: "6px" }}>
                           <span style={{ color: "#0f172a", fontWeight: 700 }}>Indicador del planeamiento</span>
-                          <select style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px" }} value={seguimientoIndicadorSeleccionado?.IndicadorGrupoId ? String(seguimientoIndicadorSeleccionado.IndicadorGrupoId) : ""} onChange={(event) => setSeguimientoIndicadorId(event.target.value)}>
-                            {seguimientoIndicadoresFiltrados.length === 0 ? <option value="">No hay indicadores para este filtro</option> : null}
+                          <select
+                            style={{
+                              color: "#0f172a",
+                              background: (seguimientoIndicadoresFiltrados.length === 0 && (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA"))) ? "#fef2f2" : "#ffffff",
+                              border: (seguimientoIndicadoresFiltrados.length === 0 && (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA"))) ? "1px solid #ef4444" : "1px solid #94a3b8",
+                              borderRadius: "10px",
+                              padding: "9px 10px",
+                              fontWeight: (seguimientoIndicadoresFiltrados.length === 0 && (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA"))) ? 700 : 500
+                            }}
+                            value={seguimientoIndicadorSeleccionado?.IndicadorGrupoId ? String(seguimientoIndicadorSeleccionado.IndicadorGrupoId) : ""}
+                            onChange={(event) => setSeguimientoIndicadorId(event.target.value)}
+                          >
+                            {seguimientoIndicadoresFiltrados.length === 0 ? (
+                              <option value="">
+                                {(normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA"))
+                                  ? (seguimientoFaltanAsignacionesActividad
+                                    ? "Hay indicadores del rubro, pero faltan asignarlos a esta actividad. Hacelo en este panel, sección 'Asignar indicadores a actividades'."
+                                    : "No hay indicadores asignados. Agregalos en Planeamiento e Indicadores.")
+                                  : "No hay indicadores para este filtro"}
+                              </option>
+                            ) : null}
                             {seguimientoIndicadoresFiltrados.map((indicador) => (
                               <option key={indicador.IndicadorGrupoId} value={indicador.IndicadorGrupoId}>
                                 {(indicador.PlaneamientoNombre || "Planeamiento") + " - " + indicador.IndicadorBase}
@@ -6910,8 +6306,21 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             </div>
                           </div>
                         ) : (
-                          <div style={{ padding: "14px", background: "white", border: "1px dashed #cbd5e1", borderRadius: "14px", color: "#475569" }}>
-                            No hay indicadores disponibles para evaluar con esos filtros.
+                          <div
+                            style={{
+                              padding: "14px",
+                              background: (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA")) ? "#fef2f2" : "white",
+                              border: (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA")) ? "1px solid #ef4444" : "1px dashed #cbd5e1",
+                              borderRadius: "14px",
+                              color: (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA")) ? "#b91c1c" : "#475569",
+                              fontWeight: (normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA")) ? 700 : 500
+                            }}
+                          >
+                            {(normalizarSeguimientoKey(seguimientoTipo).includes("COTIDIAN") || normalizarSeguimientoKey(seguimientoTipo).includes("TAREA"))
+                              ? (seguimientoFaltanAsignacionesActividad
+                                ? "Hay indicadores de este rubro, pero no están asignados a la actividad seleccionada. Asignalos en 'Asignar indicadores a actividades' y luego calificá."
+                                : "No hay indicadores asignados para este rubro. Debés agregarlos desde el módulo Planeamiento e Indicadores.")
+                              : "No hay indicadores disponibles para evaluar con esos filtros."}
                           </div>
                         )}
                       </>
@@ -7865,7 +7274,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         />
                       </label>
 
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
+                                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
                         <label>
                           Trabajo cotidiano sugerido
                           <textarea
@@ -8123,6 +7532,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                               >
                                                 {deletingEval360PlaneamientoId === planeamientoId ? "Eliminando..." : "Eliminar indicadores"}
                                               </button>
+                                              {deletingEval360PlaneamientoId === planeamientoId ? (
+                                                <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
+                                                  <div style={{ width: `${deletingEval360PlaneamientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #ef4444 0%, #f59e0b 100%)", transition: "width 240ms ease" }} />
+                                                </div>
+                                              ) : null}
                                             </>
                                           )}
                                         </div>
@@ -8160,6 +7574,57 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                 style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "10px" }}
                                               />
                                             </label>
+                                          </div>
+
+                                          <div style={{ display: "grid", gap: "10px", padding: "12px", border: "1px solid #93c5fd", borderRadius: "12px", background: "linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%)" }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                                              <strong style={{ color: "#0f172a" }}>Secciones</strong>
+                                              <span style={requiredBadgeStyle}>Requerido</span>
+                                            </div>
+                                            <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", paddingBottom: "6px", borderBottom: "1px dashed #bfdbfe" }}>
+                                              <label style={{ display: "flex", alignItems: "center", gap: "6px", color: "#0f172a", fontWeight: 600 }}>
+                                                <input
+                                                  type="checkbox"
+                                                  checked={
+                                                    seccionesMismoGradoMateriaSeleccionado.length > 0
+                                                    && (eval360GrupoIdsPorPlaneamiento[planeamientoId] || []).length === seccionesMismoGradoMateriaSeleccionado.length
+                                                  }
+                                                  onChange={(event) => {
+                                                    setEval360GrupoIdsPorPlaneamiento((prev) => ({
+                                                      ...prev,
+                                                      [planeamientoId]: event.target.checked
+                                                        ? seccionesMismoGradoMateriaSeleccionado.map((item) => String(item.GrupoId))
+                                                        : []
+                                                    }));
+                                                  }}
+                                                />
+                                                Seleccionar todas
+                                              </label>
+                                            </div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "8px", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#ffffff", padding: "10px" }}>
+                                              {seccionesMismoGradoMateriaSeleccionado.map((grupo) => {
+                                                const checked = (eval360GrupoIdsPorPlaneamiento[planeamientoId] || []).includes(String(grupo.GrupoId));
+                                                return (
+                                                  <label key={`sec-ind-${planeamientoId}-${grupo.GrupoId}`} style={{ display: "flex", alignItems: "center", gap: "6px", color: "#0f172a", fontWeight: 700, whiteSpace: "nowrap", padding: "4px 6px", borderRadius: "8px", background: checked ? "#e0f2fe" : "transparent" }}>
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={checked}
+                                                      onChange={(event) => {
+                                                        const grupoId = String(grupo.GrupoId);
+                                                        setEval360GrupoIdsPorPlaneamiento((prev) => {
+                                                          const actuales = prev[planeamientoId] || [];
+                                                          const next = event.target.checked
+                                                            ? Array.from(new Set([...actuales, grupoId]))
+                                                            : actuales.filter((item) => item !== grupoId);
+                                                          return { ...prev, [planeamientoId]: next };
+                                                        });
+                                                      }}
+                                                    />
+                                                    {grupo.GrupoNombre}
+                                                  </label>
+                                                );
+                                              })}
+                                            </div>
                                           </div>
 
                                           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
@@ -9370,6 +8835,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           <div style={{ display: "grid", gap: "4px" }}>
                             <span>{actividad.Descripcion}</span>
                             <small style={{ opacity: 0.7 }}>Vale {formatPercent(actividad.PorcentajeReal)}</small>
+                            <small style={{ opacity: 0.9, fontWeight: 700 }}>
+                              Puntos vale: {(() => {
+                                const act = (seguimientoContexto?.actividades || []).find((a) => {
+                                  const nomA = String(a.Nombre || "").trim().toLowerCase();
+                                  const nomB = String(actividad.Descripcion || "").trim().toLowerCase();
+                                  return nomA === nomB;
+                                });
+                                const puntos = Number(act?.PuntosMaximos || 0);
+                                return Number.isFinite(puntos) ? puntos.toFixed(2) : "0.00";
+                              })()}
+                            </small>
                           </div>
                         </th>
                       ))}
@@ -9419,9 +8895,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     </div>
   );
 }
-
-
-
 
 
 

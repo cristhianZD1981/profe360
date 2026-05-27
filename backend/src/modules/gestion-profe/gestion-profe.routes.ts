@@ -6,6 +6,9 @@ import * as XLSX from "xlsx";
 import { sendEmail } from "../../services/email.service";
 
 const router = Router();
+const BOOTSTRAP_CACHE_TTL_MS = 10000;
+const bootstrapCache = new Map<string, { at: number; data: any }>();
+const bootstrapInFlight = new Map<string, Promise<any>>();
 
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
@@ -176,6 +179,28 @@ router.get("/mis-grupos", async (req, res) => {
     const periodoId = toOptionalNumber(req.query.periodoId);
     const materiaId = toOptionalNumber(req.query.materiaId);
     const grupoId = toOptionalNumber(req.query.grupoId);
+    const cacheKey = [
+      "gestion.mis-grupos",
+      `u:${userId || 0}`,
+      `inst:${isSuperAdmin(req) ? "sa" : String(getAuth(req).institucionId ?? "")}`,
+      `q:${String(q || "")}`,
+      `a:${anioLectivoId ?? ""}`,
+      `p:${periodoId ?? ""}`,
+      `m:${materiaId ?? ""}`,
+      `g:${grupoId ?? ""}`,
+      `prof:${isProfesor(req) ? 1 : 0}`,
+      `adm:${isInstitutionAdmin(req) ? 1 : 0}`,
+      `sa:${isSuperAdmin(req) ? 1 : 0}`
+    ].join("|");
+    const cached = bootstrapCache.get(cacheKey);
+    if (cached && Date.now() - cached.at <= BOOTSTRAP_CACHE_TTL_MS) {
+      return ok(res, cached.data);
+    }
+    const inFlight = bootstrapInFlight.get(cacheKey);
+    if (inFlight) {
+      const shared = await inFlight;
+      return ok(res, shared);
+    }
 
     const request = pool.request()
       .input("q", sql.NVarChar(250), q)
@@ -197,152 +222,194 @@ router.get("/mis-grupos", async (req, res) => {
       ? "AND ad.UsuarioId = @usuarioId"
       : "";
 
+    const tMisGrupos = Date.now();
     const result = await request.query(`
+      ;WITH AsignacionesBase AS (
+        SELECT
+          ad.AsignacionDocenteId,
+          ad.UsuarioId,
+          ad.InstitucionId,
+          ad.GrupoId,
+          g.Nombre AS GrupoNombre,
+          g.Nivel AS GrupoNivel,
+          g.Jornada AS GrupoJornada,
+          g.NivelAcademico AS GrupoNivelAcademico,
+          g.Especialidad AS GrupoEspecialidad,
+          ad.MateriaId,
+          m.Nombre AS MateriaNombre,
+          m.Codigo AS MateriaCodigo,
+          ad.AnioLectivoId,
+          al.Nombre AS AnioNombre,
+          ad.PeriodoId,
+          p.Nombre AS PeriodoNombre,
+          p.NumeroOrden,
+          ad.TipoAsignacion,
+          ad.Activo,
+          u.Nombre AS ProfesorNombre,
+          u.PrimerApellido AS ProfesorPrimerApellido,
+          u.SegundoApellido AS ProfesorSegundoApellido
+        FROM dbo.AsignacionDocente ad
+        INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
+        LEFT JOIN dbo.Materia m ON m.MateriaId = ad.MateriaId
+        INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ad.AnioLectivoId
+        LEFT JOIN dbo.Periodo p ON p.PeriodoId = ad.PeriodoId
+        INNER JOIN dbo.Usuario u ON u.UsuarioId = ad.UsuarioId
+        WHERE ad.Activo = 1
+          AND ad.MateriaId IS NOT NULL
+          AND (@anioLectivoId IS NULL OR ad.AnioLectivoId = @anioLectivoId)
+          AND (@periodoId IS NULL OR ad.PeriodoId = @periodoId)
+          AND (@materiaId IS NULL OR ad.MateriaId = @materiaId)
+          AND (@grupoId IS NULL OR ad.GrupoId = @grupoId)
+          AND (
+            @q = N'%%'
+            OR g.Nombre LIKE @q
+            OR ISNULL(g.Nivel, N'') LIKE @q
+            OR ISNULL(m.Nombre, N'') LIKE @q
+            OR ISNULL(m.Codigo, N'') LIKE @q
+            OR ISNULL(p.Nombre, N'') LIKE @q
+            OR ISNULL(al.Nombre, N'') LIKE @q
+          )
+          ${filtroInstitucion}
+          ${filtroProfesor}
+      ),
+      Matriculados AS (
+        SELECT ma.GrupoId, ma.AnioLectivoId, COUNT(DISTINCT ma.MatriculaId) AS TotalEstudiantes
+        FROM dbo.Matricula ma
+        INNER JOIN (
+          SELECT DISTINCT GrupoId, AnioLectivoId FROM AsignacionesBase
+        ) b ON b.GrupoId = ma.GrupoId AND b.AnioLectivoId = ma.AnioLectivoId
+        WHERE ma.Estado <> N'Inactiva'
+        GROUP BY ma.GrupoId, ma.AnioLectivoId
+      ),
+      PlantillasPredeterminadas AS (
+        SELECT
+          ep.EvaluacionPlantillaId,
+          ep.InstitucionId,
+          ep.AnioLectivoId,
+          ep.PeriodoId,
+          ep.MateriaId,
+          ep.Nombre,
+          ep.Estado,
+          ROW_NUMBER() OVER (
+            PARTITION BY ep.InstitucionId, ep.AnioLectivoId, ep.PeriodoId, ep.MateriaId
+            ORDER BY CASE WHEN ep.Estado = N'ACTIVA' THEN 0 ELSE 1 END, ep.EvaluacionPlantillaId DESC
+          ) AS rn
+        FROM dbo.EvaluacionPlantilla ep
+        INNER JOIN (
+          SELECT DISTINCT InstitucionId, AnioLectivoId, PeriodoId, MateriaId FROM AsignacionesBase
+        ) b ON b.InstitucionId = ep.InstitucionId
+           AND b.AnioLectivoId = ep.AnioLectivoId
+           AND b.PeriodoId = ep.PeriodoId
+           AND b.MateriaId = ep.MateriaId
+        WHERE ep.Activo = 1
+      ),
+      Estructuras AS (
+        SELECT
+          eg.EstructuraGrupoId,
+          eg.InstitucionId,
+          eg.GrupoId,
+          eg.MateriaId,
+          eg.AnioLectivoId,
+          eg.PeriodoId,
+          eg.PlantillaBaseId,
+          ROW_NUMBER() OVER (
+            PARTITION BY eg.InstitucionId, eg.GrupoId, eg.MateriaId, eg.AnioLectivoId, eg.PeriodoId
+            ORDER BY eg.EstructuraGrupoId DESC
+          ) AS rn
+        FROM dbo.Eval360_EstructuraGrupo eg
+        INNER JOIN (
+          SELECT DISTINCT InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId FROM AsignacionesBase
+        ) b ON b.InstitucionId = eg.InstitucionId
+           AND b.GrupoId = eg.GrupoId
+           AND b.MateriaId = eg.MateriaId
+           AND b.AnioLectivoId = eg.AnioLectivoId
+           AND b.PeriodoId = eg.PeriodoId
+        WHERE eg.Activo = 1
+      ),
+      NotasCalificadas AS (
+        SELECT DISTINCT act.EstructuraGrupoId
+        FROM dbo.Eval360_Actividad act
+        INNER JOIN dbo.Eval360_NotaActividad na ON na.ActividadId = act.ActividadId
+        INNER JOIN Estructuras eg ON eg.EstructuraGrupoId = act.EstructuraGrupoId AND eg.rn = 1
+        WHERE (na.PuntosObtenidos IS NOT NULL AND na.PuntosObtenidos > 0)
+           OR (na.PorcentajeObtenido IS NOT NULL AND na.PorcentajeObtenido > 0)
+      ),
+      SeguimientosCalificados AS (
+        SELECT DISTINCT act.EstructuraGrupoId
+        FROM dbo.Eval360_Actividad act
+        INNER JOIN dbo.Eval360_SeguimientoIndicador si ON si.ActividadId = act.ActividadId
+        INNER JOIN Estructuras eg ON eg.EstructuraGrupoId = act.EstructuraGrupoId AND eg.rn = 1
+        WHERE ISNULL(si.ValorSeleccionado, 0) > 0
+      ),
+      AsistenciaCalificada AS (
+        SELECT DISTINCT ar.GrupoId, ar.MateriaId, ar.AnioLectivoId, ar.PeriodoId
+        FROM dbo.AsistenciaRegistro ar
+        INNER JOIN (
+          SELECT DISTINCT GrupoId, MateriaId, AnioLectivoId, PeriodoId FROM AsignacionesBase
+        ) b ON b.GrupoId = ar.GrupoId
+           AND b.MateriaId = ar.MateriaId
+           AND b.AnioLectivoId = ar.AnioLectivoId
+           AND b.PeriodoId = ar.PeriodoId
+      )
       SELECT
-        ad.AsignacionDocenteId,
-        ad.UsuarioId,
-        ad.InstitucionId,
-        ad.GrupoId,
-        g.Nombre AS GrupoNombre,
-        g.Nivel AS GrupoNivel,
-        g.Jornada AS GrupoJornada,
-        g.NivelAcademico AS GrupoNivelAcademico,
-        g.Especialidad AS GrupoEspecialidad,
-        ad.MateriaId,
-        m.Nombre AS MateriaNombre,
-        m.Codigo AS MateriaCodigo,
-        ad.AnioLectivoId,
-        al.Nombre AS AnioNombre,
-        ad.PeriodoId,
-        p.Nombre AS PeriodoNombre,
-        ad.TipoAsignacion,
-        ad.Activo,
-        u.Nombre AS ProfesorNombre,
-        u.PrimerApellido AS ProfesorPrimerApellido,
-        u.SegundoApellido AS ProfesorSegundoApellido,
-        COUNT(DISTINCT ma.MatriculaId) AS TotalEstudiantes,
+        b.AsignacionDocenteId,
+        b.UsuarioId,
+        b.InstitucionId,
+        b.GrupoId,
+        b.GrupoNombre,
+        b.GrupoNivel,
+        b.GrupoJornada,
+        b.GrupoNivelAcademico,
+        b.GrupoEspecialidad,
+        b.MateriaId,
+        b.MateriaNombre,
+        b.MateriaCodigo,
+        b.AnioLectivoId,
+        b.AnioNombre,
+        b.PeriodoId,
+        b.PeriodoNombre,
+        b.TipoAsignacion,
+        b.Activo,
+        b.ProfesorNombre,
+        b.ProfesorPrimerApellido,
+        b.ProfesorSegundoApellido,
+        ISNULL(ma.TotalEstudiantes, 0) AS TotalEstudiantes,
         COALESCE(epSesion.EvaluacionPlantillaId, ep.EvaluacionPlantillaId) AS EvaluacionPlantillaId,
         COALESCE(epSesion.Nombre, ep.Nombre) AS EvaluacionPlantillaNombre,
         COALESCE(epSesion.Estado, ep.Estado) AS EvaluacionPlantillaEstado,
-        CASE WHEN epSesion.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
-        ISNULL(epSesion.TieneCalificaciones, 0) AS TieneCalificacionesEvaluacion
-      FROM dbo.AsignacionDocente ad
-      INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
-      LEFT JOIN dbo.Materia m ON m.MateriaId = ad.MateriaId
-      INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ad.AnioLectivoId
-      LEFT JOIN dbo.Periodo p ON p.PeriodoId = ad.PeriodoId
-      INNER JOIN dbo.Usuario u ON u.UsuarioId = ad.UsuarioId
-      LEFT JOIN dbo.Matricula ma
-        ON ma.GrupoId = ad.GrupoId
-       AND ma.AnioLectivoId = ad.AnioLectivoId
-       AND ma.Estado <> N'Inactiva'
-      OUTER APPLY (
-        SELECT TOP 1
-          ep2.EvaluacionPlantillaId,
-          ep2.Nombre,
-          ep2.Estado
-        FROM dbo.EvaluacionPlantilla ep2
-        WHERE ep2.InstitucionId = ad.InstitucionId
-          AND ep2.AnioLectivoId = ad.AnioLectivoId
-          AND ep2.PeriodoId = ad.PeriodoId
-          AND ep2.MateriaId = ad.MateriaId
-          AND ep2.Activo = 1
-        ORDER BY CASE WHEN ep2.Estado = N'ACTIVA' THEN 0 ELSE 1 END, ep2.EvaluacionPlantillaId DESC
-      ) ep
-      OUTER APPLY (
-        SELECT TOP 1
-          eg.EstructuraGrupoId,
-          eg.PlantillaBaseId AS EvaluacionPlantillaId,
-          ep3.Nombre,
-          ep3.Estado,
-          CASE
-            WHEN EXISTS (
-              SELECT 1
-              FROM dbo.Eval360_NotaActividad na
-              INNER JOIN dbo.Eval360_Actividad act ON act.ActividadId = na.ActividadId
-              WHERE act.EstructuraGrupoId = eg.EstructuraGrupoId
-                AND (
-                  (na.PuntosObtenidos IS NOT NULL AND na.PuntosObtenidos > 0)
-                  OR (na.PorcentajeObtenido IS NOT NULL AND na.PorcentajeObtenido > 0)
-                )
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM dbo.Eval360_SeguimientoIndicador si
-              INNER JOIN dbo.Eval360_Actividad act ON act.ActividadId = si.ActividadId
-              WHERE act.EstructuraGrupoId = eg.EstructuraGrupoId
-                AND ISNULL(si.ValorSeleccionado, 0) > 0
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM dbo.AsistenciaRegistro ar
-              WHERE ar.GrupoId = eg.GrupoId
-                AND ar.MateriaId = eg.MateriaId
-                AND ar.AnioLectivoId = eg.AnioLectivoId
-                AND ar.PeriodoId = eg.PeriodoId
-            )
-            THEN 1
-            ELSE 0
-          END AS TieneCalificaciones
-        FROM dbo.Eval360_EstructuraGrupo eg
-        LEFT JOIN dbo.EvaluacionPlantilla ep3 ON ep3.EvaluacionPlantillaId = eg.PlantillaBaseId
-        WHERE eg.InstitucionId = ad.InstitucionId
-          AND eg.GrupoId = ad.GrupoId
-          AND eg.MateriaId = ad.MateriaId
-          AND eg.AnioLectivoId = ad.AnioLectivoId
-          AND eg.PeriodoId = ad.PeriodoId
-          AND eg.Activo = 1
-        ORDER BY eg.EstructuraGrupoId DESC
-      ) epSesion
-      WHERE ad.Activo = 1
-        AND ad.MateriaId IS NOT NULL
-        AND (@anioLectivoId IS NULL OR ad.AnioLectivoId = @anioLectivoId)
-        AND (@periodoId IS NULL OR ad.PeriodoId = @periodoId)
-        AND (@materiaId IS NULL OR ad.MateriaId = @materiaId)
-        AND (@grupoId IS NULL OR ad.GrupoId = @grupoId)
-        AND (
-          @q = N'%%'
-          OR g.Nombre LIKE @q
-          OR ISNULL(g.Nivel, N'') LIKE @q
-          OR ISNULL(m.Nombre, N'') LIKE @q
-          OR ISNULL(m.Codigo, N'') LIKE @q
-          OR ISNULL(p.Nombre, N'') LIKE @q
-          OR ISNULL(al.Nombre, N'') LIKE @q
-        )
-        ${filtroInstitucion}
-        ${filtroProfesor}
-      GROUP BY
-        ad.AsignacionDocenteId,
-        ad.UsuarioId,
-        ad.InstitucionId,
-        ad.GrupoId,
-        g.Nombre,
-        g.Nivel,
-        g.Jornada,
-        g.NivelAcademico,
-        g.Especialidad,
-        ad.MateriaId,
-        m.Nombre,
-        m.Codigo,
-        ad.AnioLectivoId,
-        al.Nombre,
-        ad.PeriodoId,
-        p.Nombre,
-        ad.TipoAsignacion,
-        ad.Activo,
-        u.Nombre,
-        u.PrimerApellido,
-        u.SegundoApellido,
-        epSesion.EstructuraGrupoId,
-        epSesion.TieneCalificaciones,
-        epSesion.EvaluacionPlantillaId,
-        epSesion.Nombre,
-        epSesion.Estado,
-        ep.EvaluacionPlantillaId,
-        ep.Nombre,
-        ep.Estado
-      ORDER BY al.Nombre DESC, MAX(p.NumeroOrden), g.Nombre, m.Nombre
+        CASE WHEN eg.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
+        CASE WHEN nc.EstructuraGrupoId IS NOT NULL
+               OR sc.EstructuraGrupoId IS NOT NULL
+               OR ac.GrupoId IS NOT NULL
+             THEN 1 ELSE 0 END AS TieneCalificacionesEvaluacion
+      FROM AsignacionesBase b
+      LEFT JOIN Matriculados ma
+        ON ma.GrupoId = b.GrupoId AND ma.AnioLectivoId = b.AnioLectivoId
+      LEFT JOIN PlantillasPredeterminadas ep
+        ON ep.InstitucionId = b.InstitucionId
+       AND ep.AnioLectivoId = b.AnioLectivoId
+       AND ep.PeriodoId = b.PeriodoId
+       AND ep.MateriaId = b.MateriaId
+       AND ep.rn = 1
+      LEFT JOIN Estructuras eg
+        ON eg.InstitucionId = b.InstitucionId
+       AND eg.GrupoId = b.GrupoId
+       AND eg.MateriaId = b.MateriaId
+       AND eg.AnioLectivoId = b.AnioLectivoId
+       AND eg.PeriodoId = b.PeriodoId
+       AND eg.rn = 1
+      LEFT JOIN dbo.EvaluacionPlantilla epSesion ON epSesion.EvaluacionPlantillaId = eg.PlantillaBaseId
+      LEFT JOIN NotasCalificadas nc ON nc.EstructuraGrupoId = eg.EstructuraGrupoId
+      LEFT JOIN SeguimientosCalificados sc ON sc.EstructuraGrupoId = eg.EstructuraGrupoId
+      LEFT JOIN AsistenciaCalificada ac
+        ON ac.GrupoId = b.GrupoId
+       AND ac.MateriaId = b.MateriaId
+       AND ac.AnioLectivoId = b.AnioLectivoId
+       AND ac.PeriodoId = b.PeriodoId
+      ORDER BY b.AnioNombre DESC, b.NumeroOrden, b.GrupoNombre, b.MateriaNombre
+      OPTION (RECOMPILE)
     `);
+    console.log(`[SQL][gestion.mis-grupos.listado] ${Date.now() - tMisGrupos}ms`);
 
     const gruposUnicos = new Map<string, any>();
 
@@ -359,7 +426,9 @@ router.get("/mis-grupos", async (req, res) => {
       }
     }
 
-    return ok(res, Array.from(gruposUnicos.values()));
+    const payload = Array.from(gruposUnicos.values());
+    bootstrapCache.set(cacheKey, { at: Date.now(), data: payload });
+    return ok(res, payload);
   } catch (error) {
     console.error("Error cargando mis grupos:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los grupos del profesor" });
@@ -489,6 +558,7 @@ router.get("/mi-horario", async (req, res) => {
 
 router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
   try {
+    const t0 = Date.now();
     if (!assertCanAccessProfessorModule(req, res)) return;
 
     const pool = await getPool();
@@ -525,6 +595,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
       ? "AND ad.UsuarioId = @usuarioId"
       : "";
 
+    const tAccess = Date.now();
     const access = await accessRequest.query(`
       SELECT TOP 1
         ad.AsignacionDocenteId,
@@ -553,9 +624,11 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
         ${filtroProfesor}
     `);
 
+    console.log(`[SQL][gestion.detalle.acceso] ${Date.now() - tAccess}ms`);
     const asignacion = access.recordset[0];
     if (!asignacion) return forbidden(res, "No tenés permisos para consultar este grupo y materia");
 
+    const tEstudiantes = Date.now();
     const estudiantesResult = await pool.request()
       .input("grupoId", sql.Int, grupoId)
       .input("anioLectivoId", sql.Int, anioLectivoId)
@@ -613,6 +686,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
         ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
       `);
 
+    console.log(`[SQL][gestion.detalle.estudiantes] ${Date.now() - tEstudiantes}ms`);
+    const tPlantilla = Date.now();
     const plantillaResult = await pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
@@ -634,12 +709,14 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
         ORDER BY CASE WHEN ep.Estado = N'ACTIVA' THEN 0 ELSE 1 END, ep.EvaluacionPlantillaId DESC
       `);
 
+    console.log(`[SQL][gestion.detalle.plantilla] ${Date.now() - tPlantilla}ms`);
     const plantilla = plantillaResult.recordset[0] || null;
     let componentes: any[] = [];
     let actividades: any[] = [];
     let notas: any[] = [];
 
     if (plantilla) {
+      const tPlantillaDetalle = Date.now();
       const componentesResult = await pool.request()
         .input("plantillaId", sql.Int, Number(plantilla.EvaluacionPlantillaId))
         .query(`
@@ -701,8 +778,10 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
       componentes = componentesResult.recordset;
       actividades = actividadesResult.recordset;
       notas = notasResult.recordset;
+      console.log(`[SQL][gestion.detalle.rubrosNotas] ${Date.now() - tPlantillaDetalle}ms`);
     }
 
+    console.log(`[gestion.detalle.total] ${Date.now() - t0}ms`);
     return ok(res, {
       asignacion,
       estudiantes: estudiantesResult.recordset,
@@ -1923,11 +2002,12 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
       .input("usuarioId", sql.Int, Number(asignacion.UsuarioId))
       .query(`
         SELECT
-          i.*
+          i.*,
+          ISNULL(p.Nombre, N'') AS PlaneamientoNombreOrigen
         FROM dbo.Eval360_IndicadorGrupo i
         INNER JOIN dbo.Eval360_EstructuraGrupo eg
           ON eg.EstructuraGrupoId = i.EstructuraGrupoId
-        INNER JOIN dbo.Planeamiento p
+        LEFT JOIN dbo.Planeamiento p
           ON p.PlaneamientoId = i.PlaneamientoId
         WHERE eg.InstitucionId = @institucionId
           AND eg.AnioLectivoId = @anioLectivoId
@@ -1935,13 +2015,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           AND eg.GrupoId = @grupoId
           AND eg.MateriaId = @materiaId
           AND eg.Activo = 1
-          AND p.InstitucionId = @institucionId
-          AND p.AnioLectivoId = @anioLectivoId
-          AND p.PeriodoId = @periodoId
-          AND p.GrupoId = @grupoId
-          AND p.MateriaId = @materiaId
-          AND p.UsuarioId = @usuarioId
-          AND p.Activo = 1
+          AND (p.PlaneamientoId IS NULL OR p.Activo = 1)
           AND i.Activo = 1
         ORDER BY
           i.PlaneamientoId,

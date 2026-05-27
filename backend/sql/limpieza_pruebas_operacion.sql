@@ -22,10 +22,10 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
-DECLARE @InstitucionId INT = 1;      -- CAMBIAR
+DECLARE @InstitucionId INT = 1;      -- CAMBIAR,  NULL = todos las Instituciones
 DECLARE @AnioLectivoId INT = NULL;   -- opcional: NULL = todos los años
 DECLARE @PeriodoId INT = NULL;       -- opcional: NULL = todos los periodos
-DECLARE @DryRun BIT = 1;             -- 1 = solo vista previa, 0 = borrar
+DECLARE @DryRun BIT = 0;             -- 1 = solo vista previa, 0 = borrar
 
 DECLARE @LimpiarBoletas BIT = 0;       -- 1 = borra dbo.BoletaConducta (y su envío)
 DECLARE @LimpiarTokens BIT = 0;        -- 1 = borra dbo.UsuarioResetPasswordToken
