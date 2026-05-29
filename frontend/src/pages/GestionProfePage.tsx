@@ -2331,12 +2331,32 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const response = await api.get("/eval360/plantillas", {
         params: {
           anioLectivoId: item.AnioLectivoId,
-          periodoId: item.PeriodoId,
           incluirInactivas: false
         }
       });
-      const plantillas = unwrapApiData(response) || [];
-      setEval360Plantillas(Array.isArray(plantillas) ? plantillas : []);
+      let plantillas = unwrapApiData(response) || [];
+
+      // Fallback: si no hay plantillas por año/período, mostrar las activas de la institución.
+      if (!Array.isArray(plantillas) || !plantillas.length) {
+        const fallbackResponse = await api.get("/eval360/plantillas", {
+          params: { incluirInactivas: false }
+        });
+        plantillas = unwrapApiData(fallbackResponse) || [];
+      }
+
+      const ordenadas = Array.isArray(plantillas)
+        ? [...plantillas].sort((a: any, b: any) => {
+            const aMismoPeriodo = Number(a?.PeriodoId) === Number(item.PeriodoId) ? 0 : 1;
+            const bMismoPeriodo = Number(b?.PeriodoId) === Number(item.PeriodoId) ? 0 : 1;
+            if (aMismoPeriodo !== bMismoPeriodo) return aMismoPeriodo - bMismoPeriodo;
+            const aActiva = String(a?.Estado || "").toUpperCase() === "ACTIVA" ? 0 : 1;
+            const bActiva = String(b?.Estado || "").toUpperCase() === "ACTIVA" ? 0 : 1;
+            if (aActiva !== bActiva) return aActiva - bActiva;
+            return String(a?.Nombre || "").localeCompare(String(b?.Nombre || ""));
+          })
+        : [];
+
+      setEval360Plantillas(ordenadas);
     } catch (error: any) {
       console.error("Error cargando plantillas asignables:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudieron cargar las plantillas disponibles");
