@@ -340,6 +340,7 @@ async function getPlantillaDetalle(pool: any, plantillaId: number) {
         UpdatedAt
       FROM dbo.EvaluacionComponente
       WHERE EvaluacionPlantillaId = @plantillaId
+        AND Activo = 1
       ORDER BY Orden, EvaluacionComponenteId
     `);
 
@@ -361,6 +362,8 @@ async function getPlantillaDetalle(pool: any, plantillaId: number) {
       INNER JOIN dbo.EvaluacionComponente ec
         ON ec.EvaluacionComponenteId = ea.EvaluacionComponenteId
       WHERE ec.EvaluacionPlantillaId = @plantillaId
+        AND ec.Activo = 1
+        AND ea.Activo = 1
       ORDER BY ea.Orden, ea.EvaluacionActividadId
     `);
 
@@ -412,6 +415,44 @@ async function validarSumaActividades(pool: any, componenteId: number) {
     `);
 
   return Number(result.recordset[0]?.Total || 0);
+}
+
+async function validarTopeActividadesComponente(
+  pool: any,
+  componenteId: number,
+  porcentajeNuevo: number,
+  actividadIdExcluir?: number | null
+) {
+  const request = pool.request()
+    .input("componenteId", sql.Int, componenteId)
+    .input("actividadIdExcluir", sql.Int, actividadIdExcluir ?? null);
+
+  const result = await request.query(`
+      SELECT ISNULL(SUM(Porcentaje), 0) AS TotalActual
+      FROM dbo.EvaluacionActividad
+      WHERE EvaluacionComponenteId = @componenteId
+        AND Activo = 1
+        AND (@actividadIdExcluir IS NULL OR EvaluacionActividadId <> @actividadIdExcluir)
+    `);
+
+  const totalActual = Number(result.recordset[0]?.TotalActual || 0);
+  const totalPropuesto = Number((totalActual + Number(porcentajeNuevo || 0)).toFixed(2));
+  return {
+    totalActual,
+    totalPropuesto,
+    excede: totalPropuesto > 100
+  };
+}
+
+async function marcarPlantillaComoBorrador(pool: any, plantillaId: number) {
+  await pool.request()
+    .input("plantillaId", sql.Int, plantillaId)
+    .query(`
+      UPDATE dbo.EvaluacionPlantilla
+      SET Estado = N'BORRADOR',
+          UpdatedAt = SYSDATETIME()
+      WHERE EvaluacionPlantillaId = @plantillaId
+    `);
 }
 
 /* =========================================================
@@ -941,12 +982,13 @@ router.put("/plantillas/:id", async (req, res) => {
             EsPublica = @esPublica,
             PermitirProfesorEditar = @permitirProfesorEditar,
             DecimalesNota = @decimalesNota,
+            Estado = N'BORRADOR',
             UpdatedAt = SYSDATETIME()
         OUTPUT INSERTED.*
         WHERE EvaluacionPlantillaId = @plantillaId
       `);
 
-    return ok(res, result.recordset[0], "Plantilla de evaluación actualizada correctamente");
+    return ok(res, result.recordset[0], "Plantilla actualizada. Quedó en estado borrador para volver a validarla y activarla.");
   } catch (error) {
     console.error("Error actualizando plantilla de evaluacion:", error);
     return res.status(500).json({ ok: false, message: "No se pudo actualizar la plantilla de evaluacion" });
@@ -1088,6 +1130,32 @@ router.patch("/plantillas/:id/reactivar", async (req, res) => {
   }
 });
 
+router.patch("/plantillas/:id/inactivar", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const plantillaId = Number(req.params.id);
+    const plantilla = await getPlantillaHeader(pool, plantillaId);
+
+    if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para inactivar esta plantilla");
+
+    await pool.request()
+      .input("plantillaId", sql.Int, plantillaId)
+      .query(`
+        UPDATE dbo.EvaluacionPlantilla
+        SET Activo = 0,
+            Estado = N'INACTIVA',
+            UpdatedAt = SYSDATETIME()
+        WHERE EvaluacionPlantillaId = @plantillaId
+      `);
+
+    return ok(res, null, "Plantilla de evaluación inactivada correctamente");
+  } catch (error) {
+    console.error("Error inactivando plantilla de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo inactivar la plantilla de evaluación" });
+  }
+});
+
 router.patch("/plantillas/:id/activar", async (req, res) => {
   try {
     const pool = await getPool();
@@ -1100,6 +1168,38 @@ router.patch("/plantillas/:id/activar", async (req, res) => {
     const totalComponentes = await validarSumaComponentes(pool, plantillaId);
     if (Number(totalComponentes.toFixed(2)) !== 100) {
       return badRequest(res, `La plantilla no se puede activar porque sus componentes suman ${totalComponentes}%. Deben sumar 100%.`);
+    }
+
+    const validacionActividades = await pool.request()
+      .input("plantillaId", sql.Int, plantillaId)
+      .query(`
+        SELECT
+          ec.EvaluacionComponenteId,
+          ec.Descripcion,
+          COUNT(ea.EvaluacionActividadId) AS CantidadActividades,
+          ISNULL(SUM(ISNULL(ea.Porcentaje, 0)), 0) AS TotalActividades
+        FROM dbo.EvaluacionComponente ec
+        LEFT JOIN dbo.EvaluacionActividad ea
+          ON ea.EvaluacionComponenteId = ec.EvaluacionComponenteId
+         AND ISNULL(ea.Activo, 1) = 1
+        WHERE ec.EvaluacionPlantillaId = @plantillaId
+          AND ISNULL(ec.Activo, 1) = 1
+        GROUP BY ec.EvaluacionComponenteId, ec.Descripcion
+      `);
+
+    const componenteInvalido = (validacionActividades.recordset || []).find((row: any) => {
+      const cantidad = Number(row.CantidadActividades || 0);
+      const total = Number(Number(row.TotalActividades || 0).toFixed(2));
+      return cantidad > 0 && total !== 100;
+    });
+
+    if (componenteInvalido) {
+      const nombre = String(componenteInvalido.Descripcion || "Rubro");
+      const total = Number(Number(componenteInvalido.TotalActividades || 0).toFixed(2));
+      return badRequest(
+        res,
+        `No se puede activar. El rubro "${nombre}" tiene actividades que suman ${total}%. Si un rubro tiene actividades, debe sumar 100%.`
+      );
     }
 
     await pool.request()
@@ -1336,6 +1436,19 @@ router.post("/plantillas/:plantillaId/componentes", async (req, res) => {
     if (duplicado.recordset.length) {
       return badRequest(res, "Ya existe un rubro de calificación con ese nombre en esta plantilla");
     }
+    const duplicadoOrden = await pool.request()
+      .input("plantillaId", sql.Int, plantillaId)
+      .input("orden", sql.Int, orden)
+      .query(`
+        SELECT TOP 1 EvaluacionComponenteId
+        FROM dbo.EvaluacionComponente
+        WHERE EvaluacionPlantillaId = @plantillaId
+          AND ISNULL(Activo, 1) = 1
+          AND Orden = @orden
+      `);
+    if (duplicadoOrden.recordset.length) {
+      return badRequest(res, "El orden del rubro de calificación ya existe en esta plantilla");
+    }
 
     const result = await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
@@ -1352,9 +1465,10 @@ router.post("/plantillas/:plantillaId/componentes", async (req, res) => {
       `);
 
     const total = await validarSumaComponentes(pool, plantillaId);
+    await marcarPlantillaComoBorrador(pool, plantillaId);
     const message = Number(total.toFixed(2)) === 100
-      ? "Componente creado correctamente. La plantilla suma 100%."
-      : `Componente creado correctamente. Aviso: la plantilla suma ${total}%, debe llegar a 100% para activarse.`;
+      ? "Componente creado correctamente. La plantilla quedó en borrador para volver a activarla."
+      : `Componente creado correctamente. La plantilla quedó en borrador y suma ${total}%, debe llegar a 100% para activarse.`;
 
     return created(res, result.recordset[0], message);
   } catch (error) {
@@ -1410,6 +1524,21 @@ router.put("/componentes/:id", async (req, res) => {
     if (duplicado.recordset.length) {
       return badRequest(res, "Ya existe un rubro de calificación con ese nombre en esta plantilla");
     }
+    const duplicadoOrden = await pool.request()
+      .input("componenteId", sql.Int, componenteId)
+      .input("plantillaId", sql.Int, Number(plantillaId))
+      .input("orden", sql.Int, orden)
+      .query(`
+        SELECT TOP 1 EvaluacionComponenteId
+        FROM dbo.EvaluacionComponente
+        WHERE EvaluacionPlantillaId = @plantillaId
+          AND EvaluacionComponenteId <> @componenteId
+          AND ISNULL(Activo, 1) = 1
+          AND Orden = @orden
+      `);
+    if (duplicadoOrden.recordset.length) {
+      return badRequest(res, "El orden del rubro de calificación ya existe en esta plantilla");
+    }
 
     const result = await pool.request()
       .input("componenteId", sql.Int, componenteId)
@@ -1431,7 +1560,8 @@ router.put("/componentes/:id", async (req, res) => {
       `);
 
     const total = await validarSumaComponentes(pool, Number(plantillaId));
-    return ok(res, { componente: result.recordset[0], totalComponentes: total }, "Componente actualizado correctamente");
+    await marcarPlantillaComoBorrador(pool, Number(plantillaId));
+    return ok(res, { componente: result.recordset[0], totalComponentes: total }, "Componente actualizado. La plantilla quedó en borrador para volver a activarla.");
   } catch (error) {
     console.error("Error actualizando componente de evaluaciÃ³n:", error);
     return res.status(500).json({ ok: false, message: "No se pudo actualizar el componente de evaluaciÃ³n" });
@@ -1457,16 +1587,36 @@ router.delete("/componentes/:id", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
     if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para eliminar este rubro de calificación");
 
+    const usoNotas = await pool.request()
+      .input("componenteId", sql.Int, componenteId)
+      .query(`
+        SELECT TOP 1 n.EvaluacionNotaId
+        FROM dbo.EvaluacionNota n
+        INNER JOIN dbo.EvaluacionActividad a ON a.EvaluacionActividadId = n.EvaluacionActividadId
+        WHERE a.EvaluacionComponenteId = @componenteId
+      `);
+
+    if (usoNotas.recordset.length) {
+      return badRequest(res, "No se puede eliminar el rubro porque ya tiene calificaciones registradas");
+    }
+
     await pool.request()
       .input("componenteId", sql.Int, componenteId)
       .query(`
-        UPDATE dbo.EvaluacionComponente
-        SET Activo = 0,
-            UpdatedAt = SYSDATETIME()
-        WHERE EvaluacionComponenteId = @componenteId
-      `);
+        DELETE ai
+        FROM dbo.EvaluacionActividadIndicador ai
+        INNER JOIN dbo.EvaluacionActividad a ON a.EvaluacionActividadId = ai.EvaluacionActividadId
+        WHERE a.EvaluacionComponenteId = @componenteId;
 
-    return ok(res, null, "Rubro de calificación eliminado correctamente");
+        DELETE FROM dbo.EvaluacionActividad
+        WHERE EvaluacionComponenteId = @componenteId;
+
+        DELETE FROM dbo.EvaluacionComponente
+        WHERE EvaluacionComponenteId = @componenteId;
+      `);
+    await marcarPlantillaComoBorrador(pool, Number(plantillaId));
+
+    return ok(res, null, "Rubro de calificación eliminado. La plantilla quedó en borrador para volver a activarla.");
   } catch (error) {
     console.error("Error eliminando rubro de calificación:", error);
     return res.status(500).json({ ok: false, message: "No se pudo eliminar el rubro de calificación" });
@@ -1491,6 +1641,21 @@ router.patch("/componentes/:id/reactivar", async (req, res) => {
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
     if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para reactivar este componente");
+    const duplicadoOrden = await pool.request()
+      .input("componenteId", sql.Int, componenteId)
+      .query(`
+        SELECT TOP 1 c2.EvaluacionComponenteId
+        FROM dbo.EvaluacionComponente c1
+        INNER JOIN dbo.EvaluacionComponente c2
+          ON c2.EvaluacionPlantillaId = c1.EvaluacionPlantillaId
+         AND c2.EvaluacionComponenteId <> c1.EvaluacionComponenteId
+         AND ISNULL(c2.Activo, 1) = 1
+         AND c2.Orden = c1.Orden
+        WHERE c1.EvaluacionComponenteId = @componenteId
+      `);
+    if (duplicadoOrden.recordset.length) {
+      return badRequest(res, "No se puede reactivar el rubro porque su orden ya está en uso");
+    }
 
     await pool.request()
       .input("componenteId", sql.Int, componenteId)
@@ -1538,6 +1703,27 @@ router.post("/componentes/:componenteId/actividades", async (req, res) => {
 
     if (porcentaje === null) return;
     if (!descripcion) return badRequest(res, "La descripciÃ³n de la actividad es obligatoria");
+    const duplicadoOrden = await pool.request()
+      .input("componenteId", sql.Int, componenteId)
+      .input("orden", sql.Int, orden)
+      .query(`
+        SELECT TOP 1 EvaluacionActividadId
+        FROM dbo.EvaluacionActividad
+        WHERE EvaluacionComponenteId = @componenteId
+          AND ISNULL(Activo, 1) = 1
+          AND Orden = @orden
+      `);
+    if (duplicadoOrden.recordset.length) {
+      return badRequest(res, "El orden de la actividad ya existe en este rubro de calificación");
+    }
+
+    const validacionTope = await validarTopeActividadesComponente(pool, componenteId, Number(porcentaje), null);
+    if (validacionTope.excede) {
+      return badRequest(
+        res,
+        `La suma de actividades de este rubro no puede superar 100%. Total propuesto: ${validacionTope.totalPropuesto}%.`
+      );
+    }
 
     const result = await pool.request()
       .input("componenteId", sql.Int, componenteId)
@@ -1554,9 +1740,10 @@ router.post("/componentes/:componenteId/actividades", async (req, res) => {
       `);
 
     const total = await validarSumaActividades(pool, componenteId);
+    await marcarPlantillaComoBorrador(pool, Number(plantillaId));
     const message = Number(total.toFixed(2)) === 100
-      ? "Actividad creada correctamente. Las actividades del componente suman 100%."
-      : `Actividad creada correctamente. Las actividades del componente suman ${total}%. RecordÃ¡ que las actividades son opcionales; el peso oficial lo define el componente.`;
+      ? "Actividad creada correctamente. La plantilla quedó en borrador para volver a activarla."
+      : `Actividad creada correctamente. La plantilla quedó en borrador. Las actividades del componente suman ${total}%.`;
 
     return created(res, result.recordset[0], message);
   } catch (error) {
@@ -1593,6 +1780,34 @@ router.put("/actividades/:id", async (req, res) => {
 
     if (porcentaje === null) return;
     if (!descripcion) return badRequest(res, "La descripciÃ³n de la actividad es obligatoria");
+    const duplicadoOrden = await pool.request()
+      .input("actividadId", sql.Int, actividadId)
+      .input("componenteId", sql.Int, Number(actividad.EvaluacionComponenteId))
+      .input("orden", sql.Int, orden)
+      .query(`
+        SELECT TOP 1 EvaluacionActividadId
+        FROM dbo.EvaluacionActividad
+        WHERE EvaluacionComponenteId = @componenteId
+          AND EvaluacionActividadId <> @actividadId
+          AND ISNULL(Activo, 1) = 1
+          AND Orden = @orden
+      `);
+    if (duplicadoOrden.recordset.length) {
+      return badRequest(res, "El orden de la actividad ya existe en este rubro de calificación");
+    }
+
+    const validacionTope = await validarTopeActividadesComponente(
+      pool,
+      Number(actividad.EvaluacionComponenteId),
+      Number(porcentaje),
+      actividadId
+    );
+    if (validacionTope.excede) {
+      return badRequest(
+        res,
+        `La suma de actividades de este rubro no puede superar 100%. Total propuesto: ${validacionTope.totalPropuesto}%.`
+      );
+    }
 
     const result = await pool.request()
       .input("actividadId", sql.Int, actividadId)
@@ -1614,7 +1829,8 @@ router.put("/actividades/:id", async (req, res) => {
       `);
 
     const total = await validarSumaActividades(pool, Number(actividad.EvaluacionComponenteId));
-    return ok(res, { actividad: result.recordset[0], totalActividades: total }, "Actividad actualizada correctamente. El peso oficial de la nota lo define el componente.");
+    await marcarPlantillaComoBorrador(pool, Number(actividad.EvaluacionPlantillaId));
+    return ok(res, { actividad: result.recordset[0], totalActividades: total }, "Actividad actualizada. La plantilla quedó en borrador para volver a activarla.");
   } catch (error) {
     console.error("Error actualizando actividad evaluativa:", error);
     return res.status(500).json({ ok: false, message: "No se pudo actualizar la actividad evaluativa" });
@@ -1641,16 +1857,29 @@ router.delete("/actividades/:id", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
     if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para eliminar esta actividad");
 
+    const usoNotas = await pool.request()
+      .input("actividadId", sql.Int, actividadId)
+      .query(`
+        SELECT TOP 1 EvaluacionNotaId
+        FROM dbo.EvaluacionNota
+        WHERE EvaluacionActividadId = @actividadId
+      `);
+    if (usoNotas.recordset.length) {
+      return badRequest(res, "No se puede eliminar la actividad porque ya tiene calificaciones registradas");
+    }
+
     await pool.request()
       .input("actividadId", sql.Int, actividadId)
       .query(`
-        UPDATE dbo.EvaluacionActividad
-        SET Activo = 0,
-            UpdatedAt = SYSDATETIME()
-        WHERE EvaluacionActividadId = @actividadId
-      `);
+        DELETE FROM dbo.EvaluacionActividadIndicador
+        WHERE EvaluacionActividadId = @actividadId;
 
-    return ok(res, null, "Actividad eliminada correctamente");
+        DELETE FROM dbo.EvaluacionActividad
+        WHERE EvaluacionActividadId = @actividadId;
+      `);
+    await marcarPlantillaComoBorrador(pool, Number(plantillaId));
+
+    return ok(res, null, "Actividad eliminada. La plantilla quedó en borrador para volver a activarla.");
   } catch (error) {
     console.error("Error eliminando actividad evaluativa:", error);
     return res.status(500).json({ ok: false, message: "No se pudo eliminar la actividad evaluativa" });
@@ -1676,6 +1905,21 @@ router.patch("/actividades/:id/reactivar", async (req, res) => {
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
     if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para reactivar esta actividad");
+    const duplicadoOrden = await pool.request()
+      .input("actividadId", sql.Int, actividadId)
+      .query(`
+        SELECT TOP 1 a2.EvaluacionActividadId
+        FROM dbo.EvaluacionActividad a1
+        INNER JOIN dbo.EvaluacionActividad a2
+          ON a2.EvaluacionComponenteId = a1.EvaluacionComponenteId
+         AND a2.EvaluacionActividadId <> a1.EvaluacionActividadId
+         AND ISNULL(a2.Activo, 1) = 1
+         AND a2.Orden = a1.Orden
+        WHERE a1.EvaluacionActividadId = @actividadId
+      `);
+    if (duplicadoOrden.recordset.length) {
+      return badRequest(res, "No se puede reactivar la actividad porque su orden ya está en uso");
+    }
 
     await pool.request()
       .input("actividadId", sql.Int, actividadId)
