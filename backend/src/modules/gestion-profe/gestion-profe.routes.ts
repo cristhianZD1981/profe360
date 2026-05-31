@@ -1065,6 +1065,31 @@ function formatDateCR(value?: string | Date | null) {
   return date.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+async function ensureBitacoraGrupoTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.BitacoraGrupo', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.BitacoraGrupo (
+        BitacoraGrupoId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        InstitucionId INT NOT NULL,
+        GrupoId INT NOT NULL,
+        MateriaId INT NOT NULL,
+        AnioLectivoId INT NOT NULL,
+        PeriodoId INT NOT NULL,
+        FechaRegistro DATE NOT NULL CONSTRAINT DF_BitacoraGrupo_FechaRegistro DEFAULT(CONVERT(date, SYSDATETIME())),
+        TemasDesarrollados NVARCHAR(MAX) NOT NULL,
+        Observaciones NVARCHAR(MAX) NULL,
+        HechosRelevantes NVARCHAR(MAX) NULL,
+        UsuarioId INT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_BitacoraGrupo_CreatedAt DEFAULT(SYSDATETIME()),
+        UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_BitacoraGrupo_UpdatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE INDEX IX_BitacoraGrupo_Busqueda
+        ON dbo.BitacoraGrupo (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, FechaRegistro DESC, BitacoraGrupoId DESC);
+    END
+  `);
+}
+
 function getReadableError(error: any) {
   if (!error) return "Error desconocido";
   if (typeof error === "string") return error;
@@ -1133,6 +1158,35 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
     console.error("Error enviando WhatsApp por webhook:", error);
     return { enviado: false, modo: "webhook", motivo: getReadableError(error) };
   }
+}
+
+function isAdultByBirthDate(fechaNacimiento?: string | Date | null) {
+  if (!fechaNacimiento) return false;
+  const dob = new Date(fechaNacimiento);
+  if (Number.isNaN(dob.getTime())) return false;
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const monthDiff = now.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) age -= 1;
+  return age >= 18;
+}
+
+function resolveWhatsAppPhonesForStudent(params: {
+  fechaNacimiento?: string | Date | null;
+  telefonoEstudiante?: string | null;
+  telefonosEncargadosRaw?: string | null;
+}) {
+  const isAdult = isAdultByBirthDate(params.fechaNacimiento);
+  const telefonoEstudiante = String(params.telefonoEstudiante || "").trim();
+  if (isAdult && telefonoEstudiante) return [telefonoEstudiante];
+  return Array.from(
+    new Set(
+      String(params.telefonosEncargadosRaw || "")
+        .split("|")
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0)
+    )
+  );
 }
 
 async function ensureReporteEnvioBitacoraTable(pool: any) {
@@ -2898,6 +2952,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
               e.Nombre,
               e.PrimerApellido,
               e.SegundoApellido,
+              e.FechaNacimiento,
+              e.Telefono AS TelefonoEstudiante,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
               enc.Telefonos AS EncargadosTelefonos
@@ -2960,14 +3016,11 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
         }
 
         if (estudiante.AutorizaWhatsAppEncargado) {
-          const telefonos = Array.from(
-            new Set(
-              String(estudiante.EncargadosTelefonos || "")
-                .split("|")
-                .map((item: string) => String(item || "").trim())
-                .filter((item: string) => item.length > 0)
-            )
-          );
+          const telefonos = resolveWhatsAppPhonesForStudent({
+            fechaNacimiento: estudiante.FechaNacimiento,
+            telefonoEstudiante: estudiante.TelefonoEstudiante,
+            telefonosEncargadosRaw: estudiante.EncargadosTelefonos
+          });
           for (const telefono of telefonos) {
             const whatsapp = await sendWhatsAppSeguimiento({
               telefono,
@@ -3008,6 +3061,99 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     try { if ((transaction as any)._aborted === false) await transaction.rollback(); } catch {}
     console.error("Error guardando asistencia:", error);
     return res.status(500).json({ ok: false, message: "No se pudo guardar la asistencia" });
+  }
+});
+
+router.get("/mis-grupos/:grupoId/materias/:materiaId/bitacora", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const grupoId = toOptionalNumber(req.params.grupoId);
+    const materiaId = toOptionalNumber(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
+    const periodoId = toOptionalNumber(req.query.periodoId);
+    if (!grupoId || !materiaId || !anioLectivoId || !periodoId) return badRequest(res, "Faltan parámetros de bitácora");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenés permiso para este grupo/materia");
+
+    const pool = await getPool();
+    await ensureBitacoraGrupoTable(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+      .input("grupoId", sql.Int, grupoId)
+      .input("materiaId", sql.Int, materiaId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .query(`
+        SELECT
+          b.BitacoraGrupoId,
+          b.GrupoId,
+          b.MateriaId,
+          b.AnioLectivoId,
+          b.PeriodoId,
+          b.FechaRegistro,
+          b.TemasDesarrollados,
+          b.Observaciones,
+          b.HechosRelevantes,
+          b.UsuarioId,
+          CONCAT(ISNULL(u.Nombre,''), ' ', ISNULL(u.PrimerApellido,''), ' ', ISNULL(u.SegundoApellido,'')) AS NombreUsuario
+        FROM dbo.BitacoraGrupo b
+        LEFT JOIN dbo.Usuario u ON u.UsuarioId = b.UsuarioId
+        WHERE b.InstitucionId = @institucionId
+          AND b.GrupoId = @grupoId
+          AND b.MateriaId = @materiaId
+          AND b.AnioLectivoId = @anioLectivoId
+          AND b.PeriodoId = @periodoId
+        ORDER BY b.FechaRegistro DESC, b.BitacoraGrupoId DESC
+      `);
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error cargando bitácora:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la bitácora" });
+  }
+});
+
+router.post("/mis-grupos/:grupoId/materias/:materiaId/bitacora", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const grupoId = toOptionalNumber(req.params.grupoId);
+    const materiaId = toOptionalNumber(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.body?.anioLectivoId);
+    const periodoId = toOptionalNumber(req.body?.periodoId);
+    if (!grupoId || !materiaId || !anioLectivoId || !periodoId) return badRequest(res, "Faltan parámetros para guardar bitácora");
+
+    const temasDesarrollados = normalizeText(req.body?.temasDesarrollados);
+    const observaciones = normalizeText(req.body?.observaciones);
+    const hechosRelevantes = normalizeText(req.body?.hechosRelevantes);
+    if (!temasDesarrollados) return badRequest(res, "Temas desarrollados es obligatorio");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenés permiso para este grupo/materia");
+
+    const pool = await getPool();
+    await ensureBitacoraGrupoTable(pool);
+    const usuarioId = getUserId(req) || null;
+    const insert = await pool.request()
+      .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+      .input("grupoId", sql.Int, grupoId)
+      .input("materiaId", sql.Int, materiaId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("temasDesarrollados", sql.NVarChar(sql.MAX), temasDesarrollados)
+      .input("observaciones", sql.NVarChar(sql.MAX), observaciones || null)
+      .input("hechosRelevantes", sql.NVarChar(sql.MAX), hechosRelevantes || null)
+      .input("usuarioId", sql.Int, usuarioId)
+      .query(`
+        INSERT INTO dbo.BitacoraGrupo
+          (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, FechaRegistro, TemasDesarrollados, Observaciones, HechosRelevantes, UsuarioId, CreatedAt, UpdatedAt)
+        OUTPUT INSERTED.BitacoraGrupoId
+        VALUES
+          (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, CONVERT(date, SYSDATETIME()), @temasDesarrollados, @observaciones, @hechosRelevantes, @usuarioId, SYSDATETIME(), SYSDATETIME())
+      `);
+    return ok(res, { bitacoraGrupoId: Number(insert.recordset[0]?.BitacoraGrupoId || 0) }, "Bitácora guardada correctamente");
+  } catch (error) {
+    console.error("Error guardando bitácora:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo guardar la bitácora" });
   }
 });
 

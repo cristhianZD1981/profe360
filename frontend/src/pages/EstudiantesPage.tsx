@@ -247,7 +247,7 @@ function EncargadoBlockStable({
       <label>Primer apellido<input value={value.primerApellido} onChange={(e) => onChange({ ...value, primerApellido: e.target.value })} /></label>
       <label>Segundo apellido<input value={value.segundoApellido} onChange={(e) => onChange({ ...value, segundoApellido: e.target.value })} /></label>
       <label>Correo<input type="email" value={value.correo} onChange={(e) => onChange({ ...value, correo: e.target.value })} /></label>
-      <label>Teléfono<input value={value.telefono} onChange={(e) => onChange({ ...value, telefono: e.target.value })} /></label>
+      <label>Teléfono<input value={value.telefono} onChange={(e) => onChange({ ...value, telefono: normalizePhoneForInput(e.target.value) })} /></label>
       <label>Dirección exacta<textarea rows={2} value={value.direccionExacta} onChange={(e) => onChange({ ...value, direccionExacta: e.target.value })} /></label>
       <label>Parentesco<input value={value.parentesco} onChange={(e) => onChange({ ...value, parentesco: e.target.value })} /></label>
       <label style={{ display: "flex", alignItems: "center", gap: "8px" }}><input type="checkbox" checked={value.viveConEstudiante} onChange={(e) => onChange({ ...value, viveConEstudiante: e.target.checked })} />Vive con el estudiante</label>
@@ -276,6 +276,15 @@ function DetailCardStable({ title, encargado }: { title: string; encargado: Deta
       ) : <div style={{ opacity: 0.8 }}>No hay datos registrados</div>}
     </section>
   );
+}
+
+function normalizePhoneForInput(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("+")) return raw.replace(/\s+/g, "");
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) return "";
+  return `+506${digits}`;
 }
 
 export default function EstudiantesPage() {
@@ -623,6 +632,11 @@ export default function EstudiantesPage() {
       return;
     }
 
+    if (!form.fechaNacimiento || !form.primerApellido?.trim() || !form.segundoApellido?.trim()) {
+      setErrorMessage("Completá los campos obligatorios: primer apellido, segundo apellido y fecha de nacimiento.");
+      return;
+    }
+
     setLoading(true);
     clearMessages();
     setReactivableId(null);
@@ -708,7 +722,7 @@ export default function EstudiantesPage() {
           ? String(estudiante.FechaNacimiento).slice(0, 10)
           : "",
         correo: estudiante?.Correo || "",
-        telefono: estudiante?.Telefono || "",
+        telefono: normalizePhoneForInput(estudiante?.Telefono || ""),
         tipoEstudianteId: estudiante?.TipoEstudianteId ? String(estudiante.TipoEstudianteId) : "",
         rutaTransporteId: estudiante?.RutaTransporteId ? String(estudiante.RutaTransporteId) : "",
         autorizaWhatsAppEncargado: !!estudiante?.AutorizaWhatsAppEncargado,
@@ -735,7 +749,7 @@ export default function EstudiantesPage() {
               primerApellido: madre.PrimerApellido || "",
               segundoApellido: madre.SegundoApellido || "",
               correo: madre.Correo || "",
-              telefono: madre.Telefono || "",
+              telefono: normalizePhoneForInput(madre.Telefono || ""),
               direccionExacta: madre.DireccionExacta || "",
               parentesco: madre.Parentesco || "Madre",
               viveConEstudiante: !!madre.ViveConEstudiante,
@@ -755,7 +769,7 @@ export default function EstudiantesPage() {
               primerApellido: padre.PrimerApellido || "",
               segundoApellido: padre.SegundoApellido || "",
               correo: padre.Correo || "",
-              telefono: padre.Telefono || "",
+              telefono: normalizePhoneForInput(padre.Telefono || ""),
               direccionExacta: padre.DireccionExacta || "",
               parentesco: padre.Parentesco || "Padre",
               viveConEstudiante: !!padre.ViveConEstudiante,
@@ -775,7 +789,7 @@ export default function EstudiantesPage() {
               primerApellido: encargado.PrimerApellido || "",
               segundoApellido: encargado.SegundoApellido || "",
               correo: encargado.Correo || "",
-              telefono: encargado.Telefono || "",
+              telefono: normalizePhoneForInput(encargado.Telefono || ""),
               direccionExacta: encargado.DireccionExacta || "",
               parentesco: encargado.Parentesco || "Encargado",
               viveConEstudiante: !!encargado.ViveConEstudiante,
@@ -1107,7 +1121,7 @@ export default function EstudiantesPage() {
           Teléfono
           <input
             value={value.telefono}
-            onChange={(e) => onChange({ ...value, telefono: e.target.value })}
+            onChange={(e) => onChange({ ...value, telefono: normalizePhoneForInput(e.target.value) })}
           />
         </label>
 
@@ -1347,6 +1361,7 @@ export default function EstudiantesPage() {
             <label>
               Primer apellido
               <input
+                required
                 value={form.primerApellido}
                 onChange={(e) =>
                   setForm({ ...form, primerApellido: e.target.value })
@@ -1357,6 +1372,7 @@ export default function EstudiantesPage() {
             <label>
               Segundo apellido
               <input
+                required
                 value={form.segundoApellido}
                 onChange={(e) =>
                   setForm({ ...form, segundoApellido: e.target.value })
@@ -1368,6 +1384,7 @@ export default function EstudiantesPage() {
               Fecha de nacimiento
               <input
                 type="date"
+                required
                 value={form.fechaNacimiento}
                 onChange={(e) =>
                   setForm({ ...form, fechaNacimiento: e.target.value })
@@ -1419,7 +1436,7 @@ export default function EstudiantesPage() {
               Teléfono
               <input
                 value={form.telefono}
-                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+                onChange={(e) => setForm({ ...form, telefono: normalizePhoneForInput(e.target.value) })}
               />
             </label>
 

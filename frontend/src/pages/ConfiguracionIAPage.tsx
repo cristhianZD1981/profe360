@@ -537,6 +537,16 @@ export default function ConfiguracionIAPage() {
         </div>
       </div>
 
+      <div style={{ ...cardStyle, background: "#ecfeff", border: "1px solid #67e8f9", color: "#0f172a" }}>
+        <strong>Paso a paso (Promt IA)</strong>
+        <ol style={{ margin: "8px 0 0 18px", padding: 0 }}>
+          <li>Creá el tipo de plantilla (si aún no existe).</li>
+          <li>Creá la plantilla con título y contenido del prompt.</li>
+          <li>Definí visibilidad pública o privada según el uso.</li>
+          <li>Guardá y validá la salida desde Planeamiento o Evaluaciones.</li>
+        </ol>
+      </div>
+
       {message ? (
         <div style={{ padding: "12px 14px", borderRadius: "14px", background: "#ecfdf3", color: "#166534", border: "1px solid #bbf7d0" }}>
           {message}

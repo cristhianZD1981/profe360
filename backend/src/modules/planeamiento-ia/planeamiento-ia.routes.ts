@@ -1684,8 +1684,56 @@ router.get("/habilidades/plantilla", async (_req, res) => {
     ];
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
+    const instrucciones = XLSX.utils.json_to_sheet([
+      {
+        Columna: "Materia",
+        Requerido: "SI",
+        Descripcion: "Nombre de la materia. Debe existir en el catalogo de materias de la institucion."
+      },
+      {
+        Columna: "Colegio",
+        Requerido: "SI",
+        Descripcion: "Tipo de colegio. Ejemplo: Academico, Tecnico."
+      },
+      {
+        Columna: "Ciclo",
+        Requerido: "NO",
+        Descripcion: "Texto libre. Ejemplo: Tercer ciclo."
+      },
+      {
+        Columna: "Grado",
+        Requerido: "SI",
+        Descripcion: "Grado. Ejemplo: 7, Octavo, Duodecimo."
+      },
+      {
+        Columna: "Mes",
+        Requerido: "SI",
+        Descripcion: "Mes de la habilidad. Ejemplo: Febrero."
+      },
+      {
+        Columna: "Area",
+        Requerido: "NO",
+        Descripcion: "Area o eje tematico."
+      },
+      {
+        Columna: "Numero de Habilidad",
+        Requerido: "NO",
+        Descripcion: "Numeracion de referencia. Ejemplo: 1, 2, 3."
+      },
+      {
+        Columna: "Descripcion de la Habilidad",
+        Requerido: "SI",
+        Descripcion: "Texto de la habilidad."
+      },
+      {
+        Columna: "Documento de referencia",
+        Requerido: "NO",
+        Descripcion: "Fuente de respaldo. Ejemplo: Programa de estudio MEP."
+      }
+    ]);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Habilidades");
+    XLSX.utils.book_append_sheet(workbook, instrucciones, "Instrucciones");
     const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -1733,7 +1781,7 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
       const area = normalizeNullableText(row.Area);
       const numeroHabilidad = normalizeNullableText(row["Numero de Habilidad"] || row.NumeroHabilidad);
       const descripcionHabilidad = normalizeText(row["Descripcion de la Habilidad"] || row.DescripcionHabilidad);
-      const documentoReferencia = normalizeNullableText(row["Documento de referencia "] || row["Documento de referencia"] || row.DocumentoReferencia);
+      const documentoReferencia = normalizeNullableText(row["Documento de referencia"] || row.DocumentoReferencia);
 
       if (!materiaNombre || !tipoColegio || !grado || !mes || !descripcionHabilidad) {
         omitidos += 1;

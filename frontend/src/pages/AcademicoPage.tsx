@@ -156,6 +156,13 @@ type Especialidad = {
   Activo: boolean;
 };
 
+type TipoEstudiante = {
+  TipoEstudianteId: number;
+  InstitucionId?: number;
+  Descripcion: string;
+  Activo: boolean;
+};
+
 type RutaTransporte = {
   RutaTransporteId: number;
   InstitucionId?: number;
@@ -432,6 +439,10 @@ const initialEspecialidadForm = {
   permiteMultiplesPorSeccion: false
 };
 
+const initialTipoEstudianteForm = {
+  descripcion: ""
+};
+
 const initialRutaTransporteForm = {
   descripcion: "",
   responsable: "",
@@ -591,6 +602,7 @@ type TabKey =
   | "periodos"
   | "grupos"
   | "matriculas"
+  | "tiposEstudiante"
   | "especialidades"
   | "rutasTransporte"
   | "evaluacion"
@@ -612,6 +624,7 @@ type FormSectionKey =
   | "periodos"
   | "grupos"
   | "matriculas"
+  | "tiposEstudiante"
   | "especialidades"
   | "rutasTransporte"
   | "materias"
@@ -628,6 +641,7 @@ const initialOpenSections: Record<FormSectionKey, boolean> = {
   periodos: false,
   grupos: false,
   matriculas: false,
+  tiposEstudiante: false,
   especialidades: false,
   rutasTransporte: false,
   materias: false,
@@ -651,6 +665,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [gruposCatalogo, setGruposCatalogo] = useState<Grupo[]>([]);
   const [grupos, setGrupos] = useState<Grupo[]>([]);
   const [matriculas, setMatriculas] = useState<Matricula[]>([]);
+  const [tiposEstudiante, setTiposEstudiante] = useState<TipoEstudiante[]>([]);
   const [especialidadesCatalogo, setEspecialidadesCatalogo] = useState<Especialidad[]>([]);
   const [especialidades, setEspecialidades] = useState<Especialidad[]>([]);
   const [rutasTransporteCatalogo, setRutasTransporteCatalogo] = useState<RutaTransporte[]>([]);
@@ -672,6 +687,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [periodoForm, setPeriodoForm] = useState(initialPeriodoForm);
   const [grupoForm, setGrupoForm] = useState(initialGrupoForm);
   const [matriculaForm, setMatriculaForm] = useState(initialMatriculaForm);
+  const [tipoEstudianteForm, setTipoEstudianteForm] = useState(initialTipoEstudianteForm);
   const [especialidadForm, setEspecialidadForm] = useState(initialEspecialidadForm);
   const [rutaTransporteForm, setRutaTransporteForm] = useState(initialRutaTransporteForm);
   const [materiaForm, setMateriaForm] = useState(initialMateriaForm);
@@ -687,6 +703,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [editingPeriodoId, setEditingPeriodoId] = useState<number | null>(null);
   const [editingGrupoId, setEditingGrupoId] = useState<number | null>(null);
   const [editingMatriculaId, setEditingMatriculaId] = useState<number | null>(null);
+  const [editingTipoEstudianteId, setEditingTipoEstudianteId] = useState<number | null>(null);
   const [editingEspecialidadId, setEditingEspecialidadId] = useState<number | null>(null);
   const [editingRutaTransporteId, setEditingRutaTransporteId] = useState<number | null>(null);
   const [editingMateriaId, setEditingMateriaId] = useState<number | null>(null);
@@ -723,6 +740,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [grupoSearch, setGrupoSearch] = useState("");
   const [matriculaSearch, setMatriculaSearch] = useState("");
   const [matriculaHasSearched, setMatriculaHasSearched] = useState(false);
+  const [tipoEstudianteSearch, setTipoEstudianteSearch] = useState("");
   const [especialidadSearch, setEspecialidadSearch] = useState("");
   const [rutaTransporteSearch, setRutaTransporteSearch] = useState("");
   const [materiaSearch, setMateriaSearch] = useState("");
@@ -737,6 +755,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [incluirPeriodosInactivos, setIncluirPeriodosInactivos] = useState(false);
   const [incluirGruposInactivos, setIncluirGruposInactivos] = useState(false);
   const [incluirMatriculasInactivas, setIncluirMatriculasInactivas] = useState(false);
+  const [incluirTiposEstudianteInactivos, setIncluirTiposEstudianteInactivos] = useState(false);
   const [incluirEspecialidadesInactivas, setIncluirEspecialidadesInactivas] = useState(false);
   const [incluirRutasTransporteInactivas, setIncluirRutasTransporteInactivas] = useState(false);
   const [incluirMateriasInactivas, setIncluirMateriasInactivas] = useState(false);
@@ -752,6 +771,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [loadingPeriodo, setLoadingPeriodo] = useState(false);
   const [loadingGrupo, setLoadingGrupo] = useState(false);
   const [loadingMatricula, setLoadingMatricula] = useState(false);
+  const [loadingTipoEstudiante, setLoadingTipoEstudiante] = useState(false);
   const [loadingEspecialidad, setLoadingEspecialidad] = useState(false);
   const [loadingRutaTransporte, setLoadingRutaTransporte] = useState(false);
   const [loadingMateria, setLoadingMateria] = useState(false);
@@ -879,6 +899,13 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
       params: { q: query, incluirInactivas }
     });
     setEspecialidades(response.data?.data || []);
+  }
+
+  async function loadTiposEstudiante(query = "", incluirInactivos = incluirTiposEstudianteInactivos) {
+    const response = await api.get("/academico/tipos-estudiante", {
+      params: { q: query, incluirInactivos }
+    });
+    setTiposEstudiante(response.data?.data || []);
   }
 
   async function loadRutasTransporte(query = "", incluirInactivas = incluirRutasTransporteInactivas) {
@@ -1039,6 +1066,9 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
         case "matriculas":
           await loadMatriculas(matriculaSearch, incluirMatriculasInactivas);
           break;
+        case "tiposEstudiante":
+          await loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos);
+          break;
         case "especialidades":
           await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
           break;
@@ -1198,6 +1228,12 @@ function resetMatriculaForm() {
   setReactivableMatriculaId(null);
   closeSection("matriculas");
 }
+
+  function resetTipoEstudianteForm() {
+    setTipoEstudianteForm(initialTipoEstudianteForm);
+    setEditingTipoEstudianteId(null);
+    closeSection("tiposEstudiante");
+  }
 
   function resetEspecialidadForm() {
     setEspecialidadForm(initialEspecialidadForm);
@@ -1902,6 +1938,42 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleTipoEstudianteSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingTipoEstudiante(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        descripcion: tipoEstudianteForm.descripcion
+      };
+
+      if (!payload.descripcion.trim()) {
+        setErrorMessage("La descripción del tipo de estudiante es obligatoria");
+        return;
+      }
+
+      if (editingTipoEstudianteId !== null) {
+        await api.put(`/academico/tipos-estudiante/${editingTipoEstudianteId}`, payload);
+        setMessage("Tipo de estudiante actualizado correctamente");
+      } else {
+        await api.post("/academico/tipos-estudiante", payload);
+        setMessage("Tipo de estudiante creado correctamente");
+      }
+
+      resetTipoEstudianteForm();
+      await Promise.all([
+        loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      console.error("Error guardando tipo de estudiante:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar el tipo de estudiante");
+    } finally {
+      setLoadingTipoEstudiante(false);
+    }
+  }
+
 
   async function handleRutaTransporteSubmit(e: FormEvent) {
     e.preventDefault();
@@ -2371,6 +2443,17 @@ async function handleReprogramarDesde(e: FormEvent) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function handleEditTipoEstudiante(item: TipoEstudiante) {
+    setTab("tiposEstudiante");
+    openSection("tiposEstudiante");
+    clearMessages();
+    setEditingTipoEstudianteId(item.TipoEstudianteId);
+    setTipoEstudianteForm({
+      descripcion: item.Descripcion || ""
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function handleEditRutaTransporte(item: RutaTransporte) {
     setTab("rutasTransporte");
     openSection("rutasTransporte");
@@ -2596,6 +2679,38 @@ async function handleReprogramarDesde(e: FormEvent) {
     }
   }
 
+  async function handleDeleteTipoEstudiante(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar este tipo de estudiante?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/tipos-estudiante/${id}`);
+      setMessage("Tipo de estudiante eliminado correctamente");
+      if (editingTipoEstudianteId === id) resetTipoEstudianteForm();
+      await Promise.all([
+        loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el tipo de estudiante");
+    }
+  }
+
+  async function handleReactivateTipoEstudiante(id: number) {
+    clearMessages();
+    try {
+      await api.patch(`/academico/tipos-estudiante/${id}/reactivar`);
+      setMessage("Tipo de estudiante reactivado correctamente");
+      await Promise.all([
+        loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo reactivar el tipo de estudiante");
+    }
+  }
+
   async function handleReactivateEspecialidad(id: number) {
     clearMessages();
     try {
@@ -2792,6 +2907,11 @@ async function handleReprogramarDesde(e: FormEvent) {
     await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
   }
 
+  async function handleTipoEstudianteSearch(e: FormEvent) {
+    e.preventDefault();
+    await loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos);
+  }
+
   async function handleRutaTransporteSearch(e: FormEvent) {
     e.preventDefault();
     await loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas);
@@ -2942,6 +3062,7 @@ async function handleReprogramarDesde(e: FormEvent) {
     { key: "periodos", label: "Periodos" },
     { key: "grupos", label: "Gestión de grupos" },
     { key: "matriculas", label: "Matrícula" },
+    { key: "tiposEstudiante", label: "Tipo de estudiante" },
     { key: "especialidades", label: "Especialidades" },
     { key: "rutasTransporte", label: "Rutas" },
     { key: "evaluacion", label: "Parametrización de Evaluaciones" },
@@ -4148,6 +4269,88 @@ async function handleReprogramarDesde(e: FormEvent) {
           </div>
         )}
 
+
+        {tab === "tiposEstudiante" && (
+          <div className={isSectionOpen("tiposEstudiante") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("tiposEstudiante") ? (
+                <>
+                  <h3>{editingTipoEstudianteId !== null ? "Editar tipo de estudiante" : "Crear tipo de estudiante"}</h3>
+                  <form className="form" onSubmit={handleTipoEstudianteSubmit}>
+                    <label>
+                      Descripción
+                      <input
+                        value={tipoEstudianteForm.descripcion}
+                        onChange={(e) => setTipoEstudianteForm({ ...tipoEstudianteForm, descripcion: e.target.value })}
+                        placeholder="Ejemplo: Regular, Adecuación"
+                        required
+                      />
+                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingTipoEstudiante}>
+                        {loadingTipoEstudiante ? (editingTipoEstudianteId !== null ? "Actualizando..." : "Guardando...") : (editingTipoEstudianteId !== null ? "Actualizar" : "Guardar")}
+                      </button>
+                      <button type="button" onClick={resetTipoEstudianteForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Tipo de estudiante</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetTipoEstudianteForm(); openSection("tiposEstudiante"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar tipo de estudiante
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de tipos de estudiante</h3>
+              <form onSubmit={handleTipoEstudianteSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
+                <input placeholder="Buscar por descripción" value={tipoEstudianteSearch} onChange={(e) => setTipoEstudianteSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                <button className="primary-btn" type="submit">Buscar</button>
+                <button type="button" onClick={() => { setTipoEstudianteSearch(""); loadTiposEstudiante("", incluirTiposEstudianteInactivos); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                  Limpiar
+                </button>
+              </form>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <input type="checkbox" checked={incluirTiposEstudianteInactivos} onChange={(e) => setIncluirTiposEstudianteInactivos(e.target.checked)} />
+                Incluir tipos inactivos
+              </label>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>ID</th><th>Descripción</th><th>Estado</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                    {tiposEstudiante.map((item) => (
+                      <tr key={item.TipoEstudianteId}>
+                        <td>{item.TipoEstudianteId}</td>
+                        <td>{item.Descripcion}</td>
+                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => handleEditTipoEstudiante(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                            {item.Activo ? (
+                              <button type="button" onClick={() => handleDeleteTipoEstudiante(item.TipoEstudianteId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                            ) : (
+                              <button type="button" onClick={() => handleReactivateTipoEstudiante(item.TipoEstudianteId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!tiposEstudiante.length && <tr><td colSpan={4} style={{ textAlign: "center", padding: "16px" }}>No hay tipos de estudiante registrados</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
 
 
         {tab === "especialidades" && (

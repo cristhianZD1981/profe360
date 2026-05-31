@@ -361,23 +361,30 @@ td {
 
 .param-top-nav {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .param-top-link {
-  padding: 10px 14px;
+  padding: 10px 16px;
   border-radius: 12px;
-  border: 1px solid rgba(255,255,255,0.16);
-  background: rgba(255,255,255,0.06);
-  color: #dbeafe;
-  font-weight: 600;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: linear-gradient(135deg, rgba(14, 116, 144, 0.45), rgba(14, 165, 233, 0.24));
+  color: #e0f2fe;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  box-shadow: 0 6px 18px rgba(2, 132, 199, 0.2);
+  transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .param-top-link.active,
 .param-top-link:hover {
-  background: rgba(255,255,255,0.14);
+  border-color: rgba(125, 211, 252, 0.95);
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(3, 105, 161, 0.75), rgba(2, 132, 199, 0.7));
+  box-shadow: 0 10px 24px rgba(2, 132, 199, 0.32);
+  transform: translateY(-1px);
 }
 
 .param-top-link.inactive {

@@ -543,8 +543,8 @@ export type AsistenciaDraft = Record<string, {
 export type AsistenciaNotificacionEstado = Record<string, { correoEnviado?: boolean; waEnviado?: boolean }>;
 
 export type NoteDrafts = Record<string, string>;
-export type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "reportes";
-export type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS";
+export type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "bitacora" | "reportes";
+export type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS" | "BITACORA";
 
 
 export type HorarioBloque = {
@@ -596,6 +596,19 @@ export type BoletaConductaReporte = {
   TotalEnviosCorreo?: number | null;
   TotalEnviosExitosos?: number | null;
 };
+export type BitacoraGestion = {
+  BitacoraGrupoId: number;
+  GrupoId: number;
+  MateriaId: number;
+  AnioLectivoId: number;
+  PeriodoId: number;
+  FechaRegistro: string;
+  TemasDesarrollados: string;
+  Observaciones?: string | null;
+  HechosRelevantes?: string | null;
+  UsuarioId?: number | null;
+  NombreUsuario?: string | null;
+};
 
 export const initialPlaneamientoForm: PlaneamientoForm = {
   nombre: "",
@@ -633,6 +646,7 @@ export function getGestionPanelButtonStyle(panel: ActivePanel): React.CSSPropert
   if (panel === "seguimiento") return { ...base, background: "#ecfccb", borderColor: "#bef264", color: "#3f6212" };
   if (panel === "examenes_tabla") return { ...base, background: "#fff7ed", borderColor: "#fdba74", color: "#9a3412" };
   if (panel === "notas") return { ...base, background: "#f3e8ff", borderColor: "#d8b4fe", color: "#6b21a8" };
+  if (panel === "bitacora") return { ...base, background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" };
   if (panel === "reportes") return { ...base, background: "#fef9c3", borderColor: "#fde047", color: "#854d0e" };
   return base;
 }
@@ -1056,5 +1070,4 @@ export function getTipoBloqueNoLectivo(nombre?: string | null) {
   if (texto.includes("recreo") || texto.includes("descanso")) return "recreo";
   return "";
 }
-
 

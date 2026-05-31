@@ -196,7 +196,7 @@ router.get("/catalogos", async (req, res) => {
 
     const pool = await getPool();
 
-    const [anios, estudiantes, grupos, periodos, materias, especialidades, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
+    const [anios, estudiantes, grupos, periodos, materias, especialidades, tiposEstudiante, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
       pool.request()
         .input("institucionId", sql.Int, institucionId)
         .query(`
@@ -306,6 +306,22 @@ router.get("/catalogos", async (req, res) => {
         .input("institucionId", sql.Int, institucionId)
         .query(`
           SELECT
+            TipoEstudianteId,
+            InstitucionId,
+            Descripcion,
+            Activo,
+            CreatedAt,
+            UpdatedAt
+          FROM dbo.TipoEstudiante
+          WHERE InstitucionId = @institucionId
+            AND Activo = 1
+          ORDER BY Descripcion
+        `),
+
+      pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .query(`
+          SELECT
             RutaTransporteId,
             InstitucionId,
             Descripcion,
@@ -385,6 +401,7 @@ router.get("/catalogos", async (req, res) => {
       periodos: periodos.recordset,
       materias: materias.recordset,
       especialidades: especialidades.recordset,
+      tiposEstudiante: tiposEstudiante.recordset,
       rutasTransporte: rutasTransporte.recordset,
       docentes: docentes.recordset,
       bloquesHorarios: bloques.recordset,
@@ -943,6 +960,205 @@ router.patch("/especialidades/:id/reactivar", async (req, res) => {
   } catch (error) {
     console.error("Error al reactivar especialidad:", error);
     return res.status(500).json({ ok: false, message: "Error interno al reactivar especialidad" });
+  }
+});
+
+/* =========================================================
+   TIPOS DE ESTUDIANTE
+   ========================================================= */
+router.get("/tipos-estudiante", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const q = String(req.query.q || "").trim();
+    const incluirInactivos = String(req.query.incluirInactivos || "false") === "true";
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("incluirInactivos", sql.Bit, incluirInactivos)
+      .query(`
+        SELECT
+          TipoEstudianteId,
+          InstitucionId,
+          Descripcion,
+          Activo,
+          CreatedAt,
+          UpdatedAt
+        FROM dbo.TipoEstudiante
+        WHERE InstitucionId = @institucionId
+          AND (@incluirInactivos = 1 OR Activo = 1)
+          AND (
+            @q = '%%'
+            OR Descripcion LIKE @q
+          )
+        ORDER BY Descripcion
+      `);
+
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error al listar tipos de estudiante:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al listar tipos de estudiante" });
+  }
+});
+
+router.post("/tipos-estudiante", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const descripcion = String(req.body?.descripcion || "").trim();
+    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+
+    const pool = await getPool();
+    const duplicado = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 TipoEstudianteId
+        FROM dbo.TipoEstudiante
+        WHERE InstitucionId = @institucionId
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe un tipo de estudiante con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        INSERT INTO dbo.TipoEstudiante
+        (
+          InstitucionId,
+          Descripcion,
+          Activo,
+          CreatedAt
+        )
+        OUTPUT INSERTED.*
+        VALUES
+        (
+          @institucionId,
+          @descripcion,
+          1,
+          SYSDATETIME()
+        )
+      `);
+
+    return created(res, result.recordset[0], "Tipo de estudiante creado correctamente");
+  } catch (error) {
+    console.error("Error al crear tipo de estudiante:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al crear tipo de estudiante" });
+  }
+});
+
+router.put("/tipos-estudiante/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const descripcion = String(req.body?.descripcion || "").trim();
+    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+
+    const pool = await getPool();
+    const duplicado = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 TipoEstudianteId
+        FROM dbo.TipoEstudiante
+        WHERE InstitucionId = @institucionId
+          AND TipoEstudianteId <> @id
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe otro tipo de estudiante con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        UPDATE dbo.TipoEstudiante
+        SET
+          Descripcion = @descripcion,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE TipoEstudianteId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Tipo de estudiante no encontrado" });
+    }
+    return ok(res, result.recordset[0], "Tipo de estudiante actualizado correctamente");
+  } catch (error) {
+    console.error("Error al actualizar tipo de estudiante:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al actualizar tipo de estudiante" });
+  }
+});
+
+router.delete("/tipos-estudiante/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.TipoEstudiante
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.TipoEstudianteId
+        WHERE TipoEstudianteId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Tipo de estudiante no encontrado" });
+    }
+    return ok(res, { TipoEstudianteId: id }, "Tipo de estudiante desactivado correctamente");
+  } catch (error) {
+    console.error("Error al desactivar tipo de estudiante:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al desactivar tipo de estudiante" });
+  }
+});
+
+router.patch("/tipos-estudiante/:id/reactivar", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.TipoEstudiante
+        SET Activo = 1, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE TipoEstudianteId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Tipo de estudiante no encontrado" });
+    }
+    return ok(res, result.recordset[0], "Tipo de estudiante reactivado correctamente");
+  } catch (error) {
+    console.error("Error al reactivar tipo de estudiante:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al reactivar tipo de estudiante" });
   }
 });
 

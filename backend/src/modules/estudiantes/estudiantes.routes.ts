@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
@@ -188,7 +188,7 @@ function normalizeEncargados(encargados: any[]): EncargadoPayload[] {
       primerApellido: item?.primerApellido || null,
       segundoApellido: item?.segundoApellido || null,
       correo: item?.correo || null,
-      telefono: item?.telefono || null,
+      telefono: normalizePhoneWithDefaultCountryCode(item?.telefono),
       direccionExacta: item?.direccionExacta || null,
       parentesco: item?.parentesco || null,
       viveConEstudiante: !!item?.viveConEstudiante,
@@ -216,11 +216,20 @@ function toNullableString(value: any) {
   return str ? str : null;
 }
 
+function normalizePhoneWithDefaultCountryCode(value: any) {
+  const raw = toNullableString(value);
+  if (!raw) return null;
+  if (raw.startsWith("+")) return raw.replace(/\s+/g, "");
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) return null;
+  return `+506${digits}`;
+}
+
 function toBoolean(value: any, defaultValue = false) {
   if (value === undefined || value === null || value === "") return defaultValue;
   const normalized = String(value).trim().toLowerCase();
 
-  if (["1", "si", "sí", "true", "x", "yes"].includes(normalized)) return true;
+  if (["1", "si", "Si", "true", "x", "yes"].includes(normalized)) return true;
   if (["0", "no", "false", ""].includes(normalized)) return false;
 
   return defaultValue;
@@ -416,7 +425,7 @@ async function createStudentWithTransaction(params: {
     const existente = existe.recordset[0];
     if (existente.Activo === false || existente.Activo === 0) {
       const error: any = new Error(
-        "Ya existe un estudiante inactivo con esa identificación. Podés reactivarlo."
+        "Ya existe un estudiante inactivo con esa Identificacion. PodÃ©s reactivarlo."
       );
       error.code = "ESTUDIANTE_INACTIVO";
       error.estudianteId = existente.EstudianteId;
@@ -424,7 +433,7 @@ async function createStudentWithTransaction(params: {
     }
 
     const error: any = new Error(
-      "Ya existe un estudiante con esa identificación en esta institución"
+      "Ya existe un estudiante con esa Identificacion en esta instituciÃ³n"
     );
     error.code = "ESTUDIANTE_DUPLICADO";
     throw error;
@@ -732,7 +741,7 @@ function serializeImportJob(job: ImportJob) {
 
 function parseImportRowsFromFile(file?: Express.Multer.File) {
   if (!file?.buffer) {
-    const error: any = new Error("Debés adjuntar un archivo Excel");
+    const error: any = new Error("DebÃ©s adjuntar un archivo Excel");
     error.status = 400;
     throw error;
   }
@@ -751,17 +760,96 @@ function parseImportRowsFromFile(file?: Express.Multer.File) {
     throw error;
   }
 
-  return rows;
+  return rows.map((row) => normalizeStudentImportRowKeys(row));
+}
+
+function normalizeImportHeaderKey(value: any) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function normalizeStudentImportRowKeys(row: any) {
+  const source = row && typeof row === "object" ? row : {};
+  const entries = Object.entries(source);
+  const byKey = new Map<string, any>();
+  for (const [key, value] of entries) {
+    byKey.set(normalizeImportHeaderKey(key), value);
+  }
+
+  const aliases: Record<string, string[]> = {
+    identificacion: ["identificacion", "cedula", "numeroidentificacion"],
+    nombre: ["nombre", "nombres"],
+    primerApellido: ["primerapellido", "apellido1", "primerapellidodelestudiante"],
+    segundoApellido: ["segundoapellido", "apellido2", "segundoapellidodelestudiante"],
+    fechaNacimiento: ["fechanacimiento", "fecnacimiento", "nacimiento"],
+    sexo: ["sexo", "genero"],
+    correo: ["correo", "email", "correoelectronico"],
+    telefono: ["telefono", "celular", "telefono1"],
+    tipoEstudianteId: ["tipoestudianteid", "tipoestudiante"],
+    nacionalidad: ["nacionalidad"],
+    adecuacion: ["adecuacion"],
+    discapacidad: ["discapacidad"],
+    enfermedad: ["enfermedad"],
+    rutaTransporteId: ["rutatransporteid", "idrutatransporte"],
+    rutaTransporteHabitual: ["rutatransportehabitual", "rutahabitual", "ruta"],
+    autorizaWhatsAppEncargado: ["autorizawhatsappencargado", "autorizaencargadowhatsapp", "autorizawhatsapp"],
+    observacionMedica: ["observacionmedica", "observacionesmedicas", "observacion"],
+    madre_nombre: ["madrenombre"],
+    madre_primerApellido: ["madreprimerapellido", "madreapellido1"],
+    madre_segundoApellido: ["madresegundoapellido", "madreapellido2"],
+    madre_identificacion: ["madreidentificacion", "madrecedula"],
+    madre_correo: ["madrecorreo", "madreemail"],
+    madre_telefono: ["madretelefono", "madrecelular"],
+    madre_direccionExacta: ["madredireccionexacta", "madredireccion"],
+    madre_viveConEstudiante: ["madreviveconestudiante"],
+    madre_esPrincipal: ["madreesprincipal"],
+    madre_recibeNotificaciones: ["madrerecibenotificaciones"],
+    padre_nombre: ["padrenombre"],
+    padre_primerApellido: ["padreprimerapellido", "padreapellido1"],
+    padre_segundoApellido: ["padresegundoapellido", "padreapellido2"],
+    padre_identificacion: ["padreidentificacion", "padrecedula"],
+    padre_correo: ["padrecorreo", "padreemail"],
+    padre_telefono: ["padretelefono", "padrecelular"],
+    padre_direccionExacta: ["padredireccionexacta", "padredireccion"],
+    padre_viveConEstudiante: ["padreviveconestudiante"],
+    padre_esPrincipal: ["padreesprincipal"],
+    padre_recibeNotificaciones: ["padrerecibenotificaciones"],
+    encargado_nombre: ["encargadonombre"],
+    encargado_primerApellido: ["encargadoprimerapellido", "encargadoapellido1"],
+    encargado_segundoApellido: ["encargadosegundoapellido", "encargadoapellido2"],
+    encargado_identificacion: ["encargadoidentificacion", "encargadocedula"],
+    encargado_correo: ["encargadocorreo", "encargadoemail"],
+    encargado_telefono: ["encargadotelefono", "encargadocelular"],
+    encargado_direccionExacta: ["encargadodireccionexacta", "encargadodireccion"],
+    encargado_parentesco: ["encargadoparentesco", "parentescoencargado"],
+    encargado_viveConEstudiante: ["encargadoviveconestudiante"],
+    encargado_esPrincipal: ["encargadoesprincipal"],
+    encargado_recibeNotificaciones: ["encargadorecibenotificaciones"]
+  };
+
+  const normalized: Record<string, any> = { ...source };
+  for (const [targetKey, keys] of Object.entries(aliases)) {
+    const found = keys.find((k) => byKey.has(k));
+    if (found) normalized[targetKey] = byKey.get(found);
+  }
+  return normalized;
 }
 
 function buildImportPayloadFromRow(row: any) {
   const identificacion = toNullableString(row.identificacion);
   const nombre = toNullableString(row.nombre);
+  const primerApellido = toNullableString(row.primerApellido);
+  const segundoApellido = toNullableString(row.segundoApellido);
+  const fechaNacimiento = toExcelDate(row.fechaNacimiento);
 
-  if (!identificacion || !nombre) {
+  if (!identificacion || !nombre || !primerApellido || !segundoApellido || !fechaNacimiento) {
     return {
       identificacion: identificacion || "",
-      error: "Los campos obligatorios identificacion y nombre son requeridos",
+      error: "Completá los campos obligatorios: identificación, nombre, primer apellido, segundo apellido y fecha de nacimiento.",
       payload: null
     };
   }
@@ -774,7 +862,7 @@ function buildImportPayloadFromRow(row: any) {
       primerApellido: toNullableString(row.madre_primerApellido),
       segundoApellido: toNullableString(row.madre_segundoApellido),
       correo: toNullableString(row.madre_correo),
-      telefono: toNullableString(row.madre_telefono),
+      telefono: normalizePhoneWithDefaultCountryCode(row.madre_telefono),
       direccionExacta: toNullableString(row.madre_direccionExacta),
       parentesco: "Madre",
       viveConEstudiante: toBoolean(row.madre_viveConEstudiante),
@@ -788,7 +876,7 @@ function buildImportPayloadFromRow(row: any) {
       primerApellido: toNullableString(row.padre_primerApellido),
       segundoApellido: toNullableString(row.padre_segundoApellido),
       correo: toNullableString(row.padre_correo),
-      telefono: toNullableString(row.padre_telefono),
+      telefono: normalizePhoneWithDefaultCountryCode(row.padre_telefono),
       direccionExacta: toNullableString(row.padre_direccionExacta),
       parentesco: "Padre",
       viveConEstudiante: toBoolean(row.padre_viveConEstudiante),
@@ -802,7 +890,7 @@ function buildImportPayloadFromRow(row: any) {
       primerApellido: toNullableString(row.encargado_primerApellido),
       segundoApellido: toNullableString(row.encargado_segundoApellido),
       correo: toNullableString(row.encargado_correo),
-      telefono: toNullableString(row.encargado_telefono),
+      telefono: normalizePhoneWithDefaultCountryCode(row.encargado_telefono),
       direccionExacta: toNullableString(row.encargado_direccionExacta),
       parentesco: toNullableString(row.encargado_parentesco) || "Encargado",
       viveConEstudiante: toBoolean(row.encargado_viveConEstudiante),
@@ -817,12 +905,12 @@ function buildImportPayloadFromRow(row: any) {
     payload: {
       identificacion,
       nombre,
-      primerApellido: toNullableString(row.primerApellido),
-      segundoApellido: toNullableString(row.segundoApellido),
-      fechaNacimiento: toExcelDate(row.fechaNacimiento),
+      primerApellido,
+      segundoApellido,
+      fechaNacimiento,
       sexo: toNullableString(row.sexo),
       correo: toNullableString(row.correo),
-      telefono: toNullableString(row.telefono),
+      telefono: normalizePhoneWithDefaultCountryCode(row.telefono),
       fotoUrl: null,
       nacionalidad: toNullableString(row.nacionalidad),
       tipoEstudianteId: row.tipoEstudianteId ? Number(row.tipoEstudianteId) : null,
@@ -954,7 +1042,7 @@ router.get("/", async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     if (!req.auth?.institucionId) {
-      return badRequest(res, "El usuario no tiene institución asignada");
+      return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
     }
 
     const pool = await getPool();
@@ -1202,36 +1290,36 @@ router.get(
       const instrucciones = [
         {
           Campo: "identificacion",
-          Obligatorio: "Sí",
-          Descripcion: "Identificación del estudiante"
+          Obligatorio: "Si",
+          Descripcion: "Identificacion del estudiante"
         },
-        { Campo: "nombre", Obligatorio: "Sí", Descripcion: "Nombre del estudiante" },
-        { Campo: "primerApellido", Obligatorio: "No", Descripcion: "Primer apellido" },
-        { Campo: "segundoApellido", Obligatorio: "No", Descripcion: "Segundo apellido" },
+        { Campo: "nombre", Obligatorio: "Si", Descripcion: "Nombre del estudiante" },
+        { Campo: "primerApellido", Obligatorio: "Si", Descripcion: "Primer apellido" },
+        { Campo: "segundoApellido", Obligatorio: "Si", Descripcion: "Segundo apellido" },
         {
           Campo: "fechaNacimiento",
-          Obligatorio: "No",
+          Obligatorio: "Si",
           Descripcion: "Formato recomendado YYYY-MM-DD"
         },
         { Campo: "sexo", Obligatorio: "No", Descripcion: "Masculino, Femenino u Otro" },
-        { Campo: "correo", Obligatorio: "No", Descripcion: "Se genera automáticamente con identificación + dominio institucional" },
-        { Campo: "telefono", Obligatorio: "No", Descripcion: "Teléfono del estudiante" },
-        { Campo: "tipoEstudianteId", Obligatorio: "No", Descripcion: "Id del tipo de estudiante configurado en Académico" },
+        { Campo: "correo", Obligatorio: "No", Descripcion: "Se genera automaticamente con Identificacion + dominio institucional" },
+        { Campo: "telefono", Obligatorio: "No", Descripcion: "Teléfono del estudiante. Si no inicia con + se antepone +506 automáticamente" },
+        { Campo: "tipoEstudianteId", Obligatorio: "No", Descripcion: "Id del tipo de estudiante configurado en Academico" },
         { Campo: "nacionalidad", Obligatorio: "No", Descripcion: "Nacionalidad" },
-        { Campo: "adecuacion", Obligatorio: "No", Descripcion: "Adecuación" },
+        { Campo: "adecuacion", Obligatorio: "No", Descripcion: "Adecuacion" },
         { Campo: "discapacidad", Obligatorio: "No", Descripcion: "Discapacidad" },
         { Campo: "enfermedad", Obligatorio: "No", Descripcion: "Enfermedad" },
-        { Campo: "rutaTransporteId", Obligatorio: "No", Descripcion: "Id de la ruta de transporte configurada en Académico" },
+        { Campo: "rutaTransporteId", Obligatorio: "No", Descripcion: "Id de la ruta de transporte configurada en Academico" },
         {
           Campo: "rutaTransporteHabitual",
           Obligatorio: "No",
           Descripcion: "Nombre o referencia de ruta de transporte"
         },
-        { Campo: "autorizaWhatsAppEncargado", Obligatorio: "No", Descripcion: "Sí o No. Indica si padre, madre o encargado autoriza recibir información por WhatsApp" },
+        { Campo: "autorizaWhatsAppEncargado", Obligatorio: "No", Descripcion: "Si o No. Indica si padre, madre o encargado autoriza recibir informacion por WhatsApp" },
         {
           Campo: "observacionMedica",
           Obligatorio: "No",
-          Descripcion: "Observación médica"
+          Descripcion: "Observacion medica"
         },
         {
           Campo: "madre_nombre",
@@ -1251,7 +1339,7 @@ router.get(
         {
           Campo: "madre_identificacion",
           Obligatorio: "No",
-          Descripcion: "Identificación de la madre"
+          Descripcion: "Identificacion de la madre"
         },
         {
           Campo: "madre_correo",
@@ -1261,27 +1349,27 @@ router.get(
         {
           Campo: "madre_telefono",
           Obligatorio: "No",
-          Descripcion: "Teléfono de la madre"
+          Descripcion: "Teléfono de la madre. Si no inicia con + se antepone +506 automáticamente"
         },
         {
           Campo: "madre_direccionExacta",
           Obligatorio: "No",
-          Descripcion: "Dirección exacta de la madre"
+          Descripcion: "Direccion exacta de la madre"
         },
         {
           Campo: "madre_viveConEstudiante",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "madre_esPrincipal",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "madre_recibeNotificaciones",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "padre_nombre",
@@ -1301,7 +1389,7 @@ router.get(
         {
           Campo: "padre_identificacion",
           Obligatorio: "No",
-          Descripcion: "Identificación del padre"
+          Descripcion: "Identificacion del padre"
         },
         {
           Campo: "padre_correo",
@@ -1311,27 +1399,27 @@ router.get(
         {
           Campo: "padre_telefono",
           Obligatorio: "No",
-          Descripcion: "Teléfono del padre"
+          Descripcion: "Teléfono del padre. Si no inicia con + se antepone +506 automáticamente"
         },
         {
           Campo: "padre_direccionExacta",
           Obligatorio: "No",
-          Descripcion: "Dirección exacta del padre"
+          Descripcion: "Direccion exacta del padre"
         },
         {
           Campo: "padre_viveConEstudiante",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "padre_esPrincipal",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "padre_recibeNotificaciones",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "encargado_nombre",
@@ -1351,7 +1439,7 @@ router.get(
         {
           Campo: "encargado_identificacion",
           Obligatorio: "No",
-          Descripcion: "Identificación del encargado"
+          Descripcion: "Identificacion del encargado"
         },
         {
           Campo: "encargado_correo",
@@ -1361,32 +1449,32 @@ router.get(
         {
           Campo: "encargado_telefono",
           Obligatorio: "No",
-          Descripcion: "Teléfono del encargado"
+          Descripcion: "Teléfono del encargado. Si no inicia con + se antepone +506 automáticamente"
         },
         {
           Campo: "encargado_direccionExacta",
           Obligatorio: "No",
-          Descripcion: "Dirección exacta del encargado"
+          Descripcion: "Direccion exacta del encargado"
         },
         {
           Campo: "encargado_parentesco",
           Obligatorio: "No",
-          Descripcion: "Ejemplo: Tía, abuelo, tutor"
+          Descripcion: "Ejemplo: Tia, abuelo, tutor"
         },
         {
           Campo: "encargado_viveConEstudiante",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "encargado_esPrincipal",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         },
         {
           Campo: "encargado_recibeNotificaciones",
           Obligatorio: "No",
-          Descripcion: "Sí o No"
+          Descripcion: "Si o No"
         }
       ];
 
@@ -1394,7 +1482,7 @@ router.get(
         {
           identificacion: "123456789",
           nombre: "Ana",
-          primerApellido: "Pérez",
+          primerApellido: "PÃ©rez",
           segundoApellido: "Rojas",
           fechaNacimiento: "2012-03-15",
           sexo: "Femenino",
@@ -1406,18 +1494,18 @@ router.get(
           enfermedad: "",
           rutaTransporteId: "",
           rutaTransporteHabitual: "Ruta 1",
-          autorizaWhatsAppEncargado: "Sí",
+          autorizaWhatsAppEncargado: "Si",
           observacionMedica: "",
           madre_nombre: "Laura",
-          madre_primerApellido: "Pérez",
+          madre_primerApellido: "PÃ©rez",
           madre_segundoApellido: "Solano",
           madre_identificacion: "111111111",
           madre_correo: "laura@email.com",
           madre_telefono: "70000000",
           madre_direccionExacta: "San Vito",
-          madre_viveConEstudiante: "Sí",
-          madre_esPrincipal: "Sí",
-          madre_recibeNotificaciones: "Sí",
+          madre_viveConEstudiante: "Si",
+          madre_esPrincipal: "Si",
+          madre_recibeNotificaciones: "Si",
           padre_nombre: "Carlos",
           padre_primerApellido: "Rojas",
           padre_segundoApellido: "Vega",
@@ -1427,7 +1515,7 @@ router.get(
           padre_direccionExacta: "San Vito",
           padre_viveConEstudiante: "No",
           padre_esPrincipal: "No",
-          padre_recibeNotificaciones: "Sí",
+          padre_recibeNotificaciones: "Si",
           encargado_nombre: "",
           encargado_primerApellido: "",
           encargado_segundoApellido: "",
@@ -1438,7 +1526,7 @@ router.get(
           encargado_parentesco: "",
           encargado_viveConEstudiante: "No",
           encargado_esPrincipal: "No",
-          encargado_recibeNotificaciones: "Sí"
+          encargado_recibeNotificaciones: "Si"
         }
       ];
 
@@ -1477,7 +1565,7 @@ router.post(
   async (req, res) => {
     try {
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+        return badRequest(res, "El usuario no tiene instituciÃƒÂ³n asignada");
       }
 
       const rows = parseImportRowsFromFile(req.file);
@@ -1493,20 +1581,20 @@ router.post(
           institucionId: req.auth!.institucionId!,
           job
         }).catch((error) => {
-          console.error("Error procesando importaciÃ³n de estudiantes:", error);
+          console.error("Error procesando importaciÃƒÂ³n de estudiantes:", error);
           job.status = "ERROR";
           job.error = error?.message || "No se pudo procesar el archivo Excel";
           job.updatedAt = Date.now();
         });
       });
 
-      return ok(res, serializeImportJob(job), "ImportaciÃ³n iniciada");
+      return ok(res, serializeImportJob(job), "ImportaciÃƒÂ³n iniciada");
     } catch (error: any) {
       if (error?.status === 400) return badRequest(res, error.message);
-      console.error("Error iniciando importaciÃ³n de estudiantes:", error);
+      console.error("Error iniciando importaciÃƒÂ³n de estudiantes:", error);
       return res.status(500).json({
         ok: false,
-        message: "No se pudo iniciar la importaciÃ³n"
+        message: "No se pudo iniciar la importaciÃƒÂ³n"
       });
     }
   }
@@ -1514,36 +1602,6 @@ router.post(
 
 router.get(
   "/importar-excel/progreso/:jobId",
-  requireRoles(...STUDENT_IMPORT_ROLES),
-  async (req, res) => {
-    try {
-      if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
-      }
-
-      cleanupImportJobs();
-      const job = importJobs.get(String(req.params.jobId || ""));
-
-      if (!job || job.institucionId !== req.auth.institucionId) {
-        return res.status(404).json({
-          ok: false,
-          message: "No se encontrÃ³ la importaciÃ³n solicitada"
-        });
-      }
-
-      return ok(res, serializeImportJob(job));
-    } catch (error) {
-      console.error("Error consultando progreso de importaciÃ³n:", error);
-      return res.status(500).json({
-        ok: false,
-        message: "No se pudo consultar el progreso de la importaciÃ³n"
-      });
-    }
-  }
-);
-
-router.get(
-  "/importar-excel/resumen/:jobId/excel",
   requireRoles(...STUDENT_IMPORT_ROLES),
   async (req, res) => {
     try {
@@ -1558,6 +1616,36 @@ router.get(
         return res.status(404).json({
           ok: false,
           message: "No se encontrÃƒÂ³ la importaciÃƒÂ³n solicitada"
+        });
+      }
+
+      return ok(res, serializeImportJob(job));
+    } catch (error) {
+      console.error("Error consultando progreso de importaciÃƒÂ³n:", error);
+      return res.status(500).json({
+        ok: false,
+        message: "No se pudo consultar el progreso de la importaciÃƒÂ³n"
+      });
+    }
+  }
+);
+
+router.get(
+  "/importar-excel/resumen/:jobId/excel",
+  requireRoles(...STUDENT_IMPORT_ROLES),
+  async (req, res) => {
+    try {
+      if (!req.auth?.institucionId) {
+        return badRequest(res, "El usuario no tiene instituciÃƒÆ’Ã‚Â³n asignada");
+      }
+
+      cleanupImportJobs();
+      const job = importJobs.get(String(req.params.jobId || ""));
+
+      if (!job || job.institucionId !== req.auth.institucionId) {
+        return res.status(404).json({
+          ok: false,
+          message: "No se encontrÃƒÆ’Ã‚Â³ la importaciÃƒÆ’Ã‚Â³n solicitada"
         });
       }
 
@@ -1586,10 +1674,10 @@ router.get(
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.send(buffer);
     } catch (error) {
-      console.error("Error exportando resumen de importaciÃƒÂ³n:", error);
+      console.error("Error exportando resumen de importaciÃƒÆ’Ã‚Â³n:", error);
       return res.status(500).json({
         ok: false,
-        message: "No se pudo exportar el resumen de importaciÃƒÂ³n"
+        message: "No se pudo exportar el resumen de importaciÃƒÆ’Ã‚Â³n"
       });
     }
   }
@@ -1602,11 +1690,11 @@ router.post(
   async (req, res) => {
     try {
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene institución asignada");
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
       }
 
       if (!req.file?.buffer) {
-        return badRequest(res, "Debés adjuntar un archivo Excel");
+        return badRequest(res, "DebÃ©s adjuntar un archivo Excel");
       }
 
       const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -1639,13 +1727,16 @@ router.post(
 
         const identificacion = toNullableString(row.identificacion);
         const nombre = toNullableString(row.nombre);
+        const primerApellido = toNullableString(row.primerApellido);
+        const segundoApellido = toNullableString(row.segundoApellido);
+        const fechaNacimiento = toExcelDate(row.fechaNacimiento);
 
-        if (!identificacion || !nombre) {
+        if (!identificacion || !nombre || !primerApellido || !segundoApellido || !fechaNacimiento) {
           resultados.push({
             fila,
             identificacion: identificacion || "",
             estado: "ERROR",
-            motivo: "Los campos obligatorios identificacion y nombre son requeridos"
+            motivo: "Completá los campos obligatorios: identificación, nombre, primer apellido, segundo apellido y fecha de nacimiento."
           });
           totalError++;
           continue;
@@ -1659,7 +1750,7 @@ router.post(
             primerApellido: toNullableString(row.madre_primerApellido),
             segundoApellido: toNullableString(row.madre_segundoApellido),
             correo: toNullableString(row.madre_correo),
-            telefono: toNullableString(row.madre_telefono),
+            telefono: normalizePhoneWithDefaultCountryCode(row.madre_telefono),
             direccionExacta: toNullableString(row.madre_direccionExacta),
             parentesco: "Madre",
             viveConEstudiante: toBoolean(row.madre_viveConEstudiante),
@@ -1673,7 +1764,7 @@ router.post(
             primerApellido: toNullableString(row.padre_primerApellido),
             segundoApellido: toNullableString(row.padre_segundoApellido),
             correo: toNullableString(row.padre_correo),
-            telefono: toNullableString(row.padre_telefono),
+            telefono: normalizePhoneWithDefaultCountryCode(row.padre_telefono),
             direccionExacta: toNullableString(row.padre_direccionExacta),
             parentesco: "Padre",
             viveConEstudiante: toBoolean(row.padre_viveConEstudiante),
@@ -1687,7 +1778,7 @@ router.post(
             primerApellido: toNullableString(row.encargado_primerApellido),
             segundoApellido: toNullableString(row.encargado_segundoApellido),
             correo: toNullableString(row.encargado_correo),
-            telefono: toNullableString(row.encargado_telefono),
+            telefono: normalizePhoneWithDefaultCountryCode(row.encargado_telefono),
             direccionExacta: toNullableString(row.encargado_direccionExacta),
             parentesco: toNullableString(row.encargado_parentesco) || "Encargado",
             viveConEstudiante: toBoolean(row.encargado_viveConEstudiante),
@@ -1704,7 +1795,7 @@ router.post(
           fechaNacimiento: toExcelDate(row.fechaNacimiento),
           sexo: toNullableString(row.sexo),
           correo: toNullableString(row.correo),
-          telefono: toNullableString(row.telefono),
+          telefono: normalizePhoneWithDefaultCountryCode(row.telefono),
           fotoUrl: null,
           nacionalidad: toNullableString(row.nacionalidad),
           adecuacion: toNullableString(row.adecuacion),
@@ -1753,7 +1844,7 @@ router.post(
         totalOk,
         totalError,
         resultados
-      }, "Importación procesada");
+      }, "ImportaciÃ³n procesada");
     } catch (error) {
       console.error("Error importando estudiantes desde Excel:", error);
       return res.status(500).json({
@@ -1769,11 +1860,11 @@ router.get("/:id/detalle", async (req, res) => {
     const id = Number(req.params.id);
 
     if (!id) {
-      return badRequest(res, "Id inválido");
+      return badRequest(res, "Id invÃ¡lido");
     }
 
     if (!req.auth?.institucionId) {
-      return badRequest(res, "El usuario no tiene institución asignada");
+      return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
     }
 
     const pool = await getPool();
@@ -1878,11 +1969,11 @@ router.get("/:id/carnet", async (req, res) => {
     const id = Number(req.params.id);
 
     if (!id) {
-      return badRequest(res, "Id inválido");
+      return badRequest(res, "Id invÃ¡lido");
     }
 
     if (!req.auth?.institucionId) {
-      return badRequest(res, "El usuario no tiene institución asignada");
+      return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
     }
 
     const pool = await getPool();
@@ -1990,13 +2081,14 @@ router.post(
         encargados = []
       } = req.body;
 
-      if (!identificacion || !nombre) {
-        return badRequest(res, "identificacion y nombre son obligatorios");
+      if (!identificacion || !nombre || !primerApellido || !segundoApellido || !fechaNacimiento) {
+        return badRequest(res, "Completá los campos obligatorios: identificación, nombre, primer apellido, segundo apellido y fecha de nacimiento.");
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene institución asignada");
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
       }
+      const telefonoNormalizado = normalizePhoneWithDefaultCountryCode(telefono);
 
       await transaction.begin();
 
@@ -2010,7 +2102,7 @@ router.post(
           segundoApellido,
           fechaNacimiento,
           correo,
-          telefono,
+          telefono: telefonoNormalizado,
           tipoEstudianteId,
           rutaTransporteId,
           autorizaWhatsAppEncargado,
@@ -2053,7 +2145,7 @@ router.post(
           ok: false,
           code: "ESTUDIANTE_DUPLICADO",
           message:
-            "Ya existe un estudiante con esa identificación en esta institución"
+            "Ya existe un estudiante con esa Identificacion en esta instituciÃ³n"
         });
       }
 
@@ -2097,15 +2189,15 @@ router.put(
       } = req.body;
 
       if (!id) {
-        return badRequest(res, "Id inválido");
+        return badRequest(res, "Id invÃ¡lido");
       }
 
-      if (!identificacion || !nombre) {
-        return badRequest(res, "identificacion y nombre son obligatorios");
+      if (!identificacion || !nombre || !primerApellido || !segundoApellido || !fechaNacimiento) {
+        return badRequest(res, "Completá los campos obligatorios: identificación, nombre, primer apellido, segundo apellido y fecha de nacimiento.");
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene institución asignada");
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
       }
 
       await transaction.begin();
@@ -2129,7 +2221,7 @@ router.put(
           ok: false,
           code: "ESTUDIANTE_DUPLICADO",
           message:
-            "Ya existe otro estudiante con esa identificación en esta institución"
+            "Ya existe otro estudiante con esa Identificacion en esta instituciÃ³n"
         });
       }
 
@@ -2155,6 +2247,7 @@ router.put(
         canManualInstitutionalUserCorreo && correoManualNormalizado
           ? correoManualNormalizado
           : correoGenerado;
+      const telefonoNormalizado = normalizePhoneWithDefaultCountryCode(telefono);
 
       const currentStudent = await transaction
         .request()
@@ -2172,7 +2265,7 @@ router.put(
         .input("segundoApellido", sql.NVarChar, segundoApellido || null)
         .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
         .input("correo", sql.NVarChar, correoFinal)
-                .input("telefono", sql.NVarChar, telefono || null)
+        .input("telefono", sql.NVarChar, telefonoNormalizado || null)
         .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
         .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
         .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
@@ -2265,7 +2358,7 @@ router.put(
           ok: false,
           code: "ESTUDIANTE_DUPLICADO",
           message:
-            "Ya existe otro estudiante con esa identificación en esta institución"
+            "Ya existe otro estudiante con esa Identificacion en esta instituciÃ³n"
         });
       }
 
@@ -2285,11 +2378,11 @@ router.delete(
       const id = Number(req.params.id);
 
       if (!id) {
-        return badRequest(res, "Id inválido");
+        return badRequest(res, "Id invÃ¡lido");
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene institución asignada");
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
       }
 
       const pool = await getPool();
@@ -2336,11 +2429,11 @@ router.patch(
       const id = Number(req.params.id);
 
       if (!id) {
-        return badRequest(res, "Id inválido");
+        return badRequest(res, "Id invÃ¡lido");
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene institución asignada");
+        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
       }
 
       const pool = await getPool();
@@ -2381,3 +2474,5 @@ router.patch(
 );
 
 export default router;
+
+

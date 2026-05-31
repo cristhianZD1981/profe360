@@ -390,6 +390,32 @@ router.get("/gestion-profe", async (req, res) => {
     return ok(res, result.recordset);
   }
 
+  if (tipo === "BITACORA") {
+    const result = await request.query(`
+      SELECT
+        b.BitacoraGrupoId,
+        b.FechaRegistro,
+        g.GrupoId,
+        g.Nombre AS GrupoNombre,
+        m.MateriaId,
+        m.Nombre AS MateriaNombre,
+        b.TemasDesarrollados,
+        b.Observaciones,
+        b.HechosRelevantes,
+        ISNULL(CONCAT(u.Nombre, ' ', u.PrimerApellido, ' ', ISNULL(u.SegundoApellido, '')), '') AS Usuario
+      FROM dbo.BitacoraGrupo b
+      INNER JOIN dbo.Grupo g ON g.GrupoId = b.GrupoId
+      LEFT JOIN dbo.Materia m ON m.MateriaId = b.MateriaId
+      LEFT JOIN dbo.Usuario u ON u.UsuarioId = b.UsuarioId
+      WHERE b.InstitucionId = @institucionId
+        AND (@grupoId IS NULL OR b.GrupoId = @grupoId)
+        AND (@desde IS NULL OR b.FechaRegistro >= @desde)
+        AND (@hasta IS NULL OR b.FechaRegistro <= @hasta)
+      ORDER BY b.FechaRegistro DESC, b.BitacoraGrupoId DESC
+    `);
+    return ok(res, result.recordset);
+  }
+
   if (tipo === "NOTAS") {
     const result = await request.query(`
       SELECT
@@ -413,6 +439,75 @@ router.get("/gestion-profe", async (req, res) => {
         AND (@hasta IS NULL OR ea.Fecha <= @hasta)
       GROUP BY g.GrupoId, g.Nombre, e.EstudianteId, e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido
       ORDER BY g.Nombre, e.PrimerApellido, e.SegundoApellido, e.Nombre
+    `);
+    return ok(res, result.recordset);
+  }
+
+  if (tipo === "AUDITORIA_CAMBIOS") {
+    const result = await request.query(`
+      SELECT
+        CAST('AJUSTE_RUBRO' AS NVARCHAR(40)) AS TipoCambio,
+        cam.CreatedAt AS FechaCambio,
+        g.GrupoId,
+        g.Nombre AS GrupoNombre,
+        m.MateriaId,
+        m.Nombre AS MateriaNombre,
+        e.EstudianteId,
+        e.Identificacion,
+        e.Nombre,
+        e.PrimerApellido,
+        e.SegundoApellido,
+        d.Nombre AS RubroNombre,
+        CAST(cam.PorcentajeAnterior AS DECIMAL(10,2)) AS ValorAnterior,
+        CAST(cam.PorcentajeNuevo AS DECIMAL(10,2)) AS ValorNuevo,
+        cam.Justificacion,
+        ISNULL(CONCAT(u.Nombre, ' ', u.PrimerApellido, ' ', ISNULL(u.SegundoApellido, '')), '') AS Usuario
+      FROM dbo.Eval360_ComponenteAjusteManualAuditoria cam
+      INNER JOIN dbo.Eval360_EstructuraGrupo eg ON eg.EstructuraGrupoId = cam.EstructuraGrupoId
+      INNER JOIN dbo.Eval360_EstructuraGrupoDetalle d ON d.EstructuraGrupoDetalleId = cam.EstructuraGrupoDetalleId
+      INNER JOIN dbo.Grupo g ON g.GrupoId = eg.GrupoId
+      LEFT JOIN dbo.Materia m ON m.MateriaId = eg.MateriaId
+      INNER JOIN dbo.Estudiante e ON e.EstudianteId = cam.EstudianteId
+      LEFT JOIN dbo.Usuario u ON u.UsuarioId = cam.UsuarioId
+      WHERE eg.InstitucionId = @institucionId
+        AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
+        AND (@estudianteId IS NULL OR e.EstudianteId = @estudianteId)
+        AND (@desde IS NULL OR CONVERT(date, cam.CreatedAt) >= @desde)
+        AND (@hasta IS NULL OR CONVERT(date, cam.CreatedAt) <= @hasta)
+
+      UNION ALL
+
+      SELECT
+        CAST('EDICION_ACTIVIDAD' AS NVARCHAR(40)) AS TipoCambio,
+        nea.CreatedAt AS FechaCambio,
+        g.GrupoId,
+        g.Nombre AS GrupoNombre,
+        m.MateriaId,
+        m.Nombre AS MateriaNombre,
+        e.EstudianteId,
+        e.Identificacion,
+        e.Nombre,
+        e.PrimerApellido,
+        e.SegundoApellido,
+        a.Nombre AS RubroNombre,
+        CAST(nea.PorcentajeAnterior AS DECIMAL(10,2)) AS ValorAnterior,
+        CAST(nea.PorcentajeNuevo AS DECIMAL(10,2)) AS ValorNuevo,
+        nea.Justificacion,
+        ISNULL(CONCAT(u.Nombre, ' ', u.PrimerApellido, ' ', ISNULL(u.SegundoApellido, '')), '') AS Usuario
+      FROM dbo.Eval360_NotaEdicionAuditoria nea
+      INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = nea.ActividadId
+      INNER JOIN dbo.Eval360_EstructuraGrupo eg ON eg.EstructuraGrupoId = a.EstructuraGrupoId
+      INNER JOIN dbo.Grupo g ON g.GrupoId = eg.GrupoId
+      LEFT JOIN dbo.Materia m ON m.MateriaId = eg.MateriaId
+      INNER JOIN dbo.Estudiante e ON e.EstudianteId = nea.EstudianteId
+      LEFT JOIN dbo.Usuario u ON u.UsuarioId = nea.UsuarioId
+      WHERE eg.InstitucionId = @institucionId
+        AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
+        AND (@estudianteId IS NULL OR e.EstudianteId = @estudianteId)
+        AND (@desde IS NULL OR CONVERT(date, nea.CreatedAt) >= @desde)
+        AND (@hasta IS NULL OR CONVERT(date, nea.CreatedAt) <= @hasta)
+
+      ORDER BY FechaCambio DESC
     `);
     return ok(res, result.recordset);
   }

@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 
-type TipoReporte = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS";
+type TipoReporte = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BITACORA" | "BOLETAS" | "NOTAS" | "AUDITORIA_CAMBIOS";
 
 function descargarBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
@@ -172,6 +172,8 @@ export default function ReportesPage() {
               <option value="TAREAS">Reporte de Tareas</option>
               <option value="EXAMENES">Reporte de Examenes</option>
               <option value="MENSAJES">Reporte de mensajes enviados</option>
+              <option value="BITACORA">Reporte de Bitacora</option>
+              <option value="AUDITORIA_CAMBIOS">Auditoría de cambios de calificación</option>
               <option value="BOLETAS">Reporte de Boletas</option>
               <option value="NOTAS">Reporte de Notas</option>
             </select>

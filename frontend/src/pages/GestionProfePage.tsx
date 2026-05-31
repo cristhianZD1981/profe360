@@ -9,6 +9,7 @@ import {
   type AsistenciaNotificacionEstado,
   type AsistenciaRegistro,
   type AuditoriaEnvioFila,
+  type BitacoraGestion,
   type BoletaConductaReporte,
   type Componente,
   type DetalleGrupo,
@@ -201,6 +202,17 @@ export default function GestionProfePage() {
   const [boletasConductaReporte, setBoletasConductaReporte] = useState<BoletaConductaReporte[]>([]);
   const [loadingBoletasReporte, setLoadingBoletasReporte] = useState(false);
   const [loadingAuditoriaEnvios, setLoadingAuditoriaEnvios] = useState(false);
+  const [bitacorasGrupo, setBitacorasGrupo] = useState<BitacoraGestion[]>([]);
+  const [loadingBitacora, setLoadingBitacora] = useState(false);
+  const [savingBitacora, setSavingBitacora] = useState(false);
+  const [bitacoraForm, setBitacoraForm] = useState({
+    temasDesarrollados: "",
+    observaciones: "",
+    hechosRelevantes: ""
+  });
+  const asistenciaInFlightKeyRef = useRef<string>("");
+  const auditoriaInFlightKeyRef = useRef<string>("");
+  const bitacoraInFlightKeyRef = useRef<string>("");
   const [seguimientoTipo, setSeguimientoTipo] = useState<string>("");
   const [seguimientoPlaneamientoId, setSeguimientoPlaneamientoId] = useState<string>("");
   const [seguimientoEstadoFiltro, setSeguimientoEstadoFiltro] = useState<string>("NO_CALIFICADO");
@@ -269,6 +281,8 @@ export default function GestionProfePage() {
   const [seguimientoActividadInformarDrafts, setSeguimientoActividadInformarDrafts] = useState<SeguimientoActividadInformarDrafts>({});
   const [seguimientoActividadPuntosMaximosDrafts, setSeguimientoActividadPuntosMaximosDrafts] = useState<SeguimientoActividadPuntosMaximosDrafts>({});
   const [notasDetalleAbierto, setNotasDetalleAbierto] = useState<string>("");
+  const [notaPorcentajeDrafts, setNotaPorcentajeDrafts] = useState<Record<string, string>>({});
+  const [savingNotaPorcentajeKey, setSavingNotaPorcentajeKey] = useState<string>("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const initialLoadStartedRef = useRef(false);
@@ -697,6 +711,16 @@ export default function GestionProfePage() {
     const indicadores = seguimientoContexto?.indicadores || [];
     const actividadIndicadores = seguimientoContexto?.actividadIndicadores || [];
     const asistencia = seguimientoContexto?.asistenciaRegistros || [];
+    const ajustesManuales = seguimientoContexto?.componenteAjustesManuales || [];
+    const ajustesMap = new Map<string, number>();
+    for (const item of ajustesManuales) {
+      const estudianteId = Number(item?.EstudianteId || 0);
+      const detalleId = Number(item?.EstructuraGrupoDetalleId || 0);
+      const porcentaje = Number(item?.PorcentajeObtenidoComponente);
+      if (estudianteId > 0 && detalleId > 0 && Number.isFinite(porcentaje)) {
+        ajustesMap.set(`${estudianteId}-${detalleId}`, porcentaje);
+      }
+    }
 
     function promedioNumeros(valores: number[]) {
       if (!valores.length) return 0;
@@ -727,10 +751,11 @@ export default function GestionProfePage() {
       let nota = 0;
       let porcentajeEvaluado = 0;
       let porcentajeGanado = 0;
+      let porcentajeGanadoOriginal = 0;
       let evaluados = 0;
       let pendientes = 0;
       let resumen = "Sin registros";
-      let detallesLista: Array<{ key: string; titulo: string; subtitulo: string; nota: number; porcentaje: number; estado?: string }> = [];
+      let detallesLista: Array<{ key: string; titulo: string; subtitulo: string; nota: number; porcentaje: number; estado?: string; correoEnviado?: boolean; waEnviado?: boolean }> = [];
 
       if (tipoKey.includes("ASIST")) {
         const registros = asistencia.filter((item) => Number(item.EstudianteId) === Number(estudiante.EstudianteId));
@@ -746,21 +771,28 @@ export default function GestionProfePage() {
         resumen = totalLecciones
           ? `${totalLecciones} lecciones registradas / ${ausencias.toFixed(2)} ausencias equivalentes / ${porcentajeAusencias.toFixed(2)}% ausencias`
           : "Sin asistencia registrada";
-        detallesLista = registros.map((registro) => ({
-          key: `asis-${registro.AsistenciaRegistroId}`,
-          titulo: `${registro.BloqueNombre || "Lección"} ${registro.HoraInicio || ""}-${registro.HoraFin || ""}`.trim(),
-          subtitulo: (() => {
-            const fecha = new Date(String(registro.Fecha || ""));
-            if (!Number.isFinite(fecha.getTime())) return String(registro.Fecha || "");
-            const dd = String(fecha.getDate()).padStart(2, "0");
-            const mm = String(fecha.getMonth() + 1).padStart(2, "0");
-            const yyyy = String(fecha.getFullYear());
-            return `${dd}-${mm}-${yyyy}`;
-          })(),
-          nota: ausenciaEquivalente(registro.Estado) > 0 ? 0 : 100,
-          porcentaje: 0,
-          estado: registro.Estado || "Presente"
-        }));
+        detallesLista = registros.map((registro) => {
+          const notif = asistenciaNotificaciones[
+            asistenciaDraftKey(Number(estudiante.EstudianteId), Number(registro.HorarioGrupoId || 0))
+          ] || {};
+          return {
+            key: `asis-${registro.AsistenciaRegistroId}`,
+            titulo: `${registro.BloqueNombre || "Lección"} ${registro.HoraInicio || ""}-${registro.HoraFin || ""}`.trim(),
+            subtitulo: (() => {
+              const fecha = new Date(String(registro.Fecha || ""));
+              if (!Number.isFinite(fecha.getTime())) return String(registro.Fecha || "");
+              const dd = String(fecha.getDate()).padStart(2, "0");
+              const mm = String(fecha.getMonth() + 1).padStart(2, "0");
+              const yyyy = String(fecha.getFullYear());
+              return `${dd}-${mm}-${yyyy}`;
+            })(),
+            nota: ausenciaEquivalente(registro.Estado) > 0 ? 0 : 100,
+            porcentaje: 0,
+            estado: registro.Estado || "Presente",
+            correoEnviado: Boolean((registro as any)?.CorreoEnviado || (registro as any)?.NotificacionCorreoEnviado || notif?.correoEnviado),
+            waEnviado: Boolean((registro as any)?.WaEnviado || (registro as any)?.WhatsappEnviado || (registro as any)?.NotificacionWaEnviado || notif?.waEnviado)
+          };
+        });
         if (!detallesLista.length) {
           detallesLista.push({
             key: `asis-vacio-${estudiante.EstudianteId}`,
@@ -782,6 +814,10 @@ export default function GestionProfePage() {
             Number(item.ActividadId) === Number(actividad.ActividadId)
             && indicadorIds.has(Number(item.IndicadorGrupoId))
           );
+          const notaActividadRegistro = notas.find((n) =>
+            Number((n as any).ActividadId) === Number(actividad.ActividadId)
+            && Number((n as any).EstudianteId) === Number(estudiante.EstudianteId)
+          );
           const indicadoresAsignados = actividadIndicadores
             .filter((item) =>
               Number(item.ActividadId) === Number(actividad.ActividadId)
@@ -796,7 +832,13 @@ export default function GestionProfePage() {
           const maximo = totalAsignados * 3;
           const notaActividad = maximo ? (puntos / maximo) * 100 : 0;
           const pesoActividad = Number(actividad.PorcentajeDentroRubro || 0) > 0 ? Number(actividad.PorcentajeDentroRubro || 0) / 100 : (actividadesDetalle.length ? 1 / actividadesDetalle.length : 0);
-          return { actividad, registrosActividad, indicadoresEvaluados, totalAsignados, notaActividad, pesoActividad };
+          const correoEnviadoSeguimiento = registrosActividad.some((item: any) => Boolean(item?.CorreoEnviado || item?.NotificacionCorreoEnviado));
+          const waEnviadoSeguimiento = registrosActividad.some((item: any) => Boolean(item?.WaEnviado || item?.WhatsappEnviado || item?.NotificacionWaEnviado));
+          const correoEnviadoNota = Boolean((notaActividadRegistro as any)?.CorreoEnviado || (notaActividadRegistro as any)?.NotificacionCorreoEnviado);
+          const waEnviadoNota = Boolean((notaActividadRegistro as any)?.WaEnviado || (notaActividadRegistro as any)?.WhatsappEnviado || (notaActividadRegistro as any)?.NotificacionWaEnviado);
+          const correoEnviado = correoEnviadoSeguimiento || correoEnviadoNota;
+          const waEnviado = waEnviadoSeguimiento || waEnviadoNota;
+          return { actividad, registrosActividad, indicadoresEvaluados, totalAsignados, notaActividad, pesoActividad, correoEnviado, waEnviado };
         });
         porcentajeGanado = actividadesResumen.reduce((acc, item) => acc + ((item.notaActividad / 100) * porcentajeComponente * item.pesoActividad), 0);
         nota = porcentajeComponente ? (porcentajeGanado / porcentajeComponente) * 100 : 0;
@@ -820,7 +862,9 @@ export default function GestionProfePage() {
           subtitulo: `${item.indicadoresEvaluados}/${item.totalAsignados} indicadores evaluados`,
           nota: item.notaActividad,
           porcentaje: (item.notaActividad / 100) * porcentajeComponente * item.pesoActividad,
-          estado: item.indicadoresEvaluados ? "Calificada" : "Pendiente"
+          estado: item.indicadoresEvaluados ? "Calificada" : "Pendiente",
+          correoEnviado: Boolean((item as any).correoEnviado),
+          waEnviado: Boolean((item as any).waEnviado)
         }));
         if (!detallesLista.length) {
           detallesLista = indicadoresTipo.map((indicador) => {
@@ -832,7 +876,9 @@ export default function GestionProfePage() {
             subtitulo: indicador.PlaneamientoNombre || "Planeamiento",
             nota: valor ? (valor / 3) * 100 : 0,
             porcentaje: indicadoresTipo.length ? ((valor / 3) * porcentajeComponente) / indicadoresTipo.length : 0,
-            estado: registro?.NivelNombre || (valor === 0 && registro ? "Ausente / No entregado" : "Pendiente")
+            estado: registro?.NivelNombre || (valor === 0 && registro ? "Ausente / No entregado" : "Pendiente"),
+            correoEnviado: Boolean((registro as any)?.CorreoEnviado || (registro as any)?.NotificacionCorreoEnviado),
+            waEnviado: Boolean((registro as any)?.WaEnviado || (registro as any)?.WhatsappEnviado || (registro as any)?.NotificacionWaEnviado)
           };
         });
         }
@@ -877,6 +923,10 @@ export default function GestionProfePage() {
         resumen = `${evaluados}/${actividadesDetalle.length} actividades calificadas`;
         detallesLista = notasPorActividad.map((item) => ({
           key: `act-${item.actividad.ActividadId}`,
+          actividadId: Number(item.actividad.ActividadId),
+          notaActividadId: Number(item.notaItem?.NotaActividadId || 0),
+          fueEditado: Number(item.notaItem?.FueEditado || 0) === 1,
+          porcentajeObtenido: Number(item.notaItem?.PorcentajeObtenido ?? item.notaCalculada ?? 0),
           titulo: item.actividad.Nombre || "Actividad",
           subtitulo: `Puntos: ${Number(item.notaItem?.PuntosObtenidos || 0).toFixed(2)} / ${Number(item.notaItem?.PuntosMaximos || item.actividad.PuntosMaximos || 0).toFixed(2)}`,
           nota: item.tieneRegistroCalificado ? item.notaCalculada : 0,
@@ -887,8 +937,20 @@ export default function GestionProfePage() {
               : pesoDefault;
             return (item.notaCalculada / 100) * peActividad;
           })(),
-          estado: item.tieneRegistroCalificado ? "Calificada" : "Pendiente"
+          estado: item.tieneRegistroCalificado ? "Calificada" : "Pendiente",
+          correoEnviado: Boolean((item.notaItem as any)?.CorreoEnviado || (item.notaItem as any)?.NotificacionCorreoEnviado),
+          waEnviado: Boolean((item.notaItem as any)?.WaEnviado || (item.notaItem as any)?.WhatsappEnviado || (item.notaItem as any)?.NotificacionWaEnviado)
         }));
+      }
+
+      porcentajeGanadoOriginal = porcentajeGanado;
+      const ajusteManual = ajustesMap.get(`${Number(estudiante.EstudianteId)}-${detalleId}`);
+      const tieneAjusteManual = Number.isFinite(ajusteManual);
+      if (tieneAjusteManual) {
+        porcentajeGanado = Number(ajusteManual);
+        nota = porcentajeComponente > 0 ? Math.min(100, (porcentajeGanado / porcentajeComponente) * 100) : 0;
+        porcentajeEvaluado = porcentajeComponente;
+        resumen = `Ajuste manual aplicado en Registro de Notas (${formatPercent(porcentajeGanado)}).`;
       }
 
       return {
@@ -902,7 +964,10 @@ export default function GestionProfePage() {
         evaluados,
         pendientes,
         resumen,
-        detalles: detallesLista
+        detalles: detallesLista,
+        ajustadoManual: tieneAjusteManual,
+        porcentajeGanadoOriginal,
+        porcentajeGanadoAjustado: tieneAjusteManual ? porcentajeGanado : null
       };
     }
 
@@ -1205,6 +1270,352 @@ export default function GestionProfePage() {
     };
   }, [detalle?.estudiantes, seguimientoContexto?.actividades, seguimientoContexto?.detalles, seguimientoContexto?.notasActividades]);
 
+  const detalleReportesPorTipo = useMemo(() => {
+    const estudiantes = detalle?.estudiantes || [];
+    const actividades = seguimientoContexto?.actividades || [];
+    const notasActividades = seguimientoContexto?.notasActividades || [];
+    const seguimientos = seguimientoContexto?.seguimientos || [];
+    const actividadIndicadores = seguimientoContexto?.actividadIndicadores || [];
+    const indicadores = seguimientoContexto?.indicadores || [];
+    const detalles = seguimientoContexto?.detalles || [];
+    const detallePorId = new Map<number, SeguimientoEvaluacionDetalle>();
+    for (const item of detalles) detallePorId.set(Number(item.EstructuraGrupoDetalleId), item);
+
+    const filtrarActividades = (tipo: "COTIDIANO" | "TAREAS" | "EXAMENES") => {
+      return actividades.filter((actividad) => {
+        const detalleItem = detallePorId.get(Number(actividad.EstructuraGrupoDetalleId));
+        const tipoBase = normalizarSeguimientoKey(detalleItem?.TipoSeguimiento || detalleItem?.ComponenteCatalogoNombre || actividad.Fuente || "");
+        if (tipo === "COTIDIANO") return tipoBase.includes("COTIDIAN");
+        if (tipo === "TAREAS") return tipoBase.includes("TAREA");
+        return tipoBase.includes("EXAMEN") || tipoBase.includes("PRUEBA") || tipoBase.includes("TABLA") || tipoBase.includes("ESPECIFIC");
+      });
+    };
+
+    const construir = (tipo: "COTIDIANO" | "TAREAS" | "EXAMENES") => {
+      const esIndicadorTipo = (valor: string) => {
+        const key = normalizarSeguimientoKey(valor || "");
+        if (tipo === "COTIDIANO") return key.includes("COTIDIAN");
+        return key.includes("TAREA");
+      };
+
+      if (tipo === "COTIDIANO" || tipo === "TAREAS") {
+        const detalleIdsTipo = detalles
+          .filter((d) => normalizarSeguimientoKey(d?.TipoSeguimiento || d?.ComponenteCatalogoNombre || "").includes(tipo === "COTIDIANO" ? "COTIDIAN" : "TAREA"))
+          .map((d) => Number(d.EstructuraGrupoDetalleId || 0))
+          .filter((v) => v > 0);
+        const rubroValorTotal = Array.from(new Set(detalleIdsTipo)).reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
+        const actividadesTipo = actividades.filter((a) => detalleIdsTipo.includes(Number(a.EstructuraGrupoDetalleId || 0)));
+        const actividadIdsTipo = new Set(actividadesTipo.map((a) => Number(a.ActividadId)).filter((id) => id > 0));
+        const indicadorIdsAsignados = new Set(
+          actividadIndicadores
+            .filter((item) => actividadIdsTipo.has(Number(item.ActividadId)) && item.Activo !== false && item.Activo !== 0)
+            .map((item) => Number(item.IndicadorGrupoId))
+            .filter((id) => id > 0)
+        );
+        const indicadorIdsConSeguimiento = new Set(
+          seguimientos
+            .filter((s) => detalleIdsTipo.includes(Number(s.EstructuraGrupoDetalleId || 0)))
+            .map((s) => Number(s.IndicadorGrupoId))
+            .filter((id) => id > 0)
+        );
+        const indicadorIdsTipo = new Set<number>([...indicadorIdsAsignados, ...indicadorIdsConSeguimiento]);
+        const indicadorPorId = new Map<number, (typeof indicadores)[number]>();
+        for (const ind of indicadores) indicadorPorId.set(Number(ind.IndicadorGrupoId), ind);
+        const baseIdsOrdenados = indicadores
+          .filter((i) => esIndicadorTipo(String(i?.TipoUso || "")) && indicadorIdsTipo.has(Number(i.IndicadorGrupoId)))
+          .sort((a, b) => {
+            const aa = String(a.IndicadorBase || "");
+            const bb = String(b.IndicadorBase || "");
+            const ma = aa.match(/^(\d+)(?:\.(\d+))?/);
+            const mb = bb.match(/^(\d+)(?:\.(\d+))?/);
+            if (ma && mb) {
+              const a1 = Number(ma[1] || 0);
+              const b1 = Number(mb[1] || 0);
+              if (a1 !== b1) return a1 - b1;
+              const a2 = Number(ma[2] || 0);
+              const b2 = Number(mb[2] || 0);
+              if (a2 !== b2) return a2 - b2;
+            }
+            return aa.localeCompare(bb);
+          })
+          .map((i) => Number(i.IndicadorGrupoId));
+        const idsRestantes = Array.from(indicadorIdsTipo).filter((id) => !baseIdsOrdenados.includes(id)).sort((a, b) => a - b);
+        const idsColumnas = [...baseIdsOrdenados, ...idsRestantes];
+        const columns = idsColumnas.map((id) => {
+          const i = indicadorPorId.get(id);
+          return {
+            indicadorId: id,
+            nombre: String(i?.IndicadorBase || `Indicador ${id}`)
+          };
+        });
+
+        const rows = estudiantes.map((estudiante) => {
+          const registrosEstudiante = seguimientos.filter(
+            (s) =>
+              Number(s.EstudianteId) === Number(estudiante.EstudianteId)
+              && detalleIdsTipo.includes(Number(s.EstructuraGrupoDetalleId || 0))
+          );
+          const notasEstudiante = notasActividades.filter((n) => Number((n as any).EstudianteId) === Number(estudiante.EstudianteId));
+          const valoresNumericos: number[] = [];
+          const valoresCols = columns.map((col) => {
+            const regs = registrosEstudiante.filter((r) => Number(r.IndicadorGrupoId) === Number(col.indicadorId));
+            if (!regs.length) return "-";
+            const promedioValor = regs.reduce((acc, r) => acc + Number(r.ValorSeleccionado || 0), 0) / regs.length;
+            const porcentaje = Number(((promedioValor / 3) * 100).toFixed(2));
+            valoresNumericos.push(porcentaje);
+            const correoSeg = regs.some((r: any) => Boolean(r?.CorreoEnviado || r?.NotificacionCorreoEnviado));
+            const waSeg = regs.some((r: any) => Boolean(r?.WaEnviado || r?.WhatsappEnviado || r?.NotificacionWaEnviado));
+            const actividadIds = new Set(regs.map((r) => Number((r as any).ActividadId || 0)).filter((id) => id > 0));
+            const notaActividad = notasEstudiante.filter((n: any) => actividadIds.has(Number(n?.ActividadId || 0)));
+            const correoNota = notaActividad.some((n: any) => Boolean(n?.CorreoEnviado || n?.NotificacionCorreoEnviado));
+            const waNota = notaActividad.some((n: any) => Boolean(n?.WaEnviado || n?.WhatsappEnviado || n?.NotificacionWaEnviado));
+            const correo = correoSeg || correoNota;
+            const wa = waSeg || waNota;
+            const recuperacion = regs.some((r: any) => Boolean(r?.ActRecuperacion || r?.actividadRecuperacion));
+            const etiqueta = [correo ? "Correo" : "", wa ? "WA" : "", recuperacion ? "Recuperación" : ""].filter(Boolean).join("/");
+            return etiqueta ? `${porcentaje.toFixed(2)}% (${etiqueta})` : `${porcentaje.toFixed(2)}%`;
+          });
+
+          const totalIndicadores = columns.length;
+          const evaluados = valoresNumericos.length;
+          const porcentajeEvaluado = totalIndicadores > 0
+            ? Number((((evaluados / totalIndicadores) * rubroValorTotal)).toFixed(2))
+            : 0;
+          const promedioIndicadores = evaluados > 0
+            ? (valoresNumericos.reduce((acc, v) => acc + Number(v || 0), 0) / evaluados)
+            : 0;
+          const porcentajeGanado = Number(((promedioIndicadores / 100) * porcentajeEvaluado).toFixed(2));
+
+          return {
+            EstudianteId: Number(estudiante.EstudianteId),
+            NombreCompleto: getFullName(estudiante),
+            Identificacion: String(estudiante.Identificacion || ""),
+            RegistradasCalificadas: `${evaluados}/${totalIndicadores}`,
+            porcentajeEvaluado,
+            porcentajeGanado,
+            cols: valoresCols
+          };
+        });
+        return { columns, rows };
+      }
+
+      const acts = filtrarActividades("EXAMENES");
+      const detalleIdsTipo = Array.from(new Set(acts.map((a) => Number(a.EstructuraGrupoDetalleId || 0)).filter((v) => v > 0)));
+      const rubroValorTotal = detalleIdsTipo.reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
+      const sumaPesosConfig = acts.reduce((acc, item) => {
+        const peso = Number(item.PorcentajeDentroRubro || 0);
+        return acc + (Number.isFinite(peso) && peso > 0 ? peso : 0);
+      }, 0);
+      const columns = acts.map((a) => ({
+        actividadId: Number(a.ActividadId),
+        nombre: String(a.Nombre || `Examen ${a.ActividadId}`)
+      }));
+      const rows = estudiantes.map((estudiante) => {
+        const notas = notasActividades.filter((n) => Number(n.EstudianteId) === Number(estudiante.EstudianteId));
+        const porActividad = new Map<number, any>();
+        for (const nota of notas) porActividad.set(Number(nota.ActividadId), nota);
+        const valoresCols = columns.map((col) => {
+          const nota = porActividad.get(col.actividadId);
+          if (!nota) return "-";
+          const tieneCalif = nota.PuntosObtenidos !== null && nota.PuntosObtenidos !== undefined;
+          if (!tieneCalif) return "Registrada";
+          const puntosObtenidos = Number(nota.PuntosObtenidos || 0);
+          const puntosMaximos = Number(nota.PuntosMaximos || 0);
+          const notaPorcentaje = puntosMaximos > 0
+            ? (puntosObtenidos / puntosMaximos) * 100
+            : Number(nota.PorcentajeObtenido || nota.NotaObtenida || 0);
+          return `${Number(notaPorcentaje || 0).toFixed(2)}% (${puntosObtenidos.toFixed(2)}/${puntosMaximos.toFixed(2)})`;
+        });
+        const totalActividades = columns.length;
+        const calificadasNotas = columns
+          .map((col) => porActividad.get(col.actividadId))
+          .filter((n) => n && n.PuntosObtenidos !== null && n.PuntosObtenidos !== undefined);
+        const calificadas = calificadasNotas.length;
+        let porcentajeEvaluado = 0;
+        let porcentajeGanado = 0;
+        if (totalActividades > 0) {
+          for (const col of columns) {
+            const nota = porActividad.get(col.actividadId);
+            if (!nota || nota.PuntosObtenidos === null || nota.PuntosObtenidos === undefined) continue;
+            const actividad = acts.find((a) => Number(a.ActividadId) === Number(col.actividadId));
+            const pesoActividad = sumaPesosConfig > 0
+              ? Math.max(0, Number(actividad?.PorcentajeDentroRubro || 0))
+              : (rubroValorTotal / totalActividades);
+            const puntosObtenidos = Number(nota.PuntosObtenidos || 0);
+            const puntosMaximos = Number(nota.PuntosMaximos || actividad?.PuntosMaximos || 0);
+            const notaPct = puntosMaximos > 0
+              ? (puntosObtenidos / puntosMaximos) * 100
+              : Number(nota.PorcentajeObtenido || nota.NotaObtenida || 0);
+            porcentajeEvaluado += pesoActividad;
+            porcentajeGanado += (Number(notaPct || 0) / 100) * pesoActividad;
+          }
+        }
+        porcentajeEvaluado = Number(porcentajeEvaluado.toFixed(2));
+        porcentajeGanado = Number(porcentajeGanado.toFixed(2));
+
+        return {
+          EstudianteId: Number(estudiante.EstudianteId),
+          NombreCompleto: getFullName(estudiante),
+          Identificacion: String(estudiante.Identificacion || ""),
+          RegistradasCalificadas: `${calificadas}/${totalActividades}`,
+          porcentajeEvaluado,
+          porcentajeGanado,
+          cols: valoresCols
+        };
+      });
+      return { columns, rows };
+    };
+
+    return {
+      cotidiano: construir("COTIDIANO"),
+      tareas: construir("TAREAS"),
+      examenes: construir("EXAMENES")
+    };
+  }, [detalle?.estudiantes, seguimientoContexto?.actividades, seguimientoContexto?.detalles, seguimientoContexto?.notasActividades, seguimientoContexto?.seguimientos, seguimientoContexto?.actividadIndicadores, seguimientoContexto?.indicadores]);
+
+  const reporteAsistenciaDetallado = useMemo(() => {
+    const estudiantes = detalle?.estudiantes || [];
+    const registros = seguimientoContexto?.asistenciaRegistros || [];
+    const detallesSeguimiento = seguimientoContexto?.detalles || [];
+    const porcentajeComponenteAsistencia = detallesSeguimiento
+      .filter((d: any) => normalizarSeguimientoKey(String(d?.TipoSeguimiento || d?.ComponenteCatalogoNombre || "")).includes("ASIST"))
+      .reduce((acc: number, d: any) => acc + Number(d?.Porcentaje || 0), 0);
+    const formatFecha = (raw: string) => {
+      const src = String(raw || "");
+      const iso = src.slice(0, 10);
+      const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+      const d = new Date(src);
+      if (!Number.isFinite(d.getTime())) return src;
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = String(d.getFullYear());
+      return `${dd}/${mm}/${yyyy}`;
+    };
+    const keyEstado = (estado: string) => normalizarSeguimientoKey(estado || "");
+    const esAusenciaInjustificada = (estado: string) => {
+      const k = keyEstado(estado);
+      if (k.includes("AUSENTE_JUSTIFICADA")) return false;
+      if (k.includes("TARDIA_MAYOR")) return true;
+      if (k.includes("AUSENTE_INJUSTIFICADA")) return true;
+      return false;
+    };
+    const estadoCodigo = (estado: string) => {
+      const k = keyEstado(estado);
+      if (k.includes("PRESENTE")) return "P";
+      if (k.includes("TARDIA_MENOR")) return "T";
+      if (k.includes("AUSENTE_JUSTIFICADA")) return "AJ";
+      if (esAusenciaInjustificada(estado)) return "AI";
+      return "-";
+    };
+    const ordenados = [...registros].sort((a: any, b: any) => {
+      const fa = String(a?.Fecha || "");
+      const fb = String(b?.Fecha || "");
+      if (fa !== fb) return fa.localeCompare(fb);
+      const ha = String(a?.HoraInicio || "");
+      const hb = String(b?.HoraInicio || "");
+      if (ha !== hb) return ha.localeCompare(hb);
+      return Number(a?.HorarioGrupoId || 0) - Number(b?.HorarioGrupoId || 0);
+    });
+    const columnasMap = new Map<string, any>();
+    for (const r of ordenados) {
+      const fechaIso = String(r?.Fecha || "").slice(0, 10);
+      const fechaLabel = formatFecha(String(r?.Fecha || ""));
+      const bloque = String(r?.BloqueNombre || "Lección");
+      const columnaKey = `${fechaIso}|${String(r?.HorarioGrupoId || "")}|${bloque}`;
+      if (!columnasMap.has(columnaKey)) {
+        columnasMap.set(columnaKey, {
+          key: columnaKey,
+          fechaIso,
+          fechaLabel,
+          bloque,
+          horarioGrupoId: Number(r?.HorarioGrupoId || 0)
+        });
+      }
+    }
+    const columnas = Array.from(columnasMap.values());
+    const gruposFechaMap = new Map<string, { fechaIso: string; fechaLabel: string; columns: any[] }>();
+    for (const col of columnas) {
+      const key = String(col.fechaIso);
+      if (!gruposFechaMap.has(key)) {
+        gruposFechaMap.set(key, { fechaIso: key, fechaLabel: String(col.fechaLabel || key), columns: [] });
+      }
+      gruposFechaMap.get(key)!.columns.push(col);
+    }
+    const gruposFecha = Array.from(gruposFechaMap.values()).sort((a, b) => a.fechaIso.localeCompare(b.fechaIso));
+    const columnasPlanas = gruposFecha.flatMap((g) => g.columns);
+    const registrosPorEstudiante = new Map<number, any[]>();
+    for (const r of registros as any[]) {
+      const estId = Number(r?.EstudianteId || 0);
+      if (!registrosPorEstudiante.has(estId)) registrosPorEstudiante.set(estId, []);
+      registrosPorEstudiante.get(estId)!.push(r);
+    }
+
+    const rows = estudiantes.map((est) => {
+      const estRegs = registrosPorEstudiante.get(Number(est.EstudianteId)) || [];
+      const totalLecciones = estRegs.length;
+      const tardias = estRegs.filter((r: any) => keyEstado(String(r?.Estado || "")).includes("TARDIA_MENOR")).length;
+      const ausJust = estRegs.filter((r: any) => keyEstado(String(r?.Estado || "")).includes("AUSENTE_JUSTIFICADA")).length;
+      const ausInjust = estRegs.filter((r: any) => esAusenciaInjustificada(String(r?.Estado || ""))).length;
+      const ausEquiv = estRegs.reduce((acc: number, r: any) => {
+        const estado = String(r?.Estado || "");
+        if (keyEstado(estado).includes("TARDIA_MENOR")) return acc + 0.5;
+        if (esAusenciaInjustificada(estado)) return acc + 1;
+        return acc;
+      }, 0);
+      const pctAus = totalLecciones > 0 ? (ausEquiv / totalLecciones) * 100 : 0;
+      const notaAsistencia = totalLecciones > 0 ? (((() => {
+        if (pctAus >= 50) return 0;
+        if (pctAus >= 40) return 1;
+        if (pctAus >= 30) return 2;
+        if (pctAus >= 20) return 3;
+        if (pctAus >= 10) return 4;
+        return 5;
+      })() / 5) * 100) : 0;
+      const porcentajeGanadoAsistencia = Number(((notaAsistencia / 100) * porcentajeComponenteAsistencia).toFixed(2));
+      const alerta = pctAus < 15 ? "Bien" : (pctAus < 20 ? "Posible Alerta" : "Alerta");
+      const alertaBg = pctAus < 15 ? "#dcfce7" : (pctAus < 20 ? "#fef9c3" : "#fee2e2");
+      const alertaColor = pctAus < 15 ? "#166534" : (pctAus < 20 ? "#854d0e" : "#991b1b");
+      const porColumna = new Map<string, string>();
+      const regPorColumna = new Map<string, any>();
+      for (const x of estRegs as any[]) {
+        const k = `${String(x?.Fecha || "").slice(0, 10)}|${String(x?.HorarioGrupoId || "")}|${String(x?.BloqueNombre || "Lección")}`;
+        if (!regPorColumna.has(k)) regPorColumna.set(k, x);
+      }
+      for (const col of columnasPlanas) {
+        const r = regPorColumna.get(col.key);
+        if (!r) {
+          porColumna.set(col.key, "-");
+          continue;
+        }
+        const codigo = estadoCodigo(String(r?.Estado || ""));
+        const tags: string[] = [];
+        if (Boolean((r as any)?.CorreoEnviado)) tags.push("Correo");
+        if (Boolean((r as any)?.WaEnviado)) tags.push("WA");
+        porColumna.set(col.key, tags.length ? `${codigo} (${tags.join("/")})` : codigo);
+      }
+      return {
+        estudianteId: Number(est.EstudianteId),
+        nombre: getFullName(est),
+        identificacion: String(est.Identificacion || ""),
+        nota: porcentajeGanadoAsistencia,
+        alerta,
+        alertaBg,
+        alertaColor,
+        tardias,
+        ausJust,
+        ausInjust,
+        porColumna
+      };
+    });
+    return { gruposFecha, columnas, columnasPlanas, rows };
+  }, [detalle?.estudiantes, seguimientoContexto?.asistenciaRegistros, seguimientoContexto?.detalles]);
+
+  const ultimaBitacora = useMemo(() => {
+    if (!bitacorasGrupo.length) return null;
+    return bitacorasGrupo[0];
+  }, [bitacorasGrupo]);
+
   const boletasConductaFiltradas = useMemo(() => {
     const grupoNombre = String(selected?.GrupoNombre || "").trim().toUpperCase();
     if (!grupoNombre) return boletasConductaReporte;
@@ -1441,15 +1852,20 @@ export default function GestionProfePage() {
       return exportarTablaGenericaExcel(`reporte-asistencia-${base}`, "Reporte de Asistencia", headers, rows);
     }
     if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
-      const fuente = tipoReporteGestion === "COTIDIANO" ? resumenReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? resumenReportesPorTipo.tareas : resumenReportesPorTipo.examenes;
-      const headers = ["Estudiante", "Identificación", "Actividades registradas", "Total actividades", "Promedio"];
-      const rows = fuente.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.ActividadesRegistradas, f.TotalActividades, Number(f.Promedio || 0).toFixed(2)]);
+      const fuente = tipoReporteGestion === "COTIDIANO" ? detalleReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? detalleReportesPorTipo.tareas : detalleReportesPorTipo.examenes;
+      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado"];
+      const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`]);
       return exportarTablaGenericaExcel(`reporte-${tipoReporteGestion.toLowerCase()}-${base}`, `Reporte de ${tipoReporteGestion}`, headers, rows);
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
       const rows = boletasConductaFiltradas.map((b) => [String(Number(b.Consecutivo || 0)).padStart(4, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
       return exportarTablaGenericaExcel(`reporte-boletas-${base}`, "Reporte de Boletas", headers, rows);
+    }
+    if (tipoReporteGestion === "BITACORA") {
+      const headers = ["Fecha", "Temas desarrollados", "Observaciones", "Hechos relevantes", "Usuario"];
+      const rows = bitacorasGrupo.map((b) => [String(b.FechaRegistro || "").slice(0, 10), b.TemasDesarrollados || "", b.Observaciones || "", b.HechosRelevantes || "", b.NombreUsuario || ""]);
+      return exportarTablaGenericaExcel(`reporte-bitacora-${base}`, "Reporte de Bitácora", headers, rows);
     }
   }
 
@@ -1469,9 +1885,9 @@ export default function GestionProfePage() {
       return exportarTablaGenericaPdf("Reporte de Asistencia", headers, rows);
     }
     if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
-      const fuente = tipoReporteGestion === "COTIDIANO" ? resumenReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? resumenReportesPorTipo.tareas : resumenReportesPorTipo.examenes;
-      const headers = ["Estudiante", "Identificación", "Actividades registradas", "Total actividades", "Promedio"];
-      const rows = fuente.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.ActividadesRegistradas, f.TotalActividades, Number(f.Promedio || 0).toFixed(2)]);
+      const fuente = tipoReporteGestion === "COTIDIANO" ? detalleReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? detalleReportesPorTipo.tareas : detalleReportesPorTipo.examenes;
+      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado"];
+      const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`]);
       return exportarTablaGenericaPdf(`Reporte de ${tipoReporteGestion}`, headers, rows);
     }
     if (tipoReporteGestion === "BOLETAS") {
@@ -1479,10 +1895,18 @@ export default function GestionProfePage() {
       const rows = boletasConductaFiltradas.map((b) => [String(Number(b.Consecutivo || 0)).padStart(4, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
       return exportarTablaGenericaPdf("Reporte de Boletas", headers, rows);
     }
+    if (tipoReporteGestion === "BITACORA") {
+      const headers = ["Fecha", "Temas desarrollados", "Observaciones", "Hechos relevantes", "Usuario"];
+      const rows = bitacorasGrupo.map((b) => [String(b.FechaRegistro || "").slice(0, 10), b.TemasDesarrollados || "", b.Observaciones || "", b.HechosRelevantes || "", b.NombreUsuario || ""]);
+      return exportarTablaGenericaPdf("Reporte de Bitácora", headers, rows);
+    }
   }
 
   async function cargarAuditoriaEnvios(item = selected) {
     if (!item) return;
+    const reqKey = `${item.GrupoId}|${item.MateriaId}|${item.AnioLectivoId}|${item.PeriodoId}|${auditoriaEnviosDesde}|${auditoriaEnviosHasta}`;
+    if (auditoriaInFlightKeyRef.current === reqKey) return;
+    auditoriaInFlightKeyRef.current = reqKey;
     setLoadingAuditoriaEnvios(true);
     try {
       const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}/reportes/auditoria-envios`, {
@@ -1500,6 +1924,7 @@ export default function GestionProfePage() {
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar la auditoría de envíos");
     } finally {
       setLoadingAuditoriaEnvios(false);
+      if (auditoriaInFlightKeyRef.current === reqKey) auditoriaInFlightKeyRef.current = "";
     }
   }
 
@@ -2413,6 +2838,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setSeguimientoDrafts({});
     setSeguimientoActividadIndicadoresDraft({});
     setSeguimientoMatrizAsignacionMinimizada(true);
+    setBitacorasGrupo([]);
+    setBitacoraForm({ temasDesarrollados: "", observaciones: "", hechosRelevantes: "" });
     resetPlaneamientoForm();
     setPlaneamientoIaForm({
       ...initialPlaneamientoIaForm,
@@ -2432,6 +2859,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setActivePanel("");
     setMessage("");
     setErrorMessage("");
+    void loadBitacora(item);
     if (!item.EvaluacionPlantillaId) {
       void loadPlantillasAsignables(item);
     }
@@ -2451,6 +2879,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const data = response.data?.data || response.data || null;
       setDetalle(data);
       setNoteDrafts(buildDraftsFromDetalle(data));
+      await loadBitacora(item);
     } catch (error: any) {
       console.error("Error cargando detalle del grupo:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar el detalle del grupo seleccionado");
@@ -2850,6 +3279,47 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     void detalleItem;
     const pe = Number(actividad?.PorcentajeDentroRubro || 0);
     return Number(((Number(nota || 0) / 100) * pe).toFixed(2));
+  }
+
+  async function guardarEdicionPorcentajeNota(params: {
+    notaActividadId: number;
+    actividadId: number;
+    estudianteId: number;
+    porcentajeActual: number;
+  }) {
+    const key = getSeguimientoActividadKey(params.actividadId, params.estudianteId);
+    const draftValue = String(notaPorcentajeDrafts[key] ?? "").trim();
+    const porcentajeNuevo = Number(draftValue);
+    if (!Number.isFinite(porcentajeNuevo) || porcentajeNuevo < 0 || porcentajeNuevo > 100) {
+      setErrorMessage("El % obtenido debe estar entre 0 y 100");
+      return;
+    }
+    if (Number(porcentajeNuevo.toFixed(2)) === Number(Number(params.porcentajeActual || 0).toFixed(2))) {
+      setMessage("No hay cambios en el % obtenido");
+      return;
+    }
+    const justificacion = String(window.prompt("Justificación obligatoria del cambio de nota:") || "").trim();
+    if (!justificacion) {
+      setErrorMessage("Debés ingresar una justificación para modificar la calificación");
+      return;
+    }
+
+    setSavingNotaPorcentajeKey(key);
+    setErrorMessage("");
+    setMessage("");
+    try {
+      await api.put(`/eval360/seguimiento/notas/${params.notaActividadId}/porcentaje`, {
+        porcentajeObtenido: porcentajeNuevo,
+        justificacion
+      });
+      setMessage(`Calificación actualizada. Nota anterior: ${formatPercent(params.porcentajeActual)} | Nueva nota: ${formatPercent(porcentajeNuevo)}`);
+      await loadSeguimientoEvaluacion(selected);
+    } catch (error: any) {
+      console.error("Error actualizando % obtenido:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo actualizar la calificación");
+    } finally {
+      setSavingNotaPorcentajeKey("");
+    }
   }
 
   function getMinimoPuntosPorPorcentajeActividad(actividad?: SeguimientoActividad | null) {
@@ -4383,6 +4853,50 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }));
   }
 
+  function updateResultadoIaIndicador(index: number, value: string) {
+    setUltimoPlaneamientoIa((prev) => {
+      const current = Array.isArray(prev?.indicadoresEvaluacion) ? [...prev!.indicadoresEvaluacion] : [];
+      while (current.length <= index) current.push("");
+      current[index] = value;
+      return {
+        ...(prev || {}),
+        indicadoresEvaluacion: current
+      };
+    });
+  }
+
+  function addResultadoIaIndicador() {
+    setUltimoPlaneamientoIa((prev) => ({
+      ...(prev || {}),
+      indicadoresEvaluacion: [...(Array.isArray(prev?.indicadoresEvaluacion) ? prev!.indicadoresEvaluacion : []), ""]
+    }));
+  }
+
+  function removeResultadoIaIndicador(index: number) {
+    setUltimoPlaneamientoIa((prev) => {
+      const current = Array.isArray(prev?.indicadoresEvaluacion) ? [...prev!.indicadoresEvaluacion] : [];
+      const next = current.filter((_, i) => i !== index);
+      return {
+        ...(prev || {}),
+        indicadoresEvaluacion: next
+      };
+    });
+  }
+
+  function moveResultadoIaIndicador(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex) return;
+    setUltimoPlaneamientoIa((prev) => {
+      const current = Array.isArray(prev?.indicadoresEvaluacion) ? [...prev!.indicadoresEvaluacion] : [];
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= current.length || toIndex >= current.length) return prev || {};
+      const [moved] = current.splice(fromIndex, 1);
+      current.splice(toIndex, 0, moved);
+      return {
+        ...(prev || {}),
+        indicadoresEvaluacion: current
+      };
+    });
+  }
+
   function updateResultadoIaReflexion(field: "queFunciono" | "queNoFunciono" | "quePuedoMejorar", value: string) {
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
@@ -4441,10 +4955,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const nombreMateriaSeleccionada = selected?.MateriaNombre || grupoSeleccionado?.MateriaNombre || "Materia";
       const gradoSeleccionado = getGradoPlaneamientoFromGrupo(selected) || getGradoPlaneamientoFromGrupo(grupoSeleccionado) || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
       const nombrePlaneamientoCorrecto = `${mesesSeleccionadosTextoIa || "Mes"} - ${gradoSeleccionado || "Grado"} - ${nombreMateriaSeleccionada}`;
+      const observacionesUsuario = String(ultimoPlaneamientoIa?.observaciones || "").trim();
+      const indicadoresEditados = (Array.isArray(ultimoPlaneamientoIa?.indicadoresEvaluacion) ? ultimoPlaneamientoIa.indicadoresEvaluacion : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean);
 
       const crearPayload = (grupo: GrupoProfesor) => {
         const resultadoNormalizado = {
           ...(ultimoPlaneamientoIa || {}),
+          indicadoresEvaluacion: indicadoresEditados,
+          observaciones: observacionesUsuario,
           nombre: nombrePlaneamientoCorrecto,
           mes: mesesSeleccionadosTextoIa || "",
           grado: gradoSeleccionado,
@@ -4466,9 +4986,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         materiaNombre: nombreMateriaSeleccionada,
         fechaInicio: planeamientoIaForm.fechaInicio || null,
         fechaFin: planeamientoIaForm.fechaFin || null,
-        observaciones: [
-          ultimoPlaneamientoIa.observaciones || ""
-        ].filter(Boolean).join("\\n\\n"),
+        observaciones: observacionesUsuario || null,
         resultado: resultadoNormalizado
         };
       };
@@ -4520,6 +5038,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   async function loadAsistencia(item = selected, fecha = asistenciaFecha) {
     if (!item) return;
+    const reqKey = `${item.GrupoId}|${item.MateriaId}|${item.AnioLectivoId}|${item.PeriodoId}|${fecha}`;
+    if (asistenciaInFlightKeyRef.current === reqKey) return;
+    asistenciaInFlightKeyRef.current = reqKey;
     setLoadingAsistencia(true);
     setErrorMessage("");
 
@@ -4558,6 +5079,59 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar la asistencia");
     } finally {
       setLoadingAsistencia(false);
+      if (asistenciaInFlightKeyRef.current === reqKey) asistenciaInFlightKeyRef.current = "";
+    }
+  }
+
+  async function loadBitacora(item = selected) {
+    if (!item) return;
+    const reqKey = `${item.GrupoId}|${item.MateriaId}|${item.AnioLectivoId}|${item.PeriodoId}`;
+    if (bitacoraInFlightKeyRef.current === reqKey) return;
+    bitacoraInFlightKeyRef.current = reqKey;
+    setLoadingBitacora(true);
+    try {
+      const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}/bitacora`, {
+        params: {
+          anioLectivoId: item.AnioLectivoId,
+          periodoId: item.PeriodoId
+        }
+      });
+      const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+      setBitacorasGrupo(rows);
+    } catch (error: any) {
+      console.error("Error cargando bitácora:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar la bitácora");
+    } finally {
+      setLoadingBitacora(false);
+      if (bitacoraInFlightKeyRef.current === reqKey) bitacoraInFlightKeyRef.current = "";
+    }
+  }
+
+  async function guardarBitacora() {
+    if (!selected) return;
+    if (!String(bitacoraForm.temasDesarrollados || "").trim()) {
+      setErrorMessage("Temas desarrollados es obligatorio");
+      return;
+    }
+    setSavingBitacora(true);
+    try {
+      setErrorMessage("");
+      setMessage("");
+      await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/bitacora`, {
+        anioLectivoId: selected.AnioLectivoId,
+        periodoId: selected.PeriodoId,
+        temasDesarrollados: bitacoraForm.temasDesarrollados,
+        observaciones: bitacoraForm.observaciones,
+        hechosRelevantes: bitacoraForm.hechosRelevantes
+      });
+      setBitacoraForm({ temasDesarrollados: "", observaciones: "", hechosRelevantes: "" });
+      await loadBitacora(selected);
+      setMessage("Bitácora guardada correctamente");
+    } catch (error: any) {
+      console.error("Error guardando bitácora:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la bitácora");
+    } finally {
+      setSavingBitacora(false);
     }
   }
 
@@ -4590,13 +5164,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       })
     ).filter(Boolean) as any[];
 
-    if (registros.length === 0) {
+    let registrosGuardar = registros;
+    if (registrosGuardar.length === 0 && !asistenciaYaCalificada) {
+      registrosGuardar = detalle.estudiantes.flatMap((estudiante) =>
+        leccionesUsar.map((leccion) => {
+          const key = asistenciaDraftKey(estudiante.EstudianteId, leccion.HorarioGrupoId);
+          const draft = asistenciaDrafts[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
+          const actual = asistenciaDraftComparable(draft);
+          return {
+            key,
+            estudianteId: estudiante.EstudianteId,
+            horarioGrupoId: leccion.HorarioGrupoId || null,
+            bloqueHorarioId: leccion.BloqueHorarioId || null,
+            estado: actual.estado || "PRESENTE",
+            minutosTardia: actual.minutosTardia,
+            observacion: actual.observacion || null,
+            notificarEncargado: Boolean(draft.notificarEncargado)
+          };
+        })
+      );
+    }
+
+    if (registrosGuardar.length === 0) {
       setMessage("No hay cambios en asistencia para guardar");
       setSavedAsistencia(asistenciaYaCalificada);
       return;
     }
 
-    const invalid = registros.find((item) => !Number.isFinite(item.minutosTardia) || item.minutosTardia < 0);
+    const invalid = registrosGuardar.find((item) => !Number.isFinite(item.minutosTardia) || item.minutosTardia < 0);
     if (invalid) {
       setErrorMessage("Los minutos de tardóa deben ser un número válido");
       return;
@@ -4620,7 +5215,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
         fecha: asistenciaFecha,
-        registros: registros.map((item) => ({
+        registros: registrosGuardar.map((item) => ({
           estudianteId: item.estudianteId,
           horarioGrupoId: item.horarioGrupoId,
           bloqueHorarioId: item.bloqueHorarioId,
@@ -4632,7 +5227,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       });
       const result = response.data?.data || {};
       const notificacionesEstado: AsistenciaNotificacionEstado = {};
-      for (const item of registros) {
+      for (const item of registrosGuardar) {
         const k = String(item.key || asistenciaDraftKey(item.estudianteId, item.horarioGrupoId));
         notificacionesEstado[k] = { correoEnviado: false, waEnviado: false };
       }
@@ -4641,7 +5236,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         if (notif?.enviado !== true) continue;
         const estudianteId = Number(notif?.estudianteId || 0);
         if (!estudianteId) continue;
-        for (const item of registros) {
+        for (const item of registrosGuardar) {
           if (Number(item.estudianteId) !== estudianteId || !item.notificarEncargado) continue;
           const k = String(item.key || asistenciaDraftKey(item.estudianteId, item.horarioGrupoId));
           const prev = notificacionesEstado[k] || {};
@@ -4652,7 +5247,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       }
       // Respaldo visual: si se marcó informar y no llegó detalle por canal,
       // mostramos el/los medios disponibles del estudiante para que sí aparezca en la columna final.
-      for (const item of registros) {
+      for (const item of registrosGuardar) {
         if (!item?.notificarEncargado) continue;
         const k = String(item.key || asistenciaDraftKey(item.estudianteId, item.horarioGrupoId));
         const prev = notificacionesEstado[k] || {};
@@ -5160,6 +5755,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               const tienePlantilla = !!item.EvaluacionPlantillaNombre;
               const tieneCalificaciones = Boolean(Number(item.TieneCalificacionesEvaluacion || 0));
               const puedeCambiarPlantilla = tienePlantilla && !tieneCalificaciones;
+              const paletaFondos = [
+                { bg: "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)", borde: "#cbd5e1" },
+                { bg: "linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)", borde: "#bfdbfe" },
+                { bg: "linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)", borde: "#a7f3d0" },
+                { bg: "linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)", borde: "#fdba74" },
+                { bg: "linear-gradient(135deg, #fdf4ff 0%, #f5d0fe 100%)", borde: "#e9d5ff" }
+              ];
+              const fondo = paletaFondos[Math.abs(Number(item.AsignacionDocenteId || 0)) % paletaFondos.length];
               return (
                 <button
                   key={item.AsignacionDocenteId}
@@ -5170,8 +5773,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     ...cardStyle,
                     textAlign: "left",
                     cursor: "pointer",
-                    borderColor: isSelected ? "#2563eb" : "#e5e7eb",
-                    boxShadow: isSelected ? "0 8px 20px rgba(37, 99, 235, 0.12)" : "none"
+                    background: isSelected ? "linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)" : fondo.bg,
+                    borderColor: isSelected ? "#2563eb" : fondo.borde,
+                    color: "#0f172a",
+                    boxShadow: isSelected ? "0 10px 24px rgba(37, 99, 235, 0.22)" : "0 4px 12px rgba(15, 23, 42, 0.10)",
+                    transition: "transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease",
+                    transform: isSelected ? "translateY(-1px)" : "none"
                   }}
                 >
                   <strong>{item.GrupoNombre}</strong>
@@ -5298,9 +5905,94 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : getGestionPanelButtonStyle("seguimiento")} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
               <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : getGestionPanelButtonStyle("examenes_tabla")} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Espesificaciones y Examenes</button>
               <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
-              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); }}>Reportes</button>
+              <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitacora</button>
+              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); }}>Reportes</button>
             </div>
 
+            <div style={{ marginTop: "10px", padding: "10px 12px", borderRadius: "12px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a" }}>
+              <strong style={{ display: "block", marginBottom: "6px" }}>Último registro de Bitácora incluido</strong>
+              {!ultimaBitacora ? (
+                <span style={{ color: "#64748b" }}>No hay registros de bitácora para esta sección.</span>
+              ) : (
+                <div style={{ display: "grid", gap: "4px" }}>
+                  <span><strong>Fecha:</strong> {String(ultimaBitacora.FechaRegistro || "").slice(0, 10)}</span>
+                  <span><strong>Tema desarrollado:</strong> {ultimaBitacora.TemasDesarrollados || "-"}</span>
+                  <span><strong>Observaciones:</strong> {ultimaBitacora.Observaciones || "-"}</span>
+                  <span><strong>Hechos relevantes:</strong> {ultimaBitacora.HechosRelevantes || "-"}</span>
+                </div>
+              )}
+            </div>
+
+
+            {activePanel === "bitacora" && (
+              <div style={{ display: "grid", gap: "14px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "16px", background: "#ffffff", color: "#0f172a" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                  <div>
+                    <h4 style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 900, fontSize: "20px" }}>Bitacora</h4>
+                    <p style={{ margin: 0, color: "#334155", fontWeight: 700 }}>
+                      Registro diario de temas desarrollados, observaciones y hechos relevantes.
+                    </p>
+                  </div>
+                  <button type="button" style={secondaryButtonStyle} onClick={() => loadBitacora(selected)} disabled={loadingBitacora || !selected}>
+                    {loadingBitacora ? "Actualizando..." : "Actualizar"}
+                  </button>
+                </div>
+
+                <div style={{ display: "grid", gap: "10px" }}>
+                  <label style={{ display: "grid", gap: "6px" }}>
+                    <strong>Temas desarrollados</strong>
+                    <textarea rows={3} value={bitacoraForm.temasDesarrollados} onChange={(e) => setBitacoraForm((p) => ({ ...p, temasDesarrollados: e.target.value }))} placeholder="Detalle de temas desarrollados" style={{ border: "1px solid #94a3b8", borderRadius: "10px", padding: "8px", color: "#0f172a" }} />
+                  </label>
+                  <label style={{ display: "grid", gap: "6px" }}>
+                    <strong>Observaciones</strong>
+                    <textarea rows={3} value={bitacoraForm.observaciones} onChange={(e) => setBitacoraForm((p) => ({ ...p, observaciones: e.target.value }))} placeholder="Observaciones generales" style={{ border: "1px solid #94a3b8", borderRadius: "10px", padding: "8px", color: "#0f172a" }} />
+                  </label>
+                  <label style={{ display: "grid", gap: "6px" }}>
+                    <strong>Hechos relevantes</strong>
+                    <textarea rows={3} value={bitacoraForm.hechosRelevantes} onChange={(e) => setBitacoraForm((p) => ({ ...p, hechosRelevantes: e.target.value }))} placeholder="Hechos relevantes del día" style={{ border: "1px solid #94a3b8", borderRadius: "10px", padding: "8px", color: "#0f172a" }} />
+                  </label>
+                  <div style={{ color: "#475569", fontWeight: 700, fontSize: "12px" }}>Fecha de inclusión: automática del sistema.</div>
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={guardarBitacora} disabled={savingBitacora || !selected}>
+                      {savingBitacora ? "Guardando..." : "Guardar bitacora"}
+                    </button>
+                    <button
+                      type="button"
+                      style={secondaryButtonStyle}
+                      onClick={() => setActivePanel("")}
+                      disabled={savingBitacora}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ border: "1px solid #cbd5e1", borderRadius: "12px", overflow: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ background: "#f1f5f9" }}>
+                        <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Fecha</th>
+                        <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Temas desarrollados</th>
+                        <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Observaciones</th>
+                        <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Hechos relevantes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {!bitacorasGrupo.length ? (
+                        <tr><td colSpan={4} style={{ padding: "10px", textAlign: "center", color: "#64748b" }}>No hay registros de bitácora.</td></tr>
+                      ) : bitacorasGrupo.map((fila) => (
+                        <tr key={fila.BitacoraGrupoId}>
+                          <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{String(fila.FechaRegistro || "").slice(0, 10)}</td>
+                          <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{fila.TemasDesarrollados || "-"}</td>
+                          <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{fila.Observaciones || "-"}</td>
+                          <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{fila.HechosRelevantes || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {activePanel === "notas" && (
               <div style={{ display: "grid", gap: "14px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "16px", background: "#ffffff", color: "#0f172a" }}>
@@ -5435,10 +6127,67 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                       {componentesTabla.map((detalleItem) => {
                                         const componente = buscarComponenteAlumno(alumno, detalleItem);
                                         const palette = getComponentePalette(detalleItem);
+                                        const keyAjuste = `${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`;
+                                        const valorActual = Number(componente?.porcentajeGanado || 0);
                                         return (
                                           <React.Fragment key={`valor-${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`}>
                                             <td style={{ ...tdBase, background: palette.cell }}>{formatPercent(Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0))}</td>
-                                            <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: palette.cell }}>{formatPercent(Number(componente?.porcentajeGanado || 0))}</td>
+                                            <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: palette.cell }}>
+                                              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                                                <span>{formatPercent(valorActual)}</span>
+                                                <button
+                                                  type="button"
+                                                  style={{
+                                                    ...secondaryButtonStyle,
+                                                    padding: "3px 7px",
+                                                    fontSize: "11px",
+                                                    color: (componente as any).ajustadoManual ? "#b91c1c" : (secondaryButtonStyle as any).color,
+                                                    borderColor: (componente as any).ajustadoManual ? "#ef4444" : (secondaryButtonStyle as any).borderColor,
+                                                    fontWeight: 800
+                                                  }}
+                                                  disabled={savingNotaPorcentajeKey === keyAjuste}
+                                                  onClick={async () => {
+                                                    const valor = Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0);
+                                                    const nuevoTxt = String(window.prompt(`Nuevo % obtenido para ${alumno.nombre} en ${detalleItem.Nombre} (máximo ${valor.toFixed(2)}):`, valorActual.toFixed(2)) || "").trim();
+                                                    const nuevo = Number(nuevoTxt);
+                                                    if (!Number.isFinite(nuevo)) {
+                                                      setErrorMessage("Valor inválido para % obtenido");
+                                                      return;
+                                                    }
+                                                    if (nuevo < 0 || nuevo > valor) {
+                                                      setErrorMessage(`El % obtenido debe estar entre 0 y ${valor.toFixed(2)}`);
+                                                      return;
+                                                    }
+                                                    const justificacion = String(window.prompt("Justificación obligatoria del cambio:") || "").trim();
+                                                    if (!justificacion) {
+                                                      setErrorMessage("Debés ingresar una justificación");
+                                                      return;
+                                                    }
+                                                    try {
+                                                      setSavingNotaPorcentajeKey(keyAjuste);
+                                                      setErrorMessage("");
+                                                      setMessage("");
+                                                      await api.put("/eval360/seguimiento/componentes/ajustar-porcentaje", {
+                                                        estructuraGrupoId: Number(seguimientoContexto?.estructura?.EstructuraGrupoId || 0),
+                                                        estructuraGrupoDetalleId: Number(detalleItem.EstructuraGrupoDetalleId),
+                                                        estudianteId: Number(alumno.estudiante?.EstudianteId || 0),
+                                                        porcentajeObtenidoComponente: nuevo,
+                                                        justificacion
+                                                      });
+                                                      setMessage(`Calificación actualizada. Nota anterior: ${formatPercent(valorActual)} | Nueva nota: ${formatPercent(nuevo)}`);
+                                                      await loadSeguimientoEvaluacion(selected);
+                                                    } catch (error: any) {
+                                                      console.error("Error ajustando % obtenido por rubro:", error);
+                                                      setErrorMessage(error?.response?.data?.message || "No se pudo actualizar la calificación");
+                                                    } finally {
+                                                      setSavingNotaPorcentajeKey("");
+                                                    }
+                                                  }}
+                                                >
+                                                  {savingNotaPorcentajeKey === keyAjuste ? "..." : ((componente as any).ajustadoManual ? "Editado" : "Editar")}
+                                                </button>
+                                              </div>
+                                            </td>
                                           </React.Fragment>
                                         );
                                       })}
@@ -5457,11 +6206,24 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                             <strong style={{ color: "#0f172a", fontSize: "16px" }}>Detalle de calificaciones de {alumno.nombre}</strong>
                                             {alumno.componentes.map((componente) => (
                                               <div key={componente.key} style={{ border: "1px solid #cbd5e1", borderRadius: "12px", background: "#ffffff", overflow: "hidden" }}>
-                                                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "8px", padding: "10px", background: "#e2e8f0", color: "#0f172a", fontWeight: 900, fontSize: "12px" }}>
+                                                <div style={{
+                                                  display: "grid",
+                                                  gridTemplateColumns: "2fr 1fr 1fr 1fr",
+                                                  gap: "8px",
+                                                  padding: "10px",
+                                                  background: (componente as any).ajustadoManual ? "#ffedd5" : "#e2e8f0",
+                                                  color: "#0f172a",
+                                                  fontWeight: 900,
+                                                  fontSize: "12px",
+                                                  borderBottom: (componente as any).ajustadoManual ? "1px solid #fb923c" : "none"
+                                                }}>
                                                   <span>{componente.nombre}</span>
                                                   <span>% comp.: {formatPercent(componente.porcentajeComponente)}</span>
                                                   <span>Porcentaje Evaluado: {formatPercent(Number((componente as any).porcentajeEvaluado ?? 0))}</span>
-                                                  <span style={{ color: "#166534" }}>Ganado: {formatPercent(componente.porcentajeGanado)}</span>
+                                                  <span style={{ color: (componente as any).ajustadoManual ? "#c2410c" : "#166534" }}>
+                                                    Ganado: {formatPercent(Number((componente as any).ajustadoManual ? ((componente as any).porcentajeGanadoOriginal ?? componente.porcentajeGanado) : componente.porcentajeGanado))}
+                                                    {(componente as any).ajustadoManual ? ` | Ajustado: ${formatPercent(Number((componente as any).porcentajeGanadoAjustado || 0))}` : ""}
+                                                  </span>
                                                 </div>
                                                 <div style={{ padding: "10px", color: "#334155", fontWeight: 800, fontSize: "12px" }}>{componente.resumen}</div>
                                                 {componente.detalles.length === 0 ? (
@@ -5478,6 +6240,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                           <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>Estado</th>
                                                           <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>Nota</th>
                                                           <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>% ganado</th>
+                                                          <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>Editar % obtenido</th>
                                                         </tr>
                                                       </thead>
                                                       <tbody>
@@ -5507,8 +6270,70 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 800 }}>{detalleItem.titulo}</td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", color: "#334155" }}>{detalleItem.subtitulo}</td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0" }}>{detalleItem.estado || "-"}</td>
-                                                            <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 800 }}>{formatPercent(detalleItem.nota)}</td>
+                                                            <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 800 }}>
+                                                              <div style={{ display: "grid", gap: "4px" }}>
+                                                                <span>{formatPercent(detalleItem.nota)}</span>
+                                                                {((detalleItem as any).correoEnviado || (detalleItem as any).waEnviado) ? (
+                                                                  <small style={{ fontWeight: 700, color: "#1d4ed8" }}>
+                                                                    {[
+                                                                      (detalleItem as any).correoEnviado ? "Correo enviado" : "",
+                                                                      (detalleItem as any).waEnviado ? "WA enviado" : ""
+                                                                    ].filter(Boolean).join(" / ")}
+                                                                  </small>
+                                                                ) : null}
+                                                              </div>
+                                                            </td>
                                                             <td style={{ padding: "7px", border: "1px solid #e2e8f0", fontWeight: 900, color: "#166534" }}>{formatPercent(detalleItem.porcentaje)}</td>
+                                                            <td style={{ padding: "7px", border: "1px solid #e2e8f0" }}>
+                                                              {Number((detalleItem as any).notaActividadId || 0) > 0 ? (
+                                                                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                                                  {Number((detalleItem as any).fueEditado || 0) === 1 ? (
+                                                                    <span style={{ color: "#b91c1c", fontWeight: 800, fontSize: "12px" }}>Editado</span>
+                                                                  ) : null}
+                                                                  <input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    max={100}
+                                                                    step="0.01"
+                                                                    style={{ ...inputNotaStyle, minWidth: "86px", width: "86px", padding: "4px 6px", fontSize: "12px" }}
+                                                                    value={
+                                                                      notaPorcentajeDrafts[getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0))]
+                                                                      ?? String(Number((detalleItem as any).porcentajeObtenido || detalleItem.nota || 0).toFixed(2))
+                                                                    }
+                                                                    onChange={(e) => {
+                                                                      const k = getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0));
+                                                                      setNotaPorcentajeDrafts((prev) => ({ ...prev, [k]: e.target.value }));
+                                                                    }}
+                                                                  />
+                                                                  <button
+                                                                    type="button"
+                                                                    style={{
+                                                                      ...secondaryButtonStyle,
+                                                                      padding: "4px 8px",
+                                                                      fontSize: "12px",
+                                                                      color: Number((detalleItem as any).fueEditado || 0) === 1 ? "#b91c1c" : (secondaryButtonStyle as any).color,
+                                                                      borderColor: Number((detalleItem as any).fueEditado || 0) === 1 ? "#ef4444" : (secondaryButtonStyle as any).borderColor,
+                                                                      fontWeight: 800
+                                                                    }}
+                                                                    disabled={savingNotaPorcentajeKey === getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0))}
+                                                                    onClick={() =>
+                                                                      guardarEdicionPorcentajeNota({
+                                                                        notaActividadId: Number((detalleItem as any).notaActividadId),
+                                                                        actividadId: Number((detalleItem as any).actividadId),
+                                                                        estudianteId: Number(alumno.estudiante?.EstudianteId || 0),
+                                                                        porcentajeActual: Number((detalleItem as any).porcentajeObtenido || detalleItem.nota || 0)
+                                                                      })
+                                                                    }
+                                                                  >
+                                                                    {savingNotaPorcentajeKey === getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0))
+                                                                      ? "Guardando..."
+                                                                      : (Number((detalleItem as any).fueEditado || 0) === 1 ? "Editado" : "Guardar")}
+                                                                  </button>
+                                                                </div>
+                                                              ) : (
+                                                                <span style={{ color: "#64748b", fontWeight: 700 }}>No aplica</span>
+                                                              )}
+                                                            </td>
                                                           </tr>
                                                         );
                                                         })}
@@ -7285,14 +8110,49 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           </label>
                         </div>
                       )}
-                      <label>
-                        Indicadores de evaluación
-                        <textarea
-                          rows={6}
-                          value={(ultimoPlaneamientoIa.indicadoresEvaluacion || []).join("\n")}
-                          onChange={(e) => updateResultadoIaArray("indicadoresEvaluacion", e.target.value)}
-                        />
-                      </label>
+                      <div style={{ display: "grid", gap: "10px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                          <strong>Indicadores de evaluación</strong>
+                          <button type="button" style={secondaryButtonStyle} onClick={addResultadoIaIndicador}>
+                            Agregar indicador
+                          </button>
+                        </div>
+                        <small style={{ color: "#93c5fd" }}>Podés arrastrar y soltar para ordenar (ejemplo: 3.2 debajo de 3.1).</small>
+                        {((ultimoPlaneamientoIa.indicadoresEvaluacion || []).length ? ultimoPlaneamientoIa.indicadoresEvaluacion : [""]).map((indicador, index) => (
+                          <div
+                            key={`ia-ind-${index}`}
+                            draggable
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData("text/plain", String(index));
+                              event.dataTransfer.effectAllowed = "move";
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const fromIndex = Number(event.dataTransfer.getData("text/plain"));
+                              if (!Number.isFinite(fromIndex)) return;
+                              moveResultadoIaIndicador(fromIndex, index);
+                            }}
+                            style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", alignItems: "end", border: "1px dashed #334155", borderRadius: "10px", padding: "8px" }}
+                          >
+                            <label style={{ margin: 0 }}>
+                              Indicador {index + 1}
+                              <textarea
+                                rows={2}
+                                value={indicador || ""}
+                                onChange={(e) => updateResultadoIaIndicador(index, e.target.value)}
+                                placeholder="Escribí el indicador"
+                              />
+                            </label>
+                            <button type="button" style={secondaryButtonStyle} onClick={() => removeResultadoIaIndicador(index)}>
+                              Quitar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
 
                                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
                         <label>
@@ -7483,12 +8343,32 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 <td style={{ padding: "10px" }}>
                                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                                     <button type="button" className="primary-btn" onClick={() => exportarPlaneamientoWord(planeamiento)}>Generar plantilla Word</button>
-                                    <button type="button" style={secondaryButtonStyle} onClick={() => openEditPlaneamiento(planeamiento)}>Editar</button>
-                                    <button type="button" style={secondaryButtonStyle} onClick={() => handleDeletePlaneamiento(planeamiento.PlaneamientoId)} disabled={deletingPlaneamientoId === planeamientoId}>{deletingPlaneamientoId === planeamientoId ? "Procesando..." : "Desactivar"}</button>
-                                    <button type="button" style={{ ...secondaryButtonStyle, color: "#fecaca", borderColor: "#7f1d1d" }} onClick={() => handleHardDeletePlaneamiento(planeamiento.PlaneamientoId)} disabled={deletingPlaneamientoId === planeamientoId}>{deletingPlaneamientoId === planeamientoId ? "Eliminando..." : "Eliminar"}</button>
                                     <button
                                       type="button"
-                                      style={{ ...secondaryButtonStyle, color: "#dbeafe", borderColor: "#60a5fa" }}
+                                      style={{ ...secondaryButtonStyle, background: "#dbeafe", borderColor: "#93c5fd", color: "#1e3a8a", fontWeight: 800 }}
+                                      onClick={() => openEditPlaneamiento(planeamiento)}
+                                    >
+                                      Editar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      style={{ ...secondaryButtonStyle, background: "#fef3c7", borderColor: "#fcd34d", color: "#92400e", fontWeight: 800 }}
+                                      onClick={() => handleDeletePlaneamiento(planeamiento.PlaneamientoId)}
+                                      disabled={deletingPlaneamientoId === planeamientoId}
+                                    >
+                                      {deletingPlaneamientoId === planeamientoId ? "Procesando..." : "Desactivar"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      style={{ ...secondaryButtonStyle, background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b", fontWeight: 800 }}
+                                      onClick={() => handleHardDeletePlaneamiento(planeamiento.PlaneamientoId)}
+                                      disabled={deletingPlaneamientoId === planeamientoId}
+                                    >
+                                      {deletingPlaneamientoId === planeamientoId ? "Eliminando..." : "Eliminar"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      style={{ ...secondaryButtonStyle, background: "#ede9fe", borderColor: "#c4b5fd", color: "#5b21b6", fontWeight: 800 }}
                                       onClick={() => togglePanelIndicadoresPlaneamiento(planeamientoId)}
                                     >
                                       {panelOpen ? "Ocultar indicadores IA" : (tieneIndicadoresGenerados ? "Ver Indicadores Generados con IA" : "Generar Indicadores con IA")}
@@ -7571,7 +8451,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                             <div>3. Presioná “Generar indicadores con IA”.</div>
                                             <div>4. Revisá niveles (Avanzado, Intermedio, Inicial) y guardá cambios.</div>
                                           </div>
-                                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
+                                      <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(340px, 420px)", gap: "10px", alignItems: "end" }}>
                                             <label style={{ display: "grid", gap: "6px" }}>
                                               <span style={{ fontWeight: 700, color: "#0f172a" }}>Plantilla IA de indicadores</span>
                                               <select value={eval360PlantillaIaIndicadorId} onChange={(event) => setEval360PlantillaIaIndicadorId(event.target.value)}>
@@ -7583,28 +8463,18 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                 ))}
                                               </select>
                                             </label>
-
-                                            <label style={{ display: "grid", gap: "6px" }}>
-                                              <span style={{ fontWeight: 700, color: "#0f172a" }}>Indicaciones para la IA</span>
-                                              <textarea
-                                                value={getEval360IndicacionesPlaneamiento(planeamientoId)}
-                                                onChange={(event) => setEval360IndicacionesPorPlaneamiento((prev) => ({ ...prev, [planeamientoId]: event.target.value }))}
-                                                rows={3}
-                                                placeholder="Ejemplo: redactar los niveles con lenguaje sencillo, observable y alineado al MEP."
-                                                style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "10px" }}
-                                              />
-                                            </label>
                                           </div>
 
-                                          <div style={{ display: "grid", gap: "10px", padding: "12px", border: "1px solid #93c5fd", borderRadius: "12px", background: "linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%)" }}>
+                                          <div style={{ display: "grid", gap: "8px", padding: "8px", border: "1px solid #334155", borderRadius: "10px", background: "#000000", maxWidth: "420px" }}>
                                             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                                              <strong style={{ color: "#0f172a" }}>Secciones</strong>
+                                              <strong style={{ color: "#ffffff", opacity: 1, WebkitTextFillColor: "#ffffff", textShadow: "0 0 1px rgba(255,255,255,0.35)" }}>Secciones</strong>
                                               <span style={requiredBadgeStyle}>Requerido</span>
                                             </div>
-                                            <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", paddingBottom: "6px", borderBottom: "1px dashed #bfdbfe" }}>
-                                              <label style={{ display: "flex", alignItems: "center", gap: "6px", color: "#0f172a", fontWeight: 600 }}>
+                                            <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap", paddingBottom: "4px", borderBottom: "1px dashed #bfdbfe" }}>
+                                              <label style={{ display: "flex", alignItems: "center", gap: "6px", color: "#ffffff", opacity: 1, WebkitTextFillColor: "#ffffff", fontWeight: 600 }}>
                                                 <input
                                                   type="checkbox"
+                                                  style={{ width: "13px", height: "13px", margin: 0, accentColor: "#ffffff" }}
                                                   checked={
                                                     seccionesMismoGradoMateriaSeleccionado.length > 0
                                                     && (eval360GrupoIdsPorPlaneamiento[planeamientoId] || []).length === seccionesMismoGradoMateriaSeleccionado.length
@@ -7618,17 +8488,18 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                     }));
                                                   }}
                                                 />
-                                                Seleccionar todas
+                                                <span style={{ color: "#ffffff", opacity: 1, WebkitTextFillColor: "#ffffff" }}>Seleccionar todas</span>
                                               </label>
                                             </div>
-                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "8px", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#ffffff", padding: "10px" }}>
+                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(120px, 1fr))", gap: "4px 10px", border: "1px solid #475569", borderRadius: "8px", background: "#000000", padding: "6px 8px" }}>
                                               {seccionesMismoGradoMateriaSeleccionado.map((grupo) => {
                                                 const checked = (eval360GrupoIdsPorPlaneamiento[planeamientoId] || []).includes(String(grupo.GrupoId));
                                                 return (
-                                                  <label key={`sec-ind-${planeamientoId}-${grupo.GrupoId}`} style={{ display: "flex", alignItems: "center", gap: "6px", color: "#0f172a", fontWeight: 700, whiteSpace: "nowrap", padding: "4px 6px", borderRadius: "8px", background: checked ? "#e0f2fe" : "transparent" }}>
+                                                  <label key={`sec-ind-${planeamientoId}-${grupo.GrupoId}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "4px", color: "#ffffff", opacity: 1, WebkitTextFillColor: "#ffffff", fontWeight: 700, fontSize: "12px", whiteSpace: "nowrap", padding: "2px 4px", borderRadius: "6px", background: checked ? "#111111" : "transparent" }}>
                                                     <input
                                                       type="checkbox"
                                                       checked={checked}
+                                                      style={{ width: "13px", height: "13px", margin: 0, accentColor: "#ffffff" }}
                                                       onChange={(event) => {
                                                         const grupoId = String(grupo.GrupoId);
                                                         setEval360GrupoIdsPorPlaneamiento((prev) => {
@@ -7640,12 +8511,23 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                         });
                                                       }}
                                                     />
-                                                    {grupo.GrupoNombre}
+                                                    <span style={{ color: "#ffffff", opacity: 1, WebkitTextFillColor: "#ffffff" }}>{grupo.GrupoNombre}</span>
                                                   </label>
                                                 );
                                               })}
                                             </div>
                                           </div>
+
+                                          <label style={{ display: "grid", gap: "6px" }}>
+                                            <span style={{ fontWeight: 700, color: "#0f172a" }}>Indicaciones para la IA</span>
+                                            <textarea
+                                              value={getEval360IndicacionesPlaneamiento(planeamientoId)}
+                                              onChange={(event) => setEval360IndicacionesPorPlaneamiento((prev) => ({ ...prev, [planeamientoId]: event.target.value }))}
+                                              rows={3}
+                                              placeholder="Ejemplo: redactar los niveles con lenguaje sencillo, observable y alineado al MEP."
+                                              style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "10px" }}
+                                            />
+                                          </label>
 
                                           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
                                             <button
@@ -7655,6 +8537,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                               disabled={generatingEval360PlaneamientoId === planeamientoId}
                                             >
                                               {generatingEval360PlaneamientoId === planeamientoId ? "Generando indicadores..." : "Generar indicadores con IA"}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              style={secondaryButtonStyle}
+                                              onClick={() => setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: true }))}
+                                              disabled={generatingEval360PlaneamientoId === planeamientoId}
+                                            >
+                                              Cancelar
                                             </button>
                                           </div>
                                           {generatingEval360PlaneamientoId === planeamientoId ? (
@@ -8515,6 +9405,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         <option value="TAREAS">Reporte de Tareas</option>
                         <option value="EXAMENES">Reporte de Exámenes</option>
                         <option value="MENSAJES">Reporte de mensajes enviados</option>
+                        <option value="BITACORA">Reporte de Bitácora</option>
                         <option value="BOLETAS">Reporte de Boletas</option>
                         <option value="NOTAS">Reporte de Notas</option>
                       </select>
@@ -8600,30 +9491,73 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         {loadingAsistencia ? "Actualizando..." : "Actualizar asistencia"}
                       </button>
                     </div>
-                    <table>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th>Estudiante</th>
-                          <th>Identificación</th>
-                          <th>Total lecciones</th>
-                          <th>Ausencias equivalentes</th>
-                          <th>% ausencias</th>
-                          <th>% asistencia Art. 37</th>
+                          <th
+                            colSpan={7 + reporteAsistenciaDetallado.columnas.length}
+                            style={{
+                              textAlign: "left",
+                              background: "#ecfeff",
+                              color: "#0f172a",
+                              border: "1px solid #99f6e4",
+                              padding: "8px 10px",
+                              fontWeight: 800
+                            }}
+                          >
+                            Total de lecciones con lista tomada: {reporteAsistenciaDetallado.columnas.length}
+                          </th>
+                        </tr>
+                        <tr>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Nota</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Alerta temprana</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Tardías</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Ausencias justificadas</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Ausencias injustificadas</th>
+                          {reporteAsistenciaDetallado.gruposFecha.map((g) => (
+                            <th key={`fecha-head-${g.fechaIso}`} colSpan={g.columns.length} style={{ textAlign: "center", background: "#bfdbfe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px", fontWeight: 800 }}>{g.fechaLabel}</th>
+                          ))}
+                        </tr>
+                        <tr>
+                          <th colSpan={7} style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}></th>
+                          {reporteAsistenciaDetallado.columnasPlanas.map((c: any) => (
+                            <th key={`bloque-head-${c.key}`} style={{ textAlign: "center", background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700 }}>{c.bloque}</th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {resumenReportes.filas.map((fila) => (
-                          <tr key={fila.EstudianteId}>
-                            <td>{fila.NombreCompleto}</td>
-                            <td>{fila.Identificacion}</td>
-                            <td>{fila.TotalLecciones}</td>
-                            <td>{fila.AusenciasEquivalentes.toFixed(2)}</td>
-                            <td>{formatPercent(fila.PorcentajeAusencias)}</td>
-                            <td><strong>{formatPercent(fila.PorcentajeAsistencia)}</strong></td>
+                        {reporteAsistenciaDetallado.columnas.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} style={{ padding: "12px", border: "1px solid #cbd5e1", background: "#fff7ed", color: "#9a3412", fontWeight: 700 }}>
+                              No hay listas de asistencia registradas para mostrar fechas y lecciones.
+                            </td>
+                          </tr>
+                        ) : null}
+                        {reporteAsistenciaDetallado.rows.map((fila) => (
+                          <tr key={fila.estudianteId} style={{ background: "#ffffff" }}>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.nombre}</td>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.identificacion}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", background: "#ffffff", fontWeight: 800 }}>
+                              <span style={{ color: "#0f172a", fontWeight: 900, opacity: 1 }}>{fila.nota.toFixed(2)}%</span>
+                            </td>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", fontWeight: 800, color: fila.alertaColor, background: fila.alertaBg }}>{fila.alerta}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.tardias}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.ausJust}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.ausInjust}</td>
+                            {reporteAsistenciaDetallado.columnasPlanas.map((c: any) => (
+                              <td key={`asis-cell-${fila.estudianteId}-${c.key}`} style={{ textAlign: "center", fontWeight: 700, border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>
+                                {fila.porColumna.get(c.key) || "-"}
+                              </td>
+                            ))}
                           </tr>
                         ))}
                       </tbody>
                     </table>
+                    <div style={{ marginTop: "8px", color: "#cbd5e1", fontSize: "12px" }}>
+                      T = Tardía, P = Presente, AI = Ausencia injustificada, AJ = Ausencia justificada.
+                    </div>
                   </div>
                 )}
 
@@ -8634,19 +9568,25 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         <tr>
                           <th>Estudiante</th>
                           <th>Identificación</th>
-                          <th>Actividades registradas</th>
-                          <th>Total actividades</th>
-                          <th>Promedio</th>
+                          <th>Actividades registradas/calificadas</th>
+                          {detalleReportesPorTipo.cotidiano.columns.map((col) => (
+                            <th key={`cot-col-${col.actividadId}`}>{col.nombre}</th>
+                          ))}
+                          <th>% evaluado</th>
+                          <th>% ganado</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {resumenReportesPorTipo.cotidiano.filas.map((fila) => (
+                        {detalleReportesPorTipo.cotidiano.rows.map((fila) => (
                           <tr key={fila.EstudianteId}>
                             <td>{fila.NombreCompleto}</td>
                             <td>{fila.Identificacion}</td>
-                            <td>{fila.ActividadesRegistradas}</td>
-                            <td>{fila.TotalActividades}</td>
-                            <td><strong>{formatPercent(fila.Promedio)}</strong></td>
+                            <td>{fila.RegistradasCalificadas}</td>
+                            {fila.cols.map((valor, idx) => (
+                              <td key={`cot-v-${fila.EstudianteId}-${idx}`}>{valor}</td>
+                            ))}
+                            <td><strong>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</strong></td>
+                            <td><strong>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</strong></td>
                           </tr>
                         ))}
                       </tbody>
@@ -8661,19 +9601,25 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         <tr>
                           <th>Estudiante</th>
                           <th>Identificación</th>
-                          <th>Actividades registradas</th>
-                          <th>Total actividades</th>
-                          <th>Promedio</th>
+                          <th>Actividades registradas/calificadas</th>
+                          {detalleReportesPorTipo.tareas.columns.map((col) => (
+                            <th key={`tar-col-${col.actividadId}`}>{col.nombre}</th>
+                          ))}
+                          <th>% evaluado</th>
+                          <th>% ganado</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {resumenReportesPorTipo.tareas.filas.map((fila) => (
+                        {detalleReportesPorTipo.tareas.rows.map((fila) => (
                           <tr key={fila.EstudianteId}>
                             <td>{fila.NombreCompleto}</td>
                             <td>{fila.Identificacion}</td>
-                            <td>{fila.ActividadesRegistradas}</td>
-                            <td>{fila.TotalActividades}</td>
-                            <td><strong>{formatPercent(fila.Promedio)}</strong></td>
+                            <td>{fila.RegistradasCalificadas}</td>
+                            {fila.cols.map((valor, idx) => (
+                              <td key={`tar-v-${fila.EstudianteId}-${idx}`}>{valor}</td>
+                            ))}
+                            <td><strong>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</strong></td>
+                            <td><strong>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</strong></td>
                           </tr>
                         ))}
                       </tbody>
@@ -8688,19 +9634,25 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         <tr>
                           <th>Estudiante</th>
                           <th>Identificación</th>
-                          <th>Actividades registradas</th>
-                          <th>Total actividades</th>
-                          <th>Promedio</th>
+                          <th>Actividades registradas/calificadas</th>
+                          {detalleReportesPorTipo.examenes.columns.map((col) => (
+                            <th key={`exa-col-${col.actividadId}`}>{col.nombre}</th>
+                          ))}
+                          <th>% evaluado</th>
+                          <th>% ganado</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {resumenReportesPorTipo.examenes.filas.map((fila) => (
+                        {detalleReportesPorTipo.examenes.rows.map((fila) => (
                           <tr key={fila.EstudianteId}>
                             <td>{fila.NombreCompleto}</td>
                             <td>{fila.Identificacion}</td>
-                            <td>{fila.ActividadesRegistradas}</td>
-                            <td>{fila.TotalActividades}</td>
-                            <td><strong>{formatPercent(fila.Promedio)}</strong></td>
+                            <td>{fila.RegistradasCalificadas}</td>
+                            {fila.cols.map((valor, idx) => (
+                              <td key={`exa-v-${fila.EstudianteId}-${idx}`}>{valor}</td>
+                            ))}
+                            <td><strong>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</strong></td>
+                            <td><strong>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</strong></td>
                           </tr>
                         ))}
                       </tbody>
@@ -8823,6 +9775,40 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </table>
                   </div>
                 </div>
+                )}
+
+                {tipoReporteGestion === "BITACORA" && (
+                  <div style={{ overflowX: "auto" }}>
+                    <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => selected && loadBitacora(selected)} disabled={loadingBitacora}>
+                        {loadingBitacora ? "Actualizando..." : "Actualizar bitácora"}
+                      </button>
+                    </div>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Temas desarrollados</th>
+                          <th>Observaciones</th>
+                          <th>Hechos relevantes</th>
+                          <th>Usuario</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bitacorasGrupo.length === 0 ? (
+                          <tr><td colSpan={5} style={{ textAlign: "center", padding: "10px" }}>No hay registros de bitácora.</td></tr>
+                        ) : bitacorasGrupo.map((fila) => (
+                          <tr key={fila.BitacoraGrupoId}>
+                            <td>{String(fila.FechaRegistro || "").slice(0, 10)}</td>
+                            <td>{fila.TemasDesarrollados || "-"}</td>
+                            <td>{fila.Observaciones || "-"}</td>
+                            <td>{fila.HechosRelevantes || "-"}</td>
+                            <td>{fila.NombreUsuario || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             )}

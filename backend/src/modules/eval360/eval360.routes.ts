@@ -4215,6 +4215,28 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
   }
 }
 
+function isAdultByBirthDate(fechaNacimiento?: string | Date | null) {
+  if (!fechaNacimiento) return false;
+  const dob = new Date(fechaNacimiento);
+  if (Number.isNaN(dob.getTime())) return false;
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const monthDiff = now.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) age -= 1;
+  return age >= 18;
+}
+
+function resolveWhatsAppPhonesForStudent(params: {
+  fechaNacimiento?: string | Date | null;
+  telefonoEstudiante?: string | null;
+  telefonosEncargados?: string[];
+}) {
+  const isAdult = isAdultByBirthDate(params.fechaNacimiento);
+  const telefonoEstudiante = String(params.telefonoEstudiante || "").trim();
+  if (isAdult && telefonoEstudiante) return [telefonoEstudiante];
+  return Array.from(new Set((params.telefonosEncargados || []).map((t) => String(t || "").trim()).filter(Boolean)));
+}
+
 async function ensureReporteEnvioBitacoraTable(pool: any) {
   await pool.request().query(`
     IF OBJECT_ID('dbo.ReporteEnvioBitacora', 'U') IS NULL
@@ -4237,6 +4259,71 @@ async function ensureReporteEnvioBitacoraTable(pool: any) {
       );
       CREATE UNIQUE INDEX UX_ReporteEnvioBitacora_ModuloClave ON dbo.ReporteEnvioBitacora(Modulo, RegistroClave);
       CREATE INDEX IX_ReporteEnvioBitacora_Filtros ON dbo.ReporteEnvioBitacora(GrupoId, MateriaId, PeriodoId, AnioLectivoId, EstudianteId, Fecha);
+    END
+  `);
+}
+
+async function ensureNotaEdicionAuditoriaTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.Eval360_NotaEdicionAuditoria', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.Eval360_NotaEdicionAuditoria (
+        NotaEdicionAuditoriaId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        NotaActividadId INT NOT NULL,
+        ActividadId INT NOT NULL,
+        EstudianteId INT NOT NULL,
+        EstructuraGrupoId INT NOT NULL,
+        EstructuraGrupoDetalleId INT NOT NULL,
+        PorcentajeAnterior DECIMAL(10,2) NOT NULL,
+        PorcentajeNuevo DECIMAL(10,2) NOT NULL,
+        NotaAnterior DECIMAL(10,2) NOT NULL,
+        NotaNueva DECIMAL(10,2) NOT NULL,
+        PuntosAnterior DECIMAL(10,2) NOT NULL,
+        PuntosNuevo DECIMAL(10,2) NOT NULL,
+        Justificacion NVARCHAR(1000) NOT NULL,
+        UsuarioId INT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_Eval360_NotaEdicionAuditoria_CreatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE INDEX IX_Eval360_NotaEdicionAuditoria_ActividadEstudiante
+        ON dbo.Eval360_NotaEdicionAuditoria (ActividadId, EstudianteId, CreatedAt DESC);
+    END
+  `);
+}
+
+async function ensureComponenteAjusteManualTables(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.Eval360_ComponenteAjusteManual', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.Eval360_ComponenteAjusteManual (
+        ComponenteAjusteManualId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        EstructuraGrupoId INT NOT NULL,
+        EstructuraGrupoDetalleId INT NOT NULL,
+        EstudianteId INT NOT NULL,
+        PorcentajeObtenidoComponente DECIMAL(10,2) NOT NULL,
+        Justificacion NVARCHAR(1000) NULL,
+        UsuarioId INT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_Eval360_ComponenteAjusteManual_CreatedAt DEFAULT(SYSDATETIME()),
+        UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_Eval360_ComponenteAjusteManual_UpdatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE UNIQUE INDEX UX_Eval360_ComponenteAjusteManual_Key
+        ON dbo.Eval360_ComponenteAjusteManual (EstructuraGrupoId, EstructuraGrupoDetalleId, EstudianteId);
+    END
+
+    IF OBJECT_ID('dbo.Eval360_ComponenteAjusteManualAuditoria', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.Eval360_ComponenteAjusteManualAuditoria (
+        ComponenteAjusteManualAuditoriaId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        EstructuraGrupoId INT NOT NULL,
+        EstructuraGrupoDetalleId INT NOT NULL,
+        EstudianteId INT NOT NULL,
+        PorcentajeAnterior DECIMAL(10,2) NOT NULL,
+        PorcentajeNuevo DECIMAL(10,2) NOT NULL,
+        Justificacion NVARCHAR(1000) NOT NULL,
+        UsuarioId INT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_Eval360_ComponenteAjusteManualAuditoria_CreatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE INDEX IX_Eval360_ComponenteAjusteManualAuditoria_Key
+        ON dbo.Eval360_ComponenteAjusteManualAuditoria (EstructuraGrupoId, EstructuraGrupoDetalleId, EstudianteId, CreatedAt DESC);
     END
   `);
 }
@@ -4540,6 +4627,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
     const loadContextPromise = (async () => {
       const pool = await getPool();
+      await ensureComponenteAjusteManualTables(pool);
 
       const estructuraResult = await pool.request()
       .input("grupoId", sql.Int, grupoId)
@@ -4717,10 +4805,11 @@ router.get("/seguimiento/contexto", async (req, res) => {
       let actividadIndicadores: any[] = [];
       let notasActividades: any[] = [];
       let asistenciaRegistros: any[] = [];
+      let componenteAjustesManuales: any[] = [];
       let mensajesSeguimiento: any[] = [];
 
       if (estructuraGrupoId) {
-        const [detallesResult, indicadoresResult, seguimientosResult, actividadesResult, actividadIndicadoresResult, notasActividadesResult, asistenciaResult] = await Promise.all([
+        const [detallesResult, indicadoresResult, seguimientosResult, actividadesResult, actividadIndicadoresResult, notasActividadesResult, asistenciaResult, ajustesManualesResult] = await Promise.all([
         timedQuery("eval360.contexto.detalles", () => pool.request()
           .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
           .query(`
@@ -4823,10 +4912,17 @@ router.get("/seguimiento/contexto", async (req, res) => {
               n.NotaObtenida,
               n.PorcentajeObtenido,
               n.Observacion,
+              CASE WHEN nea.NotaEdicionAuditoriaId IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS FueEditado,
               ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
               ISNULL(reb.WaEnviado, 0) AS WaEnviado
             FROM dbo.Eval360_NotaActividad n
             INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = n.ActividadId
+            OUTER APPLY (
+              SELECT TOP 1 x.NotaEdicionAuditoriaId
+              FROM dbo.Eval360_NotaEdicionAuditoria x
+              WHERE x.NotaActividadId = n.NotaActividadId
+              ORDER BY x.CreatedAt DESC
+            ) nea
             LEFT JOIN dbo.ReporteEnvioBitacora reb
               ON reb.Modulo IN (N'COTIDIANO_ACTIVIDAD', N'TAREAS_ACTIVIDAD')
              AND reb.RegistroClave = CONCAT(
@@ -4875,6 +4971,19 @@ router.get("/seguimiento/contexto", async (req, res) => {
               AND ar.MateriaId = @materiaId
               AND ar.AnioLectivoId = @anioLectivoId
               AND ar.PeriodoId = @periodoId
+          `)),
+        timedQuery("eval360.contexto.ajustesManuales", () => pool.request()
+          .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+          .query(`
+            SELECT
+              EstructuraGrupoId,
+              EstructuraGrupoDetalleId,
+              EstudianteId,
+              PorcentajeObtenidoComponente,
+              Justificacion,
+              UpdatedAt
+            FROM dbo.Eval360_ComponenteAjusteManual
+            WHERE EstructuraGrupoId = @estructuraGrupoId
           `))
       ]);
 
@@ -4885,6 +4994,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
         actividadIndicadores = actividadIndicadoresResult.recordset;
         notasActividades = notasActividadesResult.recordset;
         asistenciaRegistros = asistenciaResult.recordset;
+        componenteAjustesManuales = ajustesManualesResult.recordset;
       }
 
       mensajesSeguimiento = (await timedQuery("eval360.contexto.mensajesSeguimiento", () => pool.request()
@@ -4913,6 +5023,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
         actividadIndicadores,
         notasActividades,
         asistenciaRegistros,
+        componenteAjustesManuales,
         seguimientos,
         mensajesSeguimiento
       };
@@ -5207,6 +5318,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
     const notificacionesPendientes: Array<{
       estudianteId: number;
       estudianteNombre: string;
+      fechaNacimiento?: string | null;
+      telefonoEstudiante?: string | null;
       correoEstudiante?: string | null;
       telefonosEncargados?: string[];
       autorizaWhatsApp?: boolean;
@@ -5373,6 +5486,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
               e.Nombre,
               e.PrimerApellido,
               e.SegundoApellido,
+              e.FechaNacimiento,
+              e.Telefono AS TelefonoEstudiante,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
               enc.Telefonos AS EncargadosTelefonos
@@ -5399,6 +5514,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
           notificacionesPendientes.push({
             estudianteId,
             estudianteNombre: [estudiante.Nombre, estudiante.PrimerApellido, estudiante.SegundoApellido].filter(Boolean).join(" "),
+            fechaNacimiento: estudiante.FechaNacimiento || null,
+            telefonoEstudiante: estudiante.TelefonoEstudiante || null,
             correoEstudiante: estudiante.Correo,
             telefonosEncargados: String(estudiante.EncargadosTelefonos || "")
               .split("|")
@@ -5475,7 +5592,11 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
       }
 
       if (aviso.autorizaWhatsApp) {
-        const telefonos = Array.from(new Set((aviso.telefonosEncargados || []).map((t) => String(t || "").trim()).filter(Boolean)));
+        const telefonos = resolveWhatsAppPhonesForStudent({
+          fechaNacimiento: aviso.fechaNacimiento,
+          telefonoEstudiante: aviso.telefonoEstudiante,
+          telefonosEncargados: aviso.telefonosEncargados
+        });
         for (const telefono of telefonos) {
           const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: bodyFinal });
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
@@ -5559,6 +5680,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
     const notificacionesPendientes: Array<{
       estudianteId: number;
       estudianteNombre: string;
+      fechaNacimiento?: string | null;
+      telefonoEstudiante?: string | null;
       correoEstudiante?: string | null;
       telefonosEncargados?: string[];
       autorizaWhatsApp?: boolean;
@@ -5675,6 +5798,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
               e.Nombre,
               e.PrimerApellido,
               e.SegundoApellido,
+              e.FechaNacimiento,
+              e.Telefono AS TelefonoEstudiante,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
               enc.Telefonos AS EncargadosTelefonos,
@@ -5710,6 +5835,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
           notificacionesPendientes.push({
             estudianteId,
             estudianteNombre: [estudiante.Nombre, estudiante.PrimerApellido, estudiante.SegundoApellido].filter(Boolean).join(" "),
+            fechaNacimiento: estudiante.FechaNacimiento || null,
+            telefonoEstudiante: estudiante.TelefonoEstudiante || null,
             correoEstudiante: estudiante.Correo || estudiante.EncargadoPrincipalCorreo,
             telefonosEncargados: String(estudiante.EncargadosTelefonos || "")
               .split("|")
@@ -5784,7 +5911,11 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
       }
 
       if (aviso.autorizaWhatsApp) {
-        const telefonos = Array.from(new Set((aviso.telefonosEncargados || []).map((t) => String(t || "").trim()).filter(Boolean)));
+        const telefonos = resolveWhatsAppPhonesForStudent({
+          fechaNacimiento: aviso.fechaNacimiento,
+          telefonoEstudiante: aviso.telefonoEstudiante,
+          telefonosEncargados: aviso.telefonosEncargados
+        });
         for (const telefono of telefonos) {
           const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: textoFinal });
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
@@ -5824,6 +5955,234 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
     try { await transaction.rollback(); } catch {}
     console.error("Error guardando actividad Eval360:", error);
     return res.status(500).json({ ok: false, message: "No se pudo guardar la actividad" });
+  }
+});
+
+router.put("/seguimiento/notas/:notaActividadId/porcentaje", async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  try {
+    if (!assertCanAccess(req, res)) return;
+    await ensureNotaEdicionAuditoriaTable(pool);
+
+    const notaActividadId = toRequiredNumber(req.params.notaActividadId, "notaActividadId", res);
+    const porcentajeObtenido = Number(req.body?.porcentajeObtenido);
+    const justificacion = normalizeText(req.body?.justificacion || "");
+    if (notaActividadId === null) return;
+    if (!Number.isFinite(porcentajeObtenido) || porcentajeObtenido < 0 || porcentajeObtenido > 100) {
+      return badRequest(res, "El % obtenido debe estar entre 0 y 100");
+    }
+    if (!justificacion) {
+      return badRequest(res, "La justificación es obligatoria para editar la calificación");
+    }
+
+    await transaction.begin();
+
+    const notaResult = await new sql.Request(transaction)
+      .input("notaActividadId", sql.Int, notaActividadId)
+      .query(`
+        SELECT TOP 1
+          na.NotaActividadId,
+          na.ActividadId,
+          na.EstudianteId,
+          na.PuntosObtenidos,
+          na.PuntosMaximos,
+          na.NotaObtenida,
+          na.PorcentajeObtenido,
+          a.EstructuraGrupoId,
+          a.EstructuraGrupoDetalleId
+        FROM dbo.Eval360_NotaActividad na
+        INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = na.ActividadId
+        WHERE na.NotaActividadId = @notaActividadId
+      `);
+
+    const nota = notaResult.recordset[0];
+    if (!nota) {
+      await transaction.rollback();
+      return badRequest(res, "No se encontró la nota a editar");
+    }
+
+    const estructura = await getEstructuraPermitidaPorId(req, res, pool, Number(nota.EstructuraGrupoId || 0));
+    if (!estructura) {
+      await transaction.rollback();
+      return forbidden(res, "No tenés permiso para editar esta nota");
+    }
+
+    const puntosMaximos = Number(nota.PuntosMaximos || 0);
+    const porcentajeAnterior = Number(nota.PorcentajeObtenido || 0);
+    const notaAnterior = Number(nota.NotaObtenida || 0);
+    const puntosAnterior = Number(nota.PuntosObtenidos || 0);
+    const porcentajeNuevo = Number(porcentajeObtenido.toFixed(2));
+    const notaNueva = porcentajeNuevo;
+    const puntosNuevo = Number(((porcentajeNuevo / 100) * puntosMaximos).toFixed(2));
+
+    await new sql.Request(transaction)
+      .input("notaActividadId", sql.Int, notaActividadId)
+      .input("porcentajeObtenido", sql.Decimal(10, 2), porcentajeNuevo)
+      .input("puntosObtenidos", sql.Decimal(10, 2), puntosNuevo)
+      .query(`
+        UPDATE dbo.Eval360_NotaActividad
+        SET PorcentajeObtenido = @porcentajeObtenido,
+            PuntosObtenidos = @puntosObtenidos,
+            UpdatedAt = SYSDATETIME()
+        WHERE NotaActividadId = @notaActividadId
+      `);
+
+    await new sql.Request(transaction)
+      .input("notaActividadId", sql.Int, notaActividadId)
+      .input("actividadId", sql.Int, Number(nota.ActividadId))
+      .input("estudianteId", sql.Int, Number(nota.EstudianteId))
+      .input("estructuraGrupoId", sql.Int, Number(nota.EstructuraGrupoId))
+      .input("estructuraGrupoDetalleId", sql.Int, Number(nota.EstructuraGrupoDetalleId))
+      .input("porcentajeAnterior", sql.Decimal(10, 2), porcentajeAnterior)
+      .input("porcentajeNuevo", sql.Decimal(10, 2), porcentajeNuevo)
+      .input("notaAnterior", sql.Decimal(10, 2), notaAnterior)
+      .input("notaNueva", sql.Decimal(10, 2), notaNueva)
+      .input("puntosAnterior", sql.Decimal(10, 2), puntosAnterior)
+      .input("puntosNuevo", sql.Decimal(10, 2), puntosNuevo)
+      .input("justificacion", sql.NVarChar(1000), justificacion)
+      .input("usuarioId", sql.Int, getUserId(req) || null)
+      .query(`
+        INSERT INTO dbo.Eval360_NotaEdicionAuditoria
+          (NotaActividadId, ActividadId, EstudianteId, EstructuraGrupoId, EstructuraGrupoDetalleId,
+           PorcentajeAnterior, PorcentajeNuevo, NotaAnterior, NotaNueva, PuntosAnterior, PuntosNuevo,
+           Justificacion, UsuarioId)
+        VALUES
+          (@notaActividadId, @actividadId, @estudianteId, @estructuraGrupoId, @estructuraGrupoDetalleId,
+           @porcentajeAnterior, @porcentajeNuevo, @notaAnterior, @notaNueva, @puntosAnterior, @puntosNuevo,
+           @justificacion, @usuarioId)
+      `);
+
+    await sincronizarNotaFormalDesdeActividad(transaction, {
+      estructuraGrupoId: Number(nota.EstructuraGrupoId),
+      estructuraGrupoDetalleId: Number(nota.EstructuraGrupoDetalleId),
+      actividadId: Number(nota.ActividadId)
+    });
+
+    await transaction.commit();
+    return ok(res, {
+      notaActividadId,
+      porcentajeAnterior,
+      porcentajeNuevo,
+      justificacion
+    }, "Calificación actualizada correctamente");
+  } catch (error) {
+    try { await transaction.rollback(); } catch {}
+    console.error("Error actualizando % obtenido de nota:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la calificación" });
+  }
+});
+
+router.put("/seguimiento/componentes/ajustar-porcentaje", async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  try {
+    if (!assertCanAccess(req, res)) return;
+    await ensureNotaEdicionAuditoriaTable(pool);
+    await ensureComponenteAjusteManualTables(pool);
+
+    const estructuraGrupoId = toRequiredNumber(req.body?.estructuraGrupoId, "estructuraGrupoId", res);
+    const estructuraGrupoDetalleId = toRequiredNumber(req.body?.estructuraGrupoDetalleId, "estructuraGrupoDetalleId", res);
+    const estudianteId = toRequiredNumber(req.body?.estudianteId, "estudianteId", res);
+    const porcentajeObtenidoComponente = Number(req.body?.porcentajeObtenidoComponente);
+    const justificacion = normalizeText(req.body?.justificacion || "");
+    if (estructuraGrupoId === null || estructuraGrupoDetalleId === null || estudianteId === null) return;
+    if (!Number.isFinite(porcentajeObtenidoComponente) || porcentajeObtenidoComponente < 0) {
+      return badRequest(res, "El % obtenido debe ser mayor o igual a 0");
+    }
+    if (!justificacion) return badRequest(res, "La justificación es obligatoria para editar la calificación");
+
+    const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
+    if (!estructura) return;
+
+    const detalleRes = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .query(`
+        SELECT TOP 1 EstructuraGrupoDetalleId, Porcentaje
+        FROM dbo.Eval360_EstructuraGrupoDetalle
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND EstructuraGrupoDetalleId = @estructuraGrupoDetalleId
+          AND ISNULL(Activo,1) = 1
+      `);
+    const detalle = detalleRes.recordset[0];
+    if (!detalle) return badRequest(res, "No se encontró el rubro seleccionado");
+
+    const porcentajeValor = Number(detalle.Porcentaje || 0);
+    if (porcentajeObtenidoComponente > porcentajeValor) {
+      return badRequest(res, `El % obtenido no puede ser mayor al % valor del rubro (${porcentajeValor.toFixed(2)}%)`);
+    }
+
+    await transaction.begin();
+
+    const ajustePrevioRes = await new sql.Request(transaction)
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .input("estudianteId", sql.Int, estudianteId)
+      .query(`
+        SELECT TOP 1 PorcentajeObtenidoComponente
+        FROM dbo.Eval360_ComponenteAjusteManual
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND EstructuraGrupoDetalleId = @estructuraGrupoDetalleId
+          AND EstudianteId = @estudianteId
+      `);
+    const porcentajeAnteriorManual = Number(ajustePrevioRes.recordset[0]?.PorcentajeObtenidoComponente || 0);
+
+    await new sql.Request(transaction)
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .input("estudianteId", sql.Int, estudianteId)
+      .input("porcentajeObtenidoComponente", sql.Decimal(10, 2), Number(porcentajeObtenidoComponente.toFixed(2)))
+      .input("justificacion", sql.NVarChar(1000), justificacion)
+      .input("usuarioId", sql.Int, getUserId(req) || null)
+      .query(`
+        MERGE dbo.Eval360_ComponenteAjusteManual AS target
+        USING (
+          SELECT
+            @estructuraGrupoId AS EstructuraGrupoId,
+            @estructuraGrupoDetalleId AS EstructuraGrupoDetalleId,
+            @estudianteId AS EstudianteId
+        ) AS source
+        ON target.EstructuraGrupoId = source.EstructuraGrupoId
+          AND target.EstructuraGrupoDetalleId = source.EstructuraGrupoDetalleId
+          AND target.EstudianteId = source.EstudianteId
+        WHEN MATCHED THEN
+          UPDATE SET
+            PorcentajeObtenidoComponente = @porcentajeObtenidoComponente,
+            Justificacion = @justificacion,
+            UsuarioId = @usuarioId,
+            UpdatedAt = SYSDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (EstructuraGrupoId, EstructuraGrupoDetalleId, EstudianteId, PorcentajeObtenidoComponente, Justificacion, UsuarioId, CreatedAt, UpdatedAt)
+          VALUES (@estructuraGrupoId, @estructuraGrupoDetalleId, @estudianteId, @porcentajeObtenidoComponente, @justificacion, @usuarioId, SYSDATETIME(), SYSDATETIME());
+      `);
+
+    await new sql.Request(transaction)
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .input("estudianteId", sql.Int, estudianteId)
+      .input("porcentajeAnterior", sql.Decimal(10, 2), porcentajeAnteriorManual)
+      .input("porcentajeNuevo", sql.Decimal(10, 2), Number(porcentajeObtenidoComponente.toFixed(2)))
+      .input("justificacion", sql.NVarChar(1000), justificacion)
+      .input("usuarioId", sql.Int, getUserId(req) || null)
+      .query(`
+        INSERT INTO dbo.Eval360_ComponenteAjusteManualAuditoria
+          (EstructuraGrupoId, EstructuraGrupoDetalleId, EstudianteId, PorcentajeAnterior, PorcentajeNuevo, Justificacion, UsuarioId)
+        VALUES
+          (@estructuraGrupoId, @estructuraGrupoDetalleId, @estudianteId, @porcentajeAnterior, @porcentajeNuevo, @justificacion, @usuarioId)
+      `);
+
+    await transaction.commit();
+    return ok(res, {
+      estructuraGrupoDetalleId,
+      estudianteId,
+      porcentajeValor,
+      porcentajeObtenidoComponente: Number(porcentajeObtenidoComponente.toFixed(2))
+    }, "Calificación del rubro actualizada correctamente");
+  } catch (error) {
+    try { await transaction.rollback(); } catch {}
+    console.error("Error ajustando % obtenido por rubro:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo ajustar la calificación del rubro" });
   }
 });
 
