@@ -183,9 +183,9 @@ export default function GestionProfePage() {
   const [seguimientoContexto, setSeguimientoContexto] = useState<SeguimientoEvaluacionContexto | null>(null);
   const [loadingSeguimiento, setLoadingSeguimiento] = useState(false);
   const [savingSeguimiento, setSavingSeguimiento] = useState(false);
-  const [savingSeguimientoModo, setSavingSeguimientoModo] = useState<"actividad" | "indicador" | null>(null);
+  const [savingSeguimientoModo, setSavingSeguimientoModo] = useState<"actividad" | "indicador" | "asignacion" | null>(null);
   const [savingSeguimientoProgress, setSavingSeguimientoProgress] = useState(0);
-  const [savedSeguimientoModo, setSavedSeguimientoModo] = useState<"actividad" | "indicador" | null>(null);
+  const [savedSeguimientoModo, setSavedSeguimientoModo] = useState<"actividad" | "indicador" | "asignacion" | null>(null);
   const savingSeguimientoTimerRef = useRef<number | null>(null);
   const [loadingHorario, setLoadingHorario] = useState(false);
   const [horarioVisible, setHorarioVisible] = useState(false);
@@ -340,27 +340,51 @@ export default function GestionProfePage() {
     return Array.from(map.entries()).map(([tipo, detalleItem]) => ({ tipo, detalle: detalleItem }));
   }, [seguimientoContexto?.detalles, eval360DetallesDraft]);
 
-  const seguimientoDetalleSeleccionado = useMemo(() => {
-    return seguimientoComponentes.find((item) => item.tipo === seguimientoTipo)?.detalle || null;
-  }, [seguimientoComponentes, seguimientoTipo]);
+  const seguimientoDetallesSeleccionados = useMemo(() => {
+    const detalles = seguimientoContexto?.detalles || eval360DetallesDraft || [];
+    if (!seguimientoTipo) return [];
+    return (detalles as SeguimientoEvaluacionDetalle[]).filter((item) => {
+      if (item.Activo === false || item.Activo === 0) return false;
+      return getTipoSeguimientoFromDetalle(item) === seguimientoTipo;
+    });
+  }, [seguimientoContexto?.detalles, eval360DetallesDraft, seguimientoTipo]);
 
   const seguimientoActividadesFiltradas = useMemo(() => {
     const actividades = seguimientoContexto?.actividades || [];
-    if (!seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId) return [];
-    return actividades.filter((actividad) => Number(actividad.EstructuraGrupoDetalleId) === Number(seguimientoDetalleSeleccionado.EstructuraGrupoDetalleId));
-  }, [seguimientoContexto?.actividades, seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId]);
+    const detalleIds = new Set(
+      seguimientoDetallesSeleccionados
+        .map((item) => Number(item.EstructuraGrupoDetalleId || 0))
+        .filter((id) => id > 0)
+    );
+    if (!detalleIds.size) return [];
+    return ordenarActividadesEvaluativas(
+      actividades.filter((actividad) =>
+        detalleIds.has(Number(actividad.EstructuraGrupoDetalleId || 0))
+        && actividad.Activo !== false
+        && actividad.Activo !== 0
+      )
+    );
+  }, [seguimientoContexto?.actividades, seguimientoDetallesSeleccionados]);
 
   const seguimientoActividadSeleccionada = useMemo(() => {
     return seguimientoActividadesFiltradas.find((item) => String(item.ActividadId) === String(seguimientoActividadId)) || seguimientoActividadesFiltradas[0] || null;
   }, [seguimientoActividadesFiltradas, seguimientoActividadId]);
+
+  const seguimientoDetalleSeleccionado = useMemo(() => {
+    const detalleActividadId = Number(seguimientoActividadSeleccionada?.EstructuraGrupoDetalleId || 0);
+    if (detalleActividadId > 0) {
+      return seguimientoDetallesSeleccionados.find((item) => Number(item.EstructuraGrupoDetalleId || 0) === detalleActividadId) || seguimientoDetallesSeleccionados[0] || null;
+    }
+    return seguimientoDetallesSeleccionados[0] || null;
+  }, [seguimientoDetallesSeleccionados, seguimientoActividadSeleccionada?.EstructuraGrupoDetalleId]);
 
   const seguimientoComponenteTieneActividadesPlaneamiento = useMemo(() => {
     return seguimientoActividadesFiltradas.some((actividad) => Boolean(actividad.UsaIndicadoresPlaneamiento));
   }, [seguimientoActividadesFiltradas]);
 
   const seguimientoModoHibridoTareas = useMemo(() => {
-    return seguimientoComponenteTieneActividadesPlaneamiento && Boolean(seguimientoActividadSeleccionada?.UsaIndicadoresPlaneamiento);
-  }, [seguimientoComponenteTieneActividadesPlaneamiento, seguimientoActividadSeleccionada?.UsaIndicadoresPlaneamiento]);
+    return seguimientoComponenteTieneActividadesPlaneamiento && Boolean(seguimientoActividadSeleccionada);
+  }, [seguimientoComponenteTieneActividadesPlaneamiento, seguimientoActividadSeleccionada]);
 
   const seguimientoModoActividadDirecta = useMemo(() => {
     const actividad = seguimientoActividadSeleccionada;
@@ -406,8 +430,12 @@ export default function GestionProfePage() {
   }, [seguimientoModoHibridoTareas, seguimientoTipo, seguimientoActividadSeleccionada?.ActividadId, seguimientoContexto?.indicadores, seguimientoContexto?.actividadIndicadores, seguimientoContexto?.seguimientos, seguimientoPlaneamientoId]);
 
   const seguimientoActividadesPlaneamiento = useMemo(() => {
-    return seguimientoActividadesFiltradas.filter((actividad) => Boolean(actividad.UsaIndicadoresPlaneamiento));
-  }, [seguimientoActividadesFiltradas]);
+    const actividadesConPlaneamiento = seguimientoActividadesFiltradas.filter((actividad) => Boolean(actividad.UsaIndicadoresPlaneamiento));
+    if (!actividadesConPlaneamiento.length) return [];
+    if (actividadesConPlaneamiento.length === seguimientoActividadesFiltradas.length) return seguimientoActividadesFiltradas;
+    if (isTipoIndicadorSeguimiento(seguimientoTipo)) return seguimientoActividadesFiltradas;
+    return actividadesConPlaneamiento;
+  }, [seguimientoActividadesFiltradas, seguimientoTipo]);
 
   const seguimientoIndicadoresAsignablesPorActividad = useMemo(() => {
     if (!seguimientoComponenteTieneActividadesPlaneamiento) return [];
@@ -721,6 +749,21 @@ export default function GestionProfePage() {
     return Array.from(map.values());
   };
 
+  function ordenarActividadesEvaluativas(items: any[]) {
+    return [...(items || [])].sort((a, b) => {
+      const aa = String(a?.Nombre || "");
+      const bb = String(b?.Nombre || "");
+      const ma = aa.match(/(\d+)/);
+      const mb = bb.match(/(\d+)/);
+      if (ma && mb) {
+        const na = Number(ma[1] || 0);
+        const nb = Number(mb[1] || 0);
+        if (na !== nb) return na - nb;
+      }
+      return aa.localeCompare(bb, undefined, { numeric: true, sensitivity: "base" });
+    });
+  }
+
   const dedupeSeguimientosActividadIndicador = (items: any[]) => {
     const map = new Map<string, any>();
     for (const item of items || []) {
@@ -757,6 +800,49 @@ export default function GestionProfePage() {
       }
     }
     return Array.from(map.values());
+  };
+
+  const agruparIndicadoresLogicos = (ids: Iterable<number>, indicadoresCatalogo: any[], tipo: "COTIDIANO" | "TAREAS") => {
+    const indicadorPorId = new Map<number, any>();
+    for (const indicador of indicadoresCatalogo || []) {
+      indicadorPorId.set(Number(indicador?.IndicadorGrupoId || 0), indicador);
+    }
+
+    const columnasMap = new Map<string, { nombre: string; indicadorIds: number[] }>();
+    for (const rawId of ids) {
+      const id = Number(rawId || 0);
+      if (id <= 0) continue;
+      const indicador = indicadorPorId.get(id);
+      const nombre = String(indicador?.IndicadorBase || `Indicador ${id}`);
+      const key = indicador
+        ? [
+            tipo,
+            normalizarSeguimientoKey(nombre),
+          ].join("|")
+        : `ID|${id}`;
+      const actual = columnasMap.get(key);
+      if (actual) {
+        if (!actual.indicadorIds.includes(id)) actual.indicadorIds.push(id);
+      } else {
+        columnasMap.set(key, { nombre, indicadorIds: [id] });
+      }
+    }
+
+    return Array.from(columnasMap.values()).sort((a, b) => {
+      const aa = String(a.nombre || "");
+      const bb = String(b.nombre || "");
+      const ma = aa.match(/^(\d+)(?:\.(\d+))?/);
+      const mb = bb.match(/^(\d+)(?:\.(\d+))?/);
+      if (ma && mb) {
+        const a1 = Number(ma[1] || 0);
+        const b1 = Number(mb[1] || 0);
+        if (a1 !== b1) return a1 - b1;
+        const a2 = Number(ma[2] || 0);
+        const b2 = Number(mb[2] || 0);
+        if (a2 !== b2) return a2 - b2;
+      }
+      return aa.localeCompare(bb);
+    });
   };
 
   const consolidadoAlumnos = useMemo(() => {
@@ -1430,35 +1516,7 @@ export default function GestionProfePage() {
             .filter((id) => id > 0)
         );
         const indicadorIdsTipo = new Set<number>([...indicadorIdsAsignados, ...indicadorIdsConSeguimiento]);
-        const indicadorPorId = new Map<number, (typeof indicadores)[number]>();
-        for (const ind of indicadores) indicadorPorId.set(Number(ind.IndicadorGrupoId), ind);
-        const baseIdsOrdenados = indicadores
-          .filter((i) => esIndicadorTipo(String(i?.TipoUso || "")) && indicadorIdsTipo.has(Number(i.IndicadorGrupoId)))
-          .sort((a, b) => {
-            const aa = String(a.IndicadorBase || "");
-            const bb = String(b.IndicadorBase || "");
-            const ma = aa.match(/^(\d+)(?:\.(\d+))?/);
-            const mb = bb.match(/^(\d+)(?:\.(\d+))?/);
-            if (ma && mb) {
-              const a1 = Number(ma[1] || 0);
-              const b1 = Number(mb[1] || 0);
-              if (a1 !== b1) return a1 - b1;
-              const a2 = Number(ma[2] || 0);
-              const b2 = Number(mb[2] || 0);
-              if (a2 !== b2) return a2 - b2;
-            }
-            return aa.localeCompare(bb);
-          })
-          .map((i) => Number(i.IndicadorGrupoId));
-        const idsRestantes = Array.from(indicadorIdsTipo).filter((id) => !baseIdsOrdenados.includes(id)).sort((a, b) => a - b);
-        const idsColumnas = [...baseIdsOrdenados, ...idsRestantes];
-        const columns = idsColumnas.map((id) => {
-          const i = indicadorPorId.get(id);
-          return {
-            indicadorId: id,
-            nombre: String(i?.IndicadorBase || `Indicador ${id}`)
-          };
-        });
+        const columns = agruparIndicadoresLogicos(indicadorIdsTipo, indicadores, tipo);
 
         const rows = estudiantes.map((estudiante) => {
           const registrosEstudiante = dedupeSeguimientosActividadIndicadorLogico(
@@ -1472,7 +1530,8 @@ export default function GestionProfePage() {
           const notasEstudiante = notasActividades.filter((n) => Number((n as any).EstudianteId) === Number(estudiante.EstudianteId));
           const valoresNumericos: number[] = [];
           const valoresCols = columns.map((col) => {
-            const regs = registrosEstudiante.filter((r) => Number(r.IndicadorGrupoId) === Number(col.indicadorId));
+            const idsColumna = new Set((col.indicadorIds || []).map((id) => Number(id)).filter((id) => id > 0));
+            const regs = registrosEstudiante.filter((r) => idsColumna.has(Number(r.IndicadorGrupoId)));
             if (!regs.length) return "-";
             const promedioValor = regs.reduce((acc, r) => acc + Number(r.ValorSeleccionado || 0), 0) / regs.length;
             const porcentaje = Number(((promedioValor / 3) * 100).toFixed(2));
@@ -3467,7 +3526,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     return pendientes;
   }
 
-  function startSeguimientoSaving(modo: "actividad" | "indicador") {
+  function startSeguimientoSaving(modo: "actividad" | "indicador" | "asignacion") {
     setSavingSeguimientoModo(modo);
     setSavedSeguimientoModo(null);
     setSavingSeguimientoProgress(8);
@@ -3480,7 +3539,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }, 380);
   }
 
-  function stopSeguimientoSaving(success: boolean, modo: "actividad" | "indicador") {
+  function stopSeguimientoSaving(success: boolean, modo: "actividad" | "indicador" | "asignacion") {
     if (savingSeguimientoTimerRef.current !== null) {
       window.clearInterval(savingSeguimientoTimerRef.current);
       savingSeguimientoTimerRef.current = null;
@@ -3496,7 +3555,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   async function guardarSeguimientoActividad() {
-    if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || !seguimientoActividadSeleccionada) {
+    const estructuraGrupoDetalleId = Number(seguimientoActividadSeleccionada?.EstructuraGrupoDetalleId || seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || 0);
+    if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !estructuraGrupoDetalleId || !seguimientoActividadSeleccionada) {
       setErrorMessage("Seleccioná el grupo, la plantilla, el componente y la actividad para guardar");
       return;
     }
@@ -3563,7 +3623,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     try {
       const response = await api.post("/eval360/seguimiento/guardar-actividad", {
         estructuraGrupoId: seguimientoContexto.estructura.EstructuraGrupoId,
-        estructuraGrupoDetalleId: seguimientoDetalleSeleccionado.EstructuraGrupoDetalleId,
+        estructuraGrupoDetalleId,
         actividadId: seguimientoActividadSeleccionada.ActividadId,
         puntosMaximos,
         registros: registrosConCambios
@@ -5523,7 +5583,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   async function guardarAsignacionIndicadoresActividad() {
-    if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || !seguimientoActividadSeleccionada) {
+    if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !seguimientoActividadSeleccionada) {
       setErrorMessage("Selecciona grupo, componente y actividad para asignar indicadores");
       return;
     }
@@ -5536,14 +5596,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     setSavingSeguimiento(true);
+    startSeguimientoSaving("asignacion");
     setMessage("");
     setErrorMessage("");
     try {
       for (const actividad of actividadesAGuardar) {
         const actividadId = Number(actividad.ActividadId || 0);
+        const estructuraGrupoDetalleId = Number(actividad.EstructuraGrupoDetalleId || seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || 0);
         await api.post("/eval360/seguimiento/asignar-indicadores-actividad", {
           estructuraGrupoId: seguimientoContexto.estructura.EstructuraGrupoId,
-          estructuraGrupoDetalleId: seguimientoDetalleSeleccionado.EstructuraGrupoDetalleId,
+          estructuraGrupoDetalleId,
           actividadId,
           indicadorIds: getSeguimientoIndicadoresAsignadosActividad(actividadId)
         });
@@ -5552,9 +5614,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       await loadSeguimientoEvaluacion(selected);
       if (activePanel === "notas") await loadDetalle(selected);
       if (activePanel === "notas") await loadDetalle(selected);
+      stopSeguimientoSaving(true, "asignacion");
     } catch (error: any) {
       console.error("Error asignando indicadores:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudieron asignar los indicadores");
+      stopSeguimientoSaving(false, "asignacion");
     } finally {
       setSavingSeguimiento(false);
     }
@@ -7113,10 +7177,21 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               <small style={{ color: "#64748b" }}>No hay indicadores disponibles: ya fueron asignados o ya están calificados.</small>
                             ) : null}
                           </div>
-                          <div>
-                            <button type="button" className="primary-btn" onClick={guardarAsignacionIndicadoresActividad} disabled={savingSeguimiento || !seguimientoActividadSeleccionada}>
-                              {savingSeguimiento ? "Guardando..." : "Guardar asignación de indicadores"}
+                          <div style={{ display: "grid", gap: "8px", justifyItems: "start" }}>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              onClick={guardarAsignacionIndicadoresActividad}
+                              disabled={savingSeguimiento || !seguimientoActividadSeleccionada}
+                              style={savedSeguimientoModo === "asignacion" ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
+                            >
+                              {savingSeguimiento && savingSeguimientoModo === "asignacion" ? "Guardando..." : (savedSeguimientoModo === "asignacion" ? "Guardado" : "Guardar asignación de indicadores")}
                             </button>
+                            {savingSeguimiento && savingSeguimientoModo === "asignacion" ? (
+                              <div style={{ width: "280px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+                                <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                         ) : null}
