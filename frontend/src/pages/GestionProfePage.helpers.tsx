@@ -43,6 +43,11 @@ export type EstudianteGrupo = {
   AutorizaWhatsAppEncargado?: boolean | number;
   MatriculaId: number;
   EstadoMatricula: string;
+  FueTrasladado?: boolean | number;
+  GrupoIdOrigenTraslado?: number | null;
+  GrupoNombreOrigenTraslado?: string | null;
+  GrupoIdDestinoTraslado?: number | null;
+  TrasladoCreatedAt?: string | null;
 };
 
 export type Plantilla = {
@@ -1070,4 +1075,3 @@ export function getTipoBloqueNoLectivo(nombre?: string | null) {
   if (texto.includes("recreo") || texto.includes("descanso")) return "recreo";
   return "";
 }
-

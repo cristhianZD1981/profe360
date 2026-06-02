@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { badRequest, forbidden, ok } from "../../utils/http";
+import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 import * as XLSX from "xlsx";
 import { sendEmail } from "../../services/email.service";
 
@@ -441,6 +442,7 @@ router.get("/mi-horario", async (req, res) => {
     if (!assertCanAccessProfessorModule(req, res)) return;
 
     const pool = await getPool();
+    await ensureMatriculaTrasladoHistorialTable(pool);
     const userId = getUserId(req);
     let anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
     let periodoId = toOptionalNumber(req.query.periodoId);
@@ -647,7 +649,12 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
           encWa.Detalle AS EncargadosWhatsAppDetalle,
           e.AutorizaWhatsAppEncargado,
           ma.MatriculaId,
-          ma.Estado AS EstadoMatricula
+          ma.Estado AS EstadoMatricula,
+          ISNULL(traslado.FueTrasladado, 0) AS FueTrasladado,
+          traslado.GrupoIdOrigenTraslado,
+          traslado.GrupoNombreOrigenTraslado,
+          traslado.GrupoIdDestinoTraslado,
+          traslado.TrasladoCreatedAt
         FROM dbo.Matricula ma
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
         OUTER APPLY (
@@ -679,6 +686,20 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
               FOR XML PATH(''), TYPE
             ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
         ) encWa
+        OUTER APPLY (
+          SELECT TOP 1
+            CAST(1 AS bit) AS FueTrasladado,
+            h.GrupoIdOrigen AS GrupoIdOrigenTraslado,
+            go.Nombre AS GrupoNombreOrigenTraslado,
+            h.GrupoIdDestino AS GrupoIdDestinoTraslado,
+            h.CreatedAt AS TrasladoCreatedAt
+          FROM dbo.MatriculaTrasladoHistorial h
+          LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
+          WHERE h.EstudianteId = e.EstudianteId
+            AND h.AnioLectivoId = ma.AnioLectivoId
+            AND h.GrupoIdDestino = ma.GrupoId
+          ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
+        ) traslado
         WHERE ma.GrupoId = @grupoId
           AND ma.AnioLectivoId = @anioLectivoId
           AND ma.Estado <> N'Inactiva'
@@ -1434,7 +1455,8 @@ async function buildReporteFormalData(req: any, res: any, grupoId: number, mater
       totalLecciones: Number(asistencia.TotalLecciones || 0),
       ausenciasEquivalentes: Number(asistencia.AusenciasInjustificadasEquivalentes || 0),
       porcentajeAusencias: Number(asistencia.PorcentajeAusencias || 0),
-      porcentajeAsistencia: Number(asistencia.PorcentajeAsignadoArticulo37 || 0)
+      porcentajeAsistencia: Number(asistencia.PorcentajeAsignadoArticulo37 || 0),
+      promedioFinal: Number((acumuladoEvaluacion + Number(asistencia.PorcentajeAsignadoArticulo37 || 0)).toFixed(2))
     };
   });
 
@@ -3190,6 +3212,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/excel", async (req
       header.push(`${actividad.ComponenteDescripcion} - ${actividad.Descripcion} (${formatNumber(actividad.PorcentajeReal)}%)`);
     }
     header.push("% acumulado evaluación", "Lecciones registradas", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37");
+    header.push("Promedio final");
     rows.push(header);
 
     for (const estudiante of data.estudiantes) {
@@ -3203,7 +3226,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/excel", async (req
         estudiante.totalLecciones,
         estudiante.ausenciasEquivalentes,
         estudiante.porcentajeAusencias,
-        estudiante.porcentajeAsistencia
+        estudiante.porcentajeAsistencia,
+        estudiante.promedioFinal
       );
       rows.push(row);
     }
@@ -3263,6 +3287,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/pdf", async (req, 
           <td class="num">${formatNumber(estudiante.ausenciasEquivalentes)}</td>
           <td class="num">${formatNumber(estudiante.porcentajeAusencias)}%</td>
           <td class="num strong">${formatNumber(estudiante.porcentajeAsistencia)}%</td>
+          <td class="num strong">${formatNumber(estudiante.promedioFinal)}%</td>
         </tr>
       `;
     }).join("");
@@ -3329,6 +3354,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/pdf", async (req, 
         <th>Ausencias equivalentes</th>
         <th>% ausencias</th>
         <th>% asistencia Art. 37</th>
+        <th>Promedio final</th>
       </tr>
     </thead>
     <tbody>${rows}</tbody>

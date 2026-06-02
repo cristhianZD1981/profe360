@@ -3057,31 +3057,45 @@ async function handleReprogramarDesde(e: FormEvent) {
     }
   }
 
-  const tabButtons: { key: TabKey; label: string }[] = [
-    { key: "anios", label: "Año Lectivo" },
-    { key: "periodos", label: "Periodos" },
-    { key: "grupos", label: "Gestión de grupos" },
-    { key: "matriculas", label: "Matrícula" },
-    { key: "tiposEstudiante", label: "Tipo de estudiante" },
-    { key: "especialidades", label: "Especialidades" },
-    { key: "rutasTransporte", label: "Rutas" },
-    { key: "evaluacion", label: "Parametrización de Evaluaciones" },
-    { key: "materias", label: "Materias" },
-    { key: "habilidadesPlaneamiento", label: "Habilidades de Planeamiento" },
-    { key: "asignaciones", label: "Asignación Docentes" },
-    { key: "bloques", label: "Bloque Horario" },
-    { key: "gruposMateria", label: "Materias por grupo" },
-    { key: "horarios", label: "Horario de clases" },
-    { key: "fechasClase", label: "Fecha de clases" },
-    { key: "diasLectivos", label: "Días Lectivos" },
-    { key: "feriados", label: "Feriados" },
-    { key: "configuracionCorreo", label: "Correo Institucional" },
-    { key: "mensajes", label: "Mensajes" }
+  const tabButtons: { key: TabKey; label: string; tone: string; help: string }[] = [
+    { key: "anios", label: "Año Lectivo", tone: "#2563eb", help: "Base del curso lectivo" },
+    { key: "periodos", label: "Periodos", tone: "#2563eb", help: "Trimestres o periodos" },
+    { key: "diasLectivos", label: "Días Lectivos", tone: "#2563eb", help: "Días hábiles de clase" },
+    { key: "feriados", label: "Feriados", tone: "#2563eb", help: "Excepciones del calendario" },
+    { key: "grupos", label: "Gestión de grupos", tone: "#0d9488", help: "Secciones del centro educativo" },
+    { key: "tiposEstudiante", label: "Tipo de estudiante", tone: "#0d9488", help: "Clasificación estudiantil" },
+    { key: "especialidades", label: "Especialidades", tone: "#0d9488", help: "Oferta académica técnica" },
+    { key: "rutasTransporte", label: "Rutas", tone: "#0d9488", help: "Logística de transporte" },
+    { key: "materias", label: "Materias", tone: "#0d9488", help: "Catálogo de asignaturas" },
+    { key: "matriculas", label: "Matrícula", tone: "#7c3aed", help: "Ingreso del estudiante al grupo" },
+    { key: "gruposMateria", label: "Materias por grupo", tone: "#16a34a", help: "Qué recibe cada grupo" },
+    { key: "asignaciones", label: "Asignación Docentes", tone: "#16a34a", help: "Qué docente atiende cada grupo" },
+    { key: "bloques", label: "Bloque Horario", tone: "#f59e0b", help: "Franja horaria disponible" },
+    { key: "horarios", label: "Horario de clases", tone: "#f59e0b", help: "Cruce de grupo, materia y bloque" },
+    { key: "fechasClase", label: "Fecha de clases", tone: "#f59e0b", help: "Generación o ajuste por fecha" },
+    { key: "evaluacion", label: "Parametrización de Evaluaciones", tone: "#7c3aed", help: "Esquema de evaluación" },
+    { key: "habilidadesPlaneamiento", label: "Habilidades de Planeamiento", tone: "#7c3aed", help: "Base para planeamiento IA" },
+    { key: "configuracionCorreo", label: "Correo Institucional", tone: "#db2777", help: "Plantillas y dominio" },
+    { key: "mensajes", label: "Mensajes", tone: "#db2777", help: "Mensajería de seguimiento" }
   ];
 
   const visibleTabButtons = visibleTabs?.length
     ? tabButtons.filter((item) => visibleTabs.includes(item.key))
     : tabButtons;
+
+  function getTabButtonStyle(item: (typeof tabButtons)[number]) {
+    const isActive = tab === item.key;
+    return {
+      opacity: isActive ? 1 : 0.88,
+      background: isActive
+        ? `linear-gradient(135deg, ${item.tone}, #ffffff)`
+        : `linear-gradient(135deg, ${item.tone}, ${item.tone})`,
+      color: isActive ? "#04111f" : "#f8fafc",
+      boxShadow: isActive ? `0 0 0 2px ${item.tone}55, 0 12px 24px ${item.tone}33` : `0 8px 18px ${item.tone}22`,
+      border: isActive ? `1px solid ${item.tone}` : `1px solid ${item.tone}aa`,
+      transition: "all 0.2s ease"
+    };
+  }
 
   return (
     <div className="stack">
@@ -3091,13 +3105,17 @@ async function handleReprogramarDesde(e: FormEvent) {
             <button
               key={item.key}
               type="button"
-              className="primary-btn"
+              className="primary-btn admin-tab-btn"
               onClick={() => setTab(item.key)}
-              style={{ opacity: tab === item.key ? 1 : 0.75 }}
+              title={item.help}
+              style={getTabButtonStyle(item)}
             >
               {item.label}
             </button>
           ))}
+        </div>
+        <div style={{ marginBottom: "16px", color: "#cbd5e1", fontSize: "0.95rem" }}>
+          Orden sugerido: calendario, estructura académica, operación docente y comunicación institucional.
         </div>
 
         {message && (

@@ -157,6 +157,11 @@ td {
   color: #04111f !important;
 }
 
+.admin-tab-btn,
+.admin-tab-btn * {
+  color: inherit !important;
+}
+
 .ghost-btn {
   background: rgba(255,255,255,0.08);
   color: white;

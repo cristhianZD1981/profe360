@@ -4,6 +4,12 @@ import * as XLSX from "xlsx";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
+import {
+  asegurarEstructuraEval360ParaTraslado,
+  copiarAsistenciaPorTraslado,
+  copiarNotasPorTraslado,
+  ensureMatriculaTrasladoHistorialTable
+} from "./matricula-traslado.utils";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -103,7 +109,6 @@ async function getDocentesCatalogo(pool: any, institucionId: number) {
       ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre
     `);
 }
-
 
 async function getConfiguracionCorreoEstudiante(pool: any, institucionId: number) {
   const result = await pool.request()
@@ -4281,6 +4286,7 @@ router.put("/matriculas/:id", async (req, res) => {
 
   const transactionPool = await getPool();
   const transaction = new sql.Transaction(transactionPool);
+  const usuarioTrasladoId = Number((req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || 0) || null;
 
   try {
     const id = Number(req.params.id);
@@ -4311,7 +4317,36 @@ router.put("/matriculas/:id", async (req, res) => {
       return badRequest(res, "estudianteId, grupoId y anioLectivoId son obligatorios");
     }
 
+    await ensureMatriculaTrasladoHistorialTable(transactionPool);
     await transaction.begin();
+
+    const matriculaActual = await transaction.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TOP 1
+          m.MatriculaId,
+          m.EstudianteId,
+          m.GrupoId,
+          m.AnioLectivoId
+        FROM dbo.Matricula m
+        INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+        WHERE m.MatriculaId = @id
+          AND e.InstitucionId = @institucionId
+      `);
+
+    if (!matriculaActual.recordset.length) {
+      await transaction.rollback();
+      return res.status(404).json({
+        ok: false,
+        message: "MatrÃ­cula no encontrada"
+      });
+    }
+
+    const grupoIdAnterior = Number(matriculaActual.recordset[0].GrupoId || 0);
+    const estudianteIdAnterior = Number(matriculaActual.recordset[0].EstudianteId || 0);
+    const anioLectivoIdAnterior = Number(matriculaActual.recordset[0].AnioLectivoId || 0);
+    const cambioGrupo = Number(grupoId) !== grupoIdAnterior;
 
     const activaMismoAnio = await transaction.request()
       .input("estudianteId", sql.Int, Number(estudianteId))
@@ -4421,7 +4456,7 @@ router.put("/matriculas/:id", async (req, res) => {
       .input("anioLectivoId", sql.Int, Number(anioLectivoId))
       .input("fechaMatricula", sql.Date, fechaMatricula || null)
       .input("observacion", sql.NVarChar, observacion || null)
-      .input("usuarioActualizaId", sql.Int, (req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || null)
+      .input("usuarioActualizaId", sql.Int, usuarioTrasladoId)
       .query(`
         UPDATE dbo.Matricula
         SET
@@ -4448,6 +4483,94 @@ router.put("/matriculas/:id", async (req, res) => {
         ok: false,
         message: "Matrícula no encontrada"
       });
+    }
+
+    if (cambioGrupo && estudianteIdAnterior > 0 && grupoIdAnterior > 0 && anioLectivoIdAnterior > 0) {
+      const trasladoTotales = await transaction.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteIdAnterior)
+        .input("grupoIdOrigen", sql.Int, grupoIdAnterior)
+        .input("anioLectivoId", sql.Int, anioLectivoIdAnterior)
+        .query(`
+          SELECT
+            (
+              SELECT COUNT(1)
+              FROM dbo.EvaluacionNota en
+              INNER JOIN dbo.EvaluacionActividad act ON act.EvaluacionActividadId = en.EvaluacionActividadId
+              INNER JOIN dbo.EvaluacionComponente comp ON comp.EvaluacionComponenteId = act.EvaluacionComponenteId
+              INNER JOIN dbo.EvaluacionPlantilla pla ON pla.EvaluacionPlantillaId = comp.EvaluacionPlantillaId
+              WHERE en.EstudianteId = @estudianteId
+                AND en.GrupoId = @grupoIdOrigen
+                AND pla.InstitucionId = @institucionId
+                AND pla.AnioLectivoId = @anioLectivoId
+            ) AS TotalNotasClasicas,
+            (
+              SELECT COUNT(1)
+              FROM dbo.Eval360_NotaActividad na
+              INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = na.ActividadId
+              INNER JOIN dbo.Eval360_EstructuraGrupo eg ON eg.EstructuraGrupoId = a.EstructuraGrupoId
+              WHERE na.EstudianteId = @estudianteId
+                AND eg.InstitucionId = @institucionId
+                AND eg.GrupoId = @grupoIdOrigen
+                AND eg.AnioLectivoId = @anioLectivoId
+                AND ISNULL(eg.Activo, 1) = 1
+            ) AS TotalNotasEval360,
+            (
+              SELECT COUNT(1)
+              FROM dbo.Eval360_SeguimientoIndicador si
+              INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = si.ActividadId
+              INNER JOIN dbo.Eval360_EstructuraGrupo eg ON eg.EstructuraGrupoId = a.EstructuraGrupoId
+              WHERE si.EstudianteId = @estudianteId
+                AND eg.InstitucionId = @institucionId
+                AND eg.GrupoId = @grupoIdOrigen
+                AND eg.AnioLectivoId = @anioLectivoId
+                AND ISNULL(eg.Activo, 1) = 1
+            ) AS TotalSeguimientos
+        `);
+
+      await asegurarEstructuraEval360ParaTraslado(transaction, {
+        institucionId,
+        grupoIdOrigen: grupoIdAnterior,
+        grupoIdDestino: Number(grupoId),
+        anioLectivoId: anioLectivoIdAnterior,
+        usuarioId: usuarioTrasladoId
+      });
+
+      await copiarNotasPorTraslado(transaction, {
+        institucionId,
+        estudianteId: estudianteIdAnterior,
+        grupoIdOrigen: grupoIdAnterior,
+        grupoIdDestino: Number(grupoId),
+        anioLectivoId: anioLectivoIdAnterior
+      });
+
+      const totalAsistenciasCopiadas = await copiarAsistenciaPorTraslado(transaction, {
+        estudianteId: estudianteIdAnterior,
+        grupoIdOrigen: grupoIdAnterior,
+        grupoIdDestino: Number(grupoId),
+        anioLectivoId: anioLectivoIdAnterior,
+        usuarioId: usuarioTrasladoId
+      });
+
+      await transaction.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("matriculaId", sql.Int, id)
+        .input("estudianteId", sql.Int, estudianteIdAnterior)
+        .input("anioLectivoId", sql.Int, anioLectivoIdAnterior)
+        .input("grupoIdOrigen", sql.Int, grupoIdAnterior)
+        .input("grupoIdDestino", sql.Int, Number(grupoId))
+        .input("usuarioTrasladoId", sql.Int, usuarioTrasladoId)
+        .input("observacion", sql.NVarChar, observacion || null)
+        .input("totalNotasClasicasCopiadas", sql.Int, Number(trasladoTotales.recordset[0]?.TotalNotasClasicas || 0))
+        .input("totalNotasEval360Copiadas", sql.Int, Number(trasladoTotales.recordset[0]?.TotalNotasEval360 || 0))
+        .input("totalSeguimientosCopiados", sql.Int, Number(trasladoTotales.recordset[0]?.TotalSeguimientos || 0))
+        .input("totalAsistenciasCopiadas", sql.Int, totalAsistenciasCopiadas)
+        .query(`
+          INSERT INTO dbo.MatriculaTrasladoHistorial
+            (InstitucionId, MatriculaId, EstudianteId, AnioLectivoId, GrupoIdOrigen, GrupoIdDestino, UsuarioTrasladoId, Observacion, TotalNotasClasicasCopiadas, TotalNotasEval360Copiadas, TotalSeguimientosCopiados, TotalAsistenciasCopiadas, CreatedAt)
+          VALUES
+            (@institucionId, @matriculaId, @estudianteId, @anioLectivoId, @grupoIdOrigen, @grupoIdDestino, @usuarioTrasladoId, @observacion, @totalNotasClasicasCopiadas, @totalNotasEval360Copiadas, @totalSeguimientosCopiados, @totalAsistenciasCopiadas, SYSDATETIME())
+        `);
     }
 
     const existeDetalle = await transaction.request()

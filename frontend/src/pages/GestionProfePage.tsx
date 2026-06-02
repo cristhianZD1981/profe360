@@ -702,6 +702,63 @@ export default function GestionProfePage() {
 
   }, [seguimientoContexto?.indicadores, seguimientoContexto?.seguimientos, seguimientoContexto?.estudiantes, seguimientoTipo, seguimientoPlaneamientoId]);
 
+  const dedupeActividadesLogicas = (items: any[]) => {
+    const map = new Map<string, any>();
+    for (const actividad of items || []) {
+      const key = [
+        Number(actividad?.EstructuraGrupoDetalleId || 0),
+        normalizarSeguimientoKey(String(actividad?.Nombre || "")),
+        normalizarSeguimientoKey(String(actividad?.Fuente || "")),
+        String(actividad?.Fecha || "").slice(0, 10),
+        Number(actividad?.PuntosMaximos || 0).toFixed(2),
+        Number(actividad?.PorcentajeDentroRubro || 0).toFixed(2),
+      ].join("|");
+      const actual = map.get(key);
+      if (!actual || Number(actividad?.ActividadId || 0) > Number(actual?.ActividadId || 0)) {
+        map.set(key, actividad);
+      }
+    }
+    return Array.from(map.values());
+  };
+
+  const dedupeSeguimientosActividadIndicador = (items: any[]) => {
+    const map = new Map<string, any>();
+    for (const item of items || []) {
+      const key = [
+        Number(item?.ActividadId || 0),
+        Number(item?.IndicadorGrupoId || 0),
+        Number(item?.EstudianteId || 0),
+      ].join("|");
+      const actual = map.get(key);
+      if (!actual || Number(item?.SeguimientoIndicadorId || 0) > Number(actual?.SeguimientoIndicadorId || 0)) {
+        map.set(key, item);
+      }
+    }
+    return Array.from(map.values());
+  };
+
+  const dedupeSeguimientosActividadIndicadorLogico = (items: any[], indicadoresCatalogo: any[]) => {
+    const indicadorPorId = new Map<number, any>();
+    for (const indicador of indicadoresCatalogo || []) {
+      indicadorPorId.set(Number(indicador?.IndicadorGrupoId || 0), indicador);
+    }
+    const map = new Map<string, any>();
+    for (const item of items || []) {
+      const indicador = indicadorPorId.get(Number(item?.IndicadorGrupoId || 0));
+      const key = [
+        Number(item?.ActividadId || 0),
+        Number(item?.EstudianteId || 0),
+        normalizarSeguimientoKey(String(indicador?.TipoUso || "")),
+        normalizarSeguimientoKey(String(indicador?.IndicadorBase || "")),
+      ].join("|");
+      const actual = map.get(key);
+      if (!actual || Number(item?.SeguimientoIndicadorId || 0) > Number(actual?.SeguimientoIndicadorId || 0)) {
+        map.set(key, item);
+      }
+    }
+    return Array.from(map.values());
+  };
+
   const consolidadoAlumnos = useMemo(() => {
     const detalles = seguimientoContexto?.detalles || [];
     const estudiantes = seguimientoContexto?.estudiantes || [];
@@ -807,12 +864,17 @@ export default function GestionProfePage() {
         const tipoUso = tipoKey.includes("TAREA") ? "TAREAS" : "COTIDIANO";
         const indicadoresTipo = indicadores.filter((indicador) => normalizarSeguimientoKey(indicador.TipoUso) === tipoUso);
         const seguimientosEstudiante = seguimientos.filter((item) => Number(item.EstudianteId) === Number(estudiante.EstudianteId));
-        const actividadesDetalle = actividades.filter((actividad) => Number(actividad.EstructuraGrupoDetalleId) === detalleId);
+        const actividadesDetalle = dedupeActividadesLogicas(
+          actividades.filter((actividad) => Number(actividad.EstructuraGrupoDetalleId) === detalleId)
+        );
         const indicadorIds = new Set(indicadoresTipo.map((indicador) => Number(indicador.IndicadorGrupoId)));
         const actividadesResumen = actividadesDetalle.map((actividad) => {
-          const registrosActividad = seguimientosEstudiante.filter((item) =>
-            Number(item.ActividadId) === Number(actividad.ActividadId)
-            && indicadorIds.has(Number(item.IndicadorGrupoId))
+          const registrosActividad = dedupeSeguimientosActividadIndicadorLogico(
+            seguimientosEstudiante.filter((item) =>
+              Number(item.ActividadId) === Number(actividad.ActividadId)
+              && indicadorIds.has(Number(item.IndicadorGrupoId))
+            ),
+            indicadoresTipo
           );
           const notaActividadRegistro = notas.find((n) =>
             Number((n as any).ActividadId) === Number(actividad.ActividadId)
@@ -825,10 +887,22 @@ export default function GestionProfePage() {
               && item.Activo !== false
               && item.Activo !== 0
             )
-            .map((item) => Number(item.IndicadorGrupoId));
-          const totalAsignados = new Set(indicadoresAsignados).size || indicadoresTipo.length;
+            .map((item) => {
+              const indicador = indicadoresTipo.find((indicador) => Number(indicador.IndicadorGrupoId) === Number(item.IndicadorGrupoId));
+              return [
+                normalizarSeguimientoKey(String(indicador?.TipoUso || "")),
+                normalizarSeguimientoKey(String(indicador?.IndicadorBase || "")),
+              ].join("|");
+            });
+          const totalAsignados = new Set(indicadoresAsignados.filter(Boolean)).size || indicadoresTipo.length;
           const puntos = registrosActividad.reduce((acc, item) => acc + Number(item.ValorSeleccionado || 0), 0);
-          const indicadoresEvaluados = new Set(registrosActividad.map((item) => Number(item.IndicadorGrupoId))).size;
+          const indicadoresEvaluados = new Set(registrosActividad.map((item) => {
+            const indicador = indicadoresTipo.find((entry) => Number(entry.IndicadorGrupoId) === Number(item.IndicadorGrupoId));
+            return [
+              normalizarSeguimientoKey(String(indicador?.TipoUso || "")),
+              normalizarSeguimientoKey(String(indicador?.IndicadorBase || "")),
+            ].join("|");
+          })).size;
           const maximo = totalAsignados * 3;
           const notaActividad = maximo ? (puntos / maximo) * 100 : 0;
           const pesoActividad = Number(actividad.PorcentajeDentroRubro || 0) > 0 ? Number(actividad.PorcentajeDentroRubro || 0) / 100 : (actividadesDetalle.length ? 1 / actividadesDetalle.length : 0);
@@ -849,6 +923,8 @@ export default function GestionProfePage() {
           const ratioEvaluado = Math.min(evaluadosActividad, asignados) / asignados;
           return acc + (ratioEvaluado * porcentajeComponente * item.pesoActividad);
         }, 0);
+        porcentajeGanado = Math.min(porcentajeComponente, porcentajeGanado);
+        porcentajeEvaluado = Math.min(porcentajeComponente, porcentajeEvaluado);
         evaluados = actividadesResumen.reduce((acc, item) => acc + item.indicadoresEvaluados, 0);
         pendientes = actividadesDetalle.length
           ? actividadesResumen.reduce((acc, item) => acc + Math.max(0, item.totalAsignados - item.indicadoresEvaluados), 0)
@@ -973,8 +1049,8 @@ export default function GestionProfePage() {
 
     return estudiantes.map((estudiante) => {
       const componentes = detalles.map((detalleItem) => calcularComponente(detalleItem, estudiante));
-      const totalEvaluado = componentes.reduce((acc, item) => acc + Number((item as any).porcentajeEvaluado || 0), 0);
-      const totalGanado = componentes.reduce((acc, item) => acc + Number(item.porcentajeGanado || 0), 0);
+      const totalEvaluado = Math.min(100, componentes.reduce((acc, item) => acc + Number((item as any).porcentajeEvaluado || 0), 0));
+      const totalGanado = Math.min(100, componentes.reduce((acc, item) => acc + Number(item.porcentajeGanado || 0), 0));
       const promedioGeneral = componentes.length ? (totalGanado / Math.max(1, componentes.reduce((acc, item) => acc + Number(item.porcentajeComponente || 0), 0))) * 100 : 0;
       return {
         key: String(estudiante.EstudianteId),
@@ -993,6 +1069,25 @@ export default function GestionProfePage() {
     if (!consolidadoAlumnos.length) return 0;
     return consolidadoAlumnos.reduce((acc, item) => acc + Number(item.totalGanado || 0), 0) / consolidadoAlumnos.length;
   }, [consolidadoAlumnos]);
+
+  const estudiantesTrasladadosSet = useMemo(() => {
+    const ids = new Set<number>();
+    for (const estudiante of (seguimientoContexto?.estudiantes || [])) {
+      if (Number(estudiante?.FueTrasladado || 0) === 1) ids.add(Number(estudiante.EstudianteId));
+    }
+    for (const estudiante of (detalle?.estudiantes || [])) {
+      if (Number((estudiante as any)?.FueTrasladado || 0) === 1) ids.add(Number(estudiante.EstudianteId));
+    }
+    return ids;
+  }, [seguimientoContexto?.estudiantes, detalle?.estudiantes]);
+
+  const isEstudianteTrasladado = (estudianteId: number) => estudiantesTrasladadosSet.has(Number(estudianteId));
+  const getTransferRowBg = (estudianteId: number, fallback: string) => (
+    isEstudianteTrasladado(estudianteId) ? "#fff7cc" : fallback
+  );
+  const getTransferCellBg = (estudianteId: number, fallback: string) => (
+    isEstudianteTrasladado(estudianteId) ? "#fffbeb" : fallback
+  );
 
 
   useEffect(() => {
@@ -1204,7 +1299,8 @@ export default function GestionProfePage() {
         AusenciasEquivalentes: Number(asistencia?.AusenciasInjustificadasEquivalentes || 0),
         PorcentajeAusencias: Number(asistencia?.PorcentajeAusencias || 0),
         PorcentajeAsistencia: Number(asistencia?.PorcentajeAsignadoArticulo37 || 0),
-        TotalLecciones: Number(asistencia?.TotalLecciones || 0)
+        TotalLecciones: Number(asistencia?.TotalLecciones || 0),
+        PromedioFinal: Number((acumuladoEvaluacion + Number(asistencia?.PorcentajeAsignadoArticulo37 || 0)).toFixed(2))
       };
     });
 
@@ -1216,13 +1312,26 @@ export default function GestionProfePage() {
       ? filas.reduce((total, fila) => total + fila.PorcentajeAsistencia, 0) / filas.length
       : 0;
 
+    const promedioFinal = filas.length
+      ? filas.reduce((total, fila) => total + fila.PromedioFinal, 0) / filas.length
+      : 0;
+
     return {
       filas,
       promedioAcumulado,
       promedioAsistencia,
+      promedioFinal,
       totalEstudiantes: filas.length
     };
   }, [detalle, noteDrafts, resumenAsistencia]);
+
+  const promedioFinalPorEstudiante = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const fila of resumenReportes.filas) {
+      map.set(Number(fila.EstudianteId), Number(fila.PromedioFinal || 0));
+    }
+    return map;
+  }, [resumenReportes]);
 
   const resumenReportesPorTipo = useMemo(() => {
     const estudiantes = detalle?.estudiantes || [];
@@ -1243,7 +1352,7 @@ export default function GestionProfePage() {
     };
 
     const construir = (tipo: "COTIDIANO" | "TAREAS" | "EXAMENES") => {
-      const acts = filtrarActividades(tipo);
+      const acts = dedupeActividadesLogicas(filtrarActividades(tipo));
       const ids = new Set(acts.map((a) => Number(a.ActividadId)));
       const filas = estudiantes.map((estudiante) => {
         const notas = notasActividades.filter((n) => Number(n.EstudianteId) === Number(estudiante.EstudianteId) && ids.has(Number(n.ActividadId)));
@@ -1304,7 +1413,9 @@ export default function GestionProfePage() {
           .map((d) => Number(d.EstructuraGrupoDetalleId || 0))
           .filter((v) => v > 0);
         const rubroValorTotal = Array.from(new Set(detalleIdsTipo)).reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
-        const actividadesTipo = actividades.filter((a) => detalleIdsTipo.includes(Number(a.EstructuraGrupoDetalleId || 0)));
+        const actividadesTipo = dedupeActividadesLogicas(
+          actividades.filter((a) => detalleIdsTipo.includes(Number(a.EstructuraGrupoDetalleId || 0)))
+        );
         const actividadIdsTipo = new Set(actividadesTipo.map((a) => Number(a.ActividadId)).filter((id) => id > 0));
         const indicadorIdsAsignados = new Set(
           actividadIndicadores
@@ -1350,10 +1461,13 @@ export default function GestionProfePage() {
         });
 
         const rows = estudiantes.map((estudiante) => {
-          const registrosEstudiante = seguimientos.filter(
-            (s) =>
-              Number(s.EstudianteId) === Number(estudiante.EstudianteId)
-              && detalleIdsTipo.includes(Number(s.EstructuraGrupoDetalleId || 0))
+          const registrosEstudiante = dedupeSeguimientosActividadIndicadorLogico(
+            seguimientos.filter(
+              (s) =>
+                Number(s.EstudianteId) === Number(estudiante.EstudianteId)
+                && detalleIdsTipo.includes(Number(s.EstructuraGrupoDetalleId || 0))
+            ),
+            indicadores.filter((i) => esIndicadorTipo(String(i?.TipoUso || "")))
           );
           const notasEstudiante = notasActividades.filter((n) => Number((n as any).EstudianteId) === Number(estudiante.EstudianteId));
           const valoresNumericos: number[] = [];
@@ -1399,7 +1513,7 @@ export default function GestionProfePage() {
         return { columns, rows };
       }
 
-      const acts = filtrarActividades("EXAMENES");
+      const acts = dedupeActividadesLogicas(filtrarActividades("EXAMENES"));
       const detalleIdsTipo = Array.from(new Set(acts.map((a) => Number(a.EstructuraGrupoDetalleId || 0)).filter((v) => v > 0)));
       const rubroValorTotal = detalleIdsTipo.reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
       const sumaPesosConfig = acts.reduce((acc, item) => {
@@ -1599,6 +1713,7 @@ export default function GestionProfePage() {
         nombre: getFullName(est),
         identificacion: String(est.Identificacion || ""),
         nota: porcentajeGanadoAsistencia,
+        promedioFinal: Number(promedioFinalPorEstudiante.get(Number(est.EstudianteId)) || 0),
         alerta,
         alertaBg,
         alertaColor,
@@ -1609,7 +1724,7 @@ export default function GestionProfePage() {
       };
     });
     return { gruposFecha, columnas, columnasPlanas, rows };
-  }, [detalle?.estudiantes, seguimientoContexto?.asistenciaRegistros, seguimientoContexto?.detalles]);
+  }, [detalle?.estudiantes, seguimientoContexto?.asistenciaRegistros, seguimientoContexto?.detalles, promedioFinalPorEstudiante]);
 
   const ultimaBitacora = useMemo(() => {
     if (!bitacorasGrupo.length) return null;
@@ -1634,7 +1749,8 @@ export default function GestionProfePage() {
       "Lecciones registradas",
       "Ausencias equivalentes",
       "% ausencias",
-      "% asistencia Artículo 37"
+      "% asistencia Artículo 37",
+      "Promedio final"
     ];
 
     const rows = resumenReportes.filas.map((fila) => [
@@ -1646,7 +1762,8 @@ export default function GestionProfePage() {
       String(fila.TotalLecciones),
       fila.AusenciasEquivalentes.toFixed(2),
       fila.PorcentajeAusencias.toFixed(2),
-      fila.PorcentajeAsistencia.toFixed(2)
+      fila.PorcentajeAsistencia.toFixed(2),
+      fila.PromedioFinal.toFixed(2)
     ]);
 
     const csv = [headers, ...rows]
@@ -1847,14 +1964,14 @@ export default function GestionProfePage() {
 
     const base = `${selected.GrupoNombre}-${selected.MateriaNombre}`.replace(/\s+/g, "-");
     if (tipoReporteGestion === "ASISTENCIA") {
-      const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37"];
-      const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2)]);
+      const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37", "Promedio final"];
+      const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2), f.PromedioFinal.toFixed(2)]);
       return exportarTablaGenericaExcel(`reporte-asistencia-${base}`, "Reporte de Asistencia", headers, rows);
     }
     if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
       const fuente = tipoReporteGestion === "COTIDIANO" ? detalleReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? detalleReportesPorTipo.tareas : detalleReportesPorTipo.examenes;
-      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado"];
-      const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`]);
+      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
+      const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
       return exportarTablaGenericaExcel(`reporte-${tipoReporteGestion.toLowerCase()}-${base}`, `Reporte de ${tipoReporteGestion}`, headers, rows);
     }
     if (tipoReporteGestion === "BOLETAS") {
@@ -1880,14 +1997,14 @@ export default function GestionProfePage() {
     }
 
     if (tipoReporteGestion === "ASISTENCIA") {
-      const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37"];
-      const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2)]);
+      const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37", "Promedio final"];
+      const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2), f.PromedioFinal.toFixed(2)]);
       return exportarTablaGenericaPdf("Reporte de Asistencia", headers, rows);
     }
     if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
       const fuente = tipoReporteGestion === "COTIDIANO" ? detalleReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? detalleReportesPorTipo.tareas : detalleReportesPorTipo.examenes;
-      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado"];
-      const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`]);
+      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
+      const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
       return exportarTablaGenericaPdf(`Reporte de ${tipoReporteGestion}`, headers, rows);
     }
     if (tipoReporteGestion === "BOLETAS") {
@@ -6120,10 +6237,24 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               {consolidadoAlumnos.map((alumno, alumnoIndex) => {
                                 const abierto = notasDetalleAbierto === alumno.key;
                                 const zebraRowBg = alumnoIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
+                                const rowBg = abierto ? "#eff6ff" : getTransferRowBg(Number(alumno.estudiante?.EstudianteId || 0), zebraRowBg);
                                 return (
                                   <React.Fragment key={`consolidado-alumno-${alumno.key}`}>
-                                    <tr style={{ background: abierto ? "#eff6ff" : zebraRowBg }}>
-                                      <td style={{ ...tdBase, textAlign: "left", fontWeight: 900, background: abierto ? "#eff6ff" : zebraRowBg }}>{alumno.nombre}</td>
+                                    <tr style={{ background: rowBg }}>
+                                      <td style={{ ...tdBase, textAlign: "left", fontWeight: 900, background: rowBg }}>
+                                        <div style={{ display: "grid", gap: "4px" }}>
+                                          <span>{alumno.nombre}</span>
+                                          {Number(alumno.estudiante?.FueTrasladado || 0) === 1 ? (
+                                            <span style={{ fontSize: "10px", fontWeight: 900, color: "#92400e" }}>
+                                              Alumno trasladado{String(alumno.estudiante?.GrupoNombreOrigenTraslado || "").trim()
+                                                ? ` desde sección ${String(alumno.estudiante?.GrupoNombreOrigenTraslado || "").trim()}`
+                                                : Number(alumno.estudiante?.GrupoIdOrigenTraslado || 0) > 0
+                                                  ? ` desde sección ${alumno.estudiante?.GrupoIdOrigenTraslado}`
+                                                  : ""}
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                      </td>
                                       {componentesTabla.map((detalleItem) => {
                                         const componente = buscarComponenteAlumno(alumno, detalleItem);
                                         const palette = getComponentePalette(detalleItem);
@@ -6131,8 +6262,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                         const valorActual = Number(componente?.porcentajeGanado || 0);
                                         return (
                                           <React.Fragment key={`valor-${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`}>
-                                            <td style={{ ...tdBase, background: palette.cell }}>{formatPercent(Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0))}</td>
-                                            <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: palette.cell }}>
+                                            <td style={{ ...tdBase, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), palette.cell) }}>{formatPercent(Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0))}</td>
+                                            <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), palette.cell) }}>
                                               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
                                                 <span>{formatPercent(valorActual)}</span>
                                                 <button
@@ -6191,9 +6322,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                           </React.Fragment>
                                         );
                                       })}
-                                      <td style={{ ...tdBase, background: promedioCellBg }}>{formatPercent(Number((alumno as any).totalEvaluado || 0))}</td>
-                                      <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: promedioCellBg }}>{formatPercent(alumno.totalGanado)}</td>
-                                      <td style={{ ...tdBase, background: accionCellBg }}>
+                                      <td style={{ ...tdBase, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), promedioCellBg) }}>{formatPercent(Number((alumno as any).totalEvaluado || 0))}</td>
+                                      <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), promedioCellBg) }}>{formatPercent(alumno.totalGanado)}</td>
+                                      <td style={{ ...tdBase, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), accionCellBg) }}>
                                         <button type="button" style={{ ...secondaryButtonStyle, padding: "5px 8px", fontSize: "12px" }} onClick={() => setNotasDetalleAbierto(abierto ? "" : alumno.key)}>
                                           {abierto ? "Ocultar" : "Ver detalle"}
                                         </button>
@@ -6201,7 +6332,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     </tr>
                                     {abierto && (
                                       <tr>
-                                        <td colSpan={totalColumnasDetalle} style={{ padding: "12px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                                        <td colSpan={totalColumnasDetalle} style={{ padding: "12px", background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), "#f8fafc"), border: "1px solid #e2e8f0" }}>
                                           <div style={{ display: "grid", gap: "12px" }}>
                                             <strong style={{ color: "#0f172a", fontSize: "16px" }}>Detalle de calificaciones de {alumno.nombre}</strong>
                                             {alumno.componentes.map((componente) => (
@@ -9420,6 +9551,22 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     Exportar PDF
                   </button>
                 </div>
+                {(() => {
+                  const reportTableStyle = { width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" } as const;
+                  const reportHeaderStyle = { background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" } as const;
+                  const reportSubHeaderStyle = { background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700, textAlign: "center" as const } as const;
+                  const reportCellStyle = { border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" } as const;
+                  const reportCellCenterStyle = { ...reportCellStyle, textAlign: "center" as const };
+                  const reportBannerStyle = {
+                    textAlign: "left" as const,
+                    background: "#ecfeff",
+                    color: "#0f172a",
+                    border: "1px solid #99f6e4",
+                    padding: "8px 10px",
+                    fontWeight: 800
+                  };
+                  return null;
+                })()}
 
                 {tipoReporteGestion === "NOTAS" && (
                   <>
@@ -9437,36 +9584,56 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     <span style={{ fontSize: "24px", fontWeight: 700 }}>{formatPercent(resumenReportes.promedioAsistencia)}</span>
                   </div>
                   <div style={cardStyle}>
+                    <strong>Promedio final</strong>
+                    <span style={{ fontSize: "24px", fontWeight: 700 }}>{formatPercent(resumenReportes.promedioFinal)}</span>
+                  </div>
+                  <div style={cardStyle}>
                     <strong>Actividades evaluativas</strong>
                     <span style={{ fontSize: "24px", fontWeight: 700 }}>{detalle.actividades.length}</span>
                   </div>
                 </div>
-
                 <div style={{ overflowX: "auto" }}>
-                  <table>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                     <thead>
                       <tr>
-                        <th style={{ minWidth: "220px" }}>Estudiante</th>
-                        <th>Identificación</th>
-                        <th>Notas registradas</th>
-                        <th>% acumulado evaluación</th>
-                        <th>Lecciones registradas</th>
-                        <th>Ausencias equivalentes</th>
-                        <th>% ausencias</th>
-                        <th>% asistencia Art. 37</th>
+                        <th
+                          colSpan={9}
+                          style={{
+                            textAlign: "left",
+                            background: "#ecfeff",
+                            color: "#0f172a",
+                            border: "1px solid #99f6e4",
+                            padding: "8px 10px",
+                            fontWeight: 800
+                          }}
+                        >
+                          Resumen general de notas del grupo: {resumenReportes.totalEstudiantes} estudiantes
+                        </th>
+                      </tr>
+                      <tr>
+                        <th style={{ minWidth: "220px", background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Notas registradas</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% acumulado evaluación</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Lecciones registradas</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Ausencias equivalentes</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ausencias</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% asistencia Art. 37</th>
+                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                       </tr>
                     </thead>
                     <tbody>
                       {resumenReportes.filas.map((fila) => (
-                        <tr key={fila.EstudianteId}>
-                          <td>{fila.NombreCompleto}</td>
-                          <td>{fila.Identificacion}</td>
-                          <td>{fila.NotasRegistradas} / {fila.TotalActividades}</td>
-                          <td><strong>{formatPercent(fila.AcumuladoEvaluacion)}</strong></td>
-                          <td>{fila.TotalLecciones}</td>
-                          <td>{fila.AusenciasEquivalentes.toFixed(2)}</td>
-                          <td>{formatPercent(fila.PorcentajeAusencias)}</td>
-                          <td><strong>{formatPercent(fila.PorcentajeAsistencia)}</strong></td>
+                        <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                          <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
+                          <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.NotasRegistradas} / {fila.TotalActividades}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{formatPercent(fila.AcumuladoEvaluacion)}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.TotalLecciones}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.AusenciasEquivalentes.toFixed(2)}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{formatPercent(fila.PorcentajeAusencias)}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{formatPercent(fila.PorcentajeAsistencia)}</td>
+                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{formatPercent(fila.PromedioFinal)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -9495,7 +9662,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       <thead>
                         <tr>
                           <th
-                            colSpan={7 + reporteAsistenciaDetallado.columnas.length}
+                            colSpan={8 + reporteAsistenciaDetallado.columnas.length}
                             style={{
                               textAlign: "left",
                               background: "#ecfeff",
@@ -9512,6 +9679,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Nota</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Alerta temprana</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Tardías</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Ausencias justificadas</th>
@@ -9521,7 +9689,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           ))}
                         </tr>
                         <tr>
-                          <th colSpan={7} style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}></th>
+                          <th colSpan={8} style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}></th>
                           {reporteAsistenciaDetallado.columnasPlanas.map((c: any) => (
                             <th key={`bloque-head-${c.key}`} style={{ textAlign: "center", background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700 }}>{c.bloque}</th>
                           ))}
@@ -9530,17 +9698,20 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       <tbody>
                         {reporteAsistenciaDetallado.columnas.length === 0 ? (
                           <tr>
-                            <td colSpan={7} style={{ padding: "12px", border: "1px solid #cbd5e1", background: "#fff7ed", color: "#9a3412", fontWeight: 700 }}>
+                            <td colSpan={8} style={{ padding: "12px", border: "1px solid #cbd5e1", background: "#fff7ed", color: "#9a3412", fontWeight: 700 }}>
                               No hay listas de asistencia registradas para mostrar fechas y lecciones.
                             </td>
                           </tr>
                         ) : null}
                         {reporteAsistenciaDetallado.rows.map((fila) => (
-                          <tr key={fila.estudianteId} style={{ background: "#ffffff" }}>
+                          <tr key={fila.estudianteId} style={{ background: getTransferRowBg(Number(fila.estudianteId), "#ffffff") }}>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.nombre}</td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.identificacion}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", background: "#ffffff", fontWeight: 800 }}>
                               <span style={{ color: "#0f172a", fontWeight: 900, opacity: 1 }}>{fila.nota.toFixed(2)}%</span>
+                            </td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", background: "#ffffff", fontWeight: 800 }}>
+                              <span style={{ color: "#0f172a", fontWeight: 900, opacity: 1 }}>{fila.promedioFinal.toFixed(2)}%</span>
                             </td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", fontWeight: 800, color: fila.alertaColor, background: fila.alertaBg }}>{fila.alerta}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.tardias}</td>
@@ -9563,30 +9734,37 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                 {tipoReporteGestion === "COTIDIANO" && (
                   <div style={{ overflowX: "auto" }}>
-                    <table>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th>Estudiante</th>
-                          <th>Identificación</th>
-                          <th>Actividades registradas/calificadas</th>
+                          <th colSpan={6 + detalleReportesPorTipo.cotidiano.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                            Reporte de Cotidiano: {detalleReportesPorTipo.cotidiano.columns.length} columnas de evaluación
+                          </th>
+                        </tr>
+                        <tr>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Actividades registradas/calificadas</th>
                           {detalleReportesPorTipo.cotidiano.columns.map((col) => (
-                            <th key={`cot-col-${col.actividadId}`}>{col.nombre}</th>
+                            <th key={`cot-col-${col.actividadId}`} style={{ textAlign: "center", background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700 }}>{col.nombre}</th>
                           ))}
-                          <th>% evaluado</th>
-                          <th>% ganado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% evaluado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                         </tr>
                       </thead>
                       <tbody>
                         {detalleReportesPorTipo.cotidiano.rows.map((fila) => (
-                          <tr key={fila.EstudianteId}>
-                            <td>{fila.NombreCompleto}</td>
-                            <td>{fila.Identificacion}</td>
-                            <td>{fila.RegistradasCalificadas}</td>
+                          <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.RegistradasCalificadas}</td>
                             {fila.cols.map((valor, idx) => (
-                              <td key={`cot-v-${fila.EstudianteId}-${idx}`}>{valor}</td>
+                              <td key={`cot-v-${fila.EstudianteId}-${idx}`} style={{ textAlign: "center", fontWeight: 700, border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{valor}</td>
                             ))}
-                            <td><strong>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</strong></td>
-                            <td><strong>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</strong></td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(promedioFinalPorEstudiante.get(Number(fila.EstudianteId)) || 0).toFixed(2)}%</td>
                           </tr>
                         ))}
                       </tbody>
@@ -9596,30 +9774,37 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                 {tipoReporteGestion === "TAREAS" && (
                   <div style={{ overflowX: "auto" }}>
-                    <table>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th>Estudiante</th>
-                          <th>Identificación</th>
-                          <th>Actividades registradas/calificadas</th>
+                          <th colSpan={6 + detalleReportesPorTipo.tareas.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                            Reporte de Tareas: {detalleReportesPorTipo.tareas.columns.length} columnas de evaluación
+                          </th>
+                        </tr>
+                        <tr>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Actividades registradas/calificadas</th>
                           {detalleReportesPorTipo.tareas.columns.map((col) => (
-                            <th key={`tar-col-${col.actividadId}`}>{col.nombre}</th>
+                            <th key={`tar-col-${col.actividadId}`} style={{ textAlign: "center", background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700 }}>{col.nombre}</th>
                           ))}
-                          <th>% evaluado</th>
-                          <th>% ganado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% evaluado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                         </tr>
                       </thead>
                       <tbody>
                         {detalleReportesPorTipo.tareas.rows.map((fila) => (
-                          <tr key={fila.EstudianteId}>
-                            <td>{fila.NombreCompleto}</td>
-                            <td>{fila.Identificacion}</td>
-                            <td>{fila.RegistradasCalificadas}</td>
+                          <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.RegistradasCalificadas}</td>
                             {fila.cols.map((valor, idx) => (
-                              <td key={`tar-v-${fila.EstudianteId}-${idx}`}>{valor}</td>
+                              <td key={`tar-v-${fila.EstudianteId}-${idx}`} style={{ textAlign: "center", fontWeight: 700, border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{valor}</td>
                             ))}
-                            <td><strong>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</strong></td>
-                            <td><strong>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</strong></td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(promedioFinalPorEstudiante.get(Number(fila.EstudianteId)) || 0).toFixed(2)}%</td>
                           </tr>
                         ))}
                       </tbody>
@@ -9629,30 +9814,37 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                 {tipoReporteGestion === "EXAMENES" && (
                   <div style={{ overflowX: "auto" }}>
-                    <table>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th>Estudiante</th>
-                          <th>Identificación</th>
-                          <th>Actividades registradas/calificadas</th>
+                          <th colSpan={6 + detalleReportesPorTipo.examenes.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                            Reporte de Exámenes: {detalleReportesPorTipo.examenes.columns.length} columnas de evaluación
+                          </th>
+                        </tr>
+                        <tr>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Actividades registradas/calificadas</th>
                           {detalleReportesPorTipo.examenes.columns.map((col) => (
-                            <th key={`exa-col-${col.actividadId}`}>{col.nombre}</th>
+                            <th key={`exa-col-${col.actividadId}`} style={{ textAlign: "center", background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700 }}>{col.nombre}</th>
                           ))}
-                          <th>% evaluado</th>
-                          <th>% ganado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% evaluado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                         </tr>
                       </thead>
                       <tbody>
                         {detalleReportesPorTipo.examenes.rows.map((fila) => (
-                          <tr key={fila.EstudianteId}>
-                            <td>{fila.NombreCompleto}</td>
-                            <td>{fila.Identificacion}</td>
-                            <td>{fila.RegistradasCalificadas}</td>
+                          <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
+                            <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.RegistradasCalificadas}</td>
                             {fila.cols.map((valor, idx) => (
-                              <td key={`exa-v-${fila.EstudianteId}-${idx}`}>{valor}</td>
+                              <td key={`exa-v-${fila.EstudianteId}-${idx}`} style={{ textAlign: "center", fontWeight: 700, border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{valor}</td>
                             ))}
-                            <td><strong>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</strong></td>
-                            <td><strong>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</strong></td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
+                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(promedioFinalPorEstudiante.get(Number(fila.EstudianteId)) || 0).toFixed(2)}%</td>
                           </tr>
                         ))}
                       </tbody>

@@ -9,6 +9,7 @@ import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, created, forbidden, ok } from "../../utils/http";
 import { sendEmail } from "../../services/email.service";
 import { env } from "../../config/env";
+import { reaplicarTrasladosPendientesEnGrupo } from "../academico/matricula-traslado.utils";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -18,6 +19,8 @@ const contextoCache = new Map<string, { at: number; data: any }>();
 const contextoInFlight = new Map<string, Promise<any>>();
 const BOOTSTRAP_CACHE_TTL_MS = 10000;
 const bootstrapCache = new Map<string, { at: number; data: any }>();
+const TRASLADOS_REAPLICADOS_TTL_MS = 5 * 60 * 1000;
+const trasladosReaplicadosCache = new Map<string, number>();
 
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
@@ -4737,7 +4740,12 @@ router.get("/seguimiento/contexto", async (req, res) => {
             enc.Telefono AS EncargadoPrincipalTelefono,
             encWa.Detalle AS EncargadosWhatsAppDetalle,
             m.MatriculaId,
-            m.Estado AS EstadoMatricula
+            m.Estado AS EstadoMatricula,
+            ISNULL(traslado.FueTrasladado, 0) AS FueTrasladado,
+            traslado.GrupoIdOrigenTraslado,
+            traslado.GrupoNombreOrigenTraslado,
+            traslado.GrupoIdDestinoTraslado,
+            traslado.TrasladoCreatedAt
           FROM dbo.Matricula m
           INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
           OUTER APPLY (
@@ -4769,6 +4777,20 @@ router.get("/seguimiento/contexto", async (req, res) => {
                 FOR XML PATH(''), TYPE
               ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
           ) encWa
+          OUTER APPLY (
+            SELECT TOP 1
+              CAST(1 AS bit) AS FueTrasladado,
+              h.GrupoIdOrigen AS GrupoIdOrigenTraslado,
+              go.Nombre AS GrupoNombreOrigenTraslado,
+              h.GrupoIdDestino AS GrupoIdDestinoTraslado,
+              h.CreatedAt AS TrasladoCreatedAt
+            FROM dbo.MatriculaTrasladoHistorial h
+            LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
+            WHERE h.EstudianteId = e.EstudianteId
+              AND h.AnioLectivoId = m.AnioLectivoId
+              AND h.GrupoIdDestino = m.GrupoId
+            ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
+          ) traslado
           WHERE m.GrupoId = @grupoId
             AND m.AnioLectivoId = @anioLectivoId
             AND ISNULL(e.Activo, 1) = 1
@@ -4797,6 +4819,23 @@ router.get("/seguimiento/contexto", async (req, res) => {
           ORDER BY CreatedAt DESC, PlaneamientoId DESC
         `))
     ]);
+
+      const trasladoCacheKey = `${institucionId}|${grupoId}|${anioLectivoId}`;
+      const ultimaReaplicacion = trasladosReaplicadosCache.get(trasladoCacheKey) || 0;
+      if ((Date.now() - ultimaReaplicacion) > TRASLADOS_REAPLICADOS_TTL_MS) {
+        try {
+          await timedQuery("eval360.contexto.reaplicarTraslados", () =>
+            reaplicarTrasladosPendientesEnGrupo(pool, {
+              institucionId,
+              grupoIdDestino: grupoId,
+              anioLectivoId
+            })
+          );
+          trasladosReaplicadosCache.set(trasladoCacheKey, Date.now());
+        } catch (trasladoError) {
+          console.error("Error reaplicando traslados en eval360.contexto:", trasladoError);
+        }
+      }
 
       let detalles: any[] = [];
       let indicadores: any[] = [];
