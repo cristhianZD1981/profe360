@@ -21,6 +21,7 @@ import ConfiguracionIAPage from "./pages/ConfiguracionIAPage";
 import SeguimientoNotasPage from "./pages/SeguimientoNotasPage";
 import ParametrizacionesPage from "./pages/ParametrizacionesPage";
 import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
+import AssistantAdminPage from "./pages/AssistantAdminPage";
 
 const ADMINISTRATIVO_ROLES = [
   "SUPER_ADMIN",
@@ -232,6 +233,16 @@ export default function App() {
           />
 
 
+          <Route
+            path="assistant-admin"
+            element={
+              <ProtectedRoute
+                allowedRoles={ADMINISTRATIVO_ROLES}
+              >
+                <AssistantAdminPage />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="configuracion-ia"
             element={

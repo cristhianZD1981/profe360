@@ -20,6 +20,7 @@ import planeamientoIARoutes from "../modules/planeamiento-ia/planeamiento-ia.rou
 import plantillaIARoutes from "../modules/planeamiento-ia/plantilla-ia.routes";
 import eval360Routes from "../modules/eval360/eval360.routes";
 import seguimientoEvaluacionRoutes from "../modules/seguimiento-evaluacion/seguimiento-evaluacion.routes";
+import assistantRoutes from "../modules/assistant/assistant.routes";
 
 const router = Router();
 
@@ -44,5 +45,6 @@ router.use("/planeamiento-ia", planeamientoIARoutes);
 router.use("/ia", plantillaIARoutes);
 router.use("/eval360", eval360Routes);
 router.use("/seguimiento-evaluacion", seguimientoEvaluacionRoutes);
+router.use("/assistant", assistantRoutes);
 
 export default router;

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Margarita avatar</title>
+  <desc id="desc">Friendly tech-savvy grandmother avatar for assistant Margarita.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#dbeafe"/>
+      <stop offset="100%" stop-color="#bfdbfe"/>
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="120" fill="url(#bg)"/>
+  <circle cx="128" cy="116" r="74" fill="#f8d7c2"/>
+  <path d="M77 105c0-34 22-61 51-61 31 0 55 28 55 63 0 6-1 11-2 16-8-10-18-17-28-21-16-7-27-20-33-32-10 14-24 27-43 34-7 3-13 7-18 13-1-4-2-8-2-12z" fill="#d1d5db"/>
+  <path d="M86 177c11 23 31 35 42 35 14 0 34-12 45-35-13-10-29-15-45-15-16 0-29 4-42 15z" fill="#0f766e"/>
+  <path d="M84 181c-16 8-30 24-36 46h160c-6-21-20-37-36-46-7 10-23 24-44 24-20 0-36-14-44-24z" fill="#1e3a8a"/>
+  <ellipse cx="100" cy="122" rx="10" ry="8" fill="#1f2937"/>
+  <ellipse cx="156" cy="122" rx="10" ry="8" fill="#1f2937"/>
+  <path d="M116 152c7 6 17 10 27 10 11 0 20-4 27-10" stroke="#b45309" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M112 138c4 3 9 4 16 4 6 0 12-1 16-4" stroke="#7c2d12" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <rect x="82" y="108" width="36" height="26" rx="12" fill="none" stroke="#0f172a" stroke-width="4"/>
+  <rect x="138" y="108" width="36" height="26" rx="12" fill="none" stroke="#0f172a" stroke-width="4"/>
+  <path d="M118 121h20" stroke="#0f172a" stroke-width="4" stroke-linecap="round"/>
+  <path d="M196 119c10 0 18 8 18 18v17" fill="none" stroke="#334155" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="214" cy="157" r="8" fill="#22c55e"/>
+  <rect x="173" y="170" width="34" height="25" rx="5" fill="#e0f2fe" stroke="#38bdf8" stroke-width="4"/>
+  <path d="M180 179h20M180 186h14" stroke="#0284c7" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="68" cy="66" r="10" fill="#ffffff" opacity="0.9"/>
+  <circle cx="193" cy="57" r="8" fill="#ffffff" opacity="0.7"/>
+  <path d="M56 97h22M67 86v22" stroke="#60a5fa" stroke-width="5" stroke-linecap="round"/>
+</svg>

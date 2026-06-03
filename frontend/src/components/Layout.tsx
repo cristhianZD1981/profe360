@@ -1,7 +1,8 @@
 import { FormEvent, useMemo, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import api from "../lib/http";
+import FloatingAssistant from "./FloatingAssistant";
 
 type MenuItem = {
   label: string;
@@ -84,6 +85,7 @@ function hasAccess(item: MenuItem, roles: string[]) {
 export default function Layout() {
   const { user, logout, setUser } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -99,6 +101,10 @@ export default function Layout() {
     "Sin institución";
 
   const roles = useMemo(() => user?.roles || [], [user?.roles]);
+  const canManageAssistant = useMemo(
+    () => ADMINISTRATIVO_ROLES.some((role) => roles.map(normalizeRole).includes(normalizeRole(role))),
+    [roles]
+  );
 
   function renderMenuItem(item: MenuItem) {
     const allowed = hasAccess(item, roles);
@@ -239,6 +245,15 @@ export default function Layout() {
           </div>
 
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            {canManageAssistant ? (
+              <button
+                onClick={() => navigate("/assistant-admin")}
+                className="ghost-btn"
+                type="button"
+              >
+                Admin
+              </button>
+            ) : null}
             <button
               onClick={() => {
                 setShowChangePassword(true);
@@ -258,6 +273,7 @@ export default function Layout() {
         </header>
 
         <Outlet />
+        <FloatingAssistant />
       </main>
 
       {showChangePassword && (
