@@ -103,6 +103,25 @@ function normalizeText(value: any) {
   return String(value ?? "").trim();
 }
 
+function sanitizeEnvScalar(value: any) {
+  return String(value ?? "")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((part) => String(part || "").trim())
+    .find((part) => part.length > 0) || "";
+}
+
+function getOpenAiApiKey() {
+  return sanitizeEnvScalar(process.env.OPENAI_API_KEY);
+}
+
+function getOpenAiEvalModel() {
+  return sanitizeEnvScalar(process.env.OPENAI_EVAL360_MODEL)
+    || sanitizeEnvScalar(process.env.OPENAI_PLANEAMIENTO_MODEL)
+    || sanitizeEnvScalar(process.env.OPENAI_MODEL)
+    || "gpt-4.1-mini";
+}
+
 function getContextCacheKeyFromParts(params: {
   institucionId: number;
   grupoId: number;
@@ -3337,7 +3356,7 @@ El JSON debe traer exactamente ${input.indicadoresBase.length} objetos en "indic
 }
 
 async function callOpenAiIndicadores(prompt: string) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
 
   try {
@@ -3348,7 +3367,7 @@ async function callOpenAiIndicadores(prompt: string) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini",
+        model: getOpenAiEvalModel(),
         input: prompt,
         temperature: 0.25
       })
@@ -3526,7 +3545,7 @@ router.get("/examenes-ia", async (req, res) => {
 router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
   try {
     if (!assertCanAccess(req, res)) return;
-    if (!String(process.env.OPENAI_API_KEY || "").trim()) {
+    if (!getOpenAiApiKey()) {
       console.error("OpenAI Eval360 examenes: OPENAI_API_KEY no esta configurada en el backend.");
       return res.status(503).json({
         ok: false,
@@ -5107,7 +5126,7 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
       estructuraGrupoId: Number(estructura.EstructuraGrupoId),
       planeamientoId,
       plantillaPromptIAId: plantilla.Id,
-      generadoConIA: !!process.env.OPENAI_API_KEY,
+      generadoConIA: !!getOpenAiApiKey(),
       estructurasAplicadas: estructurasDestino.length,
       gruposSolicitados: grupoIdsDestino,
       indicadores: indicadoresGuardados.recordset
@@ -5428,12 +5447,12 @@ function getRubroCorreoSeguimiento(tipoUso: string) {
 }
 
 async function callOpenAiGeneric(prompt: string) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = getOpenAiApiKey();
   if (!apiKey) {
     console.error("OpenAI Eval360 examenes: OPENAI_API_KEY no esta configurada en el backend.");
     return null;
   }
-  const model = process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
+  const model = getOpenAiEvalModel();
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -5472,9 +5491,9 @@ async function callOpenAiGeneric(prompt: string) {
 }
 
 async function callOpenAiGenericJsonStrict(prompt: string) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = getOpenAiApiKey();
   if (!apiKey) return "";
-  const model = process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
+  const model = getOpenAiEvalModel();
   return await callOpenAiGenericChatFallback(prompt, apiKey, model);
 }
 
