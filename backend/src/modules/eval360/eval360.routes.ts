@@ -17,6 +17,8 @@ const examenIaUpload = upload.any();
 const CONTEXTO_CACHE_TTL_MS = 8000;
 const contextoCache = new Map<string, { at: number; data: any }>();
 const contextoInFlight = new Map<string, Promise<any>>();
+const CONTEXTO_SECTION_CACHE_TTL_MS = 30000;
+const contextoSectionCache = new Map<string, { at: number; data: any }>();
 const BOOTSTRAP_CACHE_TTL_MS = 10000;
 const bootstrapCache = new Map<string, { at: number; data: any }>();
 const TRASLADOS_REAPLICADOS_TTL_MS = 5 * 60 * 1000;
@@ -101,6 +103,695 @@ function normalizeText(value: any) {
   return String(value ?? "").trim();
 }
 
+function getContextCacheKeyFromParts(params: {
+  institucionId: number;
+  grupoId: number;
+  materiaId: number;
+  anioLectivoId: number;
+  periodoId: number;
+}) {
+  return `${params.institucionId}|${params.grupoId}|${params.materiaId}|${params.anioLectivoId}|${params.periodoId}`;
+}
+
+function clearContextCacheByParts(params: {
+  institucionId: number;
+  grupoId: number;
+  materiaId: number;
+  anioLectivoId: number;
+  periodoId: number;
+}) {
+  const key = getContextCacheKeyFromParts(params);
+  contextoCache.delete(key);
+  contextoInFlight.delete(key);
+}
+
+function getSectionCache<T>(key: string): T | null {
+  const cached = contextoSectionCache.get(key);
+  if (!cached) return null;
+  if ((Date.now() - cached.at) > CONTEXTO_SECTION_CACHE_TTL_MS) {
+    contextoSectionCache.delete(key);
+    return null;
+  }
+  return cached.data as T;
+}
+
+function setSectionCache(key: string, data: any) {
+  contextoSectionCache.set(key, { at: Date.now(), data });
+}
+
+function normalizeReplicaKey(value: any) {
+  return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+async function getEstructurasReplicaTablaMismoGrado(executor: any, req: any, estructuraGrupoId: number) {
+  const sourceResult = await new sql.Request(executor)
+    .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+    .query(`
+      SELECT TOP 1
+        eg.EstructuraGrupoId,
+        eg.InstitucionId,
+        eg.GrupoId,
+        eg.MateriaId,
+        eg.AnioLectivoId,
+        eg.PeriodoId,
+        LTRIM(RTRIM(ISNULL(g.Nivel, g.Nombre))) AS GrupoNivel
+      FROM dbo.Eval360_EstructuraGrupo eg
+      INNER JOIN dbo.Grupo g ON g.GrupoId = eg.GrupoId
+      WHERE eg.EstructuraGrupoId = @estructuraGrupoId
+        AND ISNULL(eg.Activo, 1) = 1
+    `);
+
+  const source = sourceResult.recordset[0];
+  if (!source) return [];
+
+  const profesoresSourceResult = await new sql.Request(executor)
+    .input("institucionId", sql.Int, Number(source.InstitucionId || 0))
+    .input("grupoId", sql.Int, Number(source.GrupoId || 0))
+    .input("materiaId", sql.Int, Number(source.MateriaId || 0))
+    .input("anioLectivoId", sql.Int, Number(source.AnioLectivoId || 0))
+    .input("periodoId", sql.Int, Number(source.PeriodoId || 0))
+    .query(`
+      SELECT DISTINCT ad.UsuarioId
+      FROM dbo.AsignacionDocente ad
+      WHERE ad.Activo = 1
+        AND ad.InstitucionId = @institucionId
+        AND ad.GrupoId = @grupoId
+        AND ad.MateriaId = @materiaId
+        AND ad.AnioLectivoId = @anioLectivoId
+        AND ad.PeriodoId = @periodoId
+        AND ad.UsuarioId IS NOT NULL
+      ORDER BY ad.UsuarioId
+    `);
+
+  let profesorIds = (profesoresSourceResult.recordset || [])
+    .map((row: any) => Number(row.UsuarioId || 0))
+    .filter((id: number) => Number.isFinite(id) && id > 0);
+
+  if (!profesorIds.length) {
+    const userId = getUserId(req);
+    if (userId) profesorIds = [userId];
+  }
+  if (!profesorIds.length) return [];
+
+  const profesorPlaceholders = profesorIds.map((_, index) => `@profesorId${index}`).join(", ");
+  const targetRequest = new sql.Request(executor)
+    .input("institucionId", sql.Int, Number(source.InstitucionId || 0))
+    .input("materiaId", sql.Int, Number(source.MateriaId || 0))
+    .input("anioLectivoId", sql.Int, Number(source.AnioLectivoId || 0))
+    .input("periodoId", sql.Int, Number(source.PeriodoId || 0))
+    .input("grupoNivel", sql.NVarChar(120), String(source.GrupoNivel || ""))
+    .input("estructuraGrupoId", sql.Int, Number(source.EstructuraGrupoId || 0));
+  profesorIds.forEach((id, index) => targetRequest.input(`profesorId${index}`, sql.Int, id));
+
+  const targetsResult = await targetRequest.query(`
+      SELECT DISTINCT
+        eg.EstructuraGrupoId,
+        eg.GrupoId,
+        g.Nombre AS GrupoNombre
+      FROM dbo.AsignacionDocente ad
+      INNER JOIN dbo.Eval360_EstructuraGrupo eg
+        ON eg.InstitucionId = ad.InstitucionId
+       AND eg.GrupoId = ad.GrupoId
+       AND eg.MateriaId = ad.MateriaId
+       AND eg.AnioLectivoId = ad.AnioLectivoId
+       AND eg.PeriodoId = ad.PeriodoId
+      INNER JOIN dbo.Grupo g ON g.GrupoId = eg.GrupoId
+      WHERE ad.Activo = 1
+        AND ad.UsuarioId IN (${profesorPlaceholders})
+        AND ad.InstitucionId = @institucionId
+        AND ad.MateriaId = @materiaId
+        AND ad.AnioLectivoId = @anioLectivoId
+        AND ad.PeriodoId = @periodoId
+        AND ISNULL(eg.Activo, 1) = 1
+        AND eg.EstructuraGrupoId <> @estructuraGrupoId
+        AND LTRIM(RTRIM(ISNULL(g.Nivel, g.Nombre))) = @grupoNivel
+      ORDER BY GrupoNombre, EstructuraGrupoId
+    `);
+
+  return targetsResult.recordset || [];
+}
+
+async function getActividadReplicaDestino(executor: any, params: {
+  sourceEstructuraGrupoId: number;
+  sourceEstructuraGrupoDetalleId: number;
+  sourceActividadId: number;
+  targetEstructuraGrupoId: number;
+}) {
+  const sourceMetaResult = await new sql.Request(executor)
+    .input("sourceEstructuraGrupoId", sql.Int, params.sourceEstructuraGrupoId)
+    .input("sourceEstructuraGrupoDetalleId", sql.Int, params.sourceEstructuraGrupoDetalleId)
+    .input("sourceActividadId", sql.Int, params.sourceActividadId)
+    .query(`
+      WITH source_acts AS (
+        SELECT
+          a.ActividadId,
+          a.EstructuraGrupoDetalleId,
+          a.Nombre,
+          a.Descripcion,
+          a.PuntosMaximos,
+          a.PorcentajeDentroRubro,
+          a.UsaIndicadoresPlaneamiento,
+          a.Fuente,
+          d.ComponenteCatalogoId,
+          d.Orden AS DetalleOrden,
+          ROW_NUMBER() OVER (PARTITION BY a.EstructuraGrupoDetalleId ORDER BY a.Fecha, a.ActividadId) AS ActividadOrden
+        FROM dbo.Eval360_Actividad a
+        INNER JOIN dbo.Eval360_EstructuraGrupoDetalle d ON d.EstructuraGrupoDetalleId = a.EstructuraGrupoDetalleId
+        WHERE a.EstructuraGrupoId = @sourceEstructuraGrupoId
+          AND a.EstructuraGrupoDetalleId = @sourceEstructuraGrupoDetalleId
+          AND ISNULL(a.Activo, 1) = 1
+      )
+      SELECT TOP 1 *
+      FROM source_acts
+      WHERE ActividadId = @sourceActividadId
+    `);
+
+  const sourceMeta = sourceMetaResult.recordset[0];
+  if (!sourceMeta) return null;
+
+  const targetMetaResult = await new sql.Request(executor)
+    .input("targetEstructuraGrupoId", sql.Int, params.targetEstructuraGrupoId)
+    .input("componenteCatalogoId", sql.Int, Number(sourceMeta.ComponenteCatalogoId || 0))
+    .input("detalleOrden", sql.Int, Number(sourceMeta.DetalleOrden || 0))
+    .input("actividadOrden", sql.Int, Number(sourceMeta.ActividadOrden || 0))
+    .query(`
+      WITH target_acts AS (
+        SELECT
+          a.ActividadId,
+          a.EstructuraGrupoDetalleId,
+          ROW_NUMBER() OVER (PARTITION BY a.EstructuraGrupoDetalleId ORDER BY a.Fecha, a.ActividadId) AS ActividadOrden
+        FROM dbo.Eval360_Actividad a
+        INNER JOIN dbo.Eval360_EstructuraGrupoDetalle d ON d.EstructuraGrupoDetalleId = a.EstructuraGrupoDetalleId
+        WHERE a.EstructuraGrupoId = @targetEstructuraGrupoId
+          AND d.ComponenteCatalogoId = @componenteCatalogoId
+          AND d.Orden = @detalleOrden
+          AND ISNULL(a.Activo, 1) = 1
+      )
+      SELECT TOP 1 *
+      FROM target_acts
+      WHERE ActividadOrden = @actividadOrden
+    `);
+
+  const targetMeta = targetMetaResult.recordset[0];
+  if (!targetMeta) return null;
+
+  return {
+    sourceMeta,
+    targetActividadId: Number(targetMeta.ActividadId || 0),
+    targetEstructuraGrupoDetalleId: Number(targetMeta.EstructuraGrupoDetalleId || 0)
+  };
+}
+
+async function mapIndicadoresReplicaTabla(executor: any, params: {
+  sourceEstructuraGrupoId: number;
+  targetEstructuraGrupoId: number;
+  indicadorIds: number[];
+}) {
+  const uniqueIds = Array.from(new Set(params.indicadorIds.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+  if (!uniqueIds.length) return new Map<number, number>();
+
+  const placeholders = uniqueIds.map((_, index) => `@sourceIndicadorId${index}`).join(", ");
+  const sourceReq = new sql.Request(executor)
+    .input("sourceEstructuraGrupoId", sql.Int, params.sourceEstructuraGrupoId);
+  uniqueIds.forEach((id, index) => sourceReq.input(`sourceIndicadorId${index}`, sql.Int, id));
+  const sourceResult = await sourceReq.query(`
+    SELECT
+      i.IndicadorGrupoId,
+      i.TipoUso,
+      i.IndicadorBase,
+      p.Nombre AS PlaneamientoNombre
+    FROM dbo.Eval360_IndicadorGrupo i
+    LEFT JOIN dbo.Planeamiento p ON p.PlaneamientoId = i.PlaneamientoId
+    WHERE i.EstructuraGrupoId = @sourceEstructuraGrupoId
+      AND ISNULL(i.Activo, 1) = 1
+      AND i.IndicadorGrupoId IN (${placeholders})
+  `);
+
+  const targetResult = await new sql.Request(executor)
+    .input("targetEstructuraGrupoId", sql.Int, params.targetEstructuraGrupoId)
+    .query(`
+      SELECT
+        i.IndicadorGrupoId,
+        i.TipoUso,
+        i.IndicadorBase,
+        p.Nombre AS PlaneamientoNombre
+      FROM dbo.Eval360_IndicadorGrupo i
+      LEFT JOIN dbo.Planeamiento p ON p.PlaneamientoId = i.PlaneamientoId
+      WHERE i.EstructuraGrupoId = @targetEstructuraGrupoId
+        AND ISNULL(i.Activo, 1) = 1
+        AND i.TipoUso IN (N'Cotidiano', N'Tareas', N'TablaEspecificaciones')
+    `);
+
+  const targetMap = new Map<string, number>();
+  for (const row of (targetResult.recordset || [])) {
+    const key = [
+      normalizeReplicaKey(row.TipoUso),
+      normalizeReplicaKey(row.PlaneamientoNombre),
+      normalizeReplicaKey(row.IndicadorBase)
+    ].join("|");
+    if (!targetMap.has(key)) targetMap.set(key, Number(row.IndicadorGrupoId || 0));
+  }
+
+  const result = new Map<number, number>();
+  for (const row of (sourceResult.recordset || [])) {
+    const key = [
+      normalizeReplicaKey(row.TipoUso),
+      normalizeReplicaKey(row.PlaneamientoNombre),
+      normalizeReplicaKey(row.IndicadorBase)
+    ].join("|");
+    const targetIndicadorId = targetMap.get(key);
+    if (targetIndicadorId) result.set(Number(row.IndicadorGrupoId || 0), Number(targetIndicadorId));
+  }
+
+  return result;
+}
+
+async function validateIndicadoresRemovidosConCalificacion(executor: any, actividadId: number, indicadorIds: number[]) {
+  const placeholders = indicadorIds.map((_, index) => `@keepIndicadorId${index}`).join(", ");
+  const request = new sql.Request(executor).input("actividadId", sql.Int, actividadId);
+  indicadorIds.forEach((id, index) => request.input(`keepIndicadorId${index}`, sql.Int, id));
+  const result = await request.query(`
+    SELECT DISTINCT si.IndicadorGrupoId
+    FROM dbo.Eval360_SeguimientoIndicador si
+    WHERE si.ActividadId = @actividadId
+      ${indicadorIds.length ? `AND si.IndicadorGrupoId NOT IN (${placeholders})` : ""}
+  `);
+  return (result.recordset || []).length > 0;
+}
+
+async function upsertActividadIndicadores(executor: any, actividadId: number, indicadorIds: number[], asignacionesMap: Map<number, { numeroLecciones: number; puntos: number; detalleItemsJson: string }>) {
+  await new sql.Request(executor)
+    .input("actividadId", sql.Int, actividadId)
+    .query(`
+      UPDATE dbo.Eval360_ActividadIndicador
+      SET Activo = 0
+      WHERE ActividadId = @actividadId
+    `);
+
+  for (const indicadorId of indicadorIds) {
+    const existing = await new sql.Request(executor)
+      .input("actividadId", sql.Int, actividadId)
+      .input("indicadorGrupoId", sql.Int, indicadorId)
+      .query(`
+        SELECT TOP 1 ActividadId
+        FROM dbo.Eval360_ActividadIndicador
+        WHERE ActividadId = @actividadId
+          AND IndicadorGrupoId = @indicadorGrupoId
+      `);
+
+    if (existing.recordset[0]) {
+      const reqUpdate = new sql.Request(executor)
+        .input("actividadId", sql.Int, actividadId)
+        .input("indicadorGrupoId", sql.Int, indicadorId);
+      const asignacion = asignacionesMap.get(Number(indicadorId)) || { numeroLecciones: 0, puntos: 0, detalleItemsJson: "{}" };
+      reqUpdate.input("numeroLecciones", sql.Decimal(10, 2), Number(asignacion.numeroLecciones || 0));
+      reqUpdate.input("puntos", sql.Decimal(10, 2), Number(asignacion.puntos || 0));
+      reqUpdate.input("detalleItemsJson", sql.NVarChar(sql.MAX), String(asignacion.detalleItemsJson || "{}"));
+      await reqUpdate.query(`
+        IF COL_LENGTH('dbo.Eval360_ActividadIndicador', 'NumeroLecciones') IS NOT NULL
+           AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'Puntos') IS NOT NULL
+           AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'DetalleItemsJson') IS NOT NULL
+        BEGIN
+          UPDATE dbo.Eval360_ActividadIndicador
+          SET Activo = 1,
+              NumeroLecciones = @numeroLecciones,
+              Puntos = @puntos,
+              DetalleItemsJson = @detalleItemsJson
+          WHERE ActividadId = @actividadId
+            AND IndicadorGrupoId = @indicadorGrupoId
+        END
+        ELSE
+        BEGIN
+          UPDATE dbo.Eval360_ActividadIndicador
+          SET Activo = 1
+          WHERE ActividadId = @actividadId
+            AND IndicadorGrupoId = @indicadorGrupoId
+        END
+      `);
+    } else {
+      const reqInsert = new sql.Request(executor)
+        .input("actividadId", sql.Int, actividadId)
+        .input("indicadorGrupoId", sql.Int, indicadorId);
+      const asignacion = asignacionesMap.get(Number(indicadorId)) || { numeroLecciones: 0, puntos: 0, detalleItemsJson: "{}" };
+      reqInsert.input("numeroLecciones", sql.Decimal(10, 2), Number(asignacion.numeroLecciones || 0));
+      reqInsert.input("puntos", sql.Decimal(10, 2), Number(asignacion.puntos || 0));
+      reqInsert.input("detalleItemsJson", sql.NVarChar(sql.MAX), String(asignacion.detalleItemsJson || "{}"));
+      await reqInsert.query(`
+        IF COL_LENGTH('dbo.Eval360_ActividadIndicador', 'NumeroLecciones') IS NOT NULL
+           AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'Puntos') IS NOT NULL
+           AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'DetalleItemsJson') IS NOT NULL
+        BEGIN
+          INSERT INTO dbo.Eval360_ActividadIndicador
+            (ActividadId, IndicadorGrupoId, Activo, NumeroLecciones, Puntos, DetalleItemsJson)
+          VALUES
+            (@actividadId, @indicadorGrupoId, 1, @numeroLecciones, @puntos, @detalleItemsJson)
+        END
+        ELSE
+        BEGIN
+          INSERT INTO dbo.Eval360_ActividadIndicador
+            (ActividadId, IndicadorGrupoId, Activo)
+          VALUES
+            (@actividadId, @indicadorGrupoId, 1)
+        END
+      `);
+    }
+  }
+}
+
+async function syncTablaEspecificacionesDesdeGrupoHermanoSiFalta(executor: any, req: any, estructuraGrupoId: number) {
+  if (!estructuraGrupoId) return 0;
+
+  const existingResult = await new sql.Request(executor)
+    .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+    .query(`
+      SELECT TOP 1 ai.ActividadId
+      FROM dbo.Eval360_ActividadIndicador ai
+      INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = ai.ActividadId
+      INNER JOIN dbo.Eval360_IndicadorGrupo i ON i.IndicadorGrupoId = ai.IndicadorGrupoId
+      WHERE a.EstructuraGrupoId = @estructuraGrupoId
+        AND ISNULL(a.Activo, 1) = 1
+        AND ISNULL(ai.Activo, 1) = 1
+        AND ISNULL(i.Activo, 1) = 1
+        AND i.TipoUso = N'TablaEspecificaciones'
+        AND (
+          ISNULL(ai.NumeroLecciones, 0) > 0
+          OR ISNULL(ai.Puntos, 0) > 0
+          OR LEN(ISNULL(ai.DetalleItemsJson, N'')) > 2
+        )
+    `);
+  if (existingResult.recordset[0]) return 0;
+
+  const siblingStructures = await getEstructurasReplicaTablaMismoGrado(executor, req, estructuraGrupoId);
+  const siblingStructuresConPeso: Array<any> = [];
+  for (const sibling of siblingStructures) {
+    const siblingEstructuraId = Number(sibling.EstructuraGrupoId || 0);
+    if (!siblingEstructuraId) continue;
+
+    const siblingParametrizadaResult = await new sql.Request(executor)
+      .input("estructuraGrupoId", sql.Int, siblingEstructuraId)
+      .query(`
+        SELECT
+          SUM(CASE
+            WHEN ISNULL(ai.Activo, 1) = 1
+             AND ISNULL(i.Activo, 1) = 1
+             AND i.TipoUso = N'TablaEspecificaciones'
+             AND (
+               ISNULL(ai.NumeroLecciones, 0) > 0
+               OR ISNULL(ai.Puntos, 0) > 0
+               OR LEN(ISNULL(ai.DetalleItemsJson, N'')) > 2
+             )
+            THEN 1 ELSE 0 END) AS Parametrizados
+        FROM dbo.Eval360_Actividad a
+        LEFT JOIN dbo.Eval360_ActividadIndicador ai ON ai.ActividadId = a.ActividadId
+        LEFT JOIN dbo.Eval360_IndicadorGrupo i ON i.IndicadorGrupoId = ai.IndicadorGrupoId
+        WHERE a.EstructuraGrupoId = @estructuraGrupoId
+          AND ISNULL(a.Activo, 1) = 1
+      `);
+    siblingStructuresConPeso.push({
+      ...sibling,
+      Parametrizados: Number(siblingParametrizadaResult.recordset?.[0]?.Parametrizados || 0)
+    });
+  }
+
+  siblingStructuresConPeso.sort((a, b) => Number(b.Parametrizados || 0) - Number(a.Parametrizados || 0));
+  for (const sibling of siblingStructuresConPeso) {
+    const siblingEstructuraId = Number(sibling.EstructuraGrupoId || 0);
+    if (!siblingEstructuraId || Number(sibling.Parametrizados || 0) <= 0) continue;
+
+    const sourceActivitiesResult = await new sql.Request(executor)
+      .input("estructuraGrupoId", sql.Int, siblingEstructuraId)
+      .query(`
+        SELECT
+          a.ActividadId,
+          a.EstructuraGrupoDetalleId,
+          a.Nombre,
+          a.Fecha,
+          SUM(CASE
+            WHEN ISNULL(ai.NumeroLecciones, 0) > 0
+              OR ISNULL(ai.Puntos, 0) > 0
+              OR LEN(ISNULL(ai.DetalleItemsJson, N'')) > 2
+            THEN 1 ELSE 0 END) AS Parametrizados
+        FROM dbo.Eval360_Actividad a
+        INNER JOIN dbo.Eval360_ActividadIndicador ai ON ai.ActividadId = a.ActividadId
+        INNER JOIN dbo.Eval360_IndicadorGrupo i ON i.IndicadorGrupoId = ai.IndicadorGrupoId
+        WHERE a.EstructuraGrupoId = @estructuraGrupoId
+          AND ISNULL(a.Activo, 1) = 1
+          AND ISNULL(ai.Activo, 1) = 1
+          AND ISNULL(i.Activo, 1) = 1
+          AND i.TipoUso = N'TablaEspecificaciones'
+        GROUP BY a.ActividadId, a.EstructuraGrupoDetalleId, a.Nombre, a.Fecha
+        HAVING SUM(CASE
+          WHEN ISNULL(ai.NumeroLecciones, 0) > 0
+            OR ISNULL(ai.Puntos, 0) > 0
+            OR LEN(ISNULL(ai.DetalleItemsJson, N'')) > 2
+          THEN 1 ELSE 0 END) > 0
+        ORDER BY a.EstructuraGrupoDetalleId, a.Fecha, a.ActividadId
+      `);
+
+    const sourceActivities = sourceActivitiesResult.recordset || [];
+    if (!sourceActivities.length) continue;
+
+    let replicatedCount = 0;
+    for (const sourceActivity of sourceActivities) {
+      const actividadReplica = await getActividadReplicaDestino(executor, {
+        sourceEstructuraGrupoId: siblingEstructuraId,
+        sourceEstructuraGrupoDetalleId: Number(sourceActivity.EstructuraGrupoDetalleId || 0),
+        sourceActividadId: Number(sourceActivity.ActividadId || 0),
+        targetEstructuraGrupoId: estructuraGrupoId
+      });
+      if (!actividadReplica?.targetActividadId) continue;
+
+      const sourceAsignacionesResult = await new sql.Request(executor)
+        .input("actividadId", sql.Int, Number(sourceActivity.ActividadId || 0))
+        .query(`
+          SELECT
+            ai.IndicadorGrupoId,
+            CASE WHEN COL_LENGTH('dbo.Eval360_ActividadIndicador', 'NumeroLecciones') IS NULL THEN 0 ELSE ISNULL(ai.NumeroLecciones, 0) END AS NumeroLecciones,
+            CASE WHEN COL_LENGTH('dbo.Eval360_ActividadIndicador', 'Puntos') IS NULL THEN 0 ELSE ISNULL(ai.Puntos, 0) END AS Puntos,
+            CASE WHEN COL_LENGTH('dbo.Eval360_ActividadIndicador', 'DetalleItemsJson') IS NULL THEN N'{}' ELSE ISNULL(ai.DetalleItemsJson, N'{}') END AS DetalleItemsJson
+          FROM dbo.Eval360_ActividadIndicador ai
+          INNER JOIN dbo.Eval360_IndicadorGrupo i ON i.IndicadorGrupoId = ai.IndicadorGrupoId
+          WHERE ai.ActividadId = @actividadId
+            AND ISNULL(ai.Activo, 1) = 1
+            AND ISNULL(i.Activo, 1) = 1
+            AND i.TipoUso = N'TablaEspecificaciones'
+        `);
+
+      const sourceIndicadorIds = (sourceAsignacionesResult.recordset || []).map((row: any) => Number(row.IndicadorGrupoId || 0)).filter((id: number) => id > 0);
+      if (!sourceIndicadorIds.length) continue;
+
+      const mappedIndicadores = await mapIndicadoresReplicaTabla(executor, {
+        sourceEstructuraGrupoId: siblingEstructuraId,
+        targetEstructuraGrupoId: estructuraGrupoId,
+        indicadorIds: sourceIndicadorIds
+      });
+      if (mappedIndicadores.size !== sourceIndicadorIds.length) continue;
+
+      const targetAsignacionesMap = new Map<number, { numeroLecciones: number; puntos: number; detalleItemsJson: string }>();
+      const targetIndicadorIds: number[] = [];
+      for (const row of (sourceAsignacionesResult.recordset || [])) {
+        const sourceIndicadorId = Number(row.IndicadorGrupoId || 0);
+        const targetIndicadorId = Number(mappedIndicadores.get(sourceIndicadorId) || 0);
+        if (!targetIndicadorId) continue;
+        targetIndicadorIds.push(targetIndicadorId);
+        targetAsignacionesMap.set(targetIndicadorId, {
+          numeroLecciones: Number(row.NumeroLecciones || 0),
+          puntos: Number(row.Puntos || 0),
+          detalleItemsJson: String(row.DetalleItemsJson || "{}")
+        });
+      }
+      if (!targetIndicadorIds.length) continue;
+
+      await upsertActividadIndicadores(executor, Number(actividadReplica.targetActividadId || 0), targetIndicadorIds, targetAsignacionesMap);
+      await new sql.Request(executor)
+        .input("actividadId", sql.Int, Number(actividadReplica.targetActividadId || 0))
+        .input("nombre", sql.NVarChar(200), normalizeText(sourceActivity.Nombre || ""))
+        .query(`
+          UPDATE dbo.Eval360_Actividad
+          SET Nombre = @nombre,
+              UpdatedAt = SYSDATETIME()
+          WHERE ActividadId = @actividadId
+        `);
+      replicatedCount += 1;
+    }
+
+    if (replicatedCount > 0) return replicatedCount;
+  }
+
+  return 0;
+}
+
+async function upsertExamenIaReplicaRecord(executor: any, params: {
+  targetEstructuraGrupoId: number;
+  targetActividadId: number;
+  sourceRow: any;
+}) {
+  const existing = await new sql.Request(executor)
+    .input("estructuraGrupoId", sql.Int, params.targetEstructuraGrupoId)
+    .input("actividadIdTabla", sql.Int, params.targetActividadId)
+    .query(`
+      SELECT TOP 1 ExamenIAGeneradoId
+      FROM dbo.Eval360_ExamenIAGenerado
+      WHERE EstructuraGrupoId = @estructuraGrupoId
+        AND ActividadIdTabla = @actividadIdTabla
+        AND Activo = 1
+      ORDER BY ExamenIAGeneradoId DESC
+    `);
+
+  const request = new sql.Request(executor)
+    .input("estructuraGrupoId", sql.Int, params.targetEstructuraGrupoId)
+    .input("actividadIdTabla", sql.Int, params.targetActividadId)
+    .input("usuarioId", sql.Int, Number(params.sourceRow.UsuarioId || 0) || null)
+    .input("plantillaPromptIAId", sql.Int, Number(params.sourceRow.PlantillaPromptIAId || 0) || null)
+    .input("nombre", sql.NVarChar(250), normalizeText(params.sourceRow.Nombre) || null)
+    .input("materia", sql.NVarChar(150), normalizeText(params.sourceRow.Materia) || null)
+    .input("grado", sql.NVarChar(120), normalizeText(params.sourceRow.Grado) || null)
+    .input("periodo", sql.NVarChar(120), normalizeText(params.sourceRow.Periodo) || null)
+    .input("tipoColegio", sql.NVarChar(120), normalizeText(params.sourceRow.TipoColegio) || null)
+    .input("fuenteWord", sql.NVarChar(120), normalizeText(params.sourceRow.FuenteWord) || null)
+    .input("tamanoWordPt", sql.Int, Number(params.sourceRow.TamanoWordPt || 11) || 11)
+    .input("seccionesJson", sql.NVarChar(sql.MAX), String(params.sourceRow.SeccionesJson || "[]"))
+    .input("formatoSalidaNombre", sql.NVarChar(255), normalizeText(params.sourceRow.FormatoSalidaNombre) || null)
+    .input("formatoSalidaMimeType", sql.NVarChar(150), normalizeText(params.sourceRow.FormatoSalidaMimeType) || null)
+    .input("formatoSalidaDocxBase64", sql.NVarChar(sql.MAX), params.sourceRow.FormatoSalidaDocxBase64 || null)
+    .input("indicaciones", sql.NVarChar(sql.MAX), params.sourceRow.Indicaciones || null)
+    .input("documentoApoyoNombre", sql.NVarChar(255), normalizeText(params.sourceRow.DocumentoApoyoNombre) || null)
+    .input("encabezadoJson", sql.NVarChar(sql.MAX), params.sourceRow.EncabezadoJson || null)
+    .input("promptGenerado", sql.NVarChar(sql.MAX), params.sourceRow.PromptGenerado || null)
+    .input("resultadoIA", sql.NVarChar(sql.MAX), params.sourceRow.ResultadoIA || null);
+
+  if (existing.recordset[0]) {
+    await request
+      .input("id", sql.Int, Number(existing.recordset[0].ExamenIAGeneradoId || 0))
+      .query(`
+        UPDATE dbo.Eval360_ExamenIAGenerado
+        SET UsuarioId = @usuarioId,
+            PlantillaPromptIAId = @plantillaPromptIAId,
+            Nombre = @nombre,
+            Materia = @materia,
+            Grado = @grado,
+            Periodo = @periodo,
+            TipoColegio = @tipoColegio,
+            FuenteWord = @fuenteWord,
+            TamanoWordPt = @tamanoWordPt,
+            SeccionesJson = @seccionesJson,
+            FormatoSalidaNombre = @formatoSalidaNombre,
+            FormatoSalidaMimeType = @formatoSalidaMimeType,
+            FormatoSalidaDocxBase64 = @formatoSalidaDocxBase64,
+            Indicaciones = @indicaciones,
+            DocumentoApoyoNombre = @documentoApoyoNombre,
+            EncabezadoJson = @encabezadoJson,
+            PromptGenerado = @promptGenerado,
+            ResultadoIA = @resultadoIA,
+            UpdatedAt = SYSDATETIME()
+        WHERE ExamenIAGeneradoId = @id
+      `);
+    return Number(existing.recordset[0].ExamenIAGeneradoId || 0);
+  }
+
+  const inserted = await request.query(`
+    INSERT INTO dbo.Eval360_ExamenIAGenerado
+      (EstructuraGrupoId, ActividadIdTabla, UsuarioId, PlantillaPromptIAId, Nombre, Materia, Grado, Periodo, TipoColegio, FuenteWord, TamanoWordPt, SeccionesJson, FormatoSalidaNombre, FormatoSalidaMimeType, FormatoSalidaDocxBase64, Indicaciones, DocumentoApoyoNombre, EncabezadoJson, PromptGenerado, ResultadoIA, Activo, CreatedAt)
+    OUTPUT INSERTED.ExamenIAGeneradoId
+    VALUES
+      (@estructuraGrupoId, @actividadIdTabla, @usuarioId, @plantillaPromptIAId, @nombre, @materia, @grado, @periodo, @tipoColegio, @fuenteWord, @tamanoWordPt, @seccionesJson, @formatoSalidaNombre, @formatoSalidaMimeType, @formatoSalidaDocxBase64, @indicaciones, @documentoApoyoNombre, @encabezadoJson, @promptGenerado, @resultadoIA, 1, SYSDATETIME())
+  `);
+  return Number(inserted.recordset?.[0]?.ExamenIAGeneradoId || 0);
+}
+
+async function syncExamenIaReplicasDesdeActividad(executor: any, req: any, params: {
+  sourceEstructuraGrupoId: number;
+  sourceActividadId: number;
+  sourceExamenRow: any;
+}) {
+  const actividadMetaResult = await new sql.Request(executor)
+    .input("actividadId", sql.Int, params.sourceActividadId)
+    .query(`
+      SELECT TOP 1 ActividadId, EstructuraGrupoDetalleId
+      FROM dbo.Eval360_Actividad
+      WHERE ActividadId = @actividadId
+        AND ISNULL(Activo, 1) = 1
+    `);
+  const actividadMeta = actividadMetaResult.recordset[0];
+  if (!actividadMeta) return 0;
+
+  const replicaTargets = await getEstructurasReplicaTablaMismoGrado(executor, req, params.sourceEstructuraGrupoId);
+  let replicas = 0;
+  for (const target of replicaTargets) {
+    const actividadReplica = await getActividadReplicaDestino(executor, {
+      sourceEstructuraGrupoId: params.sourceEstructuraGrupoId,
+      sourceEstructuraGrupoDetalleId: Number(actividadMeta.EstructuraGrupoDetalleId || 0),
+      sourceActividadId: params.sourceActividadId,
+      targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0)
+    });
+    if (!actividadReplica?.targetActividadId) continue;
+    await upsertExamenIaReplicaRecord(executor, {
+      targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0),
+      targetActividadId: Number(actividadReplica.targetActividadId || 0),
+      sourceRow: params.sourceExamenRow
+    });
+    replicas += 1;
+  }
+  return replicas;
+}
+
+async function syncExamenIaDesdeGrupoHermanoSiFalta(executor: any, req: any, estructuraGrupoId: number) {
+  const currentExamResult = await new sql.Request(executor)
+    .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+    .query(`
+      SELECT COUNT(1) AS Total
+      FROM dbo.Eval360_ExamenIAGenerado
+      WHERE EstructuraGrupoId = @estructuraGrupoId
+        AND Activo = 1
+    `);
+  const totalActual = Number(currentExamResult.recordset?.[0]?.Total || 0);
+  if (totalActual > 0) return 0;
+
+  const siblingStructures = await getEstructurasReplicaTablaMismoGrado(executor, req, estructuraGrupoId);
+  let synced = 0;
+  for (const sibling of siblingStructures) {
+    const siblingExamsResult = await new sql.Request(executor)
+      .input("estructuraGrupoId", sql.Int, Number(sibling.EstructuraGrupoId || 0))
+      .query(`
+        SELECT ex.*, a.EstructuraGrupoDetalleId
+        FROM dbo.Eval360_ExamenIAGenerado ex
+        INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = ex.ActividadIdTabla
+        WHERE ex.EstructuraGrupoId = @estructuraGrupoId
+          AND ex.Activo = 1
+          AND ISNULL(a.Activo, 1) = 1
+        ORDER BY ex.ExamenIAGeneradoId DESC
+      `);
+    for (const row of (siblingExamsResult.recordset || [])) {
+      const actividadReplica = await getActividadReplicaDestino(executor, {
+        sourceEstructuraGrupoId: Number(sibling.EstructuraGrupoId || 0),
+        sourceEstructuraGrupoDetalleId: Number(row.EstructuraGrupoDetalleId || 0),
+        sourceActividadId: Number(row.ActividadIdTabla || 0),
+        targetEstructuraGrupoId: estructuraGrupoId
+      });
+      if (!actividadReplica?.targetActividadId) continue;
+      const existing = await new sql.Request(executor)
+        .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+        .input("actividadIdTabla", sql.Int, Number(actividadReplica.targetActividadId || 0))
+        .query(`
+          SELECT TOP 1 ExamenIAGeneradoId
+          FROM dbo.Eval360_ExamenIAGenerado
+          WHERE EstructuraGrupoId = @estructuraGrupoId
+            AND ActividadIdTabla = @actividadIdTabla
+            AND Activo = 1
+          ORDER BY ExamenIAGeneradoId DESC
+        `);
+      if (existing.recordset[0]) continue;
+      await upsertExamenIaReplicaRecord(executor, {
+        targetEstructuraGrupoId: estructuraGrupoId,
+        targetActividadId: Number(actividadReplica.targetActividadId || 0),
+        sourceRow: row
+      });
+      synced += 1;
+    }
+  }
+  return synced;
+}
+
 function xmlWordToText(xml: string) {
   return xml
     .replace(/<w:p[^>]*>/g, "\n")
@@ -177,16 +868,37 @@ function xmlEscape(text: string) {
     .replace(/'/g, "&apos;");
 }
 
+function stripResidualMarkersSafely(xml: string) {
+  return String(xml || "").replace(/<w:t\b([^>]*)>([\s\S]*?)<\/w:t>/g, (_full, attrs, inner) => {
+    const cleaned = String(inner || "").replace(/\{\{[^{}]{0,120}\}\}/g, "");
+    return `<w:t${attrs}>${cleaned}</w:t>`;
+  });
+}
+
 function buildWordParagraphsXml(text: string, style?: { font?: string; sizePt?: number; bold?: boolean }) {
   const lines = String(text || "").split(/\r?\n/);
+  return lines.map((line) => `<w:p>${buildWordRunsXml(line || " ", style)}</w:p>`).join("");
+}
+
+function buildWordRunsXml(text: string, style?: { font?: string; sizePt?: number; bold?: boolean }) {
   const font = String(style?.font || "Calibri").trim() || "Calibri";
   const sizePt = Number.isFinite(Number(style?.sizePt)) ? Math.max(8, Math.min(18, Number(style?.sizePt))) : 11;
   const halfPts = Math.round(sizePt * 2);
   const bold = style?.bold ? "<w:b/><w:bCs/>" : "";
   const runProps = `<w:rPr>${bold}<w:rFonts w:ascii="${xmlEscape(font)}" w:hAnsi="${xmlEscape(font)}" w:cs="${xmlEscape(font)}"/><w:color w:val="000000"/><w:sz w:val="${halfPts}"/><w:szCs w:val="${halfPts}"/></w:rPr>`;
-  return lines
-    .map((line) => `<w:p><w:r>${runProps}<w:t xml:space="preserve">${xmlEscape(line || " ")}</w:t></w:r></w:p>`)
-    .join("");
+  const parts = String(text || "").replace(/\r/g, "").split("\n");
+  const buildTextRun = (value: string) => `<w:r>${runProps}<w:t xml:space="preserve">${xmlEscape(value || " ")}</w:t></w:r>`;
+  const buildLineRuns = (value: string) => {
+    const tabParts = String(value || " ").split("\t");
+    return tabParts.map((segment, idx) => {
+      const textRun = buildTextRun(segment || " ");
+      return idx === 0 ? textRun : `<w:r>${runProps}<w:tab/></w:r>${textRun}`;
+    }).join("");
+  };
+  return parts.map((part, index) => {
+    const lineRuns = buildLineRuns(part || " ");
+    return index === 0 ? lineRuns : `<w:r>${runProps}<w:br/></w:r>${lineRuns}`;
+  }).join("");
 }
 
 function normalizeMathForWord(input: string) {
@@ -235,26 +947,26 @@ async function renderDocxFromTemplate(
       xml = p1.xml;
       if (p1.replacedAny) replacedAnyMarker = true;
 
-      const p2 = replaceMarkersAcrossRuns(xml, markers);
-      xml = p2.xml;
-      if (p2.replacedAny) replacedAnyMarker = true;
-
       const p3 = replaceTemplateMarkers(xml, markers);
       if (p3 !== xml) replacedAnyMarker = true;
       xml = p3;
-
-      // ï¿½ltima pasada robusta: soporta marcadores partidos por runs y espacios extremos de Word.
-      for (const [k, v] of Object.entries(markers || {})) {
-        const prev = xml;
-        xml = replaceMarkerLooseAcrossXml(xml, k, String(v ?? ""));
-        if (xml !== prev) replacedAnyMarker = true;
-      }
       const p4 = replaceKnownPlainMarkers(xml, markers);
       if (p4 !== xml) replacedAnyMarker = true;
       xml = p4;
     }
 
     if (sectionBlocks && Object.keys(sectionBlocks).length) {
+      const headingAliases = {
+        SR: ["SELECCION DE RESPUESTA"],
+        RC: ["RESPUESTA CORTA"],
+        C: ["CORRESPONDENCIA"],
+        I: ["IDENTIFICACION"],
+        RE: ["RESOLUCION DE EJERCICIOS"],
+        RP: ["RESOLUCION DE PROBLEMAS"],
+        RR: ["RESPUESTA RESTRINGIDA"],
+        RCAS: ["RESOLUCION DE CASOS", "RESOLUCION DE CASOS PROBLEMA"],
+        PE: ["PRODUCCION ESCRITA"]
+      };
       const beforeBlocks = xml;
       xml = replaceBlockMarkerParagraph(xml, "PREGUNTAS_SR", sectionBlocks.SR || "", style);
       xml = replaceBlockMarkerParagraph(xml, "PREGUNTAS_RC", sectionBlocks.RC || "", style);
@@ -268,30 +980,40 @@ async function renderDocxFromTemplate(
       if (xml !== beforeBlocks) insertedExamContent = true;
 
       const beforeHeadings = xml;
-      xml = injectAfterHeading(xml, /SELECCI[ï¿½O]N\s+DE\s+RESPUESTA/i, sectionBlocks.SR || "", style);
-      xml = injectAfterHeading(xml, /RESPUESTA\s+CORTA/i, sectionBlocks.RC || "", style);
-      xml = injectAfterHeading(xml, /CORRESPONDENCIA/i, sectionBlocks.C || "", style);
-      xml = injectAfterHeading(xml, /IDENTIFICACI[ï¿½O]N/i, sectionBlocks.I || "", style);
-      xml = injectAfterHeading(xml, /RESOLUCI[ï¿½O]N\s+DE\s+EJERCICIOS/i, sectionBlocks.RE || "", style);
-      xml = injectAfterHeading(xml, /RESOLUCI[ï¿½O]N\s+DE\s+PROBLEMAS/i, sectionBlocks.RP || "", style);
-      xml = injectAfterHeading(xml, /RESPUESTA\s+RESTRINGIDA/i, sectionBlocks.RR || "", style);
-      xml = injectAfterHeading(xml, /RESOLUCI[ï¿½O]N\s+DE\s+CASOS/i, sectionBlocks.RCAS || "", style);
-      xml = injectAfterHeading(xml, /PRODUCCI[ï¿½O]N\s+ESCRITA/i, sectionBlocks.PE || "", style);
+      xml = injectAfterHeading(xml, headingAliases.SR, sectionBlocks.SR || "", style);
+      xml = injectAfterHeading(xml, headingAliases.RC, sectionBlocks.RC || "", style);
+      xml = injectAfterHeading(xml, headingAliases.C, sectionBlocks.C || "", style);
+      xml = injectAfterHeading(xml, headingAliases.I, sectionBlocks.I || "", style);
+      xml = injectAfterHeading(xml, headingAliases.RE, sectionBlocks.RE || "", style);
+      xml = injectAfterHeading(xml, headingAliases.RP, sectionBlocks.RP || "", style);
+      xml = injectAfterHeading(xml, headingAliases.RR, sectionBlocks.RR || "", style);
+      xml = injectAfterHeading(xml, headingAliases.RCAS, sectionBlocks.RCAS || "", style);
+      xml = injectAfterHeading(xml, headingAliases.PE, sectionBlocks.PE || "", style);
       if (xml !== beforeHeadings) insertedExamContent = true;
 
-      xml = pruneEmptySectionHeading(xml, /SELECCI[ï¿½O]N\s+DE\s+RESPUESTA/i, !(sectionBlocks.SR || "").trim());
-      xml = pruneEmptySectionHeading(xml, /RESPUESTA\s+CORTA/i, !(sectionBlocks.RC || "").trim());
-      xml = pruneEmptySectionHeading(xml, /CORRESPONDENCIA/i, !(sectionBlocks.C || "").trim());
-      xml = pruneEmptySectionHeading(xml, /IDENTIFICACI[ï¿½O]N/i, !(sectionBlocks.I || "").trim());
-      xml = pruneEmptySectionHeading(xml, /RESOLUCI[ï¿½O]N\s+DE\s+EJERCICIOS/i, !(sectionBlocks.RE || "").trim());
-      xml = pruneEmptySectionHeading(xml, /RESOLUCI[ï¿½O]N\s+DE\s+PROBLEMAS/i, !(sectionBlocks.RP || "").trim());
-      xml = pruneEmptySectionHeading(xml, /RESPUESTA\s+RESTRINGIDA/i, !(sectionBlocks.RR || "").trim());
-      xml = pruneEmptySectionHeading(xml, /RESOLUCI[ï¿½O]N\s+DE\s+CASOS/i, !(sectionBlocks.RCAS || "").trim());
-      xml = pruneEmptySectionHeading(xml, /PRODUCCI[ï¿½O]N\s+ESCRITA/i, !(sectionBlocks.PE || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.SR, !(sectionBlocks.SR || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.RC, !(sectionBlocks.RC || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.C, !(sectionBlocks.C || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.I, !(sectionBlocks.I || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.RE, !(sectionBlocks.RE || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.RP, !(sectionBlocks.RP || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.RR, !(sectionBlocks.RR || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.RCAS, !(sectionBlocks.RCAS || "").trim());
+      xml = pruneEmptySectionHeading(xml, headingAliases.PE, !(sectionBlocks.PE || "").trim());
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.SR);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.RC);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.C);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.I);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.RE);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.RP);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.RR);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.RCAS);
+      xml = forceBoldHeadingParagraphs(xml, headingAliases.PE);
     }
 
     // Marcador de conteo exacto de pï¿½ginas del documento (Word lo recalcula al abrir/imprimir)
     xml = injectNumPagesFieldMarker(xml, "TOTAL_PAGINAS_DOCUMENTO", style);
+    xml = replaceHardcodedPageCountInstruction(xml, style);
 
     if (/\{\{[\s\S]*?\}\}/.test(xml)) {
       hasAnyMarkerToken = true;
@@ -395,11 +1117,11 @@ async function hardenRenderedDocx(
     if (!doc) return { buffer: renderedBuffer, markersLeft: -1, hasQuestions: false };
     let xml = await doc.async("string");
 
-    xml = sweepRemainingMarkers(xml, markers || {});
     xml = forceResolveMarkersByParagraph(xml, markers || {}, style);
 
-    // Limpieza final: elimina cualquier marcador residual {{...}} para no exponer placeholders.
-    xml = xml.replace(/\{\{[\s\S]{0,200}?\}\}/g, "");
+    // Limpieza final segura: solo borra marcadores residuales dentro de nodos de texto,
+    // sin tocar XML estructural que Word puede haber fragmentado entre runs.
+    xml = stripResidualMarkersSafely(xml);
 
     let plain = xmlUnescape(xml.replace(/<[^>]+>/g, " "));
     const hasQuestions = /\b1[\.\)]\s+\S/.test(plain) || /\b2[\.\)]\s+\S/.test(plain);
@@ -412,7 +1134,7 @@ async function hardenRenderedDocx(
 
     zip.file("word/document.xml", xml);
     const out = await zip.generateAsync({ type: "nodebuffer" });
-    const left = (xml.match(/\{\{[\s\S]{0,200}?\}\}/g) || []).length;
+    const left = (xml.match(/\{\{[^{}]{0,120}\}\}/g) || []).length;
     const okQ = /\b1[\.\)]\s+\S/.test(plain) || /\b2[\.\)]\s+\S/.test(plain);
     return { buffer: out, markersLeft: left, hasQuestions: okQ, error: "" };
   } catch (err: any) {
@@ -590,18 +1312,128 @@ function buildQuestionsBlockByType(items: any[], tipo: string) {
   const filtered = (items || []).filter((it) => normalizeTipoItem(it?.tipoItem) === tipo);
   if (!filtered.length) return "";
   const lines: string[] = [];
-  filtered.forEach((it, idx) => {
-    const puntaje = Number(it?.puntaje || 0);
-    lines.push(`${idx + 1}. ${String(it?.enunciado || "").trim()} (${Math.round(puntaje)} pts)`);
-    const opciones = Array.isArray(it?.opciones) ? it.opciones : [];
-    if (opciones.length) {
-      opciones.forEach((op: any, i: number) => {
-        const letra = String.fromCharCode(65 + i);
-        lines.push(`   ${letra}) ${String(op || "").trim()}`);
-      });
-    }
-  });
+  filtered.forEach((it, idx) => lines.push(formatQuestionFromItem(it, idx)));
   return lines.join("\n");
+}
+
+function extractPercentFromText(text: string) {
+  const match = String(text || "").match(/(\d+(?:[.,]\d+)?)\s*%/);
+  if (!match) return null;
+  const value = Number(String(match[1] || "").replace(",", "."));
+  return Number.isFinite(value) ? value : null;
+}
+
+function getCorrespondenceSourceText(item: any) {
+  const candidates = [item?.instrumentoCalificacion, item?.criterioCorreccion, item?.respuestaCorrecta]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const withColumns = candidates.find((value) => /columna\s*a\s*:/i.test(value) && /columna\s*b\s*:/i.test(value));
+  return withColumns || candidates[0] || "";
+}
+
+function extractFlatCorrespondenceAEntries(text: string) {
+  const matches = Array.from(String(text || "").matchAll(/A\s*(\d+)\s*:\s*([^;]+)(?:;|$)/gi));
+  return matches.map((match) => `${Number(match[1] || 0)}. ${String(match[2] || "").trim()}`).filter(Boolean);
+}
+
+function parseCorrespondenceMapping(text: string) {
+  const result = new Map<number, number>();
+  const source = String(text || "");
+  for (const match of source.matchAll(/A\s*(\d+)\s*\(\s*([A-Z]|\d+)\s*\)/gi)) {
+    const left = Number(match[1] || 0);
+    const rawRight = String(match[2] || "").trim().toUpperCase();
+    const right = /^\d+$/.test(rawRight) ? Number(rawRight) : rawRight.charCodeAt(0) - 64;
+    if (left > 0 && right > 0) result.set(left, right);
+  }
+  return result;
+}
+
+function inferCorrespondenceDescription(entry: string) {
+  const normalized = normalizeExamPlainText(entry);
+  if (!normalized) return "";
+  if (normalized.includes("conmutativa")) return "Cambiar el orden no altera el resultado.";
+  if (normalized.includes("asociativa")) return "Cambiar la agrupacion no altera el resultado.";
+  if (normalized.includes("distributiva")) return "La multiplicacion se distribuye sobre la suma o la resta.";
+  if (normalized.includes("elemento neutro")) return "Existe un numero que no cambia el valor al operar.";
+  if (normalized.includes("inverso aditivo")) return "La suma de un numero y su opuesto es igual a cero.";
+  if (normalized.includes("inverso multiplicativo")) return "El producto de un numero por su reciproco es igual a uno.";
+  return "";
+}
+
+function buildSyntheticCorrespondenceColumns(item: any) {
+  const columnaA = extractFlatCorrespondenceAEntries(String(item?.criterioCorreccion || ""));
+  const mapping = parseCorrespondenceMapping(String(item?.respuestaCorrecta || ""));
+  if (!columnaA.length || !mapping.size) return null;
+  const rightByIndex = new Map<number, string>();
+  columnaA.forEach((entry, idx) => {
+    const description = inferCorrespondenceDescription(entry);
+    const rightSlot = mapping.get(idx + 1);
+    if (description && rightSlot) rightByIndex.set(rightSlot, description);
+  });
+  if (!rightByIndex.size) return null;
+  const maxRight = Math.max(...Array.from(rightByIndex.keys()));
+  const columnaB: string[] = [];
+  for (let i = 1; i <= maxRight; i += 1) {
+    const desc = rightByIndex.get(i);
+    if (!desc) return null;
+    columnaB.push(`${i}. ${desc}`);
+  }
+  return { columnaA, columnaB };
+}
+
+function extractCorrespondenceLines(item: any) {
+  const source = getCorrespondenceSourceText(item);
+  if (!source) return [] as string[];
+  const normalized = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  const match = normalized.match(/columna\s*a\s*:\s*([\s\S]*?)\s*columna\s*b\s*:\s*([\s\S]*)$/i);
+  if (!match) {
+    const synthetic = buildSyntheticCorrespondenceColumns(item);
+    if (!synthetic) return [source];
+    const lines = ["   Columna A:\tColumna B:"];
+    const maxRows = Math.max(synthetic.columnaA.length, synthetic.columnaB.length);
+    for (let i = 0; i < maxRows; i += 1) {
+      lines.push(`   ${synthetic.columnaA[i] || ""}\t${synthetic.columnaB[i] || ""}`);
+    }
+    return lines;
+  }
+  const splitList = (raw: string) => {
+    const plain = String(raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    const byLine = plain.split(/\n+/).map((part) => String(part || "").trim()).filter(Boolean);
+    if (byLine.length > 1) return byLine;
+    return plain
+      .split(/\s*(?=(?:\d+[.)]|[a-z][.)]))/i)
+      .map((part) => String(part || "").trim().replace(/\s+/g, " "))
+      .filter(Boolean);
+  };
+  const columnaA = splitList(match[1]);
+  const columnaB = splitList(match[2]);
+  const lines: string[] = [];
+  if (columnaA.length && columnaB.length) {
+    lines.push("   Columna A:\tColumna B:");
+    const maxRows = Math.max(columnaA.length, columnaB.length);
+    for (let i = 0; i < maxRows; i += 1) {
+      const left = columnaA[i] || "";
+      const right = columnaB[i] || "";
+      lines.push(`   ${left}\t${right}`);
+    }
+    return lines;
+  }
+  if (columnaA.length) {
+    lines.push("   Columna A:");
+    columnaA.forEach((entry) => lines.push(`      ${entry}`));
+  }
+  if (columnaB.length) {
+    lines.push("   Columna B:");
+    columnaB.forEach((entry) => lines.push(`      ${entry}`));
+  }
+  return lines.length ? lines : [source];
+}
+
+function hasUsableCorrespondenceShape(item: any) {
+  if (normalizeTipoItem(item?.tipoItem) !== "C") return true;
+  const explicit = getCorrespondenceSourceText(item);
+  if (/columna\s*a\s*:/i.test(explicit) && /columna\s*b\s*:/i.test(explicit)) return true;
+  return Boolean(buildSyntheticCorrespondenceColumns(item));
 }
 
 function formatQuestionFromItem(item: any, index: number) {
@@ -609,13 +1441,22 @@ function formatQuestionFromItem(item: any, index: number) {
   const enunciado = String(item?.enunciado || "").trim();
   const base = `${index + 1}. ${enunciado}${puntaje > 0 ? ` (${Math.round(puntaje)} pts)` : ""}`;
   const opciones = Array.isArray(item?.opciones) ? item.opciones : [];
-  if (!opciones.length) return base;
   const lines = [base];
-  opciones.forEach((op: any, i: number) => {
-    const letra = String.fromCharCode(65 + i);
-    lines.push(`   ${letra}) ${String(op || "").trim()}`);
-  });
-  return lines.join("\n");
+  if (opciones.length) {
+    opciones.forEach((op: any, i: number) => {
+      const letra = String.fromCharCode(65 + i);
+      lines.push(`   ${letra}) ${String(op || "").trim()}`);
+    });
+    return lines.join("\n");
+  }
+  if (normalizeTipoItem(item?.tipoItem) === "C") {
+    const correspondencia = extractCorrespondenceLines(item);
+    if (correspondencia.length) {
+      lines.push(...correspondencia);
+      return lines.join("\n");
+    }
+  }
+  return base;
 }
 
 function buildAnswerKeyBlockByType(items: any[], tipo: string) {
@@ -713,6 +1554,73 @@ function getDetalleTipoStats(detalleRows: any[]) {
   return stats;
 }
 
+function getItemTypeLabel(tipo: string) {
+  const map: Record<string, string> = {
+    SR: "Seleccion de respuesta",
+    RC: "Respuesta corta",
+    C: "Correspondencia",
+    I: "Identificacion",
+    RE: "Resolucion de ejercicios",
+    RP: "Resolucion de problemas",
+    RR: "Respuesta restringida",
+    RCAS: "Resolucion de casos",
+    PE: "Produccion escrita"
+  };
+  return map[String(tipo || "").toUpperCase()] || String(tipo || "");
+}
+
+function summarizeDetalleItems(detalleItemsJson: any) {
+  const parsed = parseJsonSafe(detalleItemsJson);
+  const fields = [
+    { tipo: "SR", cantidad: "seleccionRespuestaCantidad", puntos: "seleccionRespuestaPuntos" },
+    { tipo: "RC", cantidad: "respuestaCortaCantidad", puntos: "respuestaCortaPuntos" },
+    { tipo: "C", cantidad: "correspondenciaCantidad", puntos: "correspondenciaPuntos" },
+    { tipo: "I", cantidad: "identificacionCantidad", puntos: "identificacionPuntos" },
+    { tipo: "RE", cantidad: "resolucionEjerciciosCantidad", puntos: "resolucionEjerciciosPuntos" },
+    { tipo: "RP", cantidad: "resolucionProblemasCantidad", puntos: "resolucionProblemasPuntos" },
+    { tipo: "RR", cantidad: "respuestaRestringidaCantidad", puntos: "respuestaRestringidaPuntos" },
+    { tipo: "RCAS", cantidad: "resolucionCasosCantidad", puntos: "resolucionCasosPuntos" },
+    { tipo: "PE", cantidad: "produccionEscritaCantidad", puntos: "produccionEscritaPuntos" }
+  ];
+  return fields
+    .map((field) => {
+      const cantidad = Number(String(parsed?.[field.cantidad] ?? "0").replace(",", ".")) || 0;
+      const puntos = Number(String(parsed?.[field.puntos] ?? "0").replace(",", ".")) || 0;
+      if (cantidad <= 0) return "";
+      return `${getItemTypeLabel(field.tipo)}: ${Math.round(cantidad)} pregunta(s), ${puntos} punto(s) por pregunta`;
+    })
+    .filter(Boolean);
+}
+
+function summarizePlaneamientoResultado(resultadoIAJson: any) {
+  const parsed = parseJsonSafe(resultadoIAJson);
+  const habilidades = [
+    ...splitTextLines(parsed?.competenciasGenerales),
+    ...splitTextLines(parsed?.aprendizajesEsperados),
+    ...splitTextLines(parsed?.indicadoresEvaluacion),
+    ...splitTextLines(parsed?.estrategiasMediacion)
+  ];
+  const semanas = Array.isArray(parsed?.semanas) ? parsed.semanas : [];
+  for (const semana of semanas) {
+    habilidades.push(...splitTextLines(semana?.habilidadBase));
+    habilidades.push(...splitTextLines(semana?.proposito));
+    habilidades.push(...splitTextLines(semana?.indicadores));
+  }
+  return Array.from(new Set(habilidades.map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function compactPromptText(value: any, maxChars = 6000) {
+  const raw = String(value || "")
+    .replace(/\r/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[ ]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!raw) return "";
+  if (raw.length <= maxChars) return raw;
+  return `${raw.slice(0, Math.max(0, maxChars - 80)).trim()}\n\n[Texto recortado para priorizar la generación del examen.]`;
+}
+
 function parseExamPayload(resultadoIA: string) {
   const raw = String(resultadoIA || "").trim();
   let parsed: any = null;
@@ -729,6 +1637,256 @@ function parseExamPayload(resultadoIA: string) {
     ? parsed.validacion.advertencias.map((x: any) => String(x))
     : [];
   return { parsed, items, raw, advertencias };
+}
+
+function normalizeExamPlainText(value: any) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasWeakExamPlaceholderText(value: any) {
+  const text = normalizeExamPlainText(value);
+  if (!text) return false;
+  return [
+    /opcion [abcd] vinculada con/,
+    /lee la situacion \d+ y selecciona la opcion correcta relacionada con/,
+    /respuesta esperada alineada con/,
+    /procedimiento y resultado correctos segun/,
+    /identificacion correcta segun/,
+    /indicador a evaluar/,
+    /desarrolla la produccion escrita \d+ relacionada con/,
+    /analiza el caso \d+ y resolve lo solicitado a partir de/,
+    /relaciona correctamente los elementos de la consigna \d+ asociados con/
+  ].some((pattern) => pattern.test(text));
+}
+
+function isWeakExamPayload(items: any[]) {
+  if (!Array.isArray(items) || !items.length) return true;
+  let weakSignals = 0;
+  for (const item of items) {
+    if (hasWeakExamPlaceholderText(item?.enunciado)) weakSignals += 2;
+    if (hasWeakExamPlaceholderText(item?.respuestaCorrecta)) weakSignals += 1;
+    if (hasWeakExamPlaceholderText(item?.criterioCorreccion)) weakSignals += 1;
+    const opciones = Array.isArray(item?.opciones) ? item.opciones : [];
+    if (opciones.some((opt: any) => hasWeakExamPlaceholderText(opt))) weakSignals += 2;
+    if (!hasUsableCorrespondenceShape(item)) weakSignals += 2;
+  }
+  return weakSignals >= Math.max(2, Math.ceil(items.length / 3));
+}
+
+function summarizeExamItemForLog(item: any) {
+  if (!item || typeof item !== "object") return null;
+  return {
+    numero: Number(item?.numero || 0),
+    tipoItem: String(item?.tipoItem || ""),
+    aprendizajeEsperado: compactPromptText(String(item?.aprendizajeEsperado || ""), 180),
+    indicadorEvaluacion: compactPromptText(String(item?.indicadorEvaluacion || ""), 180),
+    enunciado: compactPromptText(String(item?.enunciado || ""), 260),
+    opciones: Array.isArray(item?.opciones)
+      ? item.opciones.slice(0, 4).map((opt: any) => compactPromptText(String(opt || ""), 120))
+      : [],
+    respuestaCorrecta: compactPromptText(String(item?.respuestaCorrecta || ""), 120),
+    criterioCorreccion: compactPromptText(String(item?.criterioCorreccion || ""), 180),
+    puntaje: Number(item?.puntaje || 0)
+  };
+}
+
+function buildLocalExamPayload(params: {
+  ctx: any;
+  tiposActivos: Array<{ tipoItem: string; cantidad: number; subtotalPuntos: number; valorPorPregunta: number }>;
+  indicadores: any[];
+  totalLeccionesEsperado: number;
+  totalPuntosEsperado: number;
+  seccionesTextoFinal: string;
+  tipoColegio: string;
+  indicaciones: string;
+  nombrePrueba: string;
+}) {
+  const {
+    ctx,
+    tiposActivos,
+    indicadores,
+    totalLeccionesEsperado,
+    totalPuntosEsperado,
+    seccionesTextoFinal,
+    tipoColegio,
+    indicaciones,
+    nombrePrueba
+  } = params;
+  const normalizedIndicadores = Array.isArray(indicadores) && indicadores.length ? indicadores : [{}];
+  let itemNumber = 1;
+  let indicadorCursor = 0;
+
+  const nextIndicador = () => {
+    const indicador = normalizedIndicadores[indicadorCursor % normalizedIndicadores.length] || {};
+    indicadorCursor += 1;
+    return indicador;
+  };
+
+  const buildItemText = (tipoItem: string, indicador: any, ordinal: number) => {
+    const indicadorBase = normalizeText(indicador?.IndicadorBase) || "Indicador a evaluar";
+    const aprendizaje = normalizeText(indicador?.PlaneamientoNombre) || normalizeText(indicador?.IndicadorIntermedio) || indicadorBase;
+    switch (tipoItem) {
+      case "SR":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Leé la situación ${ordinal} y seleccioná la opción correcta relacionada con ${indicadorBase.toLowerCase()}.`,
+          opciones: [
+            `Opción A vinculada con ${indicadorBase.toLowerCase()}.`,
+            `Opción B vinculada con ${indicadorBase.toLowerCase()}.`,
+            `Opción C vinculada con ${indicadorBase.toLowerCase()}.`,
+            `Opción D vinculada con ${indicadorBase.toLowerCase()}.`
+          ],
+          respuestaCorrecta: "A",
+          criterioCorreccion: `La respuesta correcta debe demostrar dominio del indicador: ${indicadorBase}.`
+        };
+      case "RC":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Respondé de forma breve la consigna ${ordinal} sobre ${indicadorBase.toLowerCase()}.`,
+          opciones: [],
+          respuestaCorrecta: `Respuesta esperada alineada con ${indicadorBase}.`,
+          criterioCorreccion: `Se valora precisión, procedimiento y coherencia con ${indicadorBase}.`
+        };
+      case "C":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Relacioná correctamente los elementos de la consigna ${ordinal} asociados con ${indicadorBase.toLowerCase()}.`,
+          opciones: [],
+          respuestaCorrecta: `Correspondencia correcta según ${indicadorBase}.`,
+          criterioCorreccion: `Debe establecer las relaciones correctas sin ambigüedad.`
+        };
+      case "I":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Identificá en la situación ${ordinal} el procedimiento o resultado correcto asociado con ${indicadorBase.toLowerCase()}.`,
+          opciones: [],
+          respuestaCorrecta: `Identificación correcta según ${indicadorBase}.`,
+          criterioCorreccion: `Debe reconocer con claridad el elemento matemático solicitado.`
+        };
+      case "RE":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Resuelve el ejercicio ${ordinal} aplicando ${indicadorBase.toLowerCase()}. Mostrá el procedimiento.`,
+          opciones: [],
+          respuestaCorrecta: `Procedimiento y resultado correctos según ${indicadorBase}.`,
+          criterioCorreccion: `Se valora desarrollo ordenado, operaciones correctas y resultado final.`
+        };
+      case "RP":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Resuelve el problema ${ordinal} relacionado con ${indicadorBase.toLowerCase()}. Justificá tu respuesta.`,
+          opciones: [],
+          respuestaCorrecta: `Resolución correcta y justificada según ${indicadorBase}.`,
+          criterioCorreccion: `Se valora interpretación, estrategia, desarrollo y justificación.`
+        };
+      case "RR":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Elaborá una respuesta restringida para la situación ${ordinal} usando ${indicadorBase.toLowerCase()}.`,
+          opciones: [],
+          respuestaCorrecta: `Respuesta concreta y correcta según ${indicadorBase}.`,
+          criterioCorreccion: `Debe responder exactamente lo solicitado, con precisión matemática.`
+        };
+      case "RCAS":
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Analizá el caso ${ordinal} y resolvé lo solicitado a partir de ${indicadorBase.toLowerCase()}.`,
+          opciones: [],
+          respuestaCorrecta: `Análisis y resolución correctos según ${indicadorBase}.`,
+          criterioCorreccion: `Se valora comprensión del caso, pertinencia del procedimiento y resultado.`
+        };
+      default:
+        return {
+          aprendizajeEsperado: aprendizaje,
+          indicadorEvaluacion: indicadorBase,
+          enunciado: `Desarrollá la producción escrita ${ordinal} relacionada con ${indicadorBase.toLowerCase()}.`,
+          opciones: [],
+          respuestaCorrecta: `Producción esperada alineada con ${indicadorBase}.`,
+          criterioCorreccion: `Se valora argumentación, claridad y uso correcto del contenido matemático.`
+        };
+    }
+  };
+
+  const items = tiposActivos.flatMap((tipo) => {
+    const cantidad = Math.max(0, Number(tipo.cantidad || 0));
+    const puntaje = Number(tipo.valorPorPregunta || 0);
+    return Array.from({ length: cantidad }).map((_, index) => {
+      const indicador = nextIndicador();
+      const base = buildItemText(tipo.tipoItem, indicador, index + 1);
+      const item = {
+        numero: itemNumber,
+        tipoItem: tipo.tipoItem,
+        aprendizajeEsperado: base.aprendizajeEsperado,
+        indicadorEvaluacion: base.indicadorEvaluacion,
+        enunciado: base.enunciado,
+        opciones: base.opciones,
+        respuestaCorrecta: base.respuestaCorrecta,
+        criterioCorreccion: base.criterioCorreccion,
+        puntaje
+      };
+      itemNumber += 1;
+      return item;
+    });
+  });
+
+  const totalPuntosCalculado = items.reduce((acc, item) => acc + Number(item.puntaje || 0), 0);
+  return {
+    encabezado: {
+      direccionRegional: normalizeText(ctx?.DireccionRegional),
+      centroEducativo: normalizeText(ctx?.CentroEducativo),
+      docente: "",
+      asignatura: normalizeText(ctx?.Materia) || "Matematica",
+      nivelGrado: normalizeText(ctx?.Grado),
+      seccion: seccionesTextoFinal,
+      periodo: normalizeText(ctx?.Periodo),
+      cursoLectivo: normalizeText(ctx?.AnioLectivo),
+      fechaAplicacion: ""
+    },
+    tablaEspecificacionesResumen: {
+      prueba: nombrePrueba,
+      tipoConstruccion: /DESPUES/i.test(String(indicaciones || "")) ? "DESPUES" : "ANTES",
+      totalLecciones: totalLeccionesEsperado,
+      totalPuntosEsperado,
+      distribucionTipos: tiposActivos.map((tipo) => ({
+        tipoItem: tipo.tipoItem,
+        cantidad: Number(tipo.cantidad || 0),
+        valorPorPregunta: Number(tipo.valorPorPregunta || 0),
+        subtotalPuntos: Number(tipo.subtotalPuntos || 0)
+      }))
+    },
+    apartados: tiposActivos.map((tipo) => ({
+      tipoItem: tipo.tipoItem,
+      cantidadPreguntas: Number(tipo.cantidad || 0),
+      valorPorPregunta: Number(tipo.valorPorPregunta || 0),
+      puntajeTotalApartado: Number(tipo.subtotalPuntos || 0)
+    })),
+    items,
+    validacion: {
+      totalItemsCalculado: items.length,
+      totalPuntosCalculado,
+      totalPuntosEsperado,
+      coincideTotalPuntos: totalPuntosCalculado === totalPuntosEsperado,
+      coincideDistribucionPorTipo: true,
+      coincidePuntajeItemsVsTipos: totalPuntosCalculado === totalPuntosEsperado,
+      advertencias: [
+        "Examen generado en modo local de respaldo.",
+        tipoColegio ? `Tipo de colegio aplicado: ${tipoColegio}.` : ""
+      ].filter(Boolean)
+    }
+  };
 }
 
 function parseQuestionBlocksFromPlainText(text: string) {
@@ -759,28 +1917,52 @@ function parseQuestionBlocksFromPlainText(text: string) {
   return Object.fromEntries(Object.entries(blocks).map(([k, arr]) => [k, arr.join("\n")]));
 }
 
-function injectAfterHeading(xml: string, headingRegex: RegExp, blockText: string, style?: { font?: string; sizePt?: number; bold?: boolean }) {
-  if (!blockText.trim()) return xml;
-  return xml.replace(/<w:p[\s\S]*?<\/w:p>/g, (pXml) => {
+function normalizeHeadingForMatch(value: string) {
+  return normalizeKey(value)
+    .replace(/[^A-Z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function paragraphMatchesAnyHeadingAlias(plain: string, aliases: string[]) {
+  const normalized = normalizeHeadingForMatch(plain);
+  return aliases.some((alias) => normalized.includes(normalizeHeadingForMatch(alias)));
+}
+
+function forceBoldHeadingParagraphs(xml: string, headingAliases: string[]) {
+  return xml.replace(/<w:p(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/w:p>/g, (pXml) => {
     const plain = xmlUnescape(pXml.replace(/<[^>]+>/g, " "));
-    if (!headingRegex.test(plain)) return pXml;
+    if (!paragraphMatchesAnyHeadingAlias(plain, headingAliases)) return pXml;
+    return pXml.replace(/<w:r>[\s\S]*?<\/w:r>/g, (rXml) => {
+      if (/<w:b\/>/.test(rXml) || /<w:bCs\/>/.test(rXml)) return rXml;
+      if (/<w:rPr>/.test(rXml)) return rXml.replace("<w:rPr>", "<w:rPr><w:b/><w:bCs/>");
+      return rXml.replace("<w:r>", "<w:r><w:rPr><w:b/><w:bCs/></w:rPr>");
+    });
+  });
+}
+
+function injectAfterHeading(xml: string, headingAliases: string[], blockText: string, style?: { font?: string; sizePt?: number; bold?: boolean }) {
+  if (!blockText.trim()) return xml;
+  return xml.replace(/<w:p(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/w:p>/g, (pXml) => {
+    const plain = xmlUnescape(pXml.replace(/<[^>]+>/g, " "));
+    if (!paragraphMatchesAnyHeadingAlias(plain, headingAliases)) return pXml;
     const add = buildWordParagraphsXml(`\n${blockText}`, style);
     return `${pXml}${add}`;
   });
 }
 
-function pruneEmptySectionHeading(xml: string, headingRegex: RegExp, shouldPrune: boolean) {
+function pruneEmptySectionHeading(xml: string, headingAliases: string[], shouldPrune: boolean) {
   if (!shouldPrune) return xml;
-  return xml.replace(/<w:p[\s\S]*?<\/w:p>/g, (pXml) => {
+  return xml.replace(/<w:p(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/w:p>/g, (pXml) => {
     const plain = xmlUnescape(pXml.replace(/<[^>]+>/g, " "));
-    return headingRegex.test(plain) ? "" : pXml;
+    return paragraphMatchesAnyHeadingAlias(plain, headingAliases) ? "" : pXml;
   });
 }
 
 function replaceBlockMarkerParagraph(xml: string, marker: string, blockText: string, style?: { font?: string; sizePt?: number; bold?: boolean }) {
   if (!blockText.trim()) return xml;
   const key = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(`<w:p[\\s\\S]*?\\{\\{\\s*${key}\\s*\\}\\}[\\s\\S]*?<\\/w:p>`, "gi");
+  const regex = new RegExp(`<w:p(?:\\s[^>]*)?(?<!\\/)>[\\s\\S]*?\\{\\{\\s*${key}\\s*\\}\\}[\\s\\S]*?<\\/w:p>`, "gi");
   const replacement = buildWordParagraphsXml(blockText, style);
   return xml.replace(regex, replacement);
 }
@@ -815,14 +1997,22 @@ function injectNumPagesFieldMarker(xml: string, marker: string, style?: { font?:
   return out;
 }
 
+function replaceHardcodedPageCountInstruction(xml: string, style?: { font?: string; sizePt?: number; bold?: boolean }) {
+  const pattern = /verifique\s+que\s+la\s+prueba\s+conste\s+de\s+\d+\s+p[aá]ginas?\s+debidamente\s+numeradas\.?/i;
+  const fieldXml = buildWordNumPagesFieldXml(style);
+  return String(xml || "").replace(/<w:p(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/w:p>/g, (pXml) => {
+    const pPr = (pXml.match(/<w:pPr[\s\S]*?<\/w:pPr>/) || [])[0] || "";
+    const plain = xmlUnescape(pXml.replace(/<[^>]+>/g, " "));
+    if (!pattern.test(plain)) return pXml;
+    const prefix = "Verifique que la prueba conste de ";
+    const suffix = " paginas debidamente numeradas.";
+    return `<w:p>${pPr}${buildWordRunsXml(prefix, style)}${fieldXml}${buildWordRunsXml(suffix, style)}</w:p>`;
+  });
+}
+
 function replaceMarkersInParagraphXml(xml: string, markers: Record<string, string>, style?: { font?: string; sizePt?: number; bold?: boolean }) {
   let replacedAny = false;
-  const font = String(style?.font || "Calibri").trim() || "Calibri";
-  const sizePt = Number.isFinite(Number(style?.sizePt)) ? Math.max(8, Math.min(18, Number(style?.sizePt))) : 11;
-  const halfPts = Math.round(sizePt * 2);
-  const bold = style?.bold ? "<w:b/><w:bCs/>" : "";
-  const runProps = `<w:rPr>${bold}<w:rFonts w:ascii="${xmlEscape(font)}" w:hAnsi="${xmlEscape(font)}" w:cs="${xmlEscape(font)}"/><w:color w:val="000000"/><w:sz w:val="${halfPts}"/><w:szCs w:val="${halfPts}"/></w:rPr>`;
-  const out = xml.replace(/<w:p[\s\S]*?<\/w:p>/g, (pXml) => {
+  const out = xml.replace(/<w:p(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/w:p>/g, (pXml) => {
     const pPr = (pXml.match(/<w:pPr[\s\S]*?<\/w:pPr>/) || [])[0] || "";
     const textRaw = pXml.replace(/<[^>]+>/g, "");
     let text = xmlUnescape(textRaw);
@@ -832,7 +2022,7 @@ function replaceMarkersInParagraphXml(xml: string, markers: Record<string, strin
     }
     if (text === before) return pXml;
     replacedAny = true;
-    return `<w:p>${pPr}<w:r>${runProps}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+    return `<w:p>${pPr}${buildWordRunsXml(text, style)}</w:p>`;
   });
   return { xml: out, replacedAny };
 }
@@ -874,12 +2064,8 @@ function forceResolveMarkersByParagraph(xml: string, markers: Record<string, str
   for (const [k, v] of Object.entries(markers || {})) {
     map.set(normalizeMarkerName(k), String(v ?? ""));
   }
-  const font = String(style?.font || "Calibri").trim() || "Calibri";
-  const sizePt = Number.isFinite(Number(style?.sizePt)) ? Math.max(8, Math.min(18, Number(style?.sizePt))) : 11;
-  const halfPts = Math.round(sizePt * 2);
-  const runProps = `<w:rPr><w:rFonts w:ascii="${xmlEscape(font)}" w:hAnsi="${xmlEscape(font)}" w:cs="${xmlEscape(font)}"/><w:color w:val="000000"/><w:sz w:val="${halfPts}"/><w:szCs w:val="${halfPts}"/></w:rPr>`;
 
-  return String(xml || "").replace(/<w:p[\s\S]*?<\/w:p>/g, (pXml) => {
+  return String(xml || "").replace(/<w:p(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/w:p>/g, (pXml) => {
     const pPr = (pXml.match(/<w:pPr[\s\S]*?<\/w:pPr>/) || [])[0] || "";
     const textRaw = pXml.replace(/<[^>]+>/g, "");
     let text = xmlUnescape(textRaw);
@@ -890,7 +2076,7 @@ function forceResolveMarkersByParagraph(xml: string, markers: Record<string, str
       return map.has(key) ? String(map.get(key)) : "";
     });
     if (text === before) return pXml;
-    return `<w:p>${pPr}<w:r>${runProps}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+    return `<w:p>${pPr}${buildWordRunsXml(text, style)}</w:p>`;
   });
 }
 
@@ -899,6 +2085,17 @@ function normalizeKey(value: any) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase();
+}
+
+function getCostaRicaIsoDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Costa_Rica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const pick = (type: string) => parts.find((p) => p.type === type)?.value || "";
+  return `${pick("year")}-${pick("month")}-${pick("day")}`;
 }
 
 function assertCanAccess(req: any, res: any) {
@@ -2164,7 +3361,7 @@ async function callOpenAiIndicadores(prompt: string) {
     }
 
     const data: any = await response.json();
-    const text = data.output_text || data.output?.[0]?.content?.[0]?.text || "";
+    const text = extractOpenAiResponseText(data);
     if (!text) return null;
 
     try {
@@ -2309,6 +3506,7 @@ router.get("/examenes-ia", async (req, res) => {
     await ensureEval360ExamenIATable(pool);
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
     if (!estructura) return;
+    await syncExamenIaDesdeGrupoHermanoSiFalta(pool, req, estructuraGrupoId);
     const result = await pool.request()
       .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
       .query(`
@@ -2328,6 +3526,13 @@ router.get("/examenes-ia", async (req, res) => {
 router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
   try {
     if (!assertCanAccess(req, res)) return;
+    if (!String(process.env.OPENAI_API_KEY || "").trim()) {
+      console.error("OpenAI Eval360 examenes: OPENAI_API_KEY no esta configurada en el backend.");
+      return res.status(503).json({
+        ok: false,
+        message: "La generacion de examenes con IA no esta disponible porque falta configurar OPENAI_API_KEY en el backend."
+      });
+    }
     const estructuraGrupoId = toRequiredNumber(req.body.estructuraGrupoId, "estructuraGrupoId", res);
     const actividadIdTabla = toRequiredNumber(req.body.actividadIdTabla, "actividadIdTabla", res);
     const plantillaPromptIAId = toOptionalNumber(req.body.plantillaPromptIAId);
@@ -2353,6 +3558,8 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
     const nombreSolicitado = normalizeText(bodyAny.nombre);
     const documentoApoyoTexto = await extractUploadedText(documentoApoyoFile);
     const formatoSalidaTexto = await extractUploadedText(formatoSalidaFile);
+    const documentoApoyoTextoCompacto = compactPromptText(documentoApoyoTexto, 5000);
+    const formatoSalidaTextoCompacto = compactPromptText(formatoSalidaTexto, 5000);
 
     const pool = await getPool();
     await ensureEval360ExamenIATable(pool);
@@ -2402,13 +3609,26 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
     `);
     const plantilla = plantillaResult.recordset[0];
     if (!plantilla) return badRequest(res, "No se encontrï¿½ una plantilla IA de exï¿½menes");
+    const plantillaEstructuraCompacta = compactPromptText(plantilla?.EstructuraSalida, 6000);
+    const plantillaFormatoRespuestaCompacta = compactPromptText(plantilla?.FormatoRespuesta, 3000);
 
     const indicadoresResult = await pool.request()
       .input("actividadId", sql.Int, actividadIdTabla)
       .query(`
-        SELECT ig.IndicadorBase, ig.IndicadorAvanzado, ig.IndicadorIntermedio, ig.IndicadorInicial, ai.Puntos, ai.NumeroLecciones, ai.DetalleItemsJson
+        SELECT
+          ig.IndicadorGrupoId,
+          ig.PlaneamientoId,
+          p.Nombre AS PlaneamientoNombre,
+          ig.IndicadorBase,
+          ig.IndicadorAvanzado,
+          ig.IndicadorIntermedio,
+          ig.IndicadorInicial,
+          ai.Puntos,
+          ai.NumeroLecciones,
+          ai.DetalleItemsJson
         FROM dbo.Eval360_ActividadIndicador ai
         INNER JOIN dbo.Eval360_IndicadorGrupo ig ON ig.IndicadorGrupoId = ai.IndicadorGrupoId
+        LEFT JOIN dbo.Planeamiento p ON p.PlaneamientoId = ig.PlaneamientoId
         WHERE ai.ActividadId = @actividadId
           AND ISNULL(ai.Activo, 1) = 1
           AND ISNULL(ig.Activo, 1) = 1
@@ -2430,14 +3650,65 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
     );
 
     const seccionesTexto = seccionGrupoIds.length
-      ? seccionGrupoIds.join(", ")
-      : String(ctx.GrupoNombre || "");
+      ? (() => {
+          const q = seccionGrupoIds.map((_, idx) => `@g${idx}`).join(",");
+          const reqSec = pool.request();
+          seccionGrupoIds.forEach((idSec, idx) => reqSec.input(`g${idx}`, sql.Int, Number(idSec)));
+          return { query: q, request: reqSec };
+        })()
+      : null;
+    let seccionesTextoFinal = String(ctx.GrupoNombre || "");
+    if (seccionesTexto) {
+      const secResult = await seccionesTexto.request.query(`
+        SELECT GrupoId, Nombre
+        FROM dbo.Grupo
+        WHERE GrupoId IN (${seccionesTexto.query})
+      `);
+      const byId = new Map<number, string>((secResult.recordset || []).map((row: any) => [Number(row.GrupoId), String(row.Nombre || "").trim()]));
+      const ordered = seccionGrupoIds.map((idSec) => byId.get(Number(idSec))).filter((item) => String(item || "").trim().length > 0);
+      if (ordered.length) seccionesTextoFinal = ordered.join(", ");
+    }
+
+    const planeamientoIds = Array.from(new Set(
+      indicadores
+        .map((item: any) => Number(item.PlaneamientoId || 0))
+        .filter((id: number) => Number.isFinite(id) && id > 0)
+    ));
+    let planeamientosRelacionados: any[] = [];
+    if (planeamientoIds.length) {
+      const planeamientoReq = pool.request();
+      const placeholders = planeamientoIds.map((_, idx) => `@pid${idx}`).join(",");
+      planeamientoIds.forEach((id, idx) => planeamientoReq.input(`pid${idx}`, sql.Int, id));
+      const planeamientoResult = await planeamientoReq.query(`
+        SELECT PlaneamientoId, Nombre, ResultadoIAJson
+        FROM dbo.Planeamiento
+        WHERE PlaneamientoId IN (${placeholders})
+      `);
+      planeamientosRelacionados = planeamientoResult.recordset || [];
+    }
+    const habilidadesPlaneamiento = Array.from(new Set(
+      planeamientosRelacionados.flatMap((row: any) => summarizePlaneamientoResultado(row?.ResultadoIAJson))
+    ));
+    const indicadoresDetalladosTexto = indicadores.map((it: any, index: number) => {
+      const tipos = summarizeDetalleItems(it.DetalleItemsJson);
+      return [
+        `${index + 1}. Planeamiento: ${normalizeText(it.PlaneamientoNombre) || "Sin planeamiento"}`,
+        `   Indicador base: ${normalizeText(it.IndicadorBase)}`,
+        normalizeText(it.IndicadorAvanzado) ? `   Nivel avanzado: ${normalizeText(it.IndicadorAvanzado)}` : "",
+        normalizeText(it.IndicadorIntermedio) ? `   Nivel intermedio: ${normalizeText(it.IndicadorIntermedio)}` : "",
+        normalizeText(it.IndicadorInicial) ? `   Nivel inicial: ${normalizeText(it.IndicadorInicial)}` : "",
+        `   Lecciones asociadas: ${Number(it.NumeroLecciones || 0)}`,
+        `   Puntaje total del indicador: ${Number(it.Puntos || 0)}`,
+        tipos.length ? `   Tipos de item obligatorios: ${tipos.join(" | ")}` : ""
+      ].filter(Boolean).join("\n");
+    }).join("\n\n");
     const reglasFormatoExtra = formatoSalidaFile
       ? `Reglas obligatorias de formato:
 - Usï¿½ el archivo DOCX de salida como formato base obligatorio.
 - No alterï¿½s encabezado, membrete, tablas fijas ni orden del documento.
 - No agreguï¿½s secciones nuevas.
-- Solo completï¿½ campos variables del examen.`
+- Solo completï¿½ campos variables del examen.
+- Si el archivo de salida tiene espacios, tablas o apartados por tipo de pregunta, respetalos y llenalos con el contenido correspondiente.`
       : `Reglas obligatorias de formato:
 - Construï¿½ una salida limpia y estructurada para examen sin agregar texto administrativo ni secciones irrelevantes.`;
 
@@ -2446,6 +3717,13 @@ ${normalizeText(plantilla.IndicacionesSistema) || "Sos un asistente experto en c
 ${normalizeText(plantilla.ContextoBase)}
 ${normalizeText(plantilla.ReglasConstruccion)}
 ${reglasFormatoExtra}
+
+Plantilla IA seleccionada y obligatoria:
+- Nombre: ${normalizeText(plantilla.NombrePlantilla) || "Plantilla IA de examen"}
+- Estructura de salida obligatoria:
+${plantillaEstructuraCompacta || "No definida"}
+- Formato de respuesta obligatorio:
+${plantillaFormatoRespuestaCompacta || "Devolver unicamente JSON valido"}
 
 Reglas obligatorias de notaciï¿½n matemï¿½tica:
 - No usar LaTeX en la salida final.
@@ -2460,16 +3738,20 @@ Encabezado institucional (obligatorio):
 - Grado: ${normalizeText(ctx.Grado)}
 - Periodo: ${normalizeText(ctx.Periodo)}
 - Tipo de colegio: ${tipoColegio || "No indicado"}
-- Secciones: ${seccionesTexto}
+- Secciones: ${seccionesTextoFinal}
 
-Indicadores para construir el examen:
-${indicadores.map((it: any, i: number) => `${i + 1}. ${normalizeText(it.IndicadorBase)}`).join("\n")}
+Habilidades, aprendizajes e indicadores pedagógicos recuperados del planeamiento (uso obligatorio):
+${habilidadesPlaneamiento.length ? habilidadesPlaneamiento.map((item, i) => `${i + 1}. ${item}`).join("\n") : "No se encontraron habilidades estructuradas; usá los indicadores y aprendizajes del planeamiento disponible."}
+
+Indicadores y especificación detallada para construir el examen:
+${indicadoresDetalladosTexto}
 
 Tabla de especificaciones (FUENTE PRIORITARIA Y OBLIGATORIA):
 - Total de lecciones esperadas: ${totalLeccionesEsperado}
 - Total de puntos esperados: ${totalPuntosEsperado}
 - Distribuciï¿½n por tipo de ï¿½tem (exacta):
 ${tiposActivos.map((t) => `  - ${t.tipoItem}: ${t.cantidad} pregunta(s), ${t.valorPorPregunta} punto(s) c/u, subtotal ${t.subtotalPuntos}`).join("\n")}
+- No cambies esta distribucion. Debe coincidir exactamente con la tabla de especificaciones.
 
 Indicaciones adicionales de la persona docente (obligatorias si existen):
 ${indicaciones || "No se indicaron"}
@@ -2478,15 +3760,18 @@ Documento de apoyo adjunto:
 ${documentoApoyoNombre || "No adjuntado"}
 
 Contenido extraï¿½do del documento de apoyo (si existe, uso obligatorio):
-${documentoApoyoTexto || "No se pudo extraer contenido o no fue adjuntado"}
+${documentoApoyoTextoCompacto || "No se pudo extraer contenido o no fue adjuntado"}
 
 Formato de salida solicitado:
 ${formatoSalidaNombre || normalizeText(plantilla.FormatoRespuesta) || "JSON"}
 
 Contenido extraï¿½do de la plantilla/formato de salida (si existe, uso obligatorio):
-${formatoSalidaTexto || "No se pudo extraer contenido o no fue adjuntado"}
+${formatoSalidaTextoCompacto || "No se pudo extraer contenido o no fue adjuntado"}
 
 Devolvï¿½ contenido de examen listo para revisiï¿½n docente.
+Cada pregunta debe corresponder a una habilidad o aprendizaje esperado y a uno de los indicadores listados.
+No inventes tipos de item fuera de los definidos por la tabla.
+La suma de puntos por pregunta debe coincidir exactamente con la tabla de especificaciones.
 
 Salida obligatoria en JSON vï¿½lido (sin markdown), con esta estructura:
 {
@@ -2513,8 +3798,177 @@ Salida obligatoria en JSON vï¿½lido (sin markdown), con esta estructura:
 }
 `;
 
-    const respuestaIA = await callOpenAiGeneric(prompt);
-    const parsed = parseExamPayload(String(respuestaIA || ""));
+    const promptCompacto = `
+${normalizeText(plantilla.IndicacionesSistema) || "Sos un asistente experto en construccion de examenes."}
+Construi un examen editable en JSON valido, sin markdown.
+Usa obligatoriamente esta plantilla IA: ${normalizeText(plantilla.NombrePlantilla) || "Plantilla IA de examen"}.
+Materia: ${normalizeText(ctx.Materia)}
+Grado: ${normalizeText(ctx.Grado)}
+Periodo: ${normalizeText(ctx.Periodo)}
+Secciones: ${seccionesTextoFinal}
+Tipo de colegio: ${tipoColegio || "No indicado"}
+
+Estructura de salida obligatoria:
+${plantillaEstructuraCompacta || "No definida"}
+
+Formato de respuesta obligatorio:
+${plantillaFormatoRespuestaCompacta || "Devolver unicamente JSON valido"}
+
+Indicadores y habilidades obligatorias:
+${indicadoresDetalladosTexto}
+${habilidadesPlaneamiento.length ? `\nHabilidades recuperadas del planeamiento:\n${habilidadesPlaneamiento.map((item, i) => `${i + 1}. ${item}`).join("\n")}` : ""}
+
+Tabla de especificaciones obligatoria:
+- Total de lecciones esperadas: ${totalLeccionesEsperado}
+- Total de puntos esperados: ${totalPuntosEsperado}
+${tiposActivos.map((t) => `- ${t.tipoItem}: ${t.cantidad} pregunta(s), ${t.valorPorPregunta} punto(s) c/u, subtotal ${t.subtotalPuntos}`).join("\n")}
+
+Indicaciones docentes:
+${indicaciones || "No se indicaron"}
+
+Usa como apoyo este resumen del archivo de salida y del documento adjunto, sin copiar basura de formato:
+${formatoSalidaTextoCompacto || "Sin formato extraido"}
+${documentoApoyoTextoCompacto || "Sin documento de apoyo extraido"}
+
+No cambies la distribucion de tipos ni el puntaje total. Devolve un JSON valido con:
+{
+  "items": [
+    {
+      "numero": 1,
+      "tipoItem": "SR|RC|C|I|RE|RP|RR|RCAS|PE",
+      "aprendizajeEsperado": "",
+      "indicadorEvaluacion": "",
+      "enunciado": "",
+      "opciones": [],
+      "respuestaCorrecta": "",
+      "criterioCorreccion": "",
+      "puntaje": 0
+    }
+  ],
+  "validacion": {
+    "totalItemsCalculado": 0,
+    "totalPuntosCalculado": 0,
+    "totalPuntosEsperado": ${totalPuntosEsperado},
+    "coincideTotalPuntos": true,
+    "advertencias": []
+  }
+}
+`.trim();
+
+    const promptUltraEstricto = `
+Sos un asistente experto en construccion de pruebas escritas de Matematica para secundaria en Costa Rica.
+Debes construir preguntas reales, concretas y resolubles por estudiantes. Esta prohibido devolver texto generico o de relleno.
+
+Prohibiciones absolutas:
+- No escribir frases como "Opcion A vinculada con..."
+- No escribir frases como "Lee la situacion 1..." sin desarrollar una situacion matematica real
+- No devolver placeholders, plantillas vacias ni explicaciones metatecnicas
+- No inventar cantidad de paginas del examen
+
+Obligaciones:
+- Usa exactamente la distribucion de la tabla de especificaciones
+- Cada pregunta debe ser concreta, comprensible y tener sentido matematico real
+- Si el tipo es SR, usa exactamente 3 opciones y una sola correcta
+- Redacta numeros, operaciones, expresiones o mini contextos reales segun el indicador
+- No agregues tipos de item con cantidad 0
+- Devuelve unicamente JSON valido
+
+Contexto:
+- Materia: ${normalizeText(ctx.Materia)}
+- Grado: ${normalizeText(ctx.Grado)}
+- Periodo: ${normalizeText(ctx.Periodo)}
+- Secciones: ${seccionesTextoFinal}
+- Nombre de la prueba: ${nombreSolicitado || "Prueba escrita"}
+
+Indicadores obligatorios:
+${indicadoresDetalladosTexto}
+
+Distribucion exacta:
+${tiposActivos.map((t) => `- ${t.tipoItem}: ${t.cantidad} pregunta(s), ${t.valorPorPregunta} punto(s) c/u, subtotal ${t.subtotalPuntos}`).join("\n")}
+
+Materia vista y apoyos:
+${documentoApoyoTextoCompacto || "No se adjunto documento de apoyo."}
+
+Restricciones del formato:
+${formatoSalidaTextoCompacto || "Usar solo contenido evaluativo y respetar el machote Word."}
+
+Estructura de salida obligatoria:
+{
+  "items": [
+    {
+      "numero": 1,
+      "tipoItem": "SR|RC|C|I|RE|RP|RR|RCAS|PE",
+      "aprendizajeEsperado": "",
+      "indicadorEvaluacion": "",
+      "enunciado": "",
+      "opciones": [],
+      "respuestaCorrecta": "",
+      "criterioCorreccion": "",
+      "puntaje": 0
+    }
+  ],
+  "validacion": {
+    "totalItemsCalculado": 0,
+    "totalPuntosCalculado": 0,
+    "totalPuntosEsperado": ${totalPuntosEsperado},
+    "coincideTotalPuntos": true,
+    "advertencias": []
+  }
+}
+`.trim();
+
+    let respuestaIA = await callOpenAiGeneric(prompt);
+    let respuestaIATexto = String(respuestaIA || "").trim();
+    if (!respuestaIATexto) {
+      console.error("OpenAI Eval360 examenes: reintentando con prompt compacto", JSON.stringify({
+        actividadIdTabla,
+        estructuraGrupoId,
+        promptChars: prompt.length,
+        promptCompactoChars: promptCompacto.length,
+        documentoApoyoChars: documentoApoyoTexto.length,
+        formatoSalidaChars: formatoSalidaTexto.length
+      }));
+      respuestaIA = await callOpenAiGeneric(promptCompacto);
+      respuestaIATexto = String(respuestaIA || "").trim();
+    }
+    let parsed = parseExamPayload(respuestaIATexto);
+    if (!respuestaIATexto || isWeakExamPayload(parsed.items)) {
+      console.error("OpenAI Eval360 examenes: reintentando con prompt ultra estricto", JSON.stringify({
+        actividadIdTabla,
+        estructuraGrupoId,
+        hadText: Boolean(respuestaIATexto),
+        weakPayload: isWeakExamPayload(parsed.items),
+        firstItem: summarizeExamItemForLog(Array.isArray(parsed.items) ? parsed.items[0] : null),
+        rawPreview: compactPromptText(respuestaIATexto, 500)
+      }));
+      respuestaIA = await callOpenAiGeneric(promptUltraEstricto);
+      respuestaIATexto = String(respuestaIA || "").trim();
+      parsed = parseExamPayload(respuestaIATexto);
+    }
+    if (!respuestaIATexto || !Array.isArray(parsed.items) || !parsed.items.length) {
+      console.error("OpenAI Eval360 examenes: reintentando con json estricto", JSON.stringify({
+        actividadIdTabla,
+        estructuraGrupoId,
+        hadText: Boolean(respuestaIATexto),
+        rawPreview: compactPromptText(respuestaIATexto, 500)
+      }));
+      respuestaIATexto = String(await callOpenAiGenericJsonStrict(promptUltraEstricto) || "").trim();
+      parsed = parseExamPayload(respuestaIATexto);
+    }
+    if (!respuestaIATexto || isWeakExamPayload(parsed.items)) {
+      console.error("OpenAI Eval360 examenes: payload rechazado por debil", JSON.stringify({
+        actividadIdTabla,
+        estructuraGrupoId,
+        hadText: Boolean(respuestaIATexto),
+        firstItem: summarizeExamItemForLog(Array.isArray(parsed.items) ? parsed.items[0] : null),
+        rawPreview: compactPromptText(respuestaIATexto, 700)
+      }));
+      return res.status(502).json({
+        ok: false,
+        message: "La IA no devolvio preguntas utilizables para el examen. Revise la plantilla, el modelo y la materia vista antes de guardar."
+      });
+    }
+    const generadoConIA = true;
     const tipoCountGenerado: Record<string, number> = {};
     for (const item of parsed.items) {
       const tipo = normalizeTipoItem(item?.tipoItem);
@@ -2544,7 +3998,7 @@ Salida obligatoria en JSON vï¿½lido (sin markdown), con esta estructura:
             advertencias: warnings
           }
         })
-      : String(respuestaIA || "");
+      : respuestaIATexto;
     const userId = getUserId(req) || null;
     const nombreFinal = nombreSolicitado || `Prueba - ${normalizeText(ctx.Grado)}-${normalizeText(ctx.Materia)}, ${normalizeText(ctx.Periodo)}`;
     const insert = await pool.request()
@@ -2583,7 +4037,15 @@ Salida obligatoria en JSON vï¿½lido (sin markdown), con esta estructura:
         VALUES
           (@estructuraGrupoId, @actividadIdTabla, @usuarioId, @plantillaPromptIAId, @nombre, @materia, @grado, @periodo, @tipoColegio, @fuenteWord, @tamanoWordPt, @seccionesJson, @formatoSalidaNombre, @formatoSalidaMimeType, @formatoSalidaDocxBase64, @indicaciones, @documentoApoyoNombre, @encabezadoJson, @promptGenerado, @resultadoIA, 1, SYSDATETIME())
       `);
-    return created(res, insert.recordset[0], "Examen IA generado y guardado correctamente");
+    await syncExamenIaReplicasDesdeActividad(pool, req, {
+      sourceEstructuraGrupoId: estructuraGrupoId,
+      sourceActividadId: actividadIdTabla,
+      sourceExamenRow: insert.recordset[0]
+    });
+    return created(res, {
+      ...insert.recordset[0],
+      generadoConIA
+    }, generadoConIA ? "Examen IA generado y guardado correctamente" : "Examen generado en modo local de respaldo");
   } catch (error) {
     console.error("Error generando examen IA:", error);
     return res.status(500).json({ ok: false, message: "No se pudo generar el examen con IA" });
@@ -2613,6 +4075,21 @@ router.put("/examenes-ia/:id", async (req, res) => {
             UpdatedAt = SYSDATETIME()
         WHERE ExamenIAGeneradoId = @id
       `);
+    const updatedResult = await pool.request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT TOP 1 *
+        FROM dbo.Eval360_ExamenIAGenerado
+        WHERE ExamenIAGeneradoId = @id
+      `);
+    const updatedRow = updatedResult.recordset?.[0];
+    if (updatedRow?.EstructuraGrupoId && updatedRow?.ActividadIdTabla) {
+      await syncExamenIaReplicasDesdeActividad(pool, req, {
+        sourceEstructuraGrupoId: Number(updatedRow.EstructuraGrupoId || 0),
+        sourceActividadId: Number(updatedRow.ActividadIdTabla || 0),
+        sourceExamenRow: updatedRow
+      });
+    }
     return ok(res, { id }, "Examen IA actualizado correctamente");
   } catch (error) {
     console.error("Error actualizando examen IA:", error);
@@ -2627,6 +4104,26 @@ router.delete("/examenes-ia/:id", async (req, res) => {
     if (!id) return;
     const pool = await getPool();
     await ensureEval360ExamenIATable(pool);
+    const examResult = await pool.request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT TOP 1 ExamenIAGeneradoId, EstructuraGrupoId, ActividadIdTabla
+        FROM dbo.Eval360_ExamenIAGenerado
+        WHERE ExamenIAGeneradoId = @id
+      `);
+    const exam = examResult.recordset?.[0];
+    if (!exam) return badRequest(res, "No se encontró el examen");
+
+    const actividadMetaResult = await pool.request()
+      .input("actividadId", sql.Int, Number(exam.ActividadIdTabla || 0))
+      .query(`
+        SELECT TOP 1 EstructuraGrupoDetalleId
+        FROM dbo.Eval360_Actividad
+        WHERE ActividadId = @actividadId
+          AND ISNULL(Activo, 1) = 1
+      `);
+    const actividadMeta = actividadMetaResult.recordset?.[0];
+
     await pool.request()
       .input("id", sql.Int, id)
       .query(`
@@ -2634,6 +4131,29 @@ router.delete("/examenes-ia/:id", async (req, res) => {
         SET Activo = 0, UpdatedAt = SYSDATETIME()
         WHERE ExamenIAGeneradoId = @id
       `);
+
+    if (actividadMeta?.EstructuraGrupoDetalleId && exam?.EstructuraGrupoId && exam?.ActividadIdTabla) {
+      const replicaTargets = await getEstructurasReplicaTablaMismoGrado(pool, req, Number(exam.EstructuraGrupoId || 0));
+      for (const target of replicaTargets) {
+        const actividadReplica = await getActividadReplicaDestino(pool, {
+          sourceEstructuraGrupoId: Number(exam.EstructuraGrupoId || 0),
+          sourceEstructuraGrupoDetalleId: Number(actividadMeta.EstructuraGrupoDetalleId || 0),
+          sourceActividadId: Number(exam.ActividadIdTabla || 0),
+          targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0)
+        });
+        if (!actividadReplica?.targetActividadId) continue;
+        await pool.request()
+          .input("estructuraGrupoId", sql.Int, Number(target.EstructuraGrupoId || 0))
+          .input("actividadIdTabla", sql.Int, Number(actividadReplica.targetActividadId || 0))
+          .query(`
+            UPDATE dbo.Eval360_ExamenIAGenerado
+            SET Activo = 0, UpdatedAt = SYSDATETIME()
+            WHERE EstructuraGrupoId = @estructuraGrupoId
+              AND ActividadIdTabla = @actividadIdTabla
+              AND Activo = 1
+          `);
+      }
+    }
     return ok(res, { id }, "Examen IA eliminado correctamente");
   } catch (error) {
     console.error("Error eliminando examen IA:", error);
@@ -2759,18 +4279,30 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
     const totalPaginasEstimadas = estimateDocumentPages(contenido);
     // Regla: el porcentaje de la prueba debe venir del porcentaje configurado del rubro/prueba.
     // PuntosMaximos representa puntos de escala interna, no porcentaje.
-    const porcentajePrueba = Number(actividadRow?.PorcentajeDentroRubro ?? actividadRow?.PuntosMaximos ?? 0);
+    const porcentajeDesdeNombre = extractPercentFromText(String(row.Nombre || ""));
+    const porcentajePrueba = Number(
+      porcentajeDesdeNombre
+      ?? actividadRow?.PorcentajeDentroRubro
+      ?? actividadRow?.PuntosMaximos
+      ?? 0
+    );
     const encabezado = parseJsonSafe(row.EncabezadoJson);
     const estiloWord = {
       font: normalizeText(row.FuenteWord) || "Calibri",
       sizePt: Math.max(8, Math.min(18, Number(row.TamanoWordPt || 11) || 11))
     };
+    const nombreAsignatura = String(row.Materia || "Matemï¿½tica");
+    const nombreDocente = String(encabezado?.docente || "");
     const markers: Record<string, string> = {
-      NOMBRE_CENTRO_EDUCATIVO: String(encabezado?.centroEducativo || "Centro Educativo"),
-      NOMBRE_ASIGNATURA: String(row.Materia || "Matemï¿½tica"),
+      NOMBRE_CENTRO_EDUCATIVO: `${String(encabezado?.centroEducativo || "Centro Educativo")}\n`,
+      NOMBRE_ASIGNATURA: nombreAsignatura,
+      Asignatura: nombreAsignatura,
+      "Asignatura ": nombreAsignatura,
+      NOMBRE_DOCENTE: nombreDocente,
       ANO_LECTIVO: String(encabezado?.anioLectivo || ""),
+      "AÑO_LECTIVO": String(encabezado?.anioLectivo || ""),
       PERIODO_ROMANO: "I",
-      PERIODO_ORDINAL: String(row.Periodo || "Semestre"),
+      PERIODO_ORDINAL: `${String(row.Periodo || "Semestre")}\n`,
       GRADO_NUMERO: String(row.Grado || ""),
       GRADO_LETRAS_1: String(row.Grado || ""),
       GRADO_LETRAS_2: "",
@@ -2789,6 +4321,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
       PUNTAJE_APARTADO_RE: String(Math.round(sum.re_p)),
       PUNTAJE_APARTADO_RP: String(Math.round(sum.rp_p)),
       PUNTAJE_APARTADO_RR: String(Math.round(sum.rr_p)),
+      PUNTAJE_APARTADO_RCAS: String(Math.round(sum.rcas_p)),
       PUNTAJE_APARTADO_PE: String(Math.round(sum.pe_p)),
       PUNTOS_REACTIVOS_RE_RP_RR_PE: String(Math.round(porcentajePrueba || 0)),
       PORCENTAJE_TOTAL_PRUEBA: String(Math.round(porcentajePrueba || 0)),
@@ -2800,8 +4333,9 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
       MODO_USO_RELACION_C: "una, varias o ninguna vez.",
       LECCION_INICIO: "",
       LECCION_FIN: "",
-      FECHA_APLICACION: new Date().toISOString().slice(0, 10),
+      FECHA_APLICACION: getCostaRicaIsoDate(),
       SECCION: seccionTexto || (seccionesIds.length ? seccionesIds.join(", ") : ""),
+      SESSION: seccionTexto || (seccionesIds.length ? seccionesIds.join(", ") : ""),
       CONTENIDO_EXAMEN: contenido,
       RESULTADO_EXAMEN: contenido
     };
@@ -2823,10 +4357,8 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
     let templateBase64 = String(row.FormatoSalidaDocxBase64 || "");
     const defaultMachoteInfo = await loadDefaultMachoteBase64();
     const defaultMachote = String(defaultMachoteInfo.base64 || "");
-    // Prioridad 1 en este entorno: usar siempre el machote institucional local.
-    if (defaultMachote) {
-      templateBase64 = defaultMachote;
-    }
+    // Prioridad 1: usar el archivo de salida asociado al examen generado.
+    // Solo usar machote institucional cuando no exista un DOCX válido en el registro.
     if (!templateBase64) {
       const fallbackTpl = await pool.request()
         .input("estructuraGrupoId", sql.Int, Number(row.EstructuraGrupoId || 0))
@@ -3886,7 +5418,11 @@ function getRubroCorreoSeguimiento(tipoUso: string) {
 
 async function callOpenAiGeneric(prompt: string) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    console.error("OpenAI Eval360 examenes: OPENAI_API_KEY no esta configurada en el backend.");
+    return null;
+  }
+  const model = process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -3894,9 +5430,10 @@ async function callOpenAiGeneric(prompt: string) {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini",
+      model,
       input: prompt,
-      temperature: 0.2
+      temperature: 0.2,
+      max_output_tokens: 8000
     })
   });
   if (!response.ok) {
@@ -3905,7 +5442,116 @@ async function callOpenAiGeneric(prompt: string) {
     return null;
   }
   const data: any = await response.json();
-  return data.output_text || data.output?.[0]?.content?.[0]?.text || "";
+  const texto = extractOpenAiResponseText(data);
+  if (!texto.trim()) {
+    console.error("OpenAI Eval360 examenes respondio sin texto util:", JSON.stringify({
+      id: data?.id || null,
+      model: data?.model || model,
+      status: data?.status || null,
+      outputCount: Array.isArray(data?.output) ? data.output.length : 0,
+      firstOutputType: Array.isArray(data?.output) && data.output[0] ? data.output[0]?.type || null : null,
+      keys: data && typeof data === "object" ? Object.keys(data).slice(0, 20) : []
+    }));
+    const fallbackTexto = await callOpenAiGenericChatFallback(prompt, apiKey, model);
+    if (fallbackTexto.trim()) {
+      return fallbackTexto;
+    }
+  }
+  return texto;
+}
+
+async function callOpenAiGenericJsonStrict(prompt: string) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return "";
+  const model = process.env.OPENAI_EVAL360_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
+  return await callOpenAiGenericChatFallback(prompt, apiKey, model);
+}
+
+async function callOpenAiGenericChatFallback(prompt: string, apiKey: string, model: string) {
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        max_tokens: 8000,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: "Debes devolver unicamente JSON valido, sin markdown ni texto extra."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      })
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("Error OpenAI Eval360 examenes fallback chat:", response.status, text.slice(0, 1000));
+      return "";
+    }
+    const data: any = await response.json();
+    return String(data?.choices?.[0]?.message?.content || "").trim();
+  } catch (error) {
+    console.error("Error OpenAI Eval360 examenes fallback chat:", error);
+    return "";
+  }
+}
+
+function extractOpenAiResponseText(data: any) {
+  const direct = String(data?.output_text || "").trim();
+  if (direct) return direct;
+
+  const collected: string[] = [];
+  const visit = (node: any) => {
+    if (!node) return;
+    if (typeof node === "string") {
+      const text = node.trim();
+      if (text) collected.push(text);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (typeof node !== "object") return;
+
+    if (typeof node.text === "string" && node.text.trim()) {
+      collected.push(node.text.trim());
+    }
+    if (typeof node.output_text === "string" && node.output_text.trim()) {
+      collected.push(node.output_text.trim());
+    }
+    if (typeof node.content === "string" && node.content.trim()) {
+      collected.push(node.content.trim());
+    }
+    if (Array.isArray(node.content)) {
+      visit(node.content);
+    }
+    if (Array.isArray(node.output)) {
+      visit(node.output);
+    }
+    if (Array.isArray(node.parts)) {
+      visit(node.parts);
+    }
+    if (Array.isArray(node.messages)) {
+      visit(node.messages);
+    }
+  };
+
+  visit(data?.output);
+  visit(data?.content);
+  visit(data?.message);
+  visit(data?.messages);
+
+  return collected.join("\n").trim();
 }
 
 async function ensureEval360ExamenIATable(pool: any) {
@@ -4612,7 +6258,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
     const institucionId = !isSuperAdmin(req) ? getInstitutionId(req, res) : Number(asignacion.InstitucionId || 0);
     if (institucionId === null) return;
 
-    const cacheKey = `${institucionId}|${grupoId}|${materiaId}|${anioLectivoId}|${periodoId}`;
+    const cacheKey = getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId });
     const canUseCache = !sincronizarSolicitado;
     if (canUseCache) {
       const cached = contextoCache.get(cacheKey);
@@ -4653,6 +6299,12 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
       const estructura = estructuraResult.recordset[0] || null;
       const estructuraGrupoId = estructura ? Number(estructura.EstructuraGrupoId) : 0;
+
+      if (estructuraGrupoId) {
+        await timedQuery("eval360.contexto.syncTablaReplica", () =>
+          syncTablaEspecificacionesDesdeGrupoHermanoSiFalta(pool, req, estructuraGrupoId)
+        );
+      }
 
     if (sincronizarSolicitado && estructuraGrupoId && Number(estructura?.PlantillaBaseId || 0) > 0) {
       await timedQuery("eval360.contexto.syncFaltantes", () =>
@@ -4711,114 +6363,126 @@ router.get("/seguimiento/contexto", async (req, res) => {
       }
     }
 
+      const plantillasSectionKey = `plantillas|${institucionId}`;
+      const estudiantesSectionKey = `estudiantes|${institucionId}|${grupoId}|${anioLectivoId}`;
+      const planeamientosSectionKey = `planeamientos|${institucionId}|${grupoId}|${materiaId}|${anioLectivoId}|${periodoId}`;
+
+      const plantillasCached = getSectionCache<any>(plantillasSectionKey);
+      const estudiantesCached = getSectionCache<any>(estudiantesSectionKey);
+      const planeamientosCached = getSectionCache<any>(planeamientosSectionKey);
+
       const [plantillas, estudiantes, planeamientos] = await Promise.all([
-      timedQuery("eval360.contexto.plantillas", () => pool.request()
-        .input("institucionId", sql.Int, institucionId)
-        .query(`
-          SELECT EvaluacionPlantillaId, Nombre, Estado, DecimalesNota, PermitirProfesorEditar
-          FROM dbo.EvaluacionPlantilla
-          WHERE InstitucionId = @institucionId
-            AND ISNULL(Activo, 1) = 1
-            AND ISNULL(Estado, N'ACTIVA') <> N'INACTIVA'
-          ORDER BY Nombre
-        `)),
-      timedQuery("eval360.contexto.estudiantes", () => pool.request()
-        .input("grupoId", sql.Int, grupoId)
-        .input("anioLectivoId", sql.Int, anioLectivoId)
-        .query(`
-          SELECT
-            e.EstudianteId,
-            e.Identificacion,
-            e.Nombre,
-            e.PrimerApellido,
-            e.SegundoApellido,
-            e.Correo,
-            e.Telefono,
-            e.AutorizaWhatsAppEncargado,
-            enc.NombreCompleto AS EncargadoPrincipalNombre,
-            enc.Correo AS EncargadoPrincipalCorreo,
-            enc.Telefono AS EncargadoPrincipalTelefono,
-            encWa.Detalle AS EncargadosWhatsAppDetalle,
-            m.MatriculaId,
-            m.Estado AS EstadoMatricula,
-            ISNULL(traslado.FueTrasladado, 0) AS FueTrasladado,
-            traslado.GrupoIdOrigenTraslado,
-            traslado.GrupoNombreOrigenTraslado,
-            traslado.GrupoIdDestinoTraslado,
-            traslado.TrasladoCreatedAt
-          FROM dbo.Matricula m
-          INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
-          OUTER APPLY (
-            SELECT TOP 1
-              CONCAT(en.Nombre, N' ', ISNULL(en.PrimerApellido, N''), N' ', ISNULL(en.SegundoApellido, N'')) AS NombreCompleto,
-              en.Correo,
-              en.Telefono
-            FROM dbo.EstudianteEncargado ee
-            INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
-            WHERE ee.EstudianteId = e.EstudianteId
-              AND ISNULL(ee.Activo, 1) = 1
-              AND ISNULL(en.Activo, 1) = 1
-            ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
-          ) enc
-          OUTER APPLY (
+        plantillasCached ?? timedQuery("eval360.contexto.plantillas", () => pool.request()
+          .input("institucionId", sql.Int, institucionId)
+          .query(`
+            SELECT EvaluacionPlantillaId, Nombre, Estado, DecimalesNota, PermitirProfesorEditar
+            FROM dbo.EvaluacionPlantilla
+            WHERE InstitucionId = @institucionId
+              AND ISNULL(Activo, 1) = 1
+              AND ISNULL(Estado, N'ACTIVA') <> N'INACTIVA'
+            ORDER BY Nombre
+          `)),
+        estudiantesCached ?? timedQuery("eval360.contexto.estudiantes", () => pool.request()
+          .input("grupoId", sql.Int, grupoId)
+          .input("anioLectivoId", sql.Int, anioLectivoId)
+          .query(`
             SELECT
-              STUFF((
-                SELECT DISTINCT
-                  ' | ' +
-                  COALESCE(NULLIF(LTRIM(RTRIM(ee2.Parentesco)), ''), CASE WHEN en2.TipoEncargado = 'MADRE' THEN 'Madre' WHEN en2.TipoEncargado = 'PADRE' THEN 'Padre' ELSE 'Encargado' END) +
-                  ': ' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
-                FROM dbo.EstudianteEncargado ee2
-                INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
-                WHERE ee2.EstudianteId = e.EstudianteId
-                  AND ISNULL(ee2.Activo, 1) = 1
-                  AND ISNULL(en2.Activo, 1) = 1
-                  AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
-                  AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
-                FOR XML PATH(''), TYPE
-              ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
-          ) encWa
-          OUTER APPLY (
-            SELECT TOP 1
-              CAST(1 AS bit) AS FueTrasladado,
-              h.GrupoIdOrigen AS GrupoIdOrigenTraslado,
-              go.Nombre AS GrupoNombreOrigenTraslado,
-              h.GrupoIdDestino AS GrupoIdDestinoTraslado,
-              h.CreatedAt AS TrasladoCreatedAt
-            FROM dbo.MatriculaTrasladoHistorial h
-            LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
-            WHERE h.EstudianteId = e.EstudianteId
-              AND h.AnioLectivoId = m.AnioLectivoId
-              AND h.GrupoIdDestino = m.GrupoId
-            ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
-          ) traslado
-          WHERE m.GrupoId = @grupoId
-            AND m.AnioLectivoId = @anioLectivoId
-            AND ISNULL(e.Activo, 1) = 1
-            AND ISNULL(m.Estado, N'Activa') IN (N'Activa', N'ACTIVA', N'Activo', N'ACTIVO')
-          ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
-        `)),
-      timedQuery("eval360.contexto.planeamientos", () => pool.request()
-        .input("grupoId", sql.Int, grupoId)
-        .input("materiaId", sql.Int, materiaId)
-        .input("anioLectivoId", sql.Int, anioLectivoId)
-        .input("periodoId", sql.Int, periodoId)
-        .query(`
-          SELECT
-            PlaneamientoId,
-            Nombre,
-            CAST(NULL AS nvarchar(200)) AS Tema,
-            ResultadoIAJson,
-            FechaInicio,
-            FechaFin
-          FROM dbo.Planeamiento
-          WHERE GrupoId = @grupoId
-            AND MateriaId = @materiaId
-            AND AnioLectivoId = @anioLectivoId
-            AND PeriodoId = @periodoId
-            AND ISNULL(Activo, 1) = 1
-          ORDER BY CreatedAt DESC, PlaneamientoId DESC
-        `))
-    ]);
+              e.EstudianteId,
+              e.Identificacion,
+              e.Nombre,
+              e.PrimerApellido,
+              e.SegundoApellido,
+              e.Correo,
+              e.Telefono,
+              e.AutorizaWhatsAppEncargado,
+              enc.NombreCompleto AS EncargadoPrincipalNombre,
+              enc.Correo AS EncargadoPrincipalCorreo,
+              enc.Telefono AS EncargadoPrincipalTelefono,
+              encWa.Detalle AS EncargadosWhatsAppDetalle,
+              m.MatriculaId,
+              m.Estado AS EstadoMatricula,
+              ISNULL(traslado.FueTrasladado, 0) AS FueTrasladado,
+              traslado.GrupoIdOrigenTraslado,
+              traslado.GrupoNombreOrigenTraslado,
+              traslado.GrupoIdDestinoTraslado,
+              traslado.TrasladoCreatedAt
+            FROM dbo.Matricula m
+            INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+            OUTER APPLY (
+              SELECT TOP 1
+                CONCAT(en.Nombre, N' ', ISNULL(en.PrimerApellido, N''), N' ', ISNULL(en.SegundoApellido, N'')) AS NombreCompleto,
+                en.Correo,
+                en.Telefono
+              FROM dbo.EstudianteEncargado ee
+              INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
+              WHERE ee.EstudianteId = e.EstudianteId
+                AND ISNULL(ee.Activo, 1) = 1
+                AND ISNULL(en.Activo, 1) = 1
+              ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
+            ) enc
+            OUTER APPLY (
+              SELECT
+                STUFF((
+                  SELECT DISTINCT
+                    ' | ' +
+                    COALESCE(NULLIF(LTRIM(RTRIM(ee2.Parentesco)), ''), CASE WHEN en2.TipoEncargado = 'MADRE' THEN 'Madre' WHEN en2.TipoEncargado = 'PADRE' THEN 'Padre' ELSE 'Encargado' END) +
+                    ': ' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+                  FROM dbo.EstudianteEncargado ee2
+                  INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+                  WHERE ee2.EstudianteId = e.EstudianteId
+                    AND ISNULL(ee2.Activo, 1) = 1
+                    AND ISNULL(en2.Activo, 1) = 1
+                    AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                    AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+                  FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
+            ) encWa
+            OUTER APPLY (
+              SELECT TOP 1
+                CAST(1 AS bit) AS FueTrasladado,
+                h.GrupoIdOrigen AS GrupoIdOrigenTraslado,
+                go.Nombre AS GrupoNombreOrigenTraslado,
+                h.GrupoIdDestino AS GrupoIdDestinoTraslado,
+                h.CreatedAt AS TrasladoCreatedAt
+              FROM dbo.MatriculaTrasladoHistorial h
+              LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
+              WHERE h.EstudianteId = e.EstudianteId
+                AND h.AnioLectivoId = m.AnioLectivoId
+                AND h.GrupoIdDestino = m.GrupoId
+              ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
+            ) traslado
+            WHERE m.GrupoId = @grupoId
+              AND m.AnioLectivoId = @anioLectivoId
+              AND ISNULL(e.Activo, 1) = 1
+              AND ISNULL(m.Estado, N'Activa') IN (N'Activa', N'ACTIVA', N'Activo', N'ACTIVO')
+            ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
+          `)),
+        planeamientosCached ?? timedQuery("eval360.contexto.planeamientos", () => pool.request()
+          .input("grupoId", sql.Int, grupoId)
+          .input("materiaId", sql.Int, materiaId)
+          .input("anioLectivoId", sql.Int, anioLectivoId)
+          .input("periodoId", sql.Int, periodoId)
+          .query(`
+            SELECT
+              PlaneamientoId,
+              Nombre,
+              CAST(NULL AS nvarchar(200)) AS Tema,
+              ResultadoIAJson,
+              FechaInicio,
+              FechaFin
+            FROM dbo.Planeamiento
+            WHERE GrupoId = @grupoId
+              AND MateriaId = @materiaId
+              AND AnioLectivoId = @anioLectivoId
+              AND PeriodoId = @periodoId
+              AND ISNULL(Activo, 1) = 1
+            ORDER BY CreatedAt DESC, PlaneamientoId DESC
+          `))
+      ]);
+
+      if (!plantillasCached) setSectionCache(plantillasSectionKey, plantillas);
+      if (!estudiantesCached) setSectionCache(estudiantesSectionKey, estudiantes);
+      if (!planeamientosCached) setSectionCache(planeamientosSectionKey, planeamientos);
 
       const trasladoCacheKey = `${institucionId}|${grupoId}|${anioLectivoId}`;
       const ultimaReaplicacion = trasladosReaplicadosCache.get(trasladoCacheKey) || 0;
@@ -5197,89 +6861,195 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
     await transaction.begin();
 
-    await new sql.Request(transaction)
-      .input("actividadId", sql.Int, actividadId)
-      .query(`
-        UPDATE dbo.Eval360_ActividadIndicador
-        SET Activo = 0
-        WHERE ActividadId = @actividadId
-      `);
+    await upsertActividadIndicadores(transaction, actividadId, indicadorIds, asignacionesMap);
 
-    for (const indicadorId of indicadorIds) {
-      const existing = await new sql.Request(transaction)
-        .input("actividadId", sql.Int, actividadId)
-        .input("indicadorGrupoId", sql.Int, indicadorId)
-        .query(`
-          SELECT TOP 1 ActividadId
-          FROM dbo.Eval360_ActividadIndicador
-          WHERE ActividadId = @actividadId
-            AND IndicadorGrupoId = @indicadorGrupoId
-        `);
-
-      if (existing.recordset[0]) {
-        const reqUpdate = new sql.Request(transaction)
-          .input("actividadId", sql.Int, actividadId)
-          .input("indicadorGrupoId", sql.Int, indicadorId);
-        const asignacion = asignacionesMap.get(Number(indicadorId)) || { numeroLecciones: 0, puntos: 0, detalleItemsJson: "{}" };
-        reqUpdate.input("numeroLecciones", sql.Decimal(10, 2), Number(asignacion.numeroLecciones || 0));
-        reqUpdate.input("puntos", sql.Decimal(10, 2), Number(asignacion.puntos || 0));
-        reqUpdate.input("detalleItemsJson", sql.NVarChar(sql.MAX), String(asignacion.detalleItemsJson || "{}"));
-        await reqUpdate.query(`
-          IF COL_LENGTH('dbo.Eval360_ActividadIndicador', 'NumeroLecciones') IS NOT NULL
-             AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'Puntos') IS NOT NULL
-             AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'DetalleItemsJson') IS NOT NULL
-          BEGIN
-            UPDATE dbo.Eval360_ActividadIndicador
-            SET Activo = 1,
-                NumeroLecciones = @numeroLecciones,
-                Puntos = @puntos,
-                DetalleItemsJson = @detalleItemsJson
-            WHERE ActividadId = @actividadId
-              AND IndicadorGrupoId = @indicadorGrupoId
-          END
-          ELSE
-          BEGIN
-            UPDATE dbo.Eval360_ActividadIndicador
-            SET Activo = 1
-            WHERE ActividadId = @actividadId
-              AND IndicadorGrupoId = @indicadorGrupoId
-          END
-        `);
-      } else {
-        const reqInsert = new sql.Request(transaction)
-          .input("actividadId", sql.Int, actividadId)
-          .input("indicadorGrupoId", sql.Int, indicadorId);
-        const asignacion = asignacionesMap.get(Number(indicadorId)) || { numeroLecciones: 0, puntos: 0, detalleItemsJson: "{}" };
-        reqInsert.input("numeroLecciones", sql.Decimal(10, 2), Number(asignacion.numeroLecciones || 0));
-        reqInsert.input("puntos", sql.Decimal(10, 2), Number(asignacion.puntos || 0));
-        reqInsert.input("detalleItemsJson", sql.NVarChar(sql.MAX), String(asignacion.detalleItemsJson || "{}"));
-        await reqInsert.query(`
-          IF COL_LENGTH('dbo.Eval360_ActividadIndicador', 'NumeroLecciones') IS NOT NULL
-             AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'Puntos') IS NOT NULL
-             AND COL_LENGTH('dbo.Eval360_ActividadIndicador', 'DetalleItemsJson') IS NOT NULL
-          BEGIN
-            INSERT INTO dbo.Eval360_ActividadIndicador
-              (ActividadId, IndicadorGrupoId, Activo, NumeroLecciones, Puntos, DetalleItemsJson)
-            VALUES
-              (@actividadId, @indicadorGrupoId, 1, @numeroLecciones, @puntos, @detalleItemsJson)
-          END
-          ELSE
-          BEGIN
-            INSERT INTO dbo.Eval360_ActividadIndicador
-              (ActividadId, IndicadorGrupoId, Activo)
-            VALUES
-              (@actividadId, @indicadorGrupoId, 1)
-          END
-        `);
+    const replicaTargets = await getEstructurasReplicaTablaMismoGrado(transaction, req, estructuraGrupoId);
+    for (const target of replicaTargets) {
+      const actividadReplica = await getActividadReplicaDestino(transaction, {
+        sourceEstructuraGrupoId: estructuraGrupoId,
+        sourceEstructuraGrupoDetalleId: estructuraGrupoDetalleId,
+        sourceActividadId: actividadId,
+        targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0)
+      });
+      if (!actividadReplica?.targetActividadId) {
+        throw new Error(`No se encontro la prueba equivalente para replicar en ${String(target.GrupoNombre || "otro grupo")}`);
       }
+
+      const mappedIndicadores = await mapIndicadoresReplicaTabla(transaction, {
+        sourceEstructuraGrupoId: estructuraGrupoId,
+        targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0),
+        indicadorIds
+      });
+      if (mappedIndicadores.size !== indicadorIds.length) {
+        throw new Error(`No se pudieron mapear todos los indicadores de la tabla en ${String(target.GrupoNombre || "otro grupo")}`);
+      }
+
+      const targetIndicadorIds = indicadorIds.map((id) => Number(mappedIndicadores.get(Number(id)) || 0)).filter((id) => id > 0);
+      const tieneCalificacionesTarget = await validateIndicadoresRemovidosConCalificacion(transaction, Number(actividadReplica.targetActividadId || 0), targetIndicadorIds);
+      if (tieneCalificacionesTarget) {
+        throw new Error(`La replica no se pudo aplicar en ${String(target.GrupoNombre || "otro grupo")} porque ya tiene calificaciones en esa prueba`);
+      }
+
+      const targetAsignacionesMap = new Map<number, { numeroLecciones: number; puntos: number; detalleItemsJson: string }>();
+      for (const [sourceIndicadorId, sourceAsignacion] of Array.from(asignacionesMap.entries())) {
+        const targetIndicadorId = mappedIndicadores.get(Number(sourceIndicadorId));
+        if (targetIndicadorId) targetAsignacionesMap.set(Number(targetIndicadorId), sourceAsignacion);
+      }
+
+      await upsertActividadIndicadores(transaction, Number(actividadReplica.targetActividadId || 0), targetIndicadorIds, targetAsignacionesMap);
+
+      await new sql.Request(transaction)
+        .input("actividadId", sql.Int, Number(actividadReplica.targetActividadId || 0))
+        .input("nombre", sql.NVarChar(200), normalizeText((actividadResult.recordset[0] as any)?.Nombre || ""))
+        .query(`
+          UPDATE dbo.Eval360_Actividad
+          SET Nombre = @nombre,
+              UpdatedAt = SYSDATETIME()
+          WHERE ActividadId = @actividadId
+        `);
     }
 
     await transaction.commit();
-    return ok(res, { actividadId, totalAsignados: indicadorIds.length }, "Indicadores asignados a la actividad correctamente");
+    clearContextCacheByParts({
+      institucionId: Number((estructura as any)?.InstitucionId || 0),
+      grupoId: Number((estructura as any)?.GrupoId || 0),
+      materiaId: Number((estructura as any)?.MateriaId || 0),
+      anioLectivoId: Number((estructura as any)?.AnioLectivoId || 0),
+      periodoId: Number((estructura as any)?.PeriodoId || 0)
+    });
+    return ok(res, { actividadId, totalAsignados: indicadorIds.length, replicasAplicadas: replicaTargets.length }, "Indicadores asignados a la actividad correctamente");
   } catch (error) {
     try { await transaction.rollback(); } catch {}
     console.error("Error asignando indicadores a actividad:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron asignar los indicadores" });
+  }
+});
+
+router.post("/seguimiento/eliminar-tabla-especificaciones", async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+
+  try {
+    if (!assertCanAccess(req, res)) return;
+    await ensureEval360ExamenIATable(pool);
+
+    const estructuraGrupoId = toRequiredNumber(req.body.estructuraGrupoId, "estructuraGrupoId", res);
+    const estructuraGrupoDetalleId = toRequiredNumber(req.body.estructuraGrupoDetalleId, "estructuraGrupoDetalleId", res);
+    const actividadId = toRequiredNumber(req.body.actividadId, "actividadId", res);
+    if (estructuraGrupoId === null || estructuraGrupoDetalleId === null || actividadId === null) return;
+
+    const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
+    if (!estructura) return;
+
+    const actividadResult = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .input("actividadId", sql.Int, actividadId)
+      .query(`
+        SELECT TOP 1 ActividadId, Nombre
+        FROM dbo.Eval360_Actividad
+        WHERE ActividadId = @actividadId
+          AND EstructuraGrupoId = @estructuraGrupoId
+          AND EstructuraGrupoDetalleId = @estructuraGrupoDetalleId
+          AND ISNULL(Activo, 1) = 1
+      `);
+
+    if (!actividadResult.recordset[0]) return badRequest(res, "La actividad no pertenece al componente seleccionado");
+
+    await transaction.begin();
+
+    const actividadesDestino: Array<{ estructuraGrupoId: number; actividadId: number; grupoNombre: string }> = [{
+      estructuraGrupoId,
+      actividadId,
+      grupoNombre: String((estructura as any)?.GrupoNombre || "sección actual")
+    }];
+
+    const replicaTargets = await getEstructurasReplicaTablaMismoGrado(transaction, req, estructuraGrupoId);
+    for (const target of replicaTargets) {
+      const actividadReplica = await getActividadReplicaDestino(transaction, {
+        sourceEstructuraGrupoId: estructuraGrupoId,
+        sourceEstructuraGrupoDetalleId: estructuraGrupoDetalleId,
+        sourceActividadId: actividadId,
+        targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0)
+      });
+      if (!actividadReplica?.targetActividadId) {
+        throw new Error(`No se encontro la prueba equivalente para eliminar en ${String(target.GrupoNombre || "otro grupo")}`);
+      }
+      actividadesDestino.push({
+        estructuraGrupoId: Number(target.EstructuraGrupoId || 0),
+        actividadId: Number(actividadReplica.targetActividadId || 0),
+        grupoNombre: String(target.GrupoNombre || "otro grupo")
+      });
+    }
+
+    const actividadIdsUnicos = Array.from(new Set(
+      actividadesDestino
+        .map((item) => Number(item.actividadId || 0))
+        .filter((item) => Number.isFinite(item) && item > 0)
+    ));
+    const examPlaceholders = actividadIdsUnicos.map((_, index) => `@actividadExamen${index}`).join(", ");
+    const examRequest = new sql.Request(transaction);
+    actividadIdsUnicos.forEach((id, index) => examRequest.input(`actividadExamen${index}`, sql.Int, id));
+    const examenesRegistrados = actividadIdsUnicos.length
+      ? await examRequest.query(`
+          SELECT TOP 1
+            ex.ExamenIAGeneradoId,
+            ex.ActividadIdTabla,
+            ISNULL(NULLIF(LTRIM(RTRIM(ex.Nombre)), ''), N'Examen IA') AS Nombre
+          FROM dbo.Eval360_ExamenIAGenerado ex
+          WHERE ex.Activo = 1
+            AND ex.ActividadIdTabla IN (${examPlaceholders})
+          ORDER BY ex.ExamenIAGeneradoId DESC
+        `)
+      : { recordset: [] as any[] };
+    if ((examenesRegistrados.recordset || []).length > 0) {
+      const examen = examenesRegistrados.recordset[0];
+      await transaction.rollback();
+      return badRequest(res, `No se puede eliminar la tabla de especificaciones porque ya existe un examen registrado: ${String(examen?.Nombre || "Examen IA")}`);
+    }
+
+    for (const destino of actividadesDestino) {
+      const indicadoresResult = await new sql.Request(transaction)
+        .input("actividadId", sql.Int, Number(destino.actividadId || 0))
+        .query(`
+          SELECT IndicadorGrupoId
+          FROM dbo.Eval360_ActividadIndicador
+          WHERE ActividadId = @actividadId
+            AND ISNULL(Activo, 1) = 1
+        `);
+      const indicadorIds = (indicadoresResult.recordset || [])
+        .map((row: any) => Number(row.IndicadorGrupoId || 0))
+        .filter((id: number) => Number.isFinite(id) && id > 0);
+
+      const tieneCalificaciones = await validateIndicadoresRemovidosConCalificacion(transaction, Number(destino.actividadId || 0), []);
+      if (tieneCalificaciones) {
+        throw new Error(`No se puede eliminar la tabla en ${destino.grupoNombre} porque esa prueba ya tiene calificaciones registradas`);
+      }
+
+      await upsertActividadIndicadores(transaction, Number(destino.actividadId || 0), [], new Map());
+    }
+
+    await transaction.commit();
+    clearContextCacheByParts({
+      institucionId: Number((estructura as any)?.InstitucionId || 0),
+      grupoId: Number((estructura as any)?.GrupoId || 0),
+      materiaId: Number((estructura as any)?.MateriaId || 0),
+      anioLectivoId: Number((estructura as any)?.AnioLectivoId || 0),
+      periodoId: Number((estructura as any)?.PeriodoId || 0)
+    });
+    return ok(res, {
+      actividadId,
+      replicasAplicadas: Math.max(0, actividadesDestino.length - 1),
+      actividadesAfectadas: actividadesDestino.length
+    }, "Tabla de especificaciones eliminada correctamente");
+  } catch (error: any) {
+    try { await transaction.rollback(); } catch {}
+    console.error("Error eliminando tabla de especificaciones:", error);
+    const message = String(error?.message || "");
+    if (message) {
+      return res.status(500).json({ ok: false, message });
+    }
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar la tabla de especificaciones" });
   }
 });
 
@@ -5675,6 +7445,87 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
     try { await transaction.rollback(); } catch {}
     console.error("Error guardando seguimiento de indicador Eval360:", error);
     return res.status(500).json({ ok: false, message: "No se pudo guardar el seguimiento del indicador" });
+  }
+});
+
+router.post("/seguimiento/guardar-nombre-actividad", async (req, res) => {
+  const pool = await getPool();
+  try {
+    if (!assertCanAccess(req, res)) return;
+
+    const estructuraGrupoId = toRequiredNumber(req.body.estructuraGrupoId, "estructuraGrupoId", res);
+    const estructuraGrupoDetalleId = toRequiredNumber(req.body.estructuraGrupoDetalleId, "estructuraGrupoDetalleId", res);
+    const actividadId = toRequiredNumber(req.body.actividadId, "actividadId", res);
+    const nombre = String(req.body.nombre || "").trim();
+
+    if (estructuraGrupoId === null || estructuraGrupoDetalleId === null || actividadId === null) return;
+    const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
+    if (!estructura) return;
+
+    const actividadResult = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .input("actividadId", sql.Int, actividadId)
+      .query(`
+        SELECT TOP 1 ActividadId, Nombre
+        FROM dbo.Eval360_Actividad
+        WHERE ActividadId = @actividadId
+          AND EstructuraGrupoId = @estructuraGrupoId
+          AND EstructuraGrupoDetalleId = @estructuraGrupoDetalleId
+          AND ISNULL(Activo, 1) = 1
+      `);
+
+    if (!actividadResult.recordset[0]) return badRequest(res, "La actividad no pertenece al componente seleccionado");
+
+    await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
+      .input("actividadId", sql.Int, actividadId)
+      .input("nombre", sql.NVarChar(200), nombre)
+      .query(`
+        UPDATE dbo.Eval360_Actividad
+        SET Nombre = @nombre,
+            UpdatedAt = SYSDATETIME()
+        WHERE ActividadId = @actividadId
+          AND EstructuraGrupoId = @estructuraGrupoId
+          AND EstructuraGrupoDetalleId = @estructuraGrupoDetalleId
+          AND ISNULL(Activo, 1) = 1
+      `);
+
+    const replicaTargets = await getEstructurasReplicaTablaMismoGrado(pool, req, estructuraGrupoId);
+    for (const target of replicaTargets) {
+      const actividadReplica = await getActividadReplicaDestino(pool, {
+        sourceEstructuraGrupoId: estructuraGrupoId,
+        sourceEstructuraGrupoDetalleId: estructuraGrupoDetalleId,
+        sourceActividadId: actividadId,
+        targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0)
+      });
+      if (!actividadReplica?.targetActividadId) {
+        throw new Error(`No se encontro la prueba equivalente para replicar el nombre en ${String(target.GrupoNombre || "otro grupo")}`);
+      }
+      await pool.request()
+        .input("actividadId", sql.Int, Number(actividadReplica.targetActividadId || 0))
+        .input("nombre", sql.NVarChar(200), nombre)
+        .query(`
+          UPDATE dbo.Eval360_Actividad
+          SET Nombre = @nombre,
+              UpdatedAt = SYSDATETIME()
+          WHERE ActividadId = @actividadId
+            AND ISNULL(Activo, 1) = 1
+        `);
+    }
+
+    clearContextCacheByParts({
+      institucionId: Number((estructura as any)?.InstitucionId || 0),
+      grupoId: Number((estructura as any)?.GrupoId || 0),
+      materiaId: Number((estructura as any)?.MateriaId || 0),
+      anioLectivoId: Number((estructura as any)?.AnioLectivoId || 0),
+      periodoId: Number((estructura as any)?.PeriodoId || 0)
+    });
+    return ok(res, { actividadId, nombre, replicasAplicadas: replicaTargets.length });
+  } catch (error) {
+    console.error("Error guardando nombre de actividad:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo guardar el nombre de la prueba" });
   }
 });
 
