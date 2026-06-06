@@ -419,6 +419,7 @@ export type ExamenIaDraft = {
 
 export type ExamenIaCreado = {
   id: string;
+  actividadIdTabla: string;
   nombre: string;
   materia: string;
   grado: string;
