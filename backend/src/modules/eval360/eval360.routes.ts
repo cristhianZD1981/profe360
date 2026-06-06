@@ -4037,11 +4037,15 @@ Estructura de salida obligatoria:
         VALUES
           (@estructuraGrupoId, @actividadIdTabla, @usuarioId, @plantillaPromptIAId, @nombre, @materia, @grado, @periodo, @tipoColegio, @fuenteWord, @tamanoWordPt, @seccionesJson, @formatoSalidaNombre, @formatoSalidaMimeType, @formatoSalidaDocxBase64, @indicaciones, @documentoApoyoNombre, @encabezadoJson, @promptGenerado, @resultadoIA, 1, SYSDATETIME())
       `);
-    await syncExamenIaReplicasDesdeActividad(pool, req, {
-      sourceEstructuraGrupoId: estructuraGrupoId,
-      sourceActividadId: actividadIdTabla,
-      sourceExamenRow: insert.recordset[0]
-    });
+    try {
+      await syncExamenIaReplicasDesdeActividad(pool, req, {
+        sourceEstructuraGrupoId: estructuraGrupoId,
+        sourceActividadId: actividadIdTabla,
+        sourceExamenRow: insert.recordset[0]
+      });
+    } catch (replicaError) {
+      console.error("OpenAI Eval360 examenes: no se pudieron sincronizar replicas del examen", replicaError);
+    }
     return created(res, {
       ...insert.recordset[0],
       generadoConIA
