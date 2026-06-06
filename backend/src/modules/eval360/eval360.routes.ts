@@ -4052,7 +4052,14 @@ Estructura de salida obligatoria:
     }, generadoConIA ? "Examen IA generado y guardado correctamente" : "Examen generado en modo local de respaldo");
   } catch (error) {
     console.error("Error generando examen IA:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo generar el examen con IA" });
+    const detalle = compactPromptText(getReadableError(error), 300)
+      .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+      .replace(/sk-[A-Za-z0-9_-]+/gi, "sk-[redacted]");
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo generar el examen con IA",
+      detalle
+    });
   }
 });
 
