@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
+import { env } from "../../config/env";
 import { ok, badRequest } from "../../utils/http";
 import { sendEmail } from "../../services/email.service";
 
 const router = Router();
+const MAIL_FROM_NOTIFICACIONES = "info@profe360cr.com";
 
 router.use(requireAuth);
 router.use(
@@ -44,6 +46,46 @@ function getInstitutionId(req: any, res: any) {
   }
 
   return Number(institucionId);
+}
+
+async function sendBoletaConductaEmail(input: {
+  to: string;
+  cc?: string;
+  subject: string;
+  html: string;
+  text: string;
+  attachments: Array<{
+    filename: string;
+    content: string;
+    type?: string;
+    disposition?: "attachment" | "inline";
+  }>;
+}) {
+  try {
+    return await sendEmail({
+      from: MAIL_FROM_NOTIFICACIONES,
+      to: input.to,
+      cc: input.cc,
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+      attachments: input.attachments
+    });
+  } catch (primaryError: any) {
+    const fallbackFrom = String(env.mail.fromEmail || "").trim();
+    if (!fallbackFrom || fallbackFrom.toLowerCase() === MAIL_FROM_NOTIFICACIONES.toLowerCase()) {
+      throw primaryError;
+    }
+    return await sendEmail({
+      from: fallbackFrom,
+      to: input.to,
+      cc: input.cc,
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+      attachments: input.attachments
+    });
+  }
 }
 
 function fullName(item: any) {
@@ -1322,8 +1364,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
     let enviado = false;
     let errorMsg: string | null = null;
     try {
-      await sendEmail({
-        from: "info@profe360cr.com",
+      const correo = await sendBoletaConductaEmail({
         to: correoEstudiante,
         cc: correoProfesor || undefined,
         subject: asunto,
@@ -1338,7 +1379,10 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
           }
         ]
       });
-      enviado = true;
+      enviado = correo?.enviado === true;
+      if (!enviado) {
+        errorMsg = String(correo?.motivo || "No se pudo enviar correo");
+      }
     } catch (error: any) {
       enviado = false;
       errorMsg = String(error?.message || "No se pudo enviar correo");
