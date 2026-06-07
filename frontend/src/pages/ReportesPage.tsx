@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
+import { getCostaRicaIsoDate } from "../utils/date";
 
 type TipoReporte = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BITACORA" | "BOLETAS" | "NOTAS" | "AUDITORIA_CAMBIOS";
 
@@ -41,7 +42,7 @@ export default function ReportesPage() {
   const [codigoPresupuestario, setCodigoPresupuestario] = useState("");
   const [tipoEducacion, setTipoEducacion] = useState("GENERAL BASICA");
   const [motivoTramite, setMotivoTramite] = useState("IMAS");
-  const [fechaEmision, setFechaEmision] = useState(() => new Date().toISOString().slice(0, 10));
+  const [fechaEmision, setFechaEmision] = useState(() => getCostaRicaIsoDate());
 
   const [loading, setLoading] = useState(false);
   const [generandoConstancia, setGenerandoConstancia] = useState(false);

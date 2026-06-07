@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { badRequest, ok } from "../../utils/http";
+import { getCostaRicaIsoDate, parseDateInputAsLocalDate } from "../../utils/date.utils";
 
 const router = Router();
 router.use(requireAuth);
@@ -16,7 +17,7 @@ function escapeHtml(value: any) {
 }
 
 function fechaLargaCR(value?: Date | string | null) {
-  const date = value ? new Date(value) : new Date();
+  const date = parseDateInputAsLocalDate(value, new Date());
   if (Number.isNaN(date.getTime())) return "";
   const meses = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -557,7 +558,9 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
   const codigoPresupuestarioBody = String(req.body?.codigoPresupuestario || "").trim();
   const tipoEducacion = String(req.body?.tipoEducacion || "").trim().toUpperCase();
   const motivoTramite = String(req.body?.motivoTramite || "").trim().toUpperCase();
-  const fechaEmision = req.body?.fechaEmision ? new Date(req.body.fechaEmision) : new Date();
+  const fechaEmision = parseDateInputAsLocalDate(
+    req.body?.fechaEmision || getCostaRicaIsoDate()
+  );
   const userId = Number(req.auth?.userId || req.auth?.usuarioId || req.auth?.id || 0);
 
   if (!estudianteId) return badRequest(res, "Seleccioná el estudiante");

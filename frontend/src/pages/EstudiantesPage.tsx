@@ -2,6 +2,7 @@
 import { useNavigate } from "react-router-dom";
 import { useRef } from "react";
 import api from "../lib/http";
+import { getCostaRicaIsoDate } from "../utils/date";
 import { useAuth } from "../context/auth";
 
 type Student = {
@@ -531,7 +532,7 @@ export default function EstudiantesPage() {
         openTab: "matriculas",
         matriculaPrefill: {
           estudianteId: item.EstudianteId,
-          fechaMatricula: new Date().toISOString().slice(0, 10),
+          fechaMatricula: getCostaRicaIsoDate(),
           rutaTransporte: item.RutaTransporteDescripcion || item.RutaTransporteHabitual || "",
           correoEnvioBoleta: item.Correo || ""
         }

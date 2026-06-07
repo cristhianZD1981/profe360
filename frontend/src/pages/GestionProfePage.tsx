@@ -1,6 +1,7 @@
 ﻿// @ts-nocheck
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
+import { getCostaRicaIsoDate, getCostaRicaIsoDateWithOffset } from "../utils/date";
 import {
   type ActivePanel,
   type Actividad,
@@ -168,7 +169,7 @@ export default function GestionProfePage() {
   const [plantillaPlaneamientoIaId, setPlantillaPlaneamientoIaId] = useState<string>("");
   const [loadingPlantillasPlaneamientoIa, setLoadingPlantillasPlaneamientoIa] = useState(false);
   const [planeamientoIaFormOpen, setPlaneamientoIaFormOpen] = useState(false);
-  const [asistenciaFecha, setAsistenciaFecha] = useState(() => new Date().toISOString().slice(0, 10));
+  const [asistenciaFecha, setAsistenciaFecha] = useState(() => getCostaRicaIsoDate());
   const [asistenciaDrafts, setAsistenciaDrafts] = useState<AsistenciaDraft>({});
   const [asistenciaDraftsBase, setAsistenciaDraftsBase] = useState<AsistenciaDraft>({});
   const [asistenciaNotificaciones, setAsistenciaNotificaciones] = useState<AsistenciaNotificacionEstado>({});
@@ -192,12 +193,8 @@ export default function GestionProfePage() {
   const [horarioVisible, setHorarioVisible] = useState(false);
   const [horarioBloques, setHorarioBloques] = useState<HorarioBloque[]>([]);
   const [horarioEntradas, setHorarioEntradas] = useState<HorarioEntrada[]>([]);
-  const [auditoriaEnviosDesde, setAuditoriaEnviosDesde] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
-  const [auditoriaEnviosHasta, setAuditoriaEnviosHasta] = useState(() => new Date().toISOString().slice(0, 10));
+  const [auditoriaEnviosDesde, setAuditoriaEnviosDesde] = useState(() => getCostaRicaIsoDateWithOffset(-30));
+  const [auditoriaEnviosHasta, setAuditoriaEnviosHasta] = useState(() => getCostaRicaIsoDate());
   const [auditoriaEnvios, setAuditoriaEnvios] = useState<AuditoriaEnvioFila[]>([]);
   const [tipoReporteGestion, setTipoReporteGestion] = useState<TipoReporteGestion>("NOTAS");
   const [boletasConductaReporte, setBoletasConductaReporte] = useState<BoletaConductaReporte[]>([]);

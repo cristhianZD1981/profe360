@@ -5,6 +5,7 @@ import { badRequest, forbidden, ok } from "../../utils/http";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 import * as XLSX from "xlsx";
 import { sendEmail } from "../../services/email.service";
+import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 const router = Router();
@@ -2643,7 +2644,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
     const materiaId = Number(req.params.materiaId);
     const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
     const periodoId = toOptionalNumber(req.query.periodoId);
-    const fecha = normalizeText(req.query.fecha) || new Date().toISOString().slice(0, 10);
+    const fecha = normalizeText(req.query.fecha) || getCostaRicaIsoDate();
 
     if (!Number.isFinite(grupoId) || !Number.isFinite(materiaId)) return badRequest(res, "Grupo o materia inválida");
     if (!anioLectivoId || !periodoId) return badRequest(res, "Debés indicar año lectivo y periodo");

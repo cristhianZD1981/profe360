@@ -7531,7 +7531,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
       const textoFinal = normalizeText(plantillaMensaje?.Cuerpo) || mensaje.text;
       const tituloFinal = normalizeText(plantillaMensaje?.Titulo) || mensaje.subject;
       const vars = {
-        fecha: new Date().toISOString().slice(0, 10),
+        fecha: getCostaRicaIsoDate(),
         alumno: aviso.estudianteNombre,
         seccion: String(contextoCorreo.SeccionNombre || ""),
         materia: String(contextoCorreo.MateriaNombre || ""),
@@ -7602,7 +7602,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
         periodoId: Number(estructura?.PeriodoId || 0) || null,
         anioLectivoId: Number(estructura?.AnioLectivoId || 0) || null,
         estudianteId: Number(aviso.estudianteId || 0) || null,
-        fecha: new Date().toISOString().slice(0, 10),
+        fecha: getCostaRicaIsoDate(),
         correoEnviado: estadoEnvio.correoEnviado,
         waEnviado: estadoEnvio.waEnviado
       });
@@ -8003,7 +8003,7 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
         periodoId: Number(estructura?.PeriodoId || 0) || null,
         anioLectivoId: Number(estructura?.AnioLectivoId || 0) || null,
         estudianteId: Number(aviso.estudianteId || 0) || null,
-        fecha: new Date().toISOString().slice(0, 10),
+        fecha: getCostaRicaIsoDate(),
         correoEnviado: estadoEnvio.correoEnviado,
         waEnviado: estadoEnvio.waEnviado
       });

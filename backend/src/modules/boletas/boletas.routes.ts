@@ -4,6 +4,7 @@ import { getPool, sql } from "../../config/database";
 import { env } from "../../config/env";
 import { ok, badRequest } from "../../utils/http";
 import { sendEmail } from "../../services/email.service";
+import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 const router = Router();
@@ -1187,7 +1188,7 @@ router.get("/conducta/contexto/:estudianteId", async (req, res) => {
       `);
 
     return ok(res, {
-      fecha: new Date().toISOString().slice(0, 10),
+      fecha: getCostaRicaIsoDate(),
       estudianteId: Number(row.EstudianteId),
       estudianteNombre: fullName(row),
       seccion: String(row.Seccion || ""),
@@ -1286,7 +1287,7 @@ router.post("/conducta", async (req, res) => {
     const insertResult = await new sql.Request(transaction)
       .input("institucionId", sql.Int, institucionId)
       .input("consecutivo", sql.Int, consecutivo)
-      .input("fecha", sql.Date, new Date().toISOString().slice(0, 10))
+      .input("fecha", sql.Date, getCostaRicaIsoDate())
       .input("estudianteId", sql.Int, estudianteId)
       .input("grupoId", sql.Int, row.GrupoId ? Number(row.GrupoId) : null)
       .input("matriculaId", sql.Int, row.MatriculaId ? Number(row.MatriculaId) : null)
