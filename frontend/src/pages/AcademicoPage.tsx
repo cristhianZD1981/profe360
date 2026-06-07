@@ -1129,6 +1129,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
 
     if (!navigationState) return;
     if (consumedNavigationKeyRef.current === location.key) return;
+
     if (navigationState.openTab !== "matriculas" && !navigationState.matriculaPrefill) return;
 
     const hasRequestedAnio =

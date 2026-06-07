@@ -103,6 +103,50 @@ function normalizeText(value: any) {
   return String(value ?? "").trim();
 }
 
+function buildPersonDisplayName(person: any) {
+  const fromSingleField = normalizeText(
+    person?.nombreCompleto
+    || person?.NombreCompleto
+    || person?.nombre
+    || person?.Nombre
+    || person?.name
+  );
+  if (fromSingleField) return fromSingleField;
+  return [
+    person?.Nombre,
+    person?.PrimerApellido,
+    person?.SegundoApellido
+  ].map((part) => normalizeText(part)).filter(Boolean).join(" ");
+}
+
+async function getSessionTeacherDisplayName(pool: any, req: any, userIdOverride?: number | null) {
+  const auth = getAuth(req) as any;
+  const authName = buildPersonDisplayName(auth);
+  if (authName) return authName;
+
+  const userId = Number(userIdOverride || getUserId(req) || 0);
+  if (!userId) return "";
+
+  try {
+    const result = await pool.request()
+      .input("usuarioId", sql.Int, userId)
+      .query(`
+        SELECT TOP 1
+          Nombre,
+          PrimerApellido,
+          SegundoApellido,
+          Correo
+        FROM dbo.Usuario
+        WHERE UsuarioId = @usuarioId
+      `);
+
+    const row = result.recordset?.[0] || null;
+    return buildPersonDisplayName(row) || normalizeText(row?.Correo);
+  } catch {
+    return "";
+  }
+}
+
 function sanitizeEnvScalar(value: any) {
   return String(value ?? "")
     .replace(/\r/g, "\n")
@@ -1736,6 +1780,7 @@ function buildLocalExamPayload(params: {
   tipoColegio: string;
   indicaciones: string;
   nombrePrueba: string;
+  docenteNombre?: string;
 }) {
   const {
     ctx,
@@ -1746,7 +1791,8 @@ function buildLocalExamPayload(params: {
     seccionesTextoFinal,
     tipoColegio,
     indicaciones,
-    nombrePrueba
+    nombrePrueba,
+    docenteNombre
   } = params;
   const normalizedIndicadores = Array.isArray(indicadores) && indicadores.length ? indicadores : [{}];
   let itemNumber = 1;
@@ -1878,7 +1924,7 @@ function buildLocalExamPayload(params: {
     encabezado: {
       direccionRegional: normalizeText(ctx?.DireccionRegional),
       centroEducativo: normalizeText(ctx?.CentroEducativo),
-      docente: "",
+      docente: normalizeText(docenteNombre),
       asignatura: normalizeText(ctx?.Materia) || "Matematica",
       nivelGrado: normalizeText(ctx?.Grado),
       seccion: seccionesTextoFinal,
@@ -2534,6 +2580,7 @@ router.get("/plantillas", async (req, res) => {
     if (!assertCanAccess(req, res)) return;
 
     const pool = await getPool();
+    const docenteSesionNombre = await getSessionTeacherDisplayName(pool, req);
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
 
@@ -3539,6 +3586,7 @@ router.get("/examenes-ia", async (req, res) => {
     const estructuraGrupoId = toRequiredNumber(req.query.estructuraGrupoId, "estructuraGrupoId", res);
     if (!estructuraGrupoId) return;
     const pool = await getPool();
+    const docenteSesionNombre = await getSessionTeacherDisplayName(pool, req);
     await ensureEval360ExamenIATable(pool);
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
     if (!estructura) return;
@@ -3598,6 +3646,7 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
     const formatoSalidaTextoCompacto = compactPromptText(formatoSalidaTexto, 5000);
 
     const pool = await getPool();
+    const docenteSesionNombre = await getSessionTeacherDisplayName(pool, req);
     await ensureEval360ExamenIATable(pool);
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
     if (!estructura) return;
@@ -3792,6 +3841,12 @@ ${tiposActivos.map((t) => `  - ${t.tipoItem}: ${t.cantidad} pregunta(s), ${t.val
 Indicaciones adicionales de la persona docente (obligatorias si existen):
 ${indicaciones || "No se indicaron"}
 
+Regla obligatoria sobre indicaciones docentes:
+- Si la persona docente escribio indicaciones adicionales, debes cumplirlas de forma mandatoria en la redaccion y formato de las preguntas.
+- No las trates como sugerencias.
+- Si una indicacion pide un formato especifico dentro del enunciado, debes aplicarlo exactamente.
+- Si no se indicaron instrucciones adicionales, no inventes restricciones nuevas.
+
 Documento de apoyo adjunto:
 ${documentoApoyoNombre || "No adjuntado"}
 
@@ -3862,6 +3917,11 @@ ${tiposActivos.map((t) => `- ${t.tipoItem}: ${t.cantidad} pregunta(s), ${t.valor
 Indicaciones docentes:
 ${indicaciones || "No se indicaron"}
 
+Regla obligatoria sobre indicaciones docentes:
+- Si existen indicaciones de la persona docente, debes obedecerlas de forma mandatoria.
+- No las resumas ni las sustituyas por una interpretacion mas general.
+- Si no existen, no inventes indicaciones nuevas.
+
 Usa como apoyo este resumen del archivo de salida y del documento adjunto, sin copiar basura de formato:
 ${formatoSalidaTextoCompacto || "Sin formato extraido"}
 ${documentoApoyoTextoCompacto || "Sin documento de apoyo extraido"}
@@ -3908,6 +3968,8 @@ Obligaciones:
 - Redacta numeros, operaciones, expresiones o mini contextos reales segun el indicador
 - No agregues tipos de item con cantidad 0
 - Devuelve unicamente JSON valido
+- Si la persona docente escribio indicaciones adicionales, debes aplicarlas de forma mandatoria y literal cuando correspondan al formato o redaccion solicitados
+- Si no hay indicaciones adicionales de la persona docente, no inventes ninguna
 
 Contexto:
 - Materia: ${normalizeText(ctx.Materia)}
@@ -3927,6 +3989,9 @@ ${documentoApoyoTextoCompacto || "No se adjunto documento de apoyo."}
 
 Restricciones del formato:
 ${formatoSalidaTextoCompacto || "Usar solo contenido evaluativo y respetar el machote Word."}
+
+Indicaciones obligatorias de la persona docente:
+${indicaciones || "No se indicaron"}
 
 Estructura de salida obligatoria:
 {
@@ -4033,6 +4098,10 @@ Estructura de salida obligatoria:
     const resultadoPersistido = parsed.parsed && typeof parsed.parsed === "object"
       ? JSON.stringify({
           ...parsed.parsed,
+          encabezado: {
+            ...(parsed.parsed.encabezado || {}),
+            docente: docenteSesionNombre
+          },
           validacion: {
             ...(parsed.parsed.validacion || {}),
             totalPuntosEsperado,
@@ -4066,6 +4135,7 @@ Estructura de salida obligatoria:
         direccionRegional: normalizeText(ctx.DireccionRegional),
         circuito: normalizeText(ctx.Circuito),
         centroEducativo: normalizeText(ctx.CentroEducativo),
+        docente: docenteSesionNombre,
         materia: normalizeText(ctx.Materia),
         grado: normalizeText(ctx.Grado),
         periodo: normalizeText(ctx.Periodo),
@@ -4112,6 +4182,7 @@ router.put("/examenes-ia/:id", async (req, res) => {
     const id = toRequiredNumber(req.params.id, "id", res);
     if (!id) return;
     const pool = await getPool();
+    const docenteSesionNombre = await getSessionTeacherDisplayName(pool, req);
     await ensureEval360ExamenIATable(pool);
     const nombre = normalizeText(req.body.nombre);
     const indicaciones = normalizeText(req.body.indicaciones);
@@ -4157,6 +4228,7 @@ router.delete("/examenes-ia/:id", async (req, res) => {
     const id = toRequiredNumber(req.params.id, "id", res);
     if (!id) return;
     const pool = await getPool();
+    const docenteSesionNombre = await getSessionTeacherDisplayName(pool, req);
     await ensureEval360ExamenIATable(pool);
     const examResult = await pool.request()
       .input("id", sql.Int, id)
@@ -4225,7 +4297,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
     const result = await pool.request()
       .input("id", sql.Int, id)
       .query(`
-        SELECT TOP 1 ExamenIAGeneradoId, EstructuraGrupoId, Nombre, Materia, Grado, Periodo, ResultadoIA, FormatoSalidaDocxBase64, ActividadIdTabla, SeccionesJson, EncabezadoJson, FuenteWord, TamanoWordPt
+        SELECT TOP 1 ExamenIAGeneradoId, EstructuraGrupoId, UsuarioId, Nombre, Materia, Grado, Periodo, ResultadoIA, FormatoSalidaDocxBase64, ActividadIdTabla, SeccionesJson, EncabezadoJson, FuenteWord, TamanoWordPt
         FROM dbo.Eval360_ExamenIAGenerado
         WHERE ExamenIAGeneradoId = @id
           AND Activo = 1
@@ -4346,7 +4418,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
       sizePt: Math.max(8, Math.min(18, Number(row.TamanoWordPt || 11) || 11))
     };
     const nombreAsignatura = String(row.Materia || "Matemï¿½tica");
-    const nombreDocente = String(encabezado?.docente || "");
+    const nombreDocente = String(encabezado?.docente || await getSessionTeacherDisplayName(pool, req, Number(row.UsuarioId || 0)) || "");
     const markers: Record<string, string> = {
       NOMBRE_CENTRO_EDUCATIVO: `${String(encabezado?.centroEducativo || "Centro Educativo")}\n`,
       NOMBRE_ASIGNATURA: nombreAsignatura,
@@ -6976,6 +7048,7 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
     await upsertActividadIndicadores(transaction, actividadId, indicadorIds, asignacionesMap);
 
     const replicaTargets = await getEstructurasReplicaTablaMismoGrado(transaction, req, estructuraGrupoId);
+    let replicasOmitidas = 0;
     for (const target of replicaTargets) {
       const actividadReplica = await getActividadReplicaDestino(transaction, {
         sourceEstructuraGrupoId: estructuraGrupoId,
@@ -6984,7 +7057,14 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
         targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0)
       });
       if (!actividadReplica?.targetActividadId) {
-        throw new Error(`No se encontro la prueba equivalente para replicar en ${String(target.GrupoNombre || "otro grupo")}`);
+        replicasOmitidas += 1;
+        console.warn("Eval360 asignar indicadores: replica omitida por actividad faltante", {
+          sourceActividadId: actividadId,
+          sourceEstructuraGrupoId: estructuraGrupoId,
+          targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0),
+          targetGrupoNombre: String(target.GrupoNombre || "otro grupo")
+        });
+        continue;
       }
 
       const mappedIndicadores = await mapIndicadoresReplicaTabla(transaction, {
@@ -7029,7 +7109,12 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
       anioLectivoId: Number((estructura as any)?.AnioLectivoId || 0),
       periodoId: Number((estructura as any)?.PeriodoId || 0)
     });
-    return ok(res, { actividadId, totalAsignados: indicadorIds.length, replicasAplicadas: replicaTargets.length }, "Indicadores asignados a la actividad correctamente");
+    return ok(res, {
+      actividadId,
+      totalAsignados: indicadorIds.length,
+      replicasAplicadas: Math.max(0, replicaTargets.length - replicasOmitidas),
+      replicasOmitidas
+    }, "Indicadores asignados a la actividad correctamente");
   } catch (error) {
     try { await transaction.rollback(); } catch {}
     console.error("Error asignando indicadores a actividad:", error);

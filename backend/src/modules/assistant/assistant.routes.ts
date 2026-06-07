@@ -56,6 +56,26 @@ function normalizeText(value: any) {
   return String(value ?? "").trim();
 }
 
+function sanitizeAssistantReply(value: any) {
+  const text = String(value ?? "").replace(/\r\n/g, "\n").trim();
+  if (!text) return "";
+
+  const dedupedLines: string[] = [];
+  let lastComparable = "";
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trimEnd();
+    const comparable = line.trim().toUpperCase();
+
+    if (comparable && comparable === lastComparable) continue;
+
+    dedupedLines.push(line);
+    lastComparable = comparable || "";
+  }
+
+  return dedupedLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function normalizeLike(value: any) {
   return `%${normalizeText(value)}%`;
 }
@@ -3275,7 +3295,7 @@ router.post("/chat", async (req, res) => {
     const directReply = buildDirectReply(question, userName, userDisplayName, context, history);
     if (directReply) {
       return ok(res, {
-        reply: directReply,
+        reply: sanitizeAssistantReply(directReply),
         contextPreview: {
           estudiantes: context.estudiantes.length,
           grupos: context.grupos.length,
@@ -3339,7 +3359,7 @@ router.post("/chat", async (req, res) => {
           : buildModuleFallback(currentPath));
 
     return ok(res, {
-      reply: reply || fallback,
+      reply: sanitizeAssistantReply(reply || fallback),
       contextPreview: {
         estudiantes: context.estudiantes.length,
         grupos: context.grupos.length,

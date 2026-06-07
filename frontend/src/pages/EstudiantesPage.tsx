@@ -1,5 +1,6 @@
 ﻿import { FormEvent, useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useRef } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 
@@ -322,8 +323,10 @@ export default function EstudiantesPage() {
 
   const [detalleVisibleId, setDetalleVisibleId] = useState<number | null>(null);
   const [detalleCargandoId, setDetalleCargandoId] = useState<number | null>(null);
+  const [detalleCargaPorcentaje, setDetalleCargaPorcentaje] = useState(0);
   const [detalleEstudiante, setDetalleEstudiante] = useState<Student | null>(null);
   const [detalleEncargados, setDetalleEncargados] = useState<DetalleEncargado[]>([]);
+  const detalleVisibleRef = useRef<HTMLDivElement | null>(null);
 
   const [archivoImportacion, setArchivoImportacion] = useState<File | null>(null);
   const [importandoExcel, setImportandoExcel] = useState(false);
@@ -466,6 +469,30 @@ export default function EstudiantesPage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [importandoExcel]);
+
+  useEffect(() => {
+    if (detalleCargandoId === null) {
+      setDetalleCargaPorcentaje(0);
+      return;
+    }
+
+    setDetalleCargaPorcentaje(18);
+    const intervalId = window.setInterval(() => {
+      setDetalleCargaPorcentaje((prev) => {
+        if (prev >= 88) return prev;
+        return Math.min(88, prev + 14);
+      });
+    }, 180);
+
+    return () => window.clearInterval(intervalId);
+  }, [detalleCargandoId]);
+
+  useEffect(() => {
+    if (!detalleVisibleId || !detalleEstudiante || detalleCargandoId !== null) return;
+    window.setTimeout(() => {
+      detalleVisibleRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }, [detalleVisibleId, detalleEstudiante, detalleCargandoId]);
 
   useEffect(() => {
     const limpio = String(form.identificacion || "").replace(/\s+/g, "").trim();
@@ -897,23 +924,29 @@ export default function EstudiantesPage() {
   async function handleVerDetalle(item: Student) {
     if (detalleVisibleId === item.EstudianteId) {
       setDetalleVisibleId(null);
+      setDetalleCargaPorcentaje(0);
       setDetalleEstudiante(null);
       setDetalleEncargados([]);
       return;
     }
 
+    setDetalleVisibleId(item.EstudianteId);
     setDetalleCargandoId(item.EstudianteId);
+    setDetalleEstudiante(null);
+    setDetalleEncargados([]);
     clearMessages();
+    window.scrollTo({ top: 0, behavior: "smooth" });
 
     try {
       const response = await api.get(`/estudiantes/${item.EstudianteId}/detalle`);
       const detalle: StudentDetalleResponse = response.data?.data;
 
-      setDetalleVisibleId(item.EstudianteId);
+      setDetalleCargaPorcentaje(100);
       setDetalleEstudiante(detalle?.estudiante || null);
       setDetalleEncargados(detalle?.encargados || []);
     } catch (error: any) {
       console.error("Error cargando detalle para visualización:", error);
+      setDetalleVisibleId(null);
       setErrorMessage(
         error?.response?.data?.message || "No se pudo cargar el detalle del estudiante"
       );
@@ -2069,9 +2102,35 @@ export default function EstudiantesPage() {
                     <tr>
                       <td colSpan={studentsTableColSpan} style={{ padding: "14px" }}>
                         {detalleCargandoId === item.EstudianteId ? (
-                          <div>Cargando detalle...</div>
+                          <div
+                            ref={detalleVisibleRef}
+                            style={{
+                              border: "1px solid rgba(255,255,255,0.12)",
+                              borderRadius: "16px",
+                              padding: "16px",
+                              display: "grid",
+                              gap: "10px",
+                              background: "rgba(255,255,255,0.03)"
+                            }}
+                          >
+                            <SectionTitle>Detalle del estudiante</SectionTitle>
+                            <div style={{ color: "#cbd5e1", fontWeight: 700 }}>
+                              Cargando datos del estudiante...
+                            </div>
+                            <div className="processing-progress-track" aria-label="Progreso de carga del detalle del estudiante">
+                              <div
+                                className="processing-progress-bar"
+                                style={{ width: `${Math.max(0, Math.min(100, detalleCargaPorcentaje))}%` }}
+                              />
+                            </div>
+                            <div className="processing-progress-meta">
+                              <span>{detalleCargaPorcentaje}%</span>
+                              <span>Preparando datos y encargados</span>
+                            </div>
+                          </div>
                         ) : detalleEstudiante ? (
                           <div
+                            ref={detalleVisibleRef}
                             style={{
                               border: "1px solid rgba(255,255,255,0.12)",
                               borderRadius: "16px",
