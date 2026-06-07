@@ -4,6 +4,7 @@ import { getPool, sql } from "../../config/database";
 import { env } from "../../config/env";
 import { ok, badRequest } from "../../utils/http";
 import { sendEmail } from "../../services/email.service";
+import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 const router = Router();
 const MAIL_FROM_NOTIFICACIONES = "info@profe360cr.com";
@@ -88,11 +89,96 @@ async function sendBoletaConductaEmail(input: {
   }
 }
 
+async function sendBoletaConductaWhatsApp(params: { telefono?: string | null; mensaje: string }) {
+  const telefono = normalizeWhatsAppPhone(params.telefono);
+  if (!telefono) return { enviado: false, modo: "omitido", motivo: "Sin telefono valido para WhatsApp" };
+
+  const mode = String(process.env.WHATSAPP_MODE || "simulado").trim().toLowerCase();
+  const provider = String(process.env.WHATSAPP_PROVIDER || "generic").trim().toLowerCase();
+  const webhookUrl = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim();
+  const webhookToken = String(process.env.WHATSAPP_WEBHOOK_TOKEN || "").trim();
+  const webhookAuthHeader = String(process.env.WHATSAPP_WEBHOOK_AUTH_HEADER || "Authorization").trim() || "Authorization";
+  const fromNumber = normalizeWhatsAppPhone(process.env.WHATSAPP_FROM_NUMBER || "");
+
+  if (mode !== "webhook" || !webhookUrl) {
+    console.log("WhatsApp boleta simulado:", { telefono, mensaje: params.mensaje });
+    return { enviado: false, modo: "simulado", telefono, motivo: webhookUrl ? "WHATSAPP_MODE no es webhook" : "WHATSAPP_WEBHOOK_URL no configurado" };
+  }
+
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    let payload: Record<string, any> = {
+      telefono,
+      mensaje: String(params.mensaje || ""),
+      canal: "whatsapp",
+      origen: "profe360-boleta-conducta"
+    };
+
+    if (provider === "2chat") {
+      if (!webhookToken) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_WEBHOOK_TOKEN no configurado para 2Chat" };
+      if (!fromNumber) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_FROM_NUMBER no configurado para 2Chat" };
+      headers["X-User-API-Key"] = webhookToken;
+      payload = {
+        from_number: fromNumber,
+        to_number: telefono,
+        text: String(params.mensaje || "")
+      };
+    } else if (webhookToken) {
+      headers[webhookAuthHeader] = webhookToken.toLowerCase().startsWith("bearer ")
+        ? webhookToken
+        : `Bearer ${webhookToken}`;
+    }
+
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    const rawBody = await response.text();
+    if (!response.ok) {
+      const snippet = rawBody.slice(0, 200);
+      console.error("Error enviando WhatsApp de boleta:", response.status, snippet);
+      return { enviado: false, modo: "webhook", telefono, status: response.status, error: snippet || "Respuesta no OK del proveedor" };
+    }
+
+    return { enviado: true, modo: "webhook", telefono, status: response.status };
+  } catch (error: any) {
+    const readable = String(error?.message || error || "Error desconocido");
+    console.error("Excepcion enviando WhatsApp de boleta:", readable);
+    return { enviado: false, modo: "webhook", telefono, error: readable };
+  }
+}
+
 function fullName(item: any) {
   return [item?.Nombre, item?.PrimerApellido, item?.SegundoApellido]
     .filter(Boolean)
     .join(" ")
     .trim();
+}
+
+function buildBoletaConductaWhatsAppText(params: {
+  consecutivo: string;
+  fecha: string;
+  estudianteNombre: string;
+  seccion: string;
+  detalle: string;
+  lugar: string;
+  funcionario: string;
+  colegio: string;
+}) {
+  return [
+    "BOLETA DE REPORTE DE CONDUCTA",
+    `Numero: ${params.consecutivo}`,
+    `Fecha: ${params.fecha}`,
+    `Colegio: ${params.colegio}`,
+    `Estudiante: ${params.estudianteNombre}`,
+    `Seccion: ${params.seccion}`,
+    `Lugar del acontecimiento: ${params.lugar}`,
+    `Persona funcionaria: ${params.funcionario}`,
+    "Detalle de los hechos:",
+    params.detalle
+  ].filter(Boolean).join("\n");
 }
 
 function calcularEdadAlPrimeroFeb(fechaNacimiento?: any, anioLectivo?: string | null) {
@@ -1319,7 +1405,11 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
           e.SegundoApellido,
           e.Identificacion,
           e.Correo AS EstudianteCorreo,
+          e.FechaNacimiento,
+          e.Telefono AS TelefonoEstudiante,
+          e.AutorizaWhatsAppEncargado,
           u.Correo AS ProfesorCorreo,
+          enc.Telefonos AS EncargadosTelefonos,
           i.Nombre AS InstitucionNombre,
           i.NombreComercial AS InstitucionNombreComercial,
           i.NombreOficialBoleta,
@@ -1331,6 +1421,20 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = b.EstudianteId
         INNER JOIN dbo.Institucion i ON i.InstitucionId = b.InstitucionId
         LEFT JOIN dbo.Usuario u ON u.UsuarioId = b.UsuarioReportaId
+        OUTER APPLY (
+          SELECT
+            STUFF((
+              SELECT DISTINCT '|' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
+              FROM dbo.EstudianteEncargado ee2
+              INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
+              WHERE ee2.EstudianteId = e.EstudianteId
+                AND ISNULL(ee2.Activo, 1) = 1
+                AND ISNULL(en2.Activo, 1) = 1
+                AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
+                AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
+              FOR XML PATH(''), TYPE
+            ).value('.', 'nvarchar(max)'), 1, 1, '') AS Telefonos
+        ) enc
         WHERE b.BoletaConductaId = @boletaConductaId
           AND b.InstitucionId = @institucionId
       `);
@@ -1344,6 +1448,17 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
     const fechaIso = String(row.Fecha || "").slice(0, 10);
     const fechaCR = formatDateCR(row.Fecha);
     const consecutivo = String(Number(row.Consecutivo || 0)).padStart(4, "0");
+    const nombreColegio = String(row.NombreOficialBoleta || row.InstitucionNombreComercial || row.InstitucionNombre || "");
+    const mensajeWhatsApp = buildBoletaConductaWhatsAppText({
+      consecutivo,
+      fecha: fechaCR,
+      estudianteNombre,
+      seccion: String(row.Seccion || ""),
+      detalle: String(row.DetalleHechos || ""),
+      lugar: String(row.LugarAcontecimiento || ""),
+      funcionario: String(row.NombreFuncionario || ""),
+      colegio: nombreColegio
+    });
 
     const asunto = `BOLETA DE REPORTE DE CONDUCTA ${consecutivo} ${fechaIso}`;
     const cuerpo = `Se adjunta BOLETA DE REPORTE DE CONDUCTA consecutivo ${consecutivo} para el estudiante ${estudianteNombre} del día ${fechaCR}.`;
@@ -1355,13 +1470,14 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
       detalle: String(row.DetalleHechos || ""),
       lugar: String(row.LugarAcontecimiento || ""),
       funcionario: String(row.NombreFuncionario || ""),
-      colegio: String(row.NombreOficialBoleta || row.InstitucionNombreComercial || row.InstitucionNombre || ""),
+      colegio: nombreColegio,
       regional: String(row.RegionalEducativa || ""),
       circuito: String(row.CircuitoEducativo || "")
     });
     const filename = `boleta_conducta_${consecutivo}_${fechaIso}.pdf`;
 
     let enviado = false;
+    let whatsappEnviado = false;
     let errorMsg: string | null = null;
     try {
       const correo = await sendBoletaConductaEmail({
@@ -1388,6 +1504,35 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
       errorMsg = String(error?.message || "No se pudo enviar correo");
     }
 
+    const telefonosWhatsApp = resolveWhatsAppPhonesForNotification({
+      fechaNacimiento: row.FechaNacimiento || null,
+      telefonoEstudiante: row.TelefonoEstudiante || null,
+      telefonosEncargados: String(row.EncargadosTelefonos || "")
+        .split("|")
+        .map((item: string) => String(item || "").trim())
+        .filter((item: string) => item.length > 0),
+      autorizaWhatsAppEncargado: !!row.AutorizaWhatsAppEncargado
+    });
+    const erroresWhatsApp: string[] = [];
+    for (const telefono of telefonosWhatsApp) {
+      const respuesta = await sendBoletaConductaWhatsApp({
+        telefono,
+        mensaje: mensajeWhatsApp
+      });
+      if (respuesta?.enviado === true) {
+        whatsappEnviado = true;
+        continue;
+      }
+      const detalle = String(respuesta?.motivo || respuesta?.error || "No se pudo enviar WhatsApp");
+      erroresWhatsApp.push(`${telefono}: ${detalle}`);
+    }
+    if (!enviado && !whatsappEnviado && !errorMsg && erroresWhatsApp.length > 0) {
+      errorMsg = erroresWhatsApp.join(" | ");
+    } else if (errorMsg && erroresWhatsApp.length > 0) {
+      errorMsg = `${errorMsg} | WhatsApp: ${erroresWhatsApp.join(" | ")}`;
+    }
+    const envioExitoso = enviado || whatsappEnviado;
+
     await pool.request()
       .input("boletaConductaId", sql.Int, boletaConductaId)
       .input("institucionId", sql.Int, institucionId)
@@ -1395,7 +1540,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
       .input("correoDestino", sql.NVarChar(320), correoEstudiante)
       .input("correoCC", sql.NVarChar(320), correoProfesor)
       .input("asunto", sql.NVarChar(300), asunto)
-      .input("enviado", sql.Bit, enviado ? 1 : 0)
+      .input("enviado", sql.Bit, envioExitoso ? 1 : 0)
       .input("error", sql.NVarChar(sql.MAX), errorMsg)
       .query(`
         INSERT INTO dbo.BoletaConductaEnvio
@@ -1404,10 +1549,14 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
           (@boletaConductaId, @institucionId, @estudianteId, @correoDestino, @correoCC, @asunto, @enviado, @error, SYSDATETIME())
       `);
 
-    if (!enviado) {
-      return res.status(500).json({ ok: false, message: errorMsg || "No se pudo enviar la boleta por correo" });
+    if (!envioExitoso) {
+      return res.status(500).json({ ok: false, message: errorMsg || "No se pudo enviar la boleta" });
     }
-    return ok(res, { enviado: true }, "Boleta enviada por correo correctamente");
+    return ok(res, {
+      enviado: true,
+      correoEnviado: enviado,
+      whatsappEnviado
+    }, "Boleta enviada correctamente");
   } catch (error) {
     console.error("Error enviando boleta de conducta por correo:", error);
     return res.status(500).json({ ok: false, message: "No se pudo enviar la boleta por correo" });

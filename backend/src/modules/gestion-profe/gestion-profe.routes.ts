@@ -5,6 +5,7 @@ import { badRequest, forbidden, ok } from "../../utils/http";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 import * as XLSX from "xlsx";
 import { sendEmail } from "../../services/email.service";
+import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 const router = Router();
 const BOOTSTRAP_CACHE_TTL_MS = 10000;
@@ -1119,8 +1120,7 @@ function getReadableError(error: any) {
 }
 
 async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensaje: string }) {
-  const telefonoRaw = String(params.telefono || "").trim();
-  const telefono = telefonoRaw.replace(/[^\d+]/g, "");
+  const telefono = normalizeWhatsAppPhone(params.telefono);
   if (!telefono) return { enviado: false, modo: "omitido", motivo: "Sin teléfono válido de encargado" };
 
   const mode = String(process.env.WHATSAPP_MODE || "simulado").trim().toLowerCase();
@@ -1179,35 +1179,6 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
     console.error("Error enviando WhatsApp por webhook:", error);
     return { enviado: false, modo: "webhook", motivo: getReadableError(error) };
   }
-}
-
-function isAdultByBirthDate(fechaNacimiento?: string | Date | null) {
-  if (!fechaNacimiento) return false;
-  const dob = new Date(fechaNacimiento);
-  if (Number.isNaN(dob.getTime())) return false;
-  const now = new Date();
-  let age = now.getFullYear() - dob.getFullYear();
-  const monthDiff = now.getMonth() - dob.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) age -= 1;
-  return age >= 18;
-}
-
-function resolveWhatsAppPhonesForStudent(params: {
-  fechaNacimiento?: string | Date | null;
-  telefonoEstudiante?: string | null;
-  telefonosEncargadosRaw?: string | null;
-}) {
-  const isAdult = isAdultByBirthDate(params.fechaNacimiento);
-  const telefonoEstudiante = String(params.telefonoEstudiante || "").trim();
-  if (isAdult && telefonoEstudiante) return [telefonoEstudiante];
-  return Array.from(
-    new Set(
-      String(params.telefonosEncargadosRaw || "")
-        .split("|")
-        .map((item) => String(item || "").trim())
-        .filter((item) => item.length > 0)
-    )
-  );
 }
 
 async function ensureReporteEnvioBitacoraTable(pool: any) {
@@ -3037,11 +3008,15 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
           if (correo?.enviado === true) correoEnviado = true;
         }
 
-        if (estudiante.AutorizaWhatsAppEncargado) {
-          const telefonos = resolveWhatsAppPhonesForStudent({
+        {
+          const telefonos = resolveWhatsAppPhonesForNotification({
             fechaNacimiento: estudiante.FechaNacimiento,
             telefonoEstudiante: estudiante.TelefonoEstudiante,
-            telefonosEncargadosRaw: estudiante.EncargadosTelefonos
+            telefonosEncargados: String(estudiante.EncargadosTelefonos || "")
+              .split("|")
+              .map((item) => String(item || "").trim())
+              .filter((item) => item.length > 0),
+            autorizaWhatsAppEncargado: !!estudiante.AutorizaWhatsAppEncargado
           });
           for (const telefono of telefonos) {
             const whatsapp = await sendWhatsAppSeguimiento({
