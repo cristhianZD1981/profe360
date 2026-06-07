@@ -3975,16 +3975,21 @@ Estructura de salida obligatoria:
       parsed = parseExamPayload(respuestaIATexto);
     }
     if (!respuestaIATexto || isWeakExamPayload(parsed.items)) {
-      console.error("OpenAI Eval360 examenes: payload rechazado por debil", JSON.stringify({
-        actividadIdTabla,
-        estructuraGrupoId,
+      const debugInfo = {
+        model: getOpenAiEvalModel(),
         hadText: Boolean(respuestaIATexto),
         firstItem: summarizeExamItemForLog(Array.isArray(parsed.items) ? parsed.items[0] : null),
         rawPreview: compactPromptText(respuestaIATexto, 700)
+      };
+      console.error("OpenAI Eval360 examenes: payload rechazado por debil", JSON.stringify({
+        actividadIdTabla,
+        estructuraGrupoId,
+        ...debugInfo
       }));
       return res.status(502).json({
         ok: false,
-        message: "La IA no devolvio preguntas utilizables para el examen. Revise la plantilla, el modelo y la materia vista antes de guardar."
+        message: "La IA no devolvio preguntas utilizables para el examen. Revise la plantilla, el modelo y la materia vista antes de guardar.",
+        detalle: debugInfo
       });
     }
     const generadoConIA = true;
