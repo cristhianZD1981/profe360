@@ -9,6 +9,7 @@ import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, created, forbidden, ok } from "../../utils/http";
 import { sendEmail } from "../../services/email.service";
 import { env } from "../../config/env";
+import { parseDateInputAsLocalDate } from "../../utils/date.utils";
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 import { reaplicarTrasladosPendientesEnGrupo } from "../academico/matricula-traslado.utils";
 
@@ -2174,6 +2175,12 @@ function getCostaRicaIsoDate(date = new Date()) {
   }).formatToParts(date);
   const pick = (type: string) => parts.find((p) => p.type === type)?.value || "";
   return `${pick("year")}-${pick("month")}-${pick("day")}`;
+}
+
+function normalizeIsoDateForCostaRica(value?: string | Date | null) {
+  if (!value) return getCostaRicaIsoDate();
+  const parsed = parseDateInputAsLocalDate(value);
+  return getCostaRicaIsoDate(parsed);
 }
 
 function assertCanAccess(req: any, res: any) {
@@ -7309,13 +7316,15 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
     let actividadId = Number.isFinite(actividadIdBody) && actividadIdBody > 0 ? actividadIdBody : 0;
     let actividadCreadaAutomaticamente = false;
 
+    let fechaActividadReferencia: string | null = null;
+
     if (actividadId) {
       const actividadSeleccionada = await new sql.Request(transaction)
         .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
         .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
         .input("actividadId", sql.Int, actividadId)
         .query(`
-          SELECT TOP 1 ActividadId
+          SELECT TOP 1 ActividadId, Fecha
           FROM dbo.Eval360_Actividad
           WHERE EstructuraGrupoId = @estructuraGrupoId
             AND EstructuraGrupoDetalleId = @estructuraGrupoDetalleId
@@ -7327,13 +7336,14 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
         await transaction.rollback();
         return badRequest(res, "La actividad seleccionada no pertenece al componente");
       }
+      fechaActividadReferencia = normalizeIsoDateForCostaRica(actividadSeleccionada.recordset[0]?.Fecha || null);
     } else {
       const existingActividad = await new sql.Request(transaction)
         .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
         .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
         .input("indicadorGrupoId", sql.Int, indicadorGrupoId)
         .query(`
-          SELECT TOP 1 a.ActividadId
+          SELECT TOP 1 a.ActividadId, a.Fecha
           FROM dbo.Eval360_Actividad a
           INNER JOIN dbo.Eval360_ActividadIndicador ai ON ai.ActividadId = a.ActividadId
           WHERE a.EstructuraGrupoId = @estructuraGrupoId
@@ -7344,6 +7354,9 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
         `);
 
       actividadId = Number(existingActividad.recordset[0]?.ActividadId || 0);
+      if (actividadId) {
+        fechaActividadReferencia = normalizeIsoDateForCostaRica(existingActividad.recordset[0]?.Fecha || null);
+      }
     }
 
     if (!actividadId) {
@@ -7352,17 +7365,19 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
         .input("estructuraGrupoDetalleId", sql.Int, estructuraGrupoDetalleId)
         .input("nombre", sql.NVarChar(200), actividadNombre)
         .input("descripcion", sql.NVarChar(sql.MAX), indicador.IndicadorBase || null)
+        .input("fecha", sql.Date, getCostaRicaIsoDate())
         .input("puntosMaximos", sql.Decimal(10, 2), 3)
         .query(`
           INSERT INTO dbo.Eval360_Actividad
             (EstructuraGrupoId, EstructuraGrupoDetalleId, Nombre, Descripcion, Fecha, PuntosMaximos, PorcentajeDentroRubro, UsaIndicadoresPlaneamiento, Fuente, Activo, CreatedAt)
           OUTPUT INSERTED.ActividadId
           VALUES
-            (@estructuraGrupoId, @estructuraGrupoDetalleId, @nombre, @descripcion, CAST(SYSDATETIME() AS date), @puntosMaximos, NULL, 1, N'Planeamiento', 1, SYSDATETIME())
+            (@estructuraGrupoId, @estructuraGrupoDetalleId, @nombre, @descripcion, @fecha, @puntosMaximos, NULL, 1, N'Planeamiento', 1, SYSDATETIME())
         `);
 
       actividadId = Number(insertedActividad.recordset[0].ActividadId);
       actividadCreadaAutomaticamente = true;
+      fechaActividadReferencia = getCostaRicaIsoDate();
     }
 
     const existingActividadIndicador = await new sql.Request(transaction)
@@ -7530,8 +7545,9 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
       );
       const textoFinal = normalizeText(plantillaMensaje?.Cuerpo) || mensaje.text;
       const tituloFinal = normalizeText(plantillaMensaje?.Titulo) || mensaje.subject;
+      const fechaNotificacion = fechaActividadReferencia || getCostaRicaIsoDate();
       const vars = {
-        fecha: getCostaRicaIsoDate(),
+        fecha: fechaNotificacion,
         alumno: aviso.estudianteNombre,
         seccion: String(contextoCorreo.SeccionNombre || ""),
         materia: String(contextoCorreo.MateriaNombre || ""),
