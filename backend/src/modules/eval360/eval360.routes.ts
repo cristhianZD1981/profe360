@@ -122,6 +122,14 @@ function getOpenAiEvalModel() {
     || "gpt-4.1-mini";
 }
 
+type OpenAiExamAttemptDebug = {
+  stage: string;
+  ok?: boolean;
+  status?: number | null;
+  model?: string;
+  detail?: string;
+};
+
 function getContextCacheKeyFromParts(params: {
   institucionId: number;
   grupoId: number;
@@ -3936,7 +3944,8 @@ Estructura de salida obligatoria:
 }
 `.trim();
 
-    let respuestaIA = await callOpenAiGeneric(prompt);
+    const openAiAttempts: OpenAiExamAttemptDebug[] = [];
+    let respuestaIA = await callOpenAiGeneric(prompt, openAiAttempts);
     let respuestaIATexto = String(respuestaIA || "").trim();
     if (!respuestaIATexto) {
       console.error("OpenAI Eval360 examenes: reintentando con prompt compacto", JSON.stringify({
@@ -3947,7 +3956,7 @@ Estructura de salida obligatoria:
         documentoApoyoChars: documentoApoyoTexto.length,
         formatoSalidaChars: formatoSalidaTexto.length
       }));
-      respuestaIA = await callOpenAiGeneric(promptCompacto);
+      respuestaIA = await callOpenAiGeneric(promptCompacto, openAiAttempts);
       respuestaIATexto = String(respuestaIA || "").trim();
     }
     let parsed = parseExamPayload(respuestaIATexto);
@@ -3960,7 +3969,7 @@ Estructura de salida obligatoria:
         firstItem: summarizeExamItemForLog(Array.isArray(parsed.items) ? parsed.items[0] : null),
         rawPreview: compactPromptText(respuestaIATexto, 500)
       }));
-      respuestaIA = await callOpenAiGeneric(promptUltraEstricto);
+      respuestaIA = await callOpenAiGeneric(promptUltraEstricto, openAiAttempts);
       respuestaIATexto = String(respuestaIA || "").trim();
       parsed = parseExamPayload(respuestaIATexto);
     }
@@ -3971,7 +3980,7 @@ Estructura de salida obligatoria:
         hadText: Boolean(respuestaIATexto),
         rawPreview: compactPromptText(respuestaIATexto, 500)
       }));
-      respuestaIATexto = String(await callOpenAiGenericJsonStrict(promptUltraEstricto) || "").trim();
+      respuestaIATexto = String(await callOpenAiGenericJsonStrict(promptUltraEstricto, openAiAttempts) || "").trim();
       parsed = parseExamPayload(respuestaIATexto);
     }
     if (!respuestaIATexto || isWeakExamPayload(parsed.items)) {
@@ -3979,7 +3988,8 @@ Estructura de salida obligatoria:
         model: getOpenAiEvalModel(),
         hadText: Boolean(respuestaIATexto),
         firstItem: summarizeExamItemForLog(Array.isArray(parsed.items) ? parsed.items[0] : null),
-        rawPreview: compactPromptText(respuestaIATexto, 700)
+        rawPreview: compactPromptText(respuestaIATexto, 700),
+        openAiAttempts
       };
       console.error("OpenAI Eval360 examenes: payload rechazado por debil", JSON.stringify({
         actividadIdTabla,
@@ -5451,10 +5461,11 @@ function getRubroCorreoSeguimiento(tipoUso: string) {
   return normalizeText(tipoUso) || "Seguimiento diario";
 }
 
-async function callOpenAiGeneric(prompt: string) {
+async function callOpenAiGeneric(prompt: string, debugAttempts?: OpenAiExamAttemptDebug[]) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) {
     console.error("OpenAI Eval360 examenes: OPENAI_API_KEY no esta configurada en el backend.");
+    debugAttempts?.push({ stage: "responses", ok: false, status: null, model: getOpenAiEvalModel(), detail: "OPENAI_API_KEY no configurada" });
     return null;
   }
   const model = getOpenAiEvalModel();
@@ -5474,6 +5485,13 @@ async function callOpenAiGeneric(prompt: string) {
   if (!response.ok) {
     const text = await response.text();
     console.error("Error OpenAI Eval360 exï¿½menes:", text);
+    debugAttempts?.push({
+      stage: "responses",
+      ok: false,
+      status: response.status,
+      model,
+      detail: compactPromptText(text, 400)
+    });
     return null;
   }
   const data: any = await response.json();
@@ -5487,7 +5505,19 @@ async function callOpenAiGeneric(prompt: string) {
       firstOutputType: Array.isArray(data?.output) && data.output[0] ? data.output[0]?.type || null : null,
       keys: data && typeof data === "object" ? Object.keys(data).slice(0, 20) : []
     }));
-    const fallbackTexto = await callOpenAiGenericChatFallback(prompt, apiKey, model);
+    debugAttempts?.push({
+      stage: "responses",
+      ok: true,
+      status: 200,
+      model,
+      detail: compactPromptText(JSON.stringify({
+        id: data?.id || null,
+        status: data?.status || null,
+        outputCount: Array.isArray(data?.output) ? data.output.length : 0,
+        firstOutputType: Array.isArray(data?.output) && data.output[0] ? data.output[0]?.type || null : null
+      }), 300)
+    });
+    const fallbackTexto = await callOpenAiGenericChatFallback(prompt, apiKey, model, debugAttempts);
     if (fallbackTexto.trim()) {
       return fallbackTexto;
     }
@@ -5495,14 +5525,14 @@ async function callOpenAiGeneric(prompt: string) {
   return texto;
 }
 
-async function callOpenAiGenericJsonStrict(prompt: string) {
+async function callOpenAiGenericJsonStrict(prompt: string, debugAttempts?: OpenAiExamAttemptDebug[]) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return "";
   const model = getOpenAiEvalModel();
-  return await callOpenAiGenericChatFallback(prompt, apiKey, model);
+  return await callOpenAiGenericChatFallback(prompt, apiKey, model, debugAttempts);
 }
 
-async function callOpenAiGenericChatFallback(prompt: string, apiKey: string, model: string) {
+async function callOpenAiGenericChatFallback(prompt: string, apiKey: string, model: string, debugAttempts?: OpenAiExamAttemptDebug[]) {
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -5530,12 +5560,41 @@ async function callOpenAiGenericChatFallback(prompt: string, apiKey: string, mod
     if (!response.ok) {
       const text = await response.text();
       console.error("Error OpenAI Eval360 examenes fallback chat:", response.status, text.slice(0, 1000));
+      debugAttempts?.push({
+        stage: "chat_completions",
+        ok: false,
+        status: response.status,
+        model,
+        detail: compactPromptText(text, 400)
+      });
       return "";
     }
     const data: any = await response.json();
-    return String(data?.choices?.[0]?.message?.content || "").trim();
+    const text = String(data?.choices?.[0]?.message?.content || "").trim();
+    if (!text) {
+      debugAttempts?.push({
+        stage: "chat_completions",
+        ok: true,
+        status: 200,
+        model,
+        detail: compactPromptText(JSON.stringify({
+          id: data?.id || null,
+          model: data?.model || model,
+          choices: Array.isArray(data?.choices) ? data.choices.length : 0,
+          finishReason: Array.isArray(data?.choices) && data?.choices?.[0] ? data.choices[0]?.finish_reason || null : null
+        }), 300)
+      });
+    }
+    return text;
   } catch (error) {
     console.error("Error OpenAI Eval360 examenes fallback chat:", error);
+    debugAttempts?.push({
+      stage: "chat_completions",
+      ok: false,
+      status: null,
+      model,
+      detail: compactPromptText(getReadableError(error), 300)
+    });
     return "";
   }
 }
