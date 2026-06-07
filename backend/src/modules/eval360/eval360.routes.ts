@@ -122,6 +122,10 @@ function getOpenAiEvalModel() {
     || "gpt-4.1-mini";
 }
 
+function isGpt5FamilyModel(model: string) {
+  return normalizeText(model).toLowerCase().includes("gpt-5");
+}
+
 type OpenAiExamAttemptDebug = {
   stage: string;
   ok?: boolean;
@@ -3366,6 +3370,15 @@ El JSON debe traer exactamente ${input.indicadoresBase.length} objetos en "indic
 async function callOpenAiIndicadores(prompt: string) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
+  const model = getOpenAiEvalModel();
+  const body: Record<string, any> = {
+    model,
+    input: prompt,
+    max_output_tokens: 8000
+  };
+  if (!isGpt5FamilyModel(model)) {
+    body.temperature = 0.25;
+  }
 
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -3374,11 +3387,7 @@ async function callOpenAiIndicadores(prompt: string) {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: getOpenAiEvalModel(),
-        input: prompt,
-        temperature: 0.25
-      })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -5469,18 +5478,21 @@ async function callOpenAiGeneric(prompt: string, debugAttempts?: OpenAiExamAttem
     return null;
   }
   const model = getOpenAiEvalModel();
+  const body: Record<string, any> = {
+    model,
+    input: prompt,
+    max_output_tokens: 8000
+  };
+  if (!isGpt5FamilyModel(model)) {
+    body.temperature = 0.2;
+  }
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      temperature: 0.2,
-      max_output_tokens: 8000
-    })
+    body: JSON.stringify(body)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -5534,28 +5546,34 @@ async function callOpenAiGenericJsonStrict(prompt: string, debugAttempts?: OpenA
 
 async function callOpenAiGenericChatFallback(prompt: string, apiKey: string, model: string, debugAttempts?: OpenAiExamAttemptDebug[]) {
   try {
+    const isGpt5Model = isGpt5FamilyModel(model);
+    const body: Record<string, any> = {
+      model,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: "Debes devolver unicamente JSON valido, sin markdown ni texto extra."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    };
+    if (isGpt5Model) {
+      body.max_completion_tokens = 8000;
+    } else {
+      body.temperature = 0.2;
+      body.max_tokens = 8000;
+    }
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        max_tokens: 8000,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: "Debes devolver unicamente JSON valido, sin markdown ni texto extra."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ]
-      })
+      body: JSON.stringify(body)
     });
     if (!response.ok) {
       const text = await response.text();

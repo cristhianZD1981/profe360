@@ -700,6 +700,14 @@ async function callOpenAiIfConfigured(prompt: string) {
   const timeoutMs = Number(process.env.OPENAI_PLANEAMIENTO_TIMEOUT_MS || 45000);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 45000);
+  const model = process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
+  const body: Record<string, any> = {
+    model,
+    input: prompt
+  };
+  if (!isGpt5FamilyModel(model)) {
+    body.temperature = 0.35;
+  }
 
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -708,11 +716,7 @@ async function callOpenAiIfConfigured(prompt: string) {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini",
-        input: prompt,
-        temperature: 0.35
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
 
@@ -776,6 +780,10 @@ function normalizarCompetenciaGeneralSeleccionada(value: any) {
     return base.includes(texto) || texto.includes(base);
   });
   return match || "";
+}
+
+function isGpt5FamilyModel(model: string) {
+  return String(model ?? "").trim().toLowerCase().includes("gpt-5");
 }
 
 function normalizarSeleccionesPlaneamientoResultado(resultado: any) {
