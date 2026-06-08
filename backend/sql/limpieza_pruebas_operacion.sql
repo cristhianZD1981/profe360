@@ -27,9 +27,9 @@ DECLARE @AnioLectivoId INT = NULL;   -- opcional: NULL = todos los años
 DECLARE @PeriodoId INT = NULL;       -- opcional: NULL = todos los periodos
 DECLARE @DryRun BIT = 0;             -- 1 = solo vista previa, 0 = borrar
 
-DECLARE @LimpiarBoletas BIT = 0;       -- 1 = borra dbo.BoletaConducta (y su envío)
-DECLARE @LimpiarTokens BIT = 0;        -- 1 = borra dbo.UsuarioResetPasswordToken
-DECLARE @LimpiarAuditoria BIT = 0;     -- 1 = borra tablas detectadas tipo log/auditoría
+DECLARE @LimpiarBoletas BIT = 1;       -- 1 = borra dbo.BoletaConducta (y su envío)
+DECLARE @LimpiarTokens BIT = 1;        -- 1 = borra dbo.UsuarioResetPasswordToken
+DECLARE @LimpiarAuditoria BIT = 1;     -- 1 = borra tablas detectadas tipo log/auditoría
 
 IF OBJECT_ID('tempdb..#TargetEstructura') IS NOT NULL DROP TABLE #TargetEstructura;
 IF OBJECT_ID('tempdb..#TargetPlaneamiento') IS NOT NULL DROP TABLE #TargetPlaneamiento;

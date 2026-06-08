@@ -829,6 +829,29 @@ function limpiarEstrategiasMediacion(estrategias: any[]) {
     });
 }
 
+function separarBloquesPorMomento(estrategias: string[]) {
+  const base = (Array.isArray(estrategias) ? estrategias : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  const salida: string[] = [];
+  const marker = /(?=Momento\s+[1-4]\s*:)/gi;
+
+  for (const item of base) {
+    const partes = item
+      .split(marker)
+      .map((parte) => String(parte || "").trim())
+      .filter(Boolean);
+    if (partes.length > 1) {
+      salida.push(...partes);
+    } else {
+      salida.push(item);
+    }
+  }
+
+  return salida;
+}
+
 function hashTextoBase(value: string) {
   let h = 0;
   const s = String(value || "");
@@ -866,7 +889,7 @@ function construirProblemaRealMomento1(habilidades: any[], materiaNombre?: strin
 }
 
 function asegurarMomento1Primero(estrategias: string[], input?: { habilidades?: any[]; materiaNombre?: string; grado?: string; tema?: string }) {
-  const base = (Array.isArray(estrategias) ? estrategias : []).map((e) => String(e || "").trim()).filter(Boolean);
+  const base = separarBloquesPorMomento(estrategias);
   const idxMomento1 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 1: propuesta del problema"));
   const textoOriginal = idxMomento1 >= 0 ? base[idxMomento1] : "";
   const originalNormalizado = normalizarParaBusqueda(textoOriginal);
@@ -902,7 +925,7 @@ function construirMomentoEspecifico(numero: 2 | 3 | 4, input?: { habilidades?: a
 }
 
 function asegurarMomentosEspecificos(estrategias: string[], input?: { habilidades?: any[]; materiaNombre?: string; grado?: string; tema?: string }) {
-  const base = (Array.isArray(estrategias) ? estrategias : []).map((e) => String(e || "").trim()).filter(Boolean);
+  const base = separarBloquesPorMomento(estrategias);
 
   const idx2 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 2:"));
   const idx3 = base.findIndex((linea) => normalizarParaBusqueda(linea).includes("momento 3:"));

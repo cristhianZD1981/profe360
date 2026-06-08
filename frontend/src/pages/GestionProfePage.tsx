@@ -4873,6 +4873,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setErrorMessage("");
     setActivePanel("planeamientos");
 
+    const indicadoresActivosPlaneamiento = planeamientoIndicadores
+      .filter((indicador) => Number(indicador.PlaneamientoId || 0) === Number(item.PlaneamientoId || 0))
+      .map((indicador) => String(indicador.Descripcion || "").trim())
+      .filter(Boolean);
+
     if (item.ResultadoIAJson) {
       try {
         const parsed = typeof item.ResultadoIAJson === "string"
@@ -4881,6 +4886,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
         setUltimoPlaneamientoIa(normalizePlaneamientoIaResultado({
           ...(parsed || {}),
+          indicadoresEvaluacion: indicadoresActivosPlaneamiento,
           nombre: parsed?.nombre || item.Nombre || "Planeamiento didáctico",
           observaciones: parsed?.observaciones || item.Observaciones || ""
         }));

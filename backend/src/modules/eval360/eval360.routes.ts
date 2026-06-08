@@ -3309,9 +3309,11 @@ async function getIndicadoresPlaneamiento(pool: any, estructura: any, planeamien
   // Eval360 debe usar solo los indicadores de evaluacion visibles en el
   // planeamiento. Los indicadores de semanas pertenecen a la mediacion y no
   // deben convertirse en un rubro adicional sin numeracion.
-  const indicadores = indicadoresJson.length > 0
-    ? uniqueTextList(indicadoresJson)
-    : uniqueTextList(indicadoresDesdeTabla);
+  // La fuente vigente para regenerar indicadores es la tabla activa del
+  // planeamiento. El JSON puede quedar desfasado despues de ediciones manuales.
+  const indicadores = indicadoresDesdeTabla.length > 0
+    ? uniqueTextList(indicadoresDesdeTabla)
+    : uniqueTextList(indicadoresJson);
 
   return {
     planeamiento: planeamiento.recordset[0],
@@ -4731,45 +4733,6 @@ router.get("/indicadores", async (req, res) => {
         END,
         i.IndicadorGrupoId
     `);
-
-    if (planeamientoId && (!result.recordset || result.recordset.length === 0)) {
-      const planeamientoBase = await pool.request()
-        .input("planeamientoId", sql.Int, planeamientoId)
-        .query(`
-          SELECT TOP 1 LTRIM(RTRIM(ISNULL(Nombre, N''))) AS Nombre
-          FROM dbo.Planeamiento
-          WHERE PlaneamientoId = @planeamientoId
-            AND Activo = 1
-        `);
-      const nombreBase = String(planeamientoBase.recordset[0]?.Nombre || "").trim();
-
-      if (nombreBase) {
-        const fallbackReq = pool.request()
-          .input("estructuraGrupoId", sql.Int, estructuraIdFinal)
-          .input("nombreBase", sql.NVarChar(200), nombreBase);
-        if (tipoUso) fallbackReq.input("tipoUso", sql.NVarChar(50), tipoUso);
-
-        const fallback = await fallbackReq.query(`
-          SELECT
-            i.*
-          FROM dbo.Eval360_IndicadorGrupo i
-          INNER JOIN dbo.Planeamiento pOrigen
-            ON pOrigen.PlaneamientoId = i.PlaneamientoId
-          WHERE i.EstructuraGrupoId = @estructuraGrupoId
-            AND LTRIM(RTRIM(ISNULL(pOrigen.Nombre, N''))) = @nombreBase
-            ${tipoUso ? "AND i.TipoUso = @tipoUso" : ""}
-          ORDER BY
-            CASE i.TipoUso
-              WHEN N'Cotidiano' THEN 1
-              WHEN N'Tareas' THEN 2
-              WHEN N'TablaEspecificaciones' THEN 3
-              ELSE 9
-            END,
-            i.IndicadorGrupoId
-        `);
-        return ok(res, fallback.recordset || []);
-      }
-    }
 
     return ok(res, result.recordset);
   } catch (error) {
@@ -6400,6 +6363,8 @@ async function sincronizarNotaFormalDesdeActividad(transaction: any, params: {
 }
 
 router.get("/seguimiento/contexto", async (req, res) => {
+  let cacheKey = "";
+  let canUseCache = false;
   try {
     const t0 = Date.now();
     if (!assertCanAccess(req, res)) return;
@@ -6419,8 +6384,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
     const institucionId = !isSuperAdmin(req) ? getInstitutionId(req, res) : Number(asignacion.InstitucionId || 0);
     if (institucionId === null) return;
 
-    const cacheKey = getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId });
-    const canUseCache = !sincronizarSolicitado;
+    cacheKey = getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId });
+    canUseCache = !sincronizarSolicitado;
     if (canUseCache) {
       const cached = contextoCache.get(cacheKey);
       if (cached && Date.now() - cached.at <= CONTEXTO_CACHE_TTL_MS) {
@@ -6547,42 +6512,46 @@ router.get("/seguimiento/contexto", async (req, res) => {
           .input("grupoId", sql.Int, grupoId)
           .input("anioLectivoId", sql.Int, anioLectivoId)
           .query(`
-            SELECT
-              e.EstudianteId,
-              e.Identificacion,
-              e.Nombre,
-              e.PrimerApellido,
-              e.SegundoApellido,
-              e.Correo,
-              e.Telefono,
-              e.AutorizaWhatsAppEncargado,
-              enc.NombreCompleto AS EncargadoPrincipalNombre,
-              enc.Correo AS EncargadoPrincipalCorreo,
-              enc.Telefono AS EncargadoPrincipalTelefono,
-              encWa.Detalle AS EncargadosWhatsAppDetalle,
-              m.MatriculaId,
-              m.Estado AS EstadoMatricula,
-              ISNULL(traslado.FueTrasladado, 0) AS FueTrasladado,
-              traslado.GrupoIdOrigenTraslado,
-              traslado.GrupoNombreOrigenTraslado,
-              traslado.GrupoIdDestinoTraslado,
-              traslado.TrasladoCreatedAt
-            FROM dbo.Matricula m
-            INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
-            OUTER APPLY (
-              SELECT TOP 1
+            ;WITH estudiantesBase AS (
+              SELECT
+                e.EstudianteId,
+                e.Identificacion,
+                e.Nombre,
+                e.PrimerApellido,
+                e.SegundoApellido,
+                e.Correo,
+                e.Telefono,
+                e.AutorizaWhatsAppEncargado,
+                m.MatriculaId,
+                m.Estado AS EstadoMatricula,
+                m.GrupoId,
+                m.AnioLectivoId
+              FROM dbo.Matricula m
+              INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+              WHERE m.GrupoId = @grupoId
+                AND m.AnioLectivoId = @anioLectivoId
+                AND ISNULL(e.Activo, 1) = 1
+                AND ISNULL(m.Estado, N'Activa') IN (N'Activa', N'ACTIVA', N'Activo', N'ACTIVO')
+            ),
+            encargadoPrincipal AS (
+              SELECT
+                ee.EstudianteId,
                 CONCAT(en.Nombre, N' ', ISNULL(en.PrimerApellido, N''), N' ', ISNULL(en.SegundoApellido, N'')) AS NombreCompleto,
                 en.Correo,
-                en.Telefono
+                en.Telefono,
+                ROW_NUMBER() OVER (
+                  PARTITION BY ee.EstudianteId
+                  ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
+                ) AS rn
               FROM dbo.EstudianteEncargado ee
               INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
-              WHERE ee.EstudianteId = e.EstudianteId
-                AND ISNULL(ee.Activo, 1) = 1
+              INNER JOIN estudiantesBase eb ON eb.EstudianteId = ee.EstudianteId
+              WHERE ISNULL(ee.Activo, 1) = 1
                 AND ISNULL(en.Activo, 1) = 1
-              ORDER BY ISNULL(ee.EsPrincipal, 0) DESC, ISNULL(ee.RecibeNotificaciones, 0) DESC, ee.EstudianteEncargadoId DESC
-            ) enc
-            OUTER APPLY (
+            ),
+            encargadosWhatsApp AS (
               SELECT
+                eb.EstudianteId,
                 STUFF((
                   SELECT DISTINCT
                     ' | ' +
@@ -6590,33 +6559,64 @@ router.get("/seguimiento/contexto", async (req, res) => {
                     ': ' + LTRIM(RTRIM(ISNULL(en2.Telefono, '')))
                   FROM dbo.EstudianteEncargado ee2
                   INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
-                  WHERE ee2.EstudianteId = e.EstudianteId
+                  WHERE ee2.EstudianteId = eb.EstudianteId
                     AND ISNULL(ee2.Activo, 1) = 1
                     AND ISNULL(en2.Activo, 1) = 1
                     AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
                     AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
                   FOR XML PATH(''), TYPE
                 ).value('.', 'nvarchar(max)'), 1, 3, '') AS Detalle
-            ) encWa
-            OUTER APPLY (
-              SELECT TOP 1
+              FROM estudiantesBase eb
+            ),
+            traslados AS (
+              SELECT
+                h.EstudianteId,
                 CAST(1 AS bit) AS FueTrasladado,
                 h.GrupoIdOrigen AS GrupoIdOrigenTraslado,
                 go.Nombre AS GrupoNombreOrigenTraslado,
                 h.GrupoIdDestino AS GrupoIdDestinoTraslado,
-                h.CreatedAt AS TrasladoCreatedAt
+                h.CreatedAt AS TrasladoCreatedAt,
+                ROW_NUMBER() OVER (
+                  PARTITION BY h.EstudianteId
+                  ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
+                ) AS rn
               FROM dbo.MatriculaTrasladoHistorial h
+              INNER JOIN estudiantesBase eb
+                ON eb.EstudianteId = h.EstudianteId
+               AND eb.AnioLectivoId = h.AnioLectivoId
+               AND eb.GrupoId = h.GrupoIdDestino
               LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
-              WHERE h.EstudianteId = e.EstudianteId
-                AND h.AnioLectivoId = m.AnioLectivoId
-                AND h.GrupoIdDestino = m.GrupoId
-              ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
-            ) traslado
-            WHERE m.GrupoId = @grupoId
-              AND m.AnioLectivoId = @anioLectivoId
-              AND ISNULL(e.Activo, 1) = 1
-              AND ISNULL(m.Estado, N'Activa') IN (N'Activa', N'ACTIVA', N'Activo', N'ACTIVO')
-            ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
+            )
+            SELECT
+              eb.EstudianteId,
+              eb.Identificacion,
+              eb.Nombre,
+              eb.PrimerApellido,
+              eb.SegundoApellido,
+              eb.Correo,
+              eb.Telefono,
+              eb.AutorizaWhatsAppEncargado,
+              ep.NombreCompleto AS EncargadoPrincipalNombre,
+              ep.Correo AS EncargadoPrincipalCorreo,
+              ep.Telefono AS EncargadoPrincipalTelefono,
+              ewa.Detalle AS EncargadosWhatsAppDetalle,
+              eb.MatriculaId,
+              eb.EstadoMatricula,
+              ISNULL(t.FueTrasladado, 0) AS FueTrasladado,
+              t.GrupoIdOrigenTraslado,
+              t.GrupoNombreOrigenTraslado,
+              t.GrupoIdDestinoTraslado,
+              t.TrasladoCreatedAt
+            FROM estudiantesBase eb
+            LEFT JOIN encargadoPrincipal ep
+              ON ep.EstudianteId = eb.EstudianteId
+             AND ep.rn = 1
+            LEFT JOIN encargadosWhatsApp ewa
+              ON ewa.EstudianteId = eb.EstudianteId
+            LEFT JOIN traslados t
+              ON t.EstudianteId = eb.EstudianteId
+             AND t.rn = 1
+            ORDER BY eb.PrimerApellido, eb.SegundoApellido, eb.Nombre
           `)),
         planeamientosCached ?? timedQuery("eval360.contexto.planeamientos", () => pool.request()
           .input("grupoId", sql.Int, grupoId)
@@ -6913,6 +6913,13 @@ router.get("/seguimiento/contexto", async (req, res) => {
     return ok(res, data);
   } catch (error) {
     console.error("Error cargando contexto de seguimiento Eval360:", error);
+    if (canUseCache && cacheKey) {
+      const stale = contextoCache.get(cacheKey);
+      if (stale?.data) {
+        console.warn(`[eval360.contexto.cache.stale] ${cacheKey}`);
+        return ok(res, stale.data, "Contexto cargado desde cache reciente");
+      }
+    }
     return res.status(500).json({ ok: false, message: "No se pudo cargar el seguimiento de notas" });
   }
 });
