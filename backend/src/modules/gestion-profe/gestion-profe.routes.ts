@@ -2837,7 +2837,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       leccionesNombrePorHorario.set(Number(item.HorarioGrupoId), String(item.LeccionNombre || "").trim());
     }
 
-    const normalizados = registros.map((item: any) => ({
+    const normalizadosSolicitados = registros.map((item: any) => ({
       estudianteId: Number(item.estudianteId),
       horarioGrupoId: Number(item.horarioGrupoId || 0),
       bloqueHorarioId: Number(item.bloqueHorarioId || 0),
@@ -2847,7 +2847,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       notificarEncargado: Boolean(item.notificarEncargado)
     }));
 
-    for (const item of normalizados) {
+    for (const item of normalizadosSolicitados) {
       if (!Number.isFinite(item.estudianteId) || !estudiantesPermitidos.has(item.estudianteId)) {
         return badRequest(res, "Se recibió un estudiante que no pertenece al grupo seleccionado");
       }
@@ -2862,6 +2862,32 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
         return badRequest(res, "Los minutos de tardía deben estar entre 0 y 999");
       }
     }
+
+    const normalizadosMap = new Map<string, any>();
+    for (const item of normalizadosSolicitados) {
+      normalizadosMap.set(`${item.estudianteId}|${item.horarioGrupoId}`, item);
+    }
+
+    const normalizados = Array.from(estudiantesPermitidos).flatMap((estudianteId) =>
+      Array.from(leccionesPermitidas.entries()).map(([horarioGrupoId, bloqueHorarioId]) => {
+        const existente = normalizadosMap.get(`${estudianteId}|${horarioGrupoId}`);
+        if (existente) {
+          return {
+            ...existente,
+            bloqueHorarioId: bloqueHorarioId || existente.bloqueHorarioId || 0
+          };
+        }
+        return {
+          estudianteId,
+          horarioGrupoId,
+          bloqueHorarioId: bloqueHorarioId || 0,
+          estado: "PRESENTE",
+          minutosTardia: 0,
+          observacion: null,
+          notificarEncargado: false
+        };
+      })
+    );
 
     await transaction.begin();
 
@@ -2920,7 +2946,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     const resumen = await buildResumenAsistencia(grupoId, materiaId, anioLectivoId, periodoId);
 
     const notificaciones: any[] = [];
-    const registrosNotificar = normalizados.filter((item: any) => item.notificarEncargado);
+    const registrosNotificar = normalizadosSolicitados.filter((item: any) => item.notificarEncargado);
     const porEstudiante = new Map<number, any[]>();
     for (const item of registrosNotificar) {
       const list = porEstudiante.get(Number(item.estudianteId)) || [];
