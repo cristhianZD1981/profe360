@@ -2367,6 +2367,34 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
     }));
   }
 
+  function getTablaCasosProblemasCantidad(detalle: ReturnType<typeof getTablaDetalle>) {
+    const problemas = Number(String(detalle.resolucionProblemasCantidad || "0").replace(",", ".")) || 0;
+    const casos = Number(String(detalle.resolucionCasosCantidad || "0").replace(",", ".")) || 0;
+    return String(Math.round(problemas + casos));
+  }
+
+  function getTablaCasosProblemasPuntos(detalle: ReturnType<typeof getTablaDetalle>) {
+    const problemas = Number(String(detalle.resolucionProblemasPuntos || "0").replace(",", ".")) || 0;
+    const casos = Number(String(detalle.resolucionCasosPuntos || "0").replace(",", ".")) || 0;
+    return String(Math.round(Math.max(problemas, casos)));
+  }
+
+  function updateTablaCasosProblemasDetalle(actividadId: number, indicadorId: number, field: "cantidad" | "puntos", value: string) {
+    const normalizedValue = String(value || "").replace(/[^\d]/g, "");
+    const key = getTablaDetalleKey(actividadId, indicadorId);
+    const actual = getTablaDetalle(actividadId, indicadorId);
+    setTablaDetalleDrafts((prev) => ({
+      ...prev,
+      [key]: {
+        ...actual,
+        resolucionProblemasCantidad: field === "cantidad" ? normalizedValue : actual.resolucionProblemasCantidad,
+        resolucionProblemasPuntos: field === "puntos" ? normalizedValue : actual.resolucionProblemasPuntos,
+        resolucionCasosCantidad: "0",
+        resolucionCasosPuntos: "0"
+      }
+    }));
+  }
+
   function getIndicadoresPruebaSeleccionada() {
     const actividadId = Number(tablaPruebaSeleccionadaId || 0);
     if (!actividadId) return [] as Array<Eval360Indicador & { PlaneamientoNombre?: string | null }>;
@@ -2440,7 +2468,9 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
         const leccionesNum = Number(String(d.numeroLecciones || "0").replace(",", "."));
         if (!Number.isInteger(leccionesNum) || leccionesNum <= 0) filasIncompletas += 1;
         const puntosCalculadosFila = Number(getPuntosFormulaPruebaSeleccionada(Number(indicador.IndicadorGrupoId), totalLecciones).toFixed(0));
+        const restricciones = getTablaRestriccionesDetalle(detalle);
         if (Number(puntosItems) !== Number(puntosCalculadosFila)) filasIncompletas += 1;
+        if (restricciones.length > 0) filasIncompletas += 1;
       }
     }
     const totalCalculado = Number(
@@ -2474,15 +2504,16 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
   }
 
   function getPuntosPorItems(detalle: ReturnType<typeof getTablaDetalle>) {
+    const casosProblemasCantidad = getTablaCasosProblemasCantidad(detalle);
+    const casosProblemasPuntos = getTablaCasosProblemasPuntos(detalle);
     const pares: Array<[string, string]> = [
       [detalle.seleccionRespuestaCantidad, detalle.seleccionRespuestaPuntos],
       [detalle.respuestaCortaCantidad, detalle.respuestaCortaPuntos],
       [detalle.correspondenciaCantidad, detalle.correspondenciaPuntos],
       [detalle.identificacionCantidad, detalle.identificacionPuntos],
       [detalle.resolucionEjerciciosCantidad, detalle.resolucionEjerciciosPuntos],
-      [detalle.resolucionProblemasCantidad, detalle.resolucionProblemasPuntos],
+      [casosProblemasCantidad, casosProblemasPuntos],
       [detalle.respuestaRestringidaCantidad, detalle.respuestaRestringidaPuntos],
-      [detalle.resolucionCasosCantidad, detalle.resolucionCasosPuntos],
       [detalle.produccionEscritaCantidad, detalle.produccionEscritaPuntos]
     ];
     return pares.reduce((acc, [c, p]) => {
@@ -2493,15 +2524,15 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
   }
 
   function getLeccionesPorItems(detalle: ReturnType<typeof getTablaDetalle>) {
+    const casosProblemasCantidad = getTablaCasosProblemasCantidad(detalle);
     const cantidades: string[] = [
       detalle.seleccionRespuestaCantidad,
       detalle.respuestaCortaCantidad,
       detalle.correspondenciaCantidad,
       detalle.identificacionCantidad,
       detalle.resolucionEjerciciosCantidad,
-      detalle.resolucionProblemasCantidad,
+      casosProblemasCantidad,
       detalle.respuestaRestringidaCantidad,
-      detalle.resolucionCasosCantidad,
       detalle.produccionEscritaCantidad
     ];
     return cantidades.reduce((acc, c) => {
@@ -2517,11 +2548,48 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       { key: "Correspondencia", cantidad: detalle.correspondenciaCantidad, valor: detalle.correspondenciaPuntos },
       { key: "Identificacion", cantidad: detalle.identificacionCantidad, valor: detalle.identificacionPuntos },
       { key: "Resolucion de ejercicios", cantidad: detalle.resolucionEjerciciosCantidad, valor: detalle.resolucionEjerciciosPuntos },
-      { key: "Resolucion de problemas", cantidad: detalle.resolucionProblemasCantidad, valor: detalle.resolucionProblemasPuntos },
+      { key: "Resolucion de casos y problemas", cantidad: getTablaCasosProblemasCantidad(detalle), valor: getTablaCasosProblemasPuntos(detalle) },
       { key: "Respuesta restringida", cantidad: detalle.respuestaRestringidaCantidad, valor: detalle.respuestaRestringidaPuntos },
-      { key: "Resolucion de casos", cantidad: detalle.resolucionCasosCantidad, valor: detalle.resolucionCasosPuntos },
       { key: "Produccion escrita", cantidad: detalle.produccionEscritaCantidad, valor: detalle.produccionEscritaPuntos }
     ];
+  }
+
+  function getTablaRestriccionPuntaje(tipo: string, cantidad: string, valor: string) {
+    const cantidadNum = Number(String(cantidad || "0").replace(",", "."));
+    if (!Number.isFinite(cantidadNum) || cantidadNum < 1) return "";
+    const valorNum = Number(String(valor || "0").replace(",", "."));
+    if (!Number.isFinite(valorNum) || valorNum <= 0) return "Debe indicar un puntaje valido.";
+    if (tipo === "SR" && valorNum !== 1) return "Seleccion de respuesta solo permite puntaje 1.";
+    if ((tipo === "RC" || tipo === "C" || tipo === "I") && (valorNum < 1 || valorNum > 5)) {
+      return "Este item solo permite puntajes entre 1 y 5.";
+    }
+    return "";
+  }
+
+  function getTablaRestriccionesDetalle(detalle: ReturnType<typeof getTablaDetalle>) {
+    return [
+      getTablaRestriccionPuntaje("SR", detalle.seleccionRespuestaCantidad, detalle.seleccionRespuestaPuntos),
+      getTablaRestriccionPuntaje("RC", detalle.respuestaCortaCantidad, detalle.respuestaCortaPuntos),
+      getTablaRestriccionPuntaje("C", detalle.correspondenciaCantidad, detalle.correspondenciaPuntos),
+      getTablaRestriccionPuntaje("I", detalle.identificacionCantidad, detalle.identificacionPuntos)
+    ].filter(Boolean);
+  }
+
+  function getTablaPuntajeHint(tipo: string) {
+    if (tipo === "SR") return "Puntaje permitido: solo 1 punto.";
+    if (tipo === "RC" || tipo === "C" || tipo === "I") return "Puntaje permitido: entre 1 y 5 puntos.";
+    return "Ingresa el valor por pregunta para este item.";
+  }
+
+  function getTablaPuntajeInputStyle(tipo: string, cantidad: string, valor: string) {
+    const invalido = Boolean(getTablaRestriccionPuntaje(tipo, cantidad, valor));
+    return {
+      width: "54px",
+      marginLeft: "6px",
+      color: "#0f172a",
+      border: invalido ? "1px solid #dc2626" : "1px solid #94a3b8",
+      background: invalido ? "#fee2e2" : "#ffffff"
+    } as const;
   }
 
   function isItemParIncompleto(cantidad: string, valor: string) {
@@ -2822,7 +2890,7 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       return;
     }
     setErrorMessage("");
-    setMessage("Planeamientos guardados. Continuá con la matriz de asignación por prueba.");
+    setMessage("Planeamientos guardados. Continua con el Paso 1.3: matriz de asignacion por prueba.");
     setTablaPlaneamientosConfirmados(true);
     setTablaMatrizMinimizada(false);
     setTablaMatrizEditando(true);
@@ -2835,7 +2903,7 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       return;
     }
     setErrorMessage("");
-    setMessage("Pruebas seleccionadas correctamente. Ahora continuá con el Paso 1.1.");
+    setMessage("Pruebas seleccionadas correctamente. Ahora continua con el Paso 1.2.");
     setTablaPruebasConfirmadas(true);
     setTablaEspecificacionesFormOpen(true);
     setTablaPlaneamientosConfirmados(false);
@@ -3130,10 +3198,10 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
               respuestaRestringidaPuntos: Number(String(detalle.respuestaRestringidaPuntos || "").replace(",", ".")) || 0,
               resolucionEjerciciosCantidad: Number(String(detalle.resolucionEjerciciosCantidad || "").replace(",", ".")) || 0,
               resolucionEjerciciosPuntos: Number(String(detalle.resolucionEjerciciosPuntos || "").replace(",", ".")) || 0,
-              resolucionProblemasCantidad: Number(String(detalle.resolucionProblemasCantidad || "").replace(",", ".")) || 0,
-              resolucionProblemasPuntos: Number(String(detalle.resolucionProblemasPuntos || "").replace(",", ".")) || 0,
-              resolucionCasosCantidad: Number(String(detalle.resolucionCasosCantidad || "").replace(",", ".")) || 0,
-              resolucionCasosPuntos: Number(String(detalle.resolucionCasosPuntos || "").replace(",", ".")) || 0,
+              resolucionProblemasCantidad: Number(getTablaCasosProblemasCantidad(detalle)) || 0,
+              resolucionProblemasPuntos: Number(getTablaCasosProblemasPuntos(detalle)) || 0,
+              resolucionCasosCantidad: 0,
+              resolucionCasosPuntos: 0,
               produccionEscritaCantidad: Number(String(detalle.produccionEscritaCantidad || "").replace(",", ".")) || 0,
               produccionEscritaPuntos: Number(String(detalle.produccionEscritaPuntos || "").replace(",", ".")) || 0
             }
@@ -3152,6 +3220,10 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       setTablaEspecificacionEditando(false);
       setTablaMatrizEditando(false);
       setTablaEditandoActividadId(null);
+      setTablaEspecificacionesFormOpen(false);
+      setTablaVerGuardadasOpen(true);
+      setTablaMatrizMinimizada(true);
+      setTablaFormatoMinimizado(false);
       stopSeguimientoSaving(true, "asignacion");
       await loadSeguimientoEvaluacion(selected);
       if (!tablaPruebaSeleccionadaId && tablaActividadesObjetivo.length > 0) {
@@ -9525,10 +9597,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px" }}>
                       {[
-                        { label: "Paso 0", done: tablaPaso0Completo },
-                        { label: "Paso 1.1", done: tablaPaso1Completo },
-                        { label: "Paso 1.2", done: tablaPaso2Completo },
-                        { label: "Paso 1.3", done: tablaPaso3Completo }
+                        { label: "Paso 1.1", done: tablaPaso0Completo },
+                        { label: "Paso 1.2", done: tablaPaso1Completo },
+                        { label: "Paso 1.3", done: tablaPaso2Completo },
+                        { label: "Paso 1.4", done: tablaPaso3Completo }
                       ].map((item) => (
                         <div key={item.label} style={{ padding: "8px 10px", borderRadius: "10px", border: `1px solid ${item.done ? "#86efac" : "#93c5fd"}`, background: item.done ? "#dcfce7" : "#eff6ff", color: item.done ? "#166534" : "#1d4ed8", fontWeight: 800, textAlign: "center" }}>
                           {item.done ? `${item.label} completado` : `${item.label} pendiente`}
@@ -9863,30 +9935,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   ) : null}
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                      <strong style={{ color: "#f8fafc" }}>Paso 0: Escoger una o varias pruebas o exámenes</strong>
+                      <strong style={{ color: "#f8fafc" }}>Paso 1.1: Escoger una o varias pruebas o examenes</strong>
                       <span style={{ background: tablaPaso0Completo ? "#dcfce7" : "#dbeafe", color: tablaPaso0Completo ? "#166534" : "#1d4ed8", border: `1px solid ${tablaPaso0Completo ? "#86efac" : "#93c5fd"}`, borderRadius: "999px", padding: "2px 10px", fontSize: "12px", fontWeight: 800 }}>
                         {tablaPaso0Completo ? "Completado" : "Pendiente"}
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      onClick={confirmarPruebasTabla}
-                      disabled={!tablaActividadIdsSeleccionadas.length}
-                      style={tablaPaso0Completo ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff", opacity: 0.9 } : undefined}
-                    >
-                      {tablaPaso0Completo ? "Guardado" : "Guardar"}
-                    </button>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                    <button
-                      type="button"
-                      style={{ ...secondaryButtonStyle, background: "#f8fafc", borderColor: "#94a3b8", color: "#0f172a" }}
-                      onClick={cancelarCreacionTablaEspecificaciones}
-                      disabled={savingSeguimiento}
-                    >
-                      Cancelar
-                    </button>
                   </div>
                   <small style={{ color: "#cbd5e1" }}>
                     Antes de todo, escogé si querés trabajar la tabla de especificaciones para Prueba (examen) 1, Prueba (examen) 2 o las que correspondan. Podés seleccionar una o varias.
@@ -9896,7 +9949,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   ) : (
                     <div style={{ display: "grid", gap: "8px", maxWidth: "640px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-                        <span style={{ color: "#f8fafc", fontWeight: 700 }}>Pruebas disponibles (Paso 0)</span>
+                        <span style={{ color: "#f8fafc", fontWeight: 700 }}>Pruebas disponibles (Paso 1.1)</span>
                         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                           <button
                             type="button"
@@ -9969,15 +10022,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           );
                         })}
                       </div>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="primary-btn"
+                          onClick={confirmarPruebasTabla}
+                          disabled={!tablaActividadIdsSeleccionadas.length}
+                          style={tablaPaso0Completo ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff", opacity: 0.9 } : undefined}
+                        >
+                          {tablaPaso0Completo ? "Guardado" : "Guardar"}
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...secondaryButtonStyle, background: "#f8fafc", borderColor: "#94a3b8", color: "#0f172a" }}
+                          onClick={cancelarCreacionTablaEspecificaciones}
+                          disabled={savingSeguimiento}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
 
                 {!crearExamenesOpen && tablaPaso0Completo ? (
                 <>
-                <label style={{ display: "grid", gap: "6px", maxWidth: "420px" }}>
+                <div style={{ display: "grid", gap: "6px", maxWidth: "640px", padding: "12px", borderRadius: "12px", border: `1px solid ${tablaPaso1Completo ? "#166534" : "#93c5fd"}`, background: tablaPaso1Completo ? "#052e16" : "#0b2342" }}>
                   <span style={{ color: "#f8fafc", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                    <span>Paso 1.1: Escoger los planeamientos a evaluar</span>
+                    <span>Paso 1.2: Escoger los planeamientos a evaluar</span>
                     <span style={{ background: tablaPaso1Completo ? "#dcfce7" : "#dbeafe", color: tablaPaso1Completo ? "#166534" : "#1d4ed8", border: `1px solid ${tablaPaso1Completo ? "#86efac" : "#93c5fd"}`, borderRadius: "999px", padding: "2px 10px", fontSize: "12px", fontWeight: 800 }}>
                       {tablaPaso1Completo ? "Completado" : "Pendiente"}
                     </span>
@@ -9997,7 +10069,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       <option key={planeamiento.PlaneamientoId} value={planeamiento.PlaneamientoId}>{planeamiento.Nombre}</option>
                     ))}
                   </select>
-                  <small style={{ color: "#cbd5e1" }}>Paso 1: escogé uno o varios planeamientos. Al darle Guardar, se abrirá el Paso 1.2 para asignar los indicadores por prueba.</small>
+                  <small style={{ color: "#cbd5e1" }}>Escogé uno o varios planeamientos. Al darle Guardar, se abrirá el Paso 1.3 para asignar los indicadores por prueba.</small>
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                     <button
                       type="button"
@@ -10009,11 +10081,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       {tablaPaso1Completo ? "Guardado" : "Guardar"}
                     </button>
                   </div>
-                </label>
+                </div>
 
                 {!tablaPaso0Completo ? (
                   <div style={{ padding: "12px 14px", borderRadius: "12px", border: "1px solid #93c5fd", background: "#eff6ff", color: "#1e3a8a", fontWeight: 700 }}>
-                    Guardá primero la selección de una o varias pruebas o exámenes para habilitar el Paso 1.1.
+                    Guarda primero la seleccion de una o varias pruebas o examenes para habilitar el Paso 1.2.
                   </div>
                 ) : null}
 
@@ -10023,7 +10095,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       Planeamientos seleccionados: {tablaPlaneamientosSeleccionados.map((planeamiento) => planeamiento.Nombre).join(", ")}
                     </strong>
                     <span style={{ color: "#334155", fontWeight: 600 }}>
-                      Se encontraron {tablaIndicadoresEspecificaciones.length} indicadores para asignar en la matriz del Paso 1.2.
+                      Se encontraron {tablaIndicadoresEspecificaciones.length} indicadores para asignar en la matriz del Paso 1.3.
                     </span>
                   </div>
                 ) : null}
@@ -10040,21 +10112,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   ) : null}
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                      <strong style={{ color: "#f8fafc" }}>Paso 1.2: Matriz de asignación por prueba</strong>
+                      <strong style={{ color: "#f8fafc" }}>Paso 1.3: Matriz de asignacion por prueba</strong>
                       <span style={{ background: tablaPaso2Completo ? "#dcfce7" : tablaPaso2Activo ? "#dbeafe" : "#fef3c7", color: tablaPaso2Completo ? "#166534" : tablaPaso2Activo ? "#1d4ed8" : "#92400e", border: `1px solid ${tablaPaso2Completo ? "#86efac" : tablaPaso2Activo ? "#93c5fd" : "#fcd34d"}`, borderRadius: "999px", padding: "2px 10px", fontSize: "12px", fontWeight: 800 }}>
                         {tablaPaso2Completo ? "Completado" : tablaPaso2Activo ? "En proceso" : "Pendiente de asignar"}
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        className="primary-btn"
-                        onClick={guardarMatrizAsignacionPruebas}
-                        disabled={savingSeguimiento || !tablaActividadesObjetivo.length || !tablaMatrizEditando}
-                        style={savedSeguimientoModo === "actividad" || !tablaMatrizEditando ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff", opacity: 0.9 } : undefined}
-                      >
-                        {savingSeguimiento && savingSeguimientoModo === "actividad" ? "Guardando..." : (!tablaMatrizEditando ? "Guardado" : "Guardar")}
-                      </button>
                       {tablaPaso2Completo ? (
                         <>
                           <button
@@ -10071,19 +10134,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       ) : null}
                     </div>
                   </div>
-                  {savingSeguimiento && savingSeguimientoModo === "actividad" ? (
-                    <div style={{ display: "grid", gap: "6px" }}>
-                      <div style={{ color: "#dbeafe", fontWeight: 800 }}>
-                        Guardando matriz de asignación...
-                      </div>
-                      <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#12345e", overflow: "hidden", border: "1px solid #3b82f6" }}>
-                        <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #38bdf8 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
-                      </div>
-                      <div style={{ color: "#e0f2fe", fontWeight: 700, fontSize: "13px" }}>
-                        {savingSeguimientoProgress}% completado
-                      </div>
-                    </div>
-                  ) : null}
                   <small style={{ color: "#cbd5e1" }}>
                     Marcá en qué prueba se evalúa cada indicador. En esta pantalla solo se hace la asignación.
                   </small>
@@ -10156,6 +10206,30 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       Se muestran {tablaIndicadoresRender.length} de {tablaIndicadoresEspecificaciones.length} indicadores para evitar bloqueo de pantalla.
                     </small>
                   ) : null}
+                  {savingSeguimiento && savingSeguimientoModo === "actividad" ? (
+                    <div style={{ display: "grid", gap: "6px" }}>
+                      <div style={{ color: "#dbeafe", fontWeight: 800 }}>
+                        Guardando matriz de asignacion...
+                      </div>
+                      <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#12345e", overflow: "hidden", border: "1px solid #3b82f6" }}>
+                        <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #38bdf8 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                      </div>
+                      <div style={{ color: "#e0f2fe", fontWeight: 700, fontSize: "13px" }}>
+                        {savingSeguimientoProgress}% completado
+                      </div>
+                    </div>
+                  ) : null}
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-start" }}>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={guardarMatrizAsignacionPruebas}
+                      disabled={savingSeguimiento || !tablaActividadesObjetivo.length || !tablaMatrizEditando}
+                      style={savedSeguimientoModo === "actividad" || !tablaMatrizEditando ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff", opacity: 0.9 } : undefined}
+                    >
+                      {savingSeguimiento && savingSeguimientoModo === "actividad" ? "Guardando..." : (!tablaMatrizEditando ? "Guardado" : "Guardar")}
+                    </button>
+                  </div>
                 </div>
                 ) : null}
 
@@ -10163,15 +10237,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <div style={{ display: "grid", gap: "10px", padding: "12px", border: `1px solid ${tablaPaso3Completo ? "#86efac" : "#cbd5e1"}`, borderRadius: "12px", background: tablaPaso3Completo ? "#f0fdf4" : "#ffffff", color: "#0f172a", opacity: 1, pointerEvents: tablaEspecificacionEditando ? "auto" : "none" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                        <strong style={{ color: "#0f172a" }}>Paso 1.3: Asignación de Puntaje a los Indicadores</strong>
+                        <strong style={{ color: "#0f172a" }}>Paso 1.4: Asignacion de Puntaje a los Indicadores</strong>
                         <span style={{ background: tablaPaso3Completo ? "#dcfce7" : "#fef3c7", color: tablaPaso3Completo ? "#166534" : "#92400e", border: `1px solid ${tablaPaso3Completo ? "#86efac" : "#fcd34d"}`, borderRadius: "999px", padding: "2px 10px", fontSize: "12px", fontWeight: 800 }}>
                           {tablaPaso3Completo ? "Completado" : `Pendientes: ${tablaPruebasPendientes.length}`}
                         </span>
                       </div>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        <button type="button" className="primary-btn" onClick={guardarAsignacionTablaEspecificaciones} disabled={savingSeguimiento || !tablaActividadesObjetivo.length || !tablaHayAsignacionesMatriz || !tablaValidacionPruebaSeleccionada.coincide || !tablaEspecificacionEditando} style={savedSeguimientoModo === "asignacion" || !tablaEspecificacionEditando ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff", opacity: 0.9 } : undefined}>
-                          {savingSeguimiento && savingSeguimientoModo === "asignacion" ? "Guardando..." : (!tablaEspecificacionEditando ? "Guardado" : "Guardar")}
-                        </button>
                         {tablaEspecificacionesGuardadas ? (
                           <>
                             <button type="button" style={secondaryButtonStyle} onClick={() => setTablaEspecificacionEditando(true)} disabled={savingSeguimiento || !tablaActividadesObjetivo.length}>
@@ -10186,19 +10257,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         ) : null}
                       </div>
                     </div>
-                    {savingSeguimiento && savingSeguimientoModo === "asignacion" ? (
-                      <div style={{ display: "grid", gap: "6px" }}>
-                        <div style={{ color: "#0f172a", fontWeight: 800 }}>
-                          Guardando asignaciones e indicadores del examen...
-                        </div>
-                        <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#dbeafe", overflow: "hidden", border: "1px solid #93c5fd" }}>
-                          <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
-                        </div>
-                        <div style={{ color: "#1e3a8a", fontWeight: 700, fontSize: "13px" }}>
-                          {savingSeguimientoProgress}% completado
-                        </div>
-                      </div>
-                    ) : null}
                     {savingSeguimiento && savingSeguimientoModo === "eliminar" ? (
                       <div style={{ display: "grid", gap: "6px" }}>
                         <div style={{ color: "#991b1b", fontWeight: 800 }}>
@@ -10231,7 +10289,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     {!tablaValidacionPruebaSeleccionada.coincide ? (
                       <div style={{ marginBottom: "6px", color: "#991b1b", fontWeight: 700 }}>
                         {tablaValidacionPruebaSeleccionada.filasIncompletas > 0
-                        ? `No se puede guardar: hay ${tablaValidacionPruebaSeleccionada.filasIncompletas} fila(s) incompleta(s). Debés indicar ítem, cantidad de preguntas y puntos del indicador (si cantidad >= 1, el valor no puede ser 0).`
+                        ? `No se puede guardar: hay ${tablaValidacionPruebaSeleccionada.filasIncompletas} fila(s) incompleta(s) o con restriccion invalida. Debes indicar item, cantidad de preguntas y puntos del indicador. Ademas: SR = 1 punto; RC/C/I = entre 1 y 5 puntos.`
                         : !tablaValidacionPruebaSeleccionada.cumpleMinimoPorcentaje
                         ? `No se puede guardar: el total de puntos (${tablaValidacionPruebaSeleccionada.totalCalculado.toFixed(2)}) debe ser mayor o igual al porcentaje de la prueba (${tablaValidacionPruebaSeleccionada.minimoPorcentaje.toFixed(2)}).`
                         : (tablaTipoFormato === "ANTES"
@@ -10304,9 +10362,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Correspondencia</th>
                             <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Identificación</th>
                             <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Resolución de ejercicios</th>
-                            <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Resolución de problemas</th>
+                            <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a", minWidth: "210px" }}>Resolucion de Casos y Problemas</th>
                             <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Respuesta restringida</th>
-                            <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Resolución de casos</th>
                             <th style={{ padding: "8px", border: "1px solid #cbd5e1", color: "#0f172a" }}>Producción escrita</th>
                           </tr>
                         </thead>
@@ -10344,10 +10401,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               ? Math.round(Number(leccionesFormulaRaw || 0))
                               : leccionesFormulaRaw;
                             const itemCampos = getDetalleCamposItems(detalle);
+                            const restriccionesFila = getTablaRestriccionesDetalle(detalle);
                             const sinPuntosAntes = tablaTipoFormato === "ANTES" && !(Number.isFinite(puntosFormula) && puntosFormula > 0);
                             const leccionesManualNum = Number(String(detalle.numeroLecciones || "0").replace(",", "."));
                             const sumaItemsFila = getPuntosPorItems(detalle);
                             const filaIncompleta = itemCampos.some((c) => isItemParIncompleto(c.cantidad, c.valor))
+                              || restriccionesFila.length > 0
                               || (tablaTipoFormato === "DESPUES" && (!Number.isInteger(leccionesManualNum) || leccionesManualNum <= 0 || Number(sumaItemsFila) !== Number(puntosFormula)))
                               || sinPuntosAntes;
                             return (
@@ -10377,35 +10436,31 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Selección de respuesta: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.seleccionRespuestaCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "seleccionRespuestaCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                  <input title="Selección de respuesta: Valor por pregunta" type="text" inputMode="numeric" value={detalle.seleccionRespuestaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "seleccionRespuestaPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
+                                  <input title={`Selección de respuesta: Valor por pregunta. ${getTablaPuntajeHint("SR")}`} type="text" inputMode="numeric" value={detalle.seleccionRespuestaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "seleccionRespuestaPuntos", e.target.value)} style={getTablaPuntajeInputStyle("SR", detalle.seleccionRespuestaCantidad, detalle.seleccionRespuestaPuntos)} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Respuesta corta: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.respuestaCortaCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "respuestaCortaCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                  <input title="Respuesta corta: Valor por pregunta" type="text" inputMode="numeric" value={detalle.respuestaCortaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "respuestaCortaPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
+                                  <input title={`Respuesta corta: Valor por pregunta. ${getTablaPuntajeHint("RC")}`} type="text" inputMode="numeric" value={detalle.respuestaCortaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "respuestaCortaPuntos", e.target.value)} style={getTablaPuntajeInputStyle("RC", detalle.respuestaCortaCantidad, detalle.respuestaCortaPuntos)} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Correspondencia: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.correspondenciaCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "correspondenciaCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                  <input title="Correspondencia: Valor por pregunta" type="text" inputMode="numeric" value={detalle.correspondenciaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "correspondenciaPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
+                                  <input title={`Correspondencia: Valor por pregunta. ${getTablaPuntajeHint("C")}`} type="text" inputMode="numeric" value={detalle.correspondenciaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "correspondenciaPuntos", e.target.value)} style={getTablaPuntajeInputStyle("C", detalle.correspondenciaCantidad, detalle.correspondenciaPuntos)} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Identificación: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.identificacionCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "identificacionCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                  <input title="Identificación: Valor por pregunta" type="text" inputMode="numeric" value={detalle.identificacionPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "identificacionPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
+                                  <input title={`Identificación: Valor por pregunta. ${getTablaPuntajeHint("I")}`} type="text" inputMode="numeric" value={detalle.identificacionPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "identificacionPuntos", e.target.value)} style={getTablaPuntajeInputStyle("I", detalle.identificacionCantidad, detalle.identificacionPuntos)} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Resolución de ejercicios: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.resolucionEjerciciosCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "resolucionEjerciciosCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
                                   <input title="Resolución de ejercicios: Valor por pregunta" type="text" inputMode="numeric" value={detalle.resolucionEjerciciosPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "resolucionEjerciciosPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
-                                  <input title="Resolución de problemas: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.resolucionProblemasCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "resolucionProblemasCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                  <input title="Resolución de problemas: Valor por pregunta" type="text" inputMode="numeric" value={detalle.resolucionProblemasPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "resolucionProblemasPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
+                                  <input title="Resolucion de casos y problemas: Cantidad de preguntas" type="text" inputMode="numeric" value={getTablaCasosProblemasCantidad(detalle)} onChange={(e) => updateTablaCasosProblemasDetalle(actividadId, Number(indicador.IndicadorGrupoId), "cantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
+                                  <input title="Resolucion de casos y problemas: Valor por pregunta" type="text" inputMode="numeric" value={getTablaCasosProblemasPuntos(detalle)} onChange={(e) => updateTablaCasosProblemasDetalle(actividadId, Number(indicador.IndicadorGrupoId), "puntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Respuesta restringida: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.respuestaRestringidaCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "respuestaRestringidaCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
                                   <input title="Respuesta restringida: Valor por pregunta" type="text" inputMode="numeric" value={detalle.respuestaRestringidaPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "respuestaRestringidaPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                </td>
-                                <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
-                                  <input title="Resolución de casos: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.resolucionCasosCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "resolucionCasosCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
-                                  <input title="Resolución de casos: Valor por pregunta" type="text" inputMode="numeric" value={detalle.resolucionCasosPuntos} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "resolucionCasosPuntos", e.target.value)} style={{ width: "54px", marginLeft: "6px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
                                 </td>
                                 <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>
                                   <input title="Producción escrita: Cantidad de preguntas" type="text" inputMode="numeric" value={detalle.produccionEscritaCantidad} onChange={(e) => updateTablaDetalle(actividadId, Number(indicador.IndicadorGrupoId), "produccionEscritaCantidad", e.target.value)} style={{ width: "54px", color: "#0f172a", border: "1px solid #94a3b8", background: "#ffffff" }} />
@@ -10443,6 +10498,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           const totalRP = sumItem("resolucionProblemasCantidad", "resolucionProblemasPuntos");
                           const totalRR = sumItem("respuestaRestringidaCantidad", "respuestaRestringidaPuntos");
                           const totalRCas = sumItem("resolucionCasosCantidad", "resolucionCasosPuntos");
+                          const totalRPyRCas = {
+                            preguntas: totalRP.preguntas + totalRCas.preguntas,
+                            puntos: totalRP.puntos + totalRCas.puntos
+                          };
                           const totalPE = sumItem("produccionEscritaCantidad", "produccionEscritaPuntos");
                           rows.push(
                             <tr key="fmt-total-preg" style={{ background: "#e2e8f0", fontWeight: 800, color: "#0f172a" }}>
@@ -10456,9 +10515,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalC.preguntas)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalI.preguntas)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRE.preguntas)}</td>
-                              <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRP.preguntas)}</td>
+                              <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRPyRCas.preguntas)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRR.preguntas)}</td>
-                              <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRCas.preguntas)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalPE.preguntas)}</td>
                             </tr>
                           );
@@ -10476,9 +10534,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalC.puntos)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalI.puntos)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRE.puntos)}</td>
-                              <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRP.puntos)}</td>
+                              <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRPyRCas.puntos)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRR.puntos)}</td>
-                              <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalRCas.puntos)}</td>
                               <td style={{ padding: "8px", border: "1px solid #cbd5e1", textAlign: "center", fontSize: "12px", color: "#0f172a" }}>{Math.round(totalPE.puntos)}</td>
                             </tr>
                           );
@@ -10489,7 +10546,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           const coincideTotal = Math.abs(diferencia) < 0.01;
                           rows.push(
                             <tr key="fmt-validacion" style={{ background: coincideTotal ? "#ecfdf5" : "#fef2f2" }}>
-                              <td colSpan={13} style={{ padding: "10px", border: "1px solid #cbd5e1", color: coincideTotal ? "#166534" : "#991b1b", fontWeight: 700 }}>
+                              <td colSpan={12} style={{ padding: "10px", border: "1px solid #cbd5e1", color: coincideTotal ? "#166534" : "#991b1b", fontWeight: 700 }}>
                                 {tablaTipoFormato === "ANTES"
                                   ? `Validación de Antes de la Prueba: total de puntos calculado ${totalPuntosCalculado.toFixed(2)}.`
                                   : (Math.abs(totalPuntosCalculado - puntosEsperadosPrueba) < 0.01
@@ -10505,6 +10562,24 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </div>
                     </>
                     )}
+                    {savingSeguimiento && savingSeguimientoModo === "asignacion" ? (
+                      <div style={{ display: "grid", gap: "6px" }}>
+                        <div style={{ color: "#0f172a", fontWeight: 800 }}>
+                          Guardando asignaciones e indicadores del examen...
+                        </div>
+                        <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#dbeafe", overflow: "hidden", border: "1px solid #93c5fd" }}>
+                          <div style={{ width: `${savingSeguimientoProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                        </div>
+                        <div style={{ color: "#1e3a8a", fontWeight: 700, fontSize: "13px" }}>
+                          {savingSeguimientoProgress}% completado
+                        </div>
+                      </div>
+                    ) : null}
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-start" }}>
+                      <button type="button" className="primary-btn" onClick={guardarAsignacionTablaEspecificaciones} disabled={savingSeguimiento || !tablaActividadesObjetivo.length || !tablaHayAsignacionesMatriz || !tablaValidacionPruebaSeleccionada.coincide || !tablaEspecificacionEditando} style={savedSeguimientoModo === "asignacion" || !tablaEspecificacionEditando ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff", opacity: 0.9 } : undefined}>
+                        {savingSeguimiento && savingSeguimientoModo === "asignacion" ? "Guardando..." : (!tablaEspecificacionEditando ? "Guardado" : "Guardar")}
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div style={{ padding: "12px", borderRadius: "12px", border: "1px dashed #2b4e7a", background: "#0a1f3d", color: "#cbd5e1", fontWeight: 700 }}>
@@ -10516,7 +10591,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 </>
                 ) : !crearExamenesOpen ? (
                   <div style={{ padding: "12px", borderRadius: "12px", border: "1px dashed #2b4e7a", background: "#0a1f3d", color: "#cbd5e1", fontWeight: 700 }}>
-                    Guardá el Paso 0 para que aparezca el Paso 1.1.
+                    Guarda el Paso 1.1 para que aparezca el Paso 1.2.
                   </div>
                 ) : null}
                 {!tablaPuedeCrearExamenes ? (
