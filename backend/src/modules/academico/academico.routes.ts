@@ -69,6 +69,608 @@ function enumerateDatesBetween(start: Date, end: Date) {
   return dates;
 }
 
+function formatDateOnly(value?: Date | string | null) {
+  if (!value) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function startOfDay(value: Date) {
+  const next = new Date(value);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function getMaxDate(...values: Array<Date | null | undefined>) {
+  const valid = values.filter(Boolean) as Date[];
+  if (!valid.length) return null;
+  return new Date(Math.max(...valid.map((item) => item.getTime())));
+}
+
+function getDiaSemanaNombre(diaSemana: number) {
+  return DIAS_LECTIVOS_CATALOGO.find((item) => item.DiaSemana === Number(diaSemana))?.Nombre || `Día ${diaSemana}`;
+}
+
+function getFechaClaseSyncErrorStatus(error: any) {
+  const message = String(error?.message || "");
+  const knownClientMessages = [
+    "El período no pertenece a la institución",
+    "El período está inactivo",
+    "El período seleccionado debe tener fecha de inicio y fin definidas",
+    "La fecha de aplicación no es válida",
+    "La fecha de aplicación debe estar dentro del período seleccionado",
+    "No se pudo determinar la fecha de aplicación"
+  ];
+
+  return knownClientMessages.some((item) => message.includes(item)) ? 400 : 500;
+}
+
+function buildFechaClaseSyncItem(item: any, overrides: Record<string, any> = {}) {
+  return {
+    FechaClaseId: item.FechaClaseId ? Number(item.FechaClaseId) : null,
+    HorarioGrupoId: Number(item.HorarioGrupoId),
+    GrupoMateriaId: Number(item.GrupoMateriaId),
+    GrupoId: Number(item.GrupoId),
+    GrupoNombre: item.GrupoNombre || "",
+    GrupoNivel: item.GrupoNivel || null,
+    MateriaNombre: item.MateriaNombre || "",
+    PeriodoId: item.PeriodoId ? Number(item.PeriodoId) : null,
+    PeriodoNombre: item.PeriodoNombre || "",
+    Fecha: formatDateOnly(item.Fecha),
+    BloqueHorarioId: Number(item.BloqueHorarioId),
+    BloqueNombre: item.BloqueNombre || "",
+    DiaSemana: Number(item.DiaSemana),
+    DiaSemanaNombre: getDiaSemanaNombre(Number(item.DiaSemana)),
+    TieneAsistencia: Boolean(item.TieneAsistencia),
+    ...overrides
+  };
+}
+
+async function writeFechaClaseSyncLogIfAvailable(
+  executor: any,
+  payload: {
+    InstitucionId: number;
+    PeriodoId: number;
+    FechaCorteSolicitada: string | null;
+    FechaCorteAplicada: string;
+    Modo: string;
+    Resumen: any;
+    UsuarioId?: number | null;
+  }
+) {
+  await executor.request()
+    .input("institucionId", sql.Int, payload.InstitucionId)
+    .input("periodoId", sql.Int, payload.PeriodoId)
+    .input("fechaCorteSolicitada", sql.Date, payload.FechaCorteSolicitada || null)
+    .input("fechaCorteAplicada", sql.Date, payload.FechaCorteAplicada)
+    .input("modo", sql.NVarChar, payload.Modo)
+    .input("usuarioId", sql.Int, payload.UsuarioId || null)
+    .input("resumenJson", sql.NVarChar(sql.MAX), JSON.stringify(payload.Resumen || {}))
+    .query(`
+      IF OBJECT_ID('dbo.FechaClaseSyncLog', 'U') IS NOT NULL
+      BEGIN
+        INSERT INTO dbo.FechaClaseSyncLog
+        (
+          InstitucionId,
+          PeriodoId,
+          FechaCorteSolicitada,
+          FechaCorteAplicada,
+          Modo,
+          UsuarioId,
+          ResumenJson,
+          CreatedAt
+        )
+        VALUES
+        (
+          @institucionId,
+          @periodoId,
+          @fechaCorteSolicitada,
+          @fechaCorteAplicada,
+          @modo,
+          @usuarioId,
+          @resumenJson,
+          SYSDATETIME()
+        )
+      END
+    `);
+}
+
+async function getHorarioDocenteConflictInfo(params: {
+  pool: any;
+  institucionId: number;
+  grupoMateriaId: number;
+  bloqueHorarioId: number;
+  diaSemana: number;
+  excludeHorarioGrupoId?: number | null;
+}) {
+  const { pool, institucionId, grupoMateriaId, bloqueHorarioId, diaSemana, excludeHorarioGrupoId } = params;
+
+  const targetResult = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("grupoMateriaId", sql.Int, grupoMateriaId)
+    .query(`
+      SELECT TOP 1
+        gm.GrupoMateriaId,
+        gm.GrupoId,
+        gm.MateriaId,
+        ISNULL(gm.PeriodoId, 0) AS PeriodoId,
+        g.Nombre AS GrupoNombre,
+        g.AnioLectivoId,
+        m.Nombre AS MateriaNombre,
+        CAST(ISNULL(m.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial
+      FROM dbo.GrupoMateria gm
+      INNER JOIN dbo.Grupo g
+        ON g.GrupoId = gm.GrupoId
+      INNER JOIN dbo.Materia m
+        ON m.MateriaId = gm.MateriaId
+      WHERE gm.GrupoMateriaId = @grupoMateriaId
+        AND gm.Activo = 1
+        AND g.InstitucionId = @institucionId
+    `);
+
+  if (!targetResult.recordset.length) {
+    return {
+      target: null,
+      docentes: [],
+      conflicts: []
+    };
+  }
+
+  const target = targetResult.recordset[0];
+
+  const docentesResult = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("grupoId", sql.Int, Number(target.GrupoId))
+    .input("materiaId", sql.Int, Number(target.MateriaId))
+    .input("anioLectivoId", sql.Int, Number(target.AnioLectivoId))
+    .input("periodoId", sql.Int, Number(target.PeriodoId))
+    .query(`
+      SELECT DISTINCT
+        ad.UsuarioId,
+        u.Correo,
+        u.Nombre,
+        u.PrimerApellido,
+        u.SegundoApellido
+      FROM dbo.AsignacionDocente ad
+      INNER JOIN dbo.Usuario u
+        ON u.UsuarioId = ad.UsuarioId
+      WHERE ad.InstitucionId = @institucionId
+        AND ad.Activo = 1
+        AND ad.GrupoId = @grupoId
+        AND ad.MateriaId = @materiaId
+        AND ad.AnioLectivoId = @anioLectivoId
+        AND ISNULL(ad.PeriodoId, 0) = @periodoId
+    `);
+
+  if (!docentesResult.recordset.length) {
+    return {
+      target,
+      docentes: [],
+      conflicts: []
+    };
+  }
+
+  const docentes = docentesResult.recordset;
+  const docenteIds = docentes.map((item: any) => Number(item.UsuarioId)).filter(Number.isFinite);
+  const docentesCsv = docenteIds.join(",");
+
+  const conflictsResult = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("grupoMateriaId", sql.Int, grupoMateriaId)
+    .input("bloqueHorarioId", sql.Int, bloqueHorarioId)
+    .input("diaSemana", sql.Int, diaSemana)
+    .input("anioLectivoId", sql.Int, Number(target.AnioLectivoId))
+    .input("periodoId", sql.Int, Number(target.PeriodoId))
+    .input("excludeHorarioGrupoId", sql.Int, excludeHorarioGrupoId || null)
+    .input("docentesCsv", sql.NVarChar(sql.MAX), docentesCsv)
+    .query(`
+      SELECT DISTINCT
+        ad.UsuarioId,
+        u.Correo,
+        u.Nombre,
+        u.PrimerApellido,
+        u.SegundoApellido,
+        hg.HorarioGrupoId,
+        gm.GrupoMateriaId,
+        g.Nombre AS GrupoNombre,
+        m.Nombre AS MateriaNombre,
+        bh.Nombre AS BloqueNombre,
+        CAST(ISNULL(m.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial
+      FROM dbo.HorarioGrupo hg
+      INNER JOIN dbo.GrupoMateria gm
+        ON gm.GrupoMateriaId = hg.GrupoMateriaId
+       AND gm.Activo = 1
+      INNER JOIN dbo.Grupo g
+        ON g.GrupoId = gm.GrupoId
+      INNER JOIN dbo.Materia m
+        ON m.MateriaId = gm.MateriaId
+      INNER JOIN dbo.BloqueHorario bh
+        ON bh.BloqueHorarioId = hg.BloqueHorarioId
+      INNER JOIN dbo.AsignacionDocente ad
+        ON ad.GrupoId = gm.GrupoId
+       AND ad.MateriaId = gm.MateriaId
+       AND ad.Activo = 1
+       AND ad.InstitucionId = @institucionId
+       AND ad.AnioLectivoId = @anioLectivoId
+       AND ISNULL(ad.PeriodoId, 0) = @periodoId
+      INNER JOIN dbo.Usuario u
+        ON u.UsuarioId = ad.UsuarioId
+      WHERE hg.Activo = 1
+        AND hg.GrupoMateriaId <> @grupoMateriaId
+        AND hg.BloqueHorarioId = @bloqueHorarioId
+        AND hg.DiaSemana = @diaSemana
+        AND (@excludeHorarioGrupoId IS NULL OR hg.HorarioGrupoId <> @excludeHorarioGrupoId)
+        AND ad.UsuarioId IN (
+          SELECT TRY_CAST([value] AS INT)
+          FROM string_split(@docentesCsv, ',')
+          WHERE TRY_CAST([value] AS INT) IS NOT NULL
+        )
+      ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre, g.Nombre, m.Nombre
+    `);
+
+  return {
+    target,
+    docentes,
+    conflicts: conflictsResult.recordset || []
+  };
+}
+
+async function validateHorarioDocenteConflict(params: {
+  pool: any;
+  institucionId: number;
+  grupoMateriaId: number;
+  bloqueHorarioId: number;
+  diaSemana: number;
+  excludeHorarioGrupoId?: number | null;
+}) {
+  const result = await getHorarioDocenteConflictInfo(params);
+  const target = result.target;
+
+  if (!target || !result.conflicts.length) {
+    return null;
+  }
+
+  const targetEsEspecial = Boolean(target.EsMateriaEspecial);
+  const blocking = result.conflicts.filter((item: any) => !(targetEsEspecial && Boolean(item.EsMateriaEspecial)));
+
+  if (!blocking.length) {
+    return null;
+  }
+
+  const first = blocking[0];
+  const docente = [
+    first.Nombre || "",
+    first.PrimerApellido || "",
+    first.SegundoApellido || ""
+  ].join(" ").replace(/\s+/g, " ").trim() || first.Correo || "docente";
+
+  const detalles = blocking
+    .slice(0, 3)
+    .map((item: any) => `${item.GrupoNombre} - ${item.MateriaNombre}`)
+    .join(", ");
+
+  return {
+    code: "DOCENTE_HORARIO_CONFLICTO",
+    message: `El docente ${docente} ya tiene horario asignado en ese día y bloque con ${detalles}. Solo se permite compartir lección cuando ambas materias están marcadas como especiales.`,
+    details: blocking
+  };
+}
+
+async function buildFechaClaseSyncPreview(
+  pool: any,
+  institucionId: number,
+  periodoId: number,
+  fechaCorteSolicitada?: string | null
+) {
+  const periodoResult = await pool.request()
+    .input("periodoId", sql.Int, periodoId)
+    .input("institucionId", sql.Int, institucionId)
+    .query(`
+      SELECT TOP 1
+        p.PeriodoId,
+        p.Nombre,
+        p.FechaInicio,
+        p.FechaFin,
+        p.Activo,
+        a.AnioLectivoId,
+        a.Nombre AS AnioNombre
+      FROM dbo.Periodo p
+      INNER JOIN dbo.AnioLectivo a
+        ON a.AnioLectivoId = p.AnioLectivoId
+      WHERE p.PeriodoId = @periodoId
+        AND a.InstitucionId = @institucionId
+    `);
+
+  if (!periodoResult.recordset.length) {
+    throw new Error("El período no pertenece a la institución");
+  }
+
+  const periodo = periodoResult.recordset[0];
+
+  if (!periodo.Activo) {
+    throw new Error("El período está inactivo. Reactívalo antes de sincronizar las fechas de clase");
+  }
+
+  if (!periodo.FechaInicio || !periodo.FechaFin) {
+    throw new Error("El período seleccionado debe tener fecha de inicio y fin definidas");
+  }
+
+  const hoy = startOfDay(new Date());
+  const periodoInicio = startOfDay(new Date(periodo.FechaInicio));
+  const periodoFin = startOfDay(new Date(periodo.FechaFin));
+  const fechaSolicitada = fechaCorteSolicitada ? startOfDay(new Date(fechaCorteSolicitada)) : null;
+
+  if (fechaSolicitada && Number.isNaN(fechaSolicitada.getTime())) {
+    throw new Error("La fecha de aplicación no es válida");
+  }
+
+  if (fechaSolicitada && (fechaSolicitada < periodoInicio || fechaSolicitada > periodoFin)) {
+    throw new Error("La fecha de aplicación debe estar dentro del período seleccionado");
+  }
+
+  const fechaAplicadaDate = getMaxDate(hoy, periodoInicio, fechaSolicitada);
+
+  if (!fechaAplicadaDate) {
+    throw new Error("No se pudo determinar la fecha de aplicación");
+  }
+
+  if (fechaAplicadaDate > periodoFin) {
+    return {
+      periodo: {
+        PeriodoId: Number(periodo.PeriodoId),
+        Nombre: periodo.Nombre || "",
+        FechaInicio: formatDateOnly(periodo.FechaInicio),
+        FechaFin: formatDateOnly(periodo.FechaFin)
+      },
+      fechaCorteSolicitada: fechaCorteSolicitada ? formatDateOnly(fechaCorteSolicitada) : null,
+      fechaCorteAplicada: formatDateOnly(fechaAplicadaDate),
+      resumen: {
+        horariosActivos: 0,
+        totalEsperadas: 0,
+        crear: 0,
+        mantener: 0,
+        eliminar: 0,
+        bloqueadasPorAsistencia: 0,
+        conflictos: 0
+      },
+      crear: [],
+      mantener: [],
+      eliminar: [],
+      bloqueadas: [],
+      conflictos: []
+    };
+  }
+
+  const [horariosResult, fechasExistentesResult, feriadosResult] = await Promise.all([
+    pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("periodoId", sql.Int, periodoId)
+      .query(`
+        SELECT
+          hg.HorarioGrupoId,
+          hg.GrupoMateriaId,
+          hg.BloqueHorarioId,
+          hg.DiaSemana,
+          gm.PeriodoId,
+          gm.GrupoId,
+          g.Nombre AS GrupoNombre,
+          g.Nivel AS GrupoNivel,
+          m.Nombre AS MateriaNombre,
+          p.Nombre AS PeriodoNombre,
+          bh.Nombre AS BloqueNombre,
+          bh.OrdenVisual
+        FROM dbo.HorarioGrupo hg
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoMateriaId = hg.GrupoMateriaId
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+        INNER JOIN dbo.Materia m
+          ON m.MateriaId = gm.MateriaId
+        INNER JOIN dbo.BloqueHorario bh
+          ON bh.BloqueHorarioId = hg.BloqueHorarioId
+        LEFT JOIN dbo.Periodo p
+          ON p.PeriodoId = gm.PeriodoId
+        WHERE g.InstitucionId = @institucionId
+          AND gm.PeriodoId = @periodoId
+          AND gm.Activo = 1
+          AND hg.Activo = 1
+        ORDER BY g.Nombre, m.Nombre, bh.OrdenVisual
+      `),
+    pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("fechaCorteAplicada", sql.Date, formatDateOnly(fechaAplicadaDate))
+      .query(`
+        SELECT
+          fc.FechaClaseId,
+          fc.HorarioGrupoId,
+          fc.Fecha,
+          fc.PeriodoId,
+          hg.GrupoMateriaId,
+          hg.BloqueHorarioId,
+          hg.DiaSemana,
+          gm.GrupoId,
+          g.Nombre AS GrupoNombre,
+          g.Nivel AS GrupoNivel,
+          m.Nombre AS MateriaNombre,
+          p.Nombre AS PeriodoNombre,
+          bh.Nombre AS BloqueNombre,
+          bh.OrdenVisual,
+          CASE WHEN s.FechaClaseId IS NULL THEN 0 ELSE 1 END AS TieneAsistencia
+        FROM dbo.FechaClase fc
+        INNER JOIN dbo.HorarioGrupo hg
+          ON hg.HorarioGrupoId = fc.HorarioGrupoId
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoMateriaId = hg.GrupoMateriaId
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+        INNER JOIN dbo.Materia m
+          ON m.MateriaId = gm.MateriaId
+        INNER JOIN dbo.BloqueHorario bh
+          ON bh.BloqueHorarioId = hg.BloqueHorarioId
+        LEFT JOIN dbo.Periodo p
+          ON p.PeriodoId = fc.PeriodoId
+        LEFT JOIN dbo.AsistenciaSesion s
+          ON s.FechaClaseId = fc.FechaClaseId
+        WHERE g.InstitucionId = @institucionId
+          AND fc.PeriodoId = @periodoId
+          AND fc.Fecha >= @fechaCorteAplicada
+        ORDER BY fc.Fecha, g.Nombre, m.Nombre, bh.OrdenVisual
+      `),
+    pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("fechaInicio", sql.Date, formatDateOnly(fechaAplicadaDate))
+      .input("fechaFin", sql.Date, formatDateOnly(periodoFin))
+      .query(`
+        SELECT Fecha
+        FROM dbo.FeriadoInstitucional
+        WHERE InstitucionId = @institucionId
+          AND Activo = 1
+          AND Fecha BETWEEN @fechaInicio AND @fechaFin
+      `)
+  ]);
+
+  const feriadosSet = new Set(
+    feriadosResult.recordset.map((item: any) => formatDateOnly(item.Fecha))
+  );
+
+  const fechasFuturas = enumerateDatesBetween(fechaAplicadaDate, periodoFin);
+  const fechasPorDiaSemana = new Map<number, string[]>();
+
+  for (const fecha of fechasFuturas) {
+    const fechaStr = formatDateOnly(fecha);
+    if (feriadosSet.has(fechaStr)) continue;
+    const diaSemana = jsDayToSqlWeekday(fecha.getDay());
+    const bucket = fechasPorDiaSemana.get(diaSemana) || [];
+    bucket.push(fechaStr);
+    fechasPorDiaSemana.set(diaSemana, bucket);
+  }
+
+  const expectedByKey = new Map<string, any>();
+  const expectedByOccupancy = new Map<string, any[]>();
+
+  for (const horario of horariosResult.recordset) {
+    const fechasEsperadas = fechasPorDiaSemana.get(Number(horario.DiaSemana)) || [];
+    for (const fecha of fechasEsperadas) {
+      const expectedItem = buildFechaClaseSyncItem(horario, { Fecha: fecha, TieneAsistencia: false });
+      const key = `${expectedItem.HorarioGrupoId}|${expectedItem.Fecha}`;
+      expectedByKey.set(key, expectedItem);
+
+      const occupancyKey = `${expectedItem.GrupoId}|${expectedItem.Fecha}|${expectedItem.BloqueHorarioId}`;
+      const current = expectedByOccupancy.get(occupancyKey) || [];
+      current.push(expectedItem);
+      expectedByOccupancy.set(occupancyKey, current);
+    }
+  }
+
+  const existingByKey = new Map<string, any>();
+  const existingByOccupancy = new Map<string, any[]>();
+  const eliminar: any[] = [];
+  const bloqueadas: any[] = [];
+  const mantener: any[] = [];
+  const keysEliminables = new Set<string>();
+
+  for (const fechaExistente of fechasExistentesResult.recordset) {
+    const currentItem = buildFechaClaseSyncItem(fechaExistente);
+    const key = `${currentItem.HorarioGrupoId}|${currentItem.Fecha}`;
+    existingByKey.set(key, currentItem);
+
+    const occupancyKey = `${currentItem.GrupoId}|${currentItem.Fecha}|${currentItem.BloqueHorarioId}`;
+    const current = existingByOccupancy.get(occupancyKey) || [];
+    current.push(currentItem);
+    existingByOccupancy.set(occupancyKey, current);
+
+    if (expectedByKey.has(key)) {
+      mantener.push(currentItem);
+      continue;
+    }
+
+    if (currentItem.TieneAsistencia) {
+      bloqueadas.push({
+        ...currentItem,
+        Motivo: "Tiene asistencia registrada y no se puede modificar"
+      });
+      continue;
+    }
+
+    eliminar.push({
+      ...currentItem,
+      Motivo: "Ya no corresponde al horario activo del período"
+    });
+    keysEliminables.add(key);
+  }
+
+  const conflictos: any[] = [];
+  const crear: any[] = [];
+  const conflictKeys = new Set<string>();
+
+  for (const expectedItem of expectedByKey.values()) {
+    const key = `${expectedItem.HorarioGrupoId}|${expectedItem.Fecha}`;
+    if (existingByKey.has(key)) continue;
+
+    const occupancyKey = `${expectedItem.GrupoId}|${expectedItem.Fecha}|${expectedItem.BloqueHorarioId}`;
+    const expectedDuplicates = (expectedByOccupancy.get(occupancyKey) || []).filter(
+      (item) => !(item.HorarioGrupoId === expectedItem.HorarioGrupoId && item.Fecha === expectedItem.Fecha)
+    );
+
+    if (expectedDuplicates.length) {
+      if (!conflictKeys.has(key)) {
+        conflictos.push({
+          ...expectedItem,
+          Motivo: "Hay más de un horario activo ocupando el mismo bloque en esa fecha"
+        });
+        conflictKeys.add(key);
+      }
+      continue;
+    }
+
+    const occupancies = existingByOccupancy.get(occupancyKey) || [];
+    const ocupacionesActivas = occupancies.filter((item) => {
+      const existingKey = `${item.HorarioGrupoId}|${item.Fecha}`;
+      return !keysEliminables.has(existingKey);
+    });
+
+    if (ocupacionesActivas.length) {
+      conflictos.push({
+        ...expectedItem,
+        Motivo: "Existe otra fecha futura ocupando ese mismo bloque y no se puede reemplazar automáticamente"
+      });
+      conflictKeys.add(key);
+      continue;
+    }
+
+    crear.push({
+      ...expectedItem,
+      Motivo: "Fecha faltante según horario activo del período"
+    });
+  }
+
+  return {
+    periodo: {
+      PeriodoId: Number(periodo.PeriodoId),
+      Nombre: periodo.Nombre || "",
+      FechaInicio: formatDateOnly(periodo.FechaInicio),
+      FechaFin: formatDateOnly(periodo.FechaFin)
+    },
+    fechaCorteSolicitada: fechaCorteSolicitada ? formatDateOnly(fechaCorteSolicitada) : null,
+    fechaCorteAplicada: formatDateOnly(fechaAplicadaDate),
+    resumen: {
+      horariosActivos: horariosResult.recordset.length,
+      totalEsperadas: expectedByKey.size,
+      crear: crear.length,
+      mantener: mantener.length,
+      eliminar: eliminar.length,
+      bloqueadasPorAsistencia: bloqueadas.length,
+      conflictos: conflictos.length
+    },
+    crear,
+    mantener,
+    eliminar,
+    bloqueadas,
+    conflictos
+  };
+}
+
 const DIAS_LECTIVOS_CATALOGO = [
   { DiaSemana: 2, Nombre: "Lunes" },
   { DiaSemana: 3, Nombre: "Martes" },
@@ -281,6 +883,7 @@ router.get("/catalogos", async (req, res) => {
             Codigo,
             Nombre,
             Descripcion,
+            CAST(ISNULL(EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
             Activa AS Activo,
             CreatedAt,
             UpdatedAt
@@ -1440,6 +2043,49 @@ router.get("/anios-lectivos", async (req, res) => {
 
     const pool = await getPool();
 
+    const actual = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TOP 1
+          hg.HorarioGrupoId,
+          hg.GrupoMateriaId,
+          hg.BloqueHorarioId,
+          hg.DiaSemana
+        FROM dbo.HorarioGrupo hg
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoMateriaId = hg.GrupoMateriaId
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+        WHERE hg.HorarioGrupoId = @id
+          AND g.InstitucionId = @institucionId
+      `);
+
+    if (!actual.recordset.length) {
+      return res.status(404).json({
+        ok: false,
+        message: "Horario de clase no encontrado"
+      });
+    }
+
+    const conflictoDocente = await validateHorarioDocenteConflict({
+      pool,
+      institucionId,
+      grupoMateriaId: Number(actual.recordset[0].GrupoMateriaId),
+      bloqueHorarioId: Number(actual.recordset[0].BloqueHorarioId),
+      diaSemana: Number(actual.recordset[0].DiaSemana),
+      excludeHorarioGrupoId: id
+    });
+
+    if (conflictoDocente) {
+      return res.status(409).json({
+        ok: false,
+        code: conflictoDocente.code,
+        message: conflictoDocente.message,
+        data: conflictoDocente.details
+      });
+    }
+
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("q", sql.NVarChar, `%${q}%`)
@@ -2401,6 +3047,7 @@ router.get("/materias", async (req, res) => {
           Codigo,
           Nombre,
           Descripcion,
+          CAST(ISNULL(EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
           Activa AS Activo,
           CreatedAt,
           UpdatedAt
@@ -2431,7 +3078,7 @@ router.post("/materias", async (req, res) => {
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
 
-    const { nombre, codigo, descripcion } = req.body;
+    const { nombre, codigo, descripcion, esMateriaEspecial } = req.body;
 
     if (!nombre) {
       return badRequest(res, "nombre es obligatorio");
@@ -2463,6 +3110,7 @@ router.post("/materias", async (req, res) => {
       .input("codigo", sql.NVarChar, codigo || null)
       .input("nombre", sql.NVarChar, nombre)
       .input("descripcion", sql.NVarChar, descripcion || null)
+      .input("esMateriaEspecial", sql.Bit, esMateriaEspecial ? 1 : 0)
       .query(`
         INSERT INTO dbo.Materia
         (
@@ -2470,6 +3118,7 @@ router.post("/materias", async (req, res) => {
           Codigo,
           Nombre,
           Descripcion,
+          EsMateriaEspecial,
           Activa,
           CreatedAt
         )
@@ -2479,6 +3128,7 @@ router.post("/materias", async (req, res) => {
           INSERTED.Codigo,
           INSERTED.Nombre,
           INSERTED.Descripcion,
+          CAST(ISNULL(INSERTED.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
           INSERTED.Activa AS Activo,
           INSERTED.CreatedAt,
           INSERTED.UpdatedAt
@@ -2488,6 +3138,7 @@ router.post("/materias", async (req, res) => {
           @codigo,
           @nombre,
           @descripcion,
+          @esMateriaEspecial,
           1,
           SYSDATETIME()
         )
@@ -2518,7 +3169,7 @@ router.put("/materias/:id", async (req, res) => {
     if (institucionId === null) return;
 
     const id = Number(req.params.id);
-    const { nombre, codigo, descripcion } = req.body;
+    const { nombre, codigo, descripcion, esMateriaEspecial } = req.body;
 
     if (!isValidNonNegativeId(id)) {
       return badRequest(res, "Id inválido");
@@ -2557,12 +3208,14 @@ router.put("/materias/:id", async (req, res) => {
       .input("codigo", sql.NVarChar, codigo || null)
       .input("nombre", sql.NVarChar, nombre)
       .input("descripcion", sql.NVarChar, descripcion || null)
+      .input("esMateriaEspecial", sql.Bit, esMateriaEspecial ? 1 : 0)
       .query(`
         UPDATE dbo.Materia
         SET
           Codigo = @codigo,
           Nombre = @nombre,
           Descripcion = @descripcion,
+          EsMateriaEspecial = @esMateriaEspecial,
           UpdatedAt = SYSDATETIME()
         OUTPUT
           INSERTED.MateriaId,
@@ -2570,6 +3223,7 @@ router.put("/materias/:id", async (req, res) => {
           INSERTED.Codigo,
           INSERTED.Nombre,
           INSERTED.Descripcion,
+          CAST(ISNULL(INSERTED.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
           INSERTED.Activa AS Activo,
           INSERTED.CreatedAt,
           INSERTED.UpdatedAt
@@ -6105,6 +6759,23 @@ router.post("/horarios-grupo", async (req, res) => {
       });
     }
 
+    const conflictoDocente = await validateHorarioDocenteConflict({
+      pool,
+      institucionId,
+      grupoMateriaId: Number(grupoMateriaId),
+      bloqueHorarioId: Number(bloqueHorarioId),
+      diaSemana: Number(diaSemana)
+    });
+
+    if (conflictoDocente) {
+      return res.status(409).json({
+        ok: false,
+        code: conflictoDocente.code,
+        message: conflictoDocente.message,
+        data: conflictoDocente.details
+      });
+    }
+
     const result = await pool.request()
       .input("grupoMateriaId", sql.Int, Number(grupoMateriaId))
       .input("bloqueHorarioId", sql.Int, Number(bloqueHorarioId))
@@ -6176,6 +6847,24 @@ router.put("/horarios-grupo/:id", async (req, res) => {
         ok: false,
         code: "HORARIO_GRUPO_DUPLICADO",
         message: "Ya existe otro horario para esa materia, bloque y día"
+      });
+    }
+
+    const conflictoDocente = await validateHorarioDocenteConflict({
+      pool,
+      institucionId,
+      grupoMateriaId: Number(grupoMateriaId),
+      bloqueHorarioId: Number(bloqueHorarioId),
+      diaSemana: Number(diaSemana),
+      excludeHorarioGrupoId: id
+    });
+
+    if (conflictoDocente) {
+      return res.status(409).json({
+        ok: false,
+        code: conflictoDocente.code,
+        message: conflictoDocente.message,
+        data: conflictoDocente.details
       });
     }
 
@@ -6878,6 +7567,153 @@ router.delete("/fechas-clase/:id", async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: "Error interno al eliminar fecha de clase"
+    });
+  }
+});
+
+router.post("/fechas-clase/sync-periodo/preview", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const { periodoId, fechaCorte } = req.body;
+
+    if (!isValidNonNegativeId(periodoId)) {
+      return badRequest(res, "periodoId es obligatorio");
+    }
+
+    const pool = await getPool();
+    const preview = await buildFechaClaseSyncPreview(
+      pool,
+      institucionId,
+      Number(periodoId),
+      fechaCorte || null
+    );
+
+    return ok(res, preview, "Vista previa de sincronización generada correctamente");
+  } catch (error: any) {
+    console.error("Error al generar la vista previa de fechas de clase:", error);
+    return res.status(getFechaClaseSyncErrorStatus(error)).json({
+      ok: false,
+      message: error?.message || "Error interno al generar la vista previa de fechas de clase"
+    });
+  }
+});
+
+router.post("/fechas-clase/sync-periodo/apply", async (req, res) => {
+  const institucionId = getInstitutionId(req, res);
+  if (institucionId === null) return;
+
+  const { periodoId, fechaCorte } = req.body;
+
+  if (!isValidNonNegativeId(periodoId)) {
+    return badRequest(res, "periodoId es obligatorio");
+  }
+
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+
+  try {
+    const preview = await buildFechaClaseSyncPreview(
+      pool,
+      institucionId,
+      Number(periodoId),
+      fechaCorte || null
+    );
+
+    await transaction.begin();
+
+    let totalEliminadas = 0;
+    let totalCreadas = 0;
+
+    for (const item of preview.eliminar) {
+      const deleteResult = await transaction.request()
+        .input("fechaClaseId", sql.Int, Number(item.FechaClaseId))
+        .query(`
+          DELETE FROM dbo.FechaClase
+          WHERE FechaClaseId = @fechaClaseId
+        `);
+
+      totalEliminadas += deleteResult.rowsAffected?.[0] || 0;
+    }
+
+    for (const item of preview.crear) {
+      const existsResult = await transaction.request()
+        .input("horarioGrupoId", sql.Int, Number(item.HorarioGrupoId))
+        .input("fecha", sql.Date, item.Fecha)
+        .query(`
+          SELECT TOP 1 FechaClaseId
+          FROM dbo.FechaClase
+          WHERE HorarioGrupoId = @horarioGrupoId
+            AND Fecha = @fecha
+        `);
+
+      if (existsResult.recordset.length) continue;
+
+      await transaction.request()
+        .input("horarioGrupoId", sql.Int, Number(item.HorarioGrupoId))
+        .input("fecha", sql.Date, item.Fecha)
+        .input("periodoId", sql.Int, Number(periodoId))
+        .query(`
+          INSERT INTO dbo.FechaClase
+          (
+            HorarioGrupoId,
+            Fecha,
+            PeriodoId,
+            EsExtraordinaria,
+            Observacion,
+            CreatedAt
+          )
+          VALUES
+          (
+            @horarioGrupoId,
+            @fecha,
+            @periodoId,
+            0,
+            N'Sincronizada por período',
+            SYSDATETIME()
+          )
+        `);
+
+      totalCreadas += 1;
+    }
+
+    await writeFechaClaseSyncLogIfAvailable(transaction, {
+      InstitucionId: institucionId,
+      PeriodoId: Number(periodoId),
+      FechaCorteSolicitada: preview.fechaCorteSolicitada,
+      FechaCorteAplicada: preview.fechaCorteAplicada,
+      Modo: "SYNC",
+      UsuarioId: req.auth?.usuarioId ? Number(req.auth.usuarioId) : null,
+      Resumen: {
+        ...preview.resumen,
+        aplicadasCrear: totalCreadas,
+        aplicadasEliminar: totalEliminadas
+      }
+    });
+
+    await transaction.commit();
+
+    return ok(
+      res,
+      {
+        ...preview,
+        aplicado: {
+          crear: totalCreadas,
+          eliminar: totalEliminadas
+        }
+      },
+      "Sincronización aplicada correctamente sobre fechas futuras"
+    );
+  } catch (error: any) {
+    try {
+      if ((transaction as any)._aborted === false) await transaction.rollback();
+    } catch {}
+
+    console.error("Error al aplicar la sincronización de fechas de clase:", error);
+    return res.status(getFechaClaseSyncErrorStatus(error)).json({
+      ok: false,
+      message: error?.message || "Error interno al aplicar la sincronización de fechas de clase"
     });
   }
 });
@@ -7812,6 +8648,7 @@ async function processMateriaImportRow(pool: any, institucionId: number, row: an
   const codigo = toNullableImportString(getImportValue(row, ["codigo", "código"]));
   const nombre = getRowText(row, ["nombre", "materia"]);
   const descripcion = toNullableImportString(getImportValue(row, ["descripcion", "descripción"]));
+  const esMateriaEspecial = toImportBoolean(getImportValue(row, ["materia especial", "es materia especial", "especial", "especial si/no"]));
   const referencia = nombre || codigo || `Fila ${fila}`;
   if (!nombre) return { fila, referencia, estado: "ERROR", motivo: "nombre es obligatorio" };
 
@@ -7834,9 +8671,10 @@ async function processMateriaImportRow(pool: any, institucionId: number, row: an
       .input("codigo", sql.NVarChar, codigo)
       .input("nombre", sql.NVarChar, nombre)
       .input("descripcion", sql.NVarChar, descripcion)
+      .input("esMateriaEspecial", sql.Bit, !!esMateriaEspecial)
       .query(`
         UPDATE dbo.Materia
-        SET Codigo = @codigo, Nombre = @nombre, Descripcion = @descripcion, Activa = 1, UpdatedAt = SYSDATETIME()
+        SET Codigo = @codigo, Nombre = @nombre, Descripcion = @descripcion, EsMateriaEspecial = @esMateriaEspecial, Activa = 1, UpdatedAt = SYSDATETIME()
         WHERE MateriaId = @id
       `);
     return { fila, referencia, estado: "REACTIVADO", motivo: "Materia inactiva reactivada y actualizada" };
@@ -7847,9 +8685,10 @@ async function processMateriaImportRow(pool: any, institucionId: number, row: an
     .input("codigo", sql.NVarChar, codigo)
     .input("nombre", sql.NVarChar, nombre)
     .input("descripcion", sql.NVarChar, descripcion)
+    .input("esMateriaEspecial", sql.Bit, !!esMateriaEspecial)
     .query(`
-      INSERT INTO dbo.Materia (InstitucionId, Codigo, Nombre, Descripcion, Activa, CreatedAt)
-      VALUES (@institucionId, @codigo, @nombre, @descripcion, 1, SYSDATETIME())
+      INSERT INTO dbo.Materia (InstitucionId, Codigo, Nombre, Descripcion, EsMateriaEspecial, Activa, CreatedAt)
+      VALUES (@institucionId, @codigo, @nombre, @descripcion, @esMateriaEspecial, 1, SYSDATETIME())
     `);
   return { fila, referencia, estado: "CREADO", motivo: "Materia creada correctamente" };
 }
@@ -7978,10 +8817,36 @@ async function processHorarioImportRow(pool: any, institucionId: number, row: an
   if (existente.recordset.length) {
     const current = existente.recordset[0];
     if (current.Activo) return { fila, referencia, estado: "OMITIDO", motivo: "El horario ya existe activo" };
+
+    const conflictoDocente = await validateHorarioDocenteConflict({
+      pool,
+      institucionId,
+      grupoMateriaId: Number(grupoMateria.GrupoMateriaId),
+      bloqueHorarioId: Number(bloque.BloqueHorarioId),
+      diaSemana: Number(diaSemana),
+      excludeHorarioGrupoId: Number(current.HorarioGrupoId)
+    });
+
+    if (conflictoDocente) {
+      return { fila, referencia, estado: "ERROR", motivo: conflictoDocente.message };
+    }
+
     await pool.request()
       .input("id", sql.Int, current.HorarioGrupoId)
       .query(`UPDATE dbo.HorarioGrupo SET Activo = 1, UpdatedAt = SYSDATETIME() WHERE HorarioGrupoId = @id`);
     return { fila, referencia, estado: "REACTIVADO", motivo: "Horario inactivo reactivado" };
+  }
+
+  const conflictoDocente = await validateHorarioDocenteConflict({
+    pool,
+    institucionId,
+    grupoMateriaId: Number(grupoMateria.GrupoMateriaId),
+    bloqueHorarioId: Number(bloque.BloqueHorarioId),
+    diaSemana: Number(diaSemana)
+  });
+
+  if (conflictoDocente) {
+    return { fila, referencia, estado: "ERROR", motivo: conflictoDocente.message };
   }
 
   await pool.request()

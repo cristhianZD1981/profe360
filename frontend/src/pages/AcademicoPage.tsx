@@ -145,6 +145,7 @@ type Materia = {
   Codigo: string | null;
   Nombre: string;
   Descripcion: string | null;
+  EsMateriaEspecial?: boolean;
   Activo: boolean;
 };
 
@@ -280,6 +281,54 @@ type FechaClase = {
   DiaSemana: number | null;
 };
 
+type FechaClaseSyncItem = {
+  FechaClaseId: number | null;
+  HorarioGrupoId: number;
+  GrupoMateriaId: number;
+  GrupoId: number;
+  GrupoNombre: string;
+  GrupoNivel: string | null;
+  MateriaNombre: string;
+  PeriodoId: number | null;
+  PeriodoNombre: string;
+  Fecha: string;
+  BloqueHorarioId: number;
+  BloqueNombre: string;
+  DiaSemana: number;
+  DiaSemanaNombre: string;
+  TieneAsistencia: boolean;
+  Motivo?: string | null;
+};
+
+type FechaClaseSyncPreview = {
+  periodo: {
+    PeriodoId: number;
+    Nombre: string;
+    FechaInicio: string;
+    FechaFin: string;
+  };
+  fechaCorteSolicitada: string | null;
+  fechaCorteAplicada: string;
+  resumen: {
+    horariosActivos: number;
+    totalEsperadas: number;
+    crear: number;
+    mantener: number;
+    eliminar: number;
+    bloqueadasPorAsistencia: number;
+    conflictos: number;
+  };
+  crear: FechaClaseSyncItem[];
+  mantener: FechaClaseSyncItem[];
+  eliminar: FechaClaseSyncItem[];
+  bloqueadas: FechaClaseSyncItem[];
+  conflictos: FechaClaseSyncItem[];
+  aplicado?: {
+    crear: number;
+    eliminar: number;
+  };
+};
+
 type MensajeSeguimiento = {
   MensajeSeguimientoId: number;
   TipoUso: "COTIDIANO" | "TAREA" | "ASISTENCIA" | "EXAMEN";
@@ -402,7 +451,8 @@ function getCicloPorNivel(value: any) {
 const initialMateriaForm = {
   codigo: "",
   nombre: "",
-  descripcion: ""
+  descripcion: "",
+  esMateriaEspecial: false
 };
 
 type CorreoNotificacionConfig = {
@@ -495,6 +545,11 @@ const initialFechaClaseForm = {
   bloqueHorarioIdInicialNuevo: "",
   diaSemanaNuevo: "",
   cantidadLeccionesPorDiaNueva: "1"
+};
+
+const initialFechaClaseSyncForm = {
+  periodoId: "",
+  fechaCorte: ""
 };
 
 const academicoBulkImportLabels: Record<AcademicoBulkImportKey, { title: string; filename: string }> = {
@@ -696,6 +751,11 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [grupoMateriaForm, setGrupoMateriaForm] = useState(initialGrupoMateriaForm);
   const [horarioForm, setHorarioForm] = useState(initialHorarioForm);
   const [fechaClaseForm, setFechaClaseForm] = useState(initialFechaClaseForm);
+  const [fechaClaseSyncForm, setFechaClaseSyncForm] = useState(() => ({
+    ...initialFechaClaseSyncForm,
+    fechaCorte: formatDate(new Date().toISOString())
+  }));
+  const [fechaClaseSyncPreview, setFechaClaseSyncPreview] = useState<FechaClaseSyncPreview | null>(null);
   const [feriadoForm, setFeriadoForm] = useState({ fecha: "", nombre: "", descripcion: "" });
   const [mensajeSeguimientoForm, setMensajeSeguimientoForm] = useState(initialMensajeSeguimientoForm);
 
@@ -780,6 +840,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [loadingGrupoMateria, setLoadingGrupoMateria] = useState(false);
   const [loadingHorario, setLoadingHorario] = useState(false);
   const [loadingFechaClase, setLoadingFechaClase] = useState(false);
+  const [loadingFechaClaseSync, setLoadingFechaClaseSync] = useState(false);
   const [loadingFeriado, setLoadingFeriado] = useState(false);
   const [loadingDiasLectivos, setLoadingDiasLectivos] = useState(false);
   const [loadingMensajesSeguimiento, setLoadingMensajesSeguimiento] = useState(false);
@@ -798,7 +859,6 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   });
   const [boletaConductaConsecutivo, setBoletaConductaConsecutivo] = useState("1");
   const [openSections, setOpenSections] = useState<Record<FormSectionKey, boolean>>(initialOpenSections);
-  const [fechasClaseMode, setFechasClaseMode] = useState<"none" | "generar" | "reprogramar">("none");
 
   function openSection(section: FormSectionKey) {
     setOpenSections((prev) => ({ ...prev, [section]: true }));
@@ -1281,7 +1341,14 @@ function resetMatriculaForm() {
   function resetFechaClaseForm() {
     setFechaClaseForm(initialFechaClaseForm);
     setEditingFechaClaseId(null);
-    setFechasClaseMode("none");
+  }
+
+  function resetFechaClaseSyncForm() {
+    setFechaClaseSyncForm({
+      ...initialFechaClaseSyncForm,
+      fechaCorte: formatDate(new Date().toISOString())
+    });
+    setFechaClaseSyncPreview(null);
   }
 
   function resetFeriadoForm() {
@@ -2022,7 +2089,8 @@ function resetMatriculaForm() {
       const payload = {
         codigo: materiaForm.codigo || null,
         nombre: materiaForm.nombre,
-        descripcion: materiaForm.descripcion || null
+        descripcion: materiaForm.descripcion || null,
+        esMateriaEspecial: !!materiaForm.esMateriaEspecial
       };
 
       if (editingMateriaId !== null) {
@@ -2223,70 +2291,74 @@ function resetMatriculaForm() {
     }
   }
 
-  async function handleGenerarFechasAutomaticas(e: FormEvent) {
-  e.preventDefault();
-  setLoadingFechaClase(true);
-  clearMessages();
+  async function handleFechaClaseSyncPreview(e: FormEvent) {
+    e.preventDefault();
+    setLoadingFechaClaseSync(true);
+    clearMessages();
 
-  try {
-    const payload = {
-      grupoMateriaId: Number(fechaClaseForm.grupoMateriaId),
-      periodoId: Number(fechaClaseForm.periodoId),
-      bloqueHorarioIdInicial: Number(fechaClaseForm.bloqueHorarioIdInicial),
-      diaSemana: Number(fechaClaseForm.diaSemana),
-      cantidadLeccionesPorDia: Number(fechaClaseForm.cantidadLeccionesPorDia)
-    };
+    try {
+      const payload = {
+        periodoId: Number(fechaClaseSyncForm.periodoId),
+        fechaCorte: fechaClaseSyncForm.fechaCorte || null
+      };
 
-    const response = await api.post("/academico/fechas-clase/generar-automatico", payload);
-    const data = response.data?.data;
+      const response = await api.post("/academico/fechas-clase/sync-periodo/preview", payload);
+      const data = response.data?.data as FechaClaseSyncPreview;
 
-    setMessage(
-      `Fechas generadas correctamente. Total insertadas: ${data?.totalFechasInsertadas ?? 0}${
-        data?.conflictos?.length ? ` | Conflictos omitidos: ${data.conflictos.length}` : ""
-      }${data?.omitidasPorFeriado?.length ? ` | Feriados omitidos: ${data.omitidasPorFeriado.length}` : ""}`
-    );
-
-    resetFechaClaseForm();
-    await loadFechasClase(fechaClaseSearch);
-  } catch (error: any) {
-    console.error("Error generando fechas automáticas:", error);
-    setErrorMessage(
-      error?.response?.data?.message || "No se pudieron generar las fechas de clase automáticamente"
-    );
-  } finally {
-    setLoadingFechaClase(false);
+      setFechaClaseSyncPreview(data);
+      setMessage(
+        `Vista previa lista. Crear: ${data?.resumen?.crear ?? 0} | Eliminar: ${data?.resumen?.eliminar ?? 0} | Bloqueadas: ${data?.resumen?.bloqueadasPorAsistencia ?? 0} | Conflictos: ${data?.resumen?.conflictos ?? 0}`
+      );
+    } catch (error: any) {
+      console.error("Error generando la vista previa de fechas:", error);
+      setFechaClaseSyncPreview(null);
+      setErrorMessage(
+        error?.response?.data?.message || "No se pudo generar la vista previa de sincronización"
+      );
+    } finally {
+      setLoadingFechaClaseSync(false);
+    }
   }
-}
 
-async function handleReprogramarDesde(e: FormEvent) {
-  e.preventDefault();
-  setLoadingFechaClase(true);
-  clearMessages();
+  async function handleFechaClaseSyncApply() {
+    if (!fechaClaseSyncPreview) {
+      setErrorMessage("Primero debes generar la vista previa del período");
+      return;
+    }
 
-  try {
-    const payload = {
-      grupoMateriaId: Number(fechaClaseForm.grupoMateriaId),
-      periodoId: Number(fechaClaseForm.periodoId),
-      fechaDesde: fechaClaseForm.fechaDesde,
-      bloqueHorarioIdInicialNuevo: Number(fechaClaseForm.bloqueHorarioIdInicialNuevo),
-      diaSemanaNuevo: Number(fechaClaseForm.diaSemanaNuevo),
-      cantidadLeccionesPorDiaNueva: Number(fechaClaseForm.cantidadLeccionesPorDiaNueva)
-    };
-
-    await api.post("/academico/fechas-clase/reprogramar-desde", payload);
-
-    setMessage("Reprogramación aplicada correctamente desde la fecha indicada");
-    resetFechaClaseForm();
-    await loadFechasClase(fechaClaseSearch);
-  } catch (error: any) {
-    console.error("Error reprogramando fechas:", error);
-    setErrorMessage(
-      error?.response?.data?.message || "No se pudieron reprogramar las fechas de clase"
+    const confirmado = window.confirm(
+      "Se aplicarán cambios solo sobre fechas futuras. Las fechas con asistencia y el histórico anterior no se tocarán. ¿Deseás continuar?"
     );
-  } finally {
-    setLoadingFechaClase(false);
+
+    if (!confirmado) return;
+
+    setLoadingFechaClaseSync(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        periodoId: Number(fechaClaseSyncForm.periodoId),
+        fechaCorte: fechaClaseSyncForm.fechaCorte || null
+      };
+
+      const response = await api.post("/academico/fechas-clase/sync-periodo/apply", payload);
+      const data = response.data?.data as FechaClaseSyncPreview;
+
+      setFechaClaseSyncPreview(data);
+      setMessage(
+        `Sincronización aplicada. Creadas: ${data?.aplicado?.crear ?? 0} | Eliminadas: ${data?.aplicado?.eliminar ?? 0} | Bloqueadas: ${data?.resumen?.bloqueadasPorAsistencia ?? 0} | Conflictos pendientes: ${data?.resumen?.conflictos ?? 0}`
+      );
+
+      await loadFechasClase(fechaClaseSearch);
+    } catch (error: any) {
+      console.error("Error aplicando sincronización de fechas:", error);
+      setErrorMessage(
+        error?.response?.data?.message || "No se pudo aplicar la sincronización del período"
+      );
+    } finally {
+      setLoadingFechaClaseSync(false);
+    }
   }
-}
 
 
 
@@ -2480,7 +2552,8 @@ async function handleReprogramarDesde(e: FormEvent) {
     setMateriaForm({
       codigo: item.Codigo || "",
       nombre: item.Nombre || "",
-      descripcion: item.Descripcion || ""
+      descripcion: item.Descripcion || "",
+      esMateriaEspecial: !!item.EsMateriaEspecial
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -4598,6 +4671,20 @@ async function handleReprogramarDesde(e: FormEvent) {
                   Descripción
                   <input value={materiaForm.descripcion} onChange={(e) => setMateriaForm({ ...materiaForm, descripcion: e.target.value })} placeholder="Opcional" />
                 </label>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!materiaForm.esMateriaEspecial}
+                    onChange={(e) => setMateriaForm({ ...materiaForm, esMateriaEspecial: e.target.checked })}
+                    style={{ marginTop: "3px" }}
+                  />
+                  <span>
+                    Materia especial
+                    <small style={{ display: "block", color: "#64748b", marginTop: "4px" }}>
+                      Permití que un profesor comparta esta lección con varios grupos solo cuando las materias del cruce estén marcadas como especiales.
+                    </small>
+                  </span>
+                </label>
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                   <button className="primary-btn" disabled={loadingMateria}>
                     {loadingMateria ? (editingMateriaId !== null ? "Actualizando..." : "Guardando...") : (editingMateriaId !== null ? "Actualizar" : "Guardar")}
@@ -4637,7 +4724,7 @@ async function handleReprogramarDesde(e: FormEvent) {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>ID</th><th>Código</th><th>Nombre</th><th>Descripción</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>ID</th><th>Código</th><th>Nombre</th><th>Especial</th><th>Descripción</th><th>Estado</th><th>Acciones</th></tr>
                   </thead>
                   <tbody>
                     {materias.map((item) => (
@@ -4645,6 +4732,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                         <td>{item.MateriaId}</td>
                         <td>{item.Codigo || ""}</td>
                         <td>{item.Nombre}</td>
+                        <td>{item.EsMateriaEspecial ? "Sí" : "No"}</td>
                         <td>{item.Descripcion || ""}</td>
                         <td>{item.Activo ? "Activo" : "Inactivo"}</td>
                         <td>
@@ -4659,7 +4747,7 @@ async function handleReprogramarDesde(e: FormEvent) {
                         </td>
                       </tr>
                     ))}
-                    {!materias.length && <tr><td colSpan={6} style={{ textAlign: "center", padding: "16px" }}>No hay materias registradas</td></tr>}
+                    {!materias.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: "16px" }}>No hay materias registradas</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -5277,203 +5365,205 @@ async function handleReprogramarDesde(e: FormEvent) {
         )}
 
         {tab === "fechasClase" && (
-          <div className={fechasClaseMode !== "none" ? "two-col" : "stack"}>
+          <div className="two-col">
             <section className="card" style={{ marginBottom: 0 }}>
-              {fechasClaseMode !== "none" ? (
-                <>
-      <h3>Generación automática de fechas de clase</h3>
+              <h3>Sincronización por período</h3>
+              <p style={{ marginTop: 0, color: "#475569", lineHeight: 1.5 }}>
+                Este proceso recalcula las fechas de clase del período completo y solo aplica cambios a fechas futuras.
+                El histórico anterior y las fechas con asistencia registrada se conservan.
+              </p>
 
-      <form className="form" onSubmit={handleGenerarFechasAutomaticas}>
-        <label>
-          Materia por grupo
-          <select
-            value={fechaClaseForm.grupoMateriaId}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, grupoMateriaId: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            {gruposMateriaActivas.map((item) => (
-              <option key={item.GrupoMateriaId} value={item.GrupoMateriaId}>
-                {item.GrupoNombre || ""} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""} / {item.MateriaNombre || ""} {item.PeriodoNombre ? `- ${item.PeriodoNombre}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+              <form className="form" onSubmit={handleFechaClaseSyncPreview}>
+                <label>
+                  Período
+                  <select
+                    value={fechaClaseSyncForm.periodoId}
+                    onChange={(e) => setFechaClaseSyncForm({ ...fechaClaseSyncForm, periodoId: e.target.value })}
+                  >
+                    <option value="">Seleccione</option>
+                    {periodos.filter((p) => p.Activo).map((item) => (
+                      <option key={item.PeriodoId} value={item.PeriodoId}>
+                        {item.Nombre} {item.AnioNombre ? `- ${item.AnioNombre}` : ""} {item.FechaInicio ? `(${formatDate(item.FechaInicio)} a ${formatDate(item.FechaFin)})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-        <label>
-          Período
-          <select
-            value={fechaClaseForm.periodoId}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, periodoId: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            {periodos.filter((p) => p.Activo).map((item) => (
-              <option key={item.PeriodoId} value={item.PeriodoId}>
-                {item.Nombre} {item.AnioNombre ? `- ${item.AnioNombre}` : ""} {item.FechaInicio ? `(${formatDate(item.FechaInicio)} a ${formatDate(item.FechaFin)})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+                <label>
+                  Aplicar desde
+                  <input
+                    type="date"
+                    value={fechaClaseSyncForm.fechaCorte}
+                    onChange={(e) => setFechaClaseSyncForm({ ...fechaClaseSyncForm, fechaCorte: e.target.value })}
+                  />
+                </label>
 
-        <label>
-          Sesión inicial
-          <select
-            value={fechaClaseForm.bloqueHorarioIdInicial}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, bloqueHorarioIdInicial: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            {bloquesCatalogo.map((item) => (
-              <option key={item.BloqueHorarioId} value={item.BloqueHorarioId}>
-                {item.Nombre} - {formatTime(item.HoraInicio)} a {formatTime(item.HoraFin)}
-              </option>
-            ))}
-          </select>
-        </label>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button className="primary-btn" disabled={loadingFechaClaseSync}>
+                    {loadingFechaClaseSync ? "Analizando..." : "Analizar período"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleFechaClaseSyncApply}
+                    disabled={loadingFechaClaseSync || !fechaClaseSyncPreview}
+                    style={{
+                      border: "1px solid #bbf7d0",
+                      background: fechaClaseSyncPreview ? "#16a34a" : "#dcfce7",
+                      color: fechaClaseSyncPreview ? "#fff" : "#166534",
+                      borderRadius: "10px",
+                      padding: "10px 14px",
+                      cursor: loadingFechaClaseSync || !fechaClaseSyncPreview ? "not-allowed" : "pointer",
+                      opacity: loadingFechaClaseSync || !fechaClaseSyncPreview ? 0.7 : 1
+                    }}
+                  >
+                    {loadingFechaClaseSync ? "Aplicando..." : "Sincronizar fechas futuras"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetFechaClaseSyncForm}
+                    style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </form>
 
-        <label>
-          Día de la semana
-          <select
-            value={fechaClaseForm.diaSemana}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, diaSemana: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            <option value="2">Lunes</option>
-            <option value="3">Martes</option>
-            <option value="4">Miércoles</option>
-            <option value="5">Jueves</option>
-            <option value="6">Viernes</option>
-            <option value="7">Sábado</option>
-            <option value="1">Domingo</option>
-          </select>
-        </label>
-
-        <label>
-          Cantidad de lecciones por día
-          <input
-            type="number"
-            min="1"
-            value={fechaClaseForm.cantidadLeccionesPorDia}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, cantidadLeccionesPorDia: e.target.value })}
-          />
-        </label>
-
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-          <button className="primary-btn" disabled={loadingFechaClase}>
-            {loadingFechaClase ? "Generando..." : "Generar automáticamente"}
-          </button>
-          <button type="button" onClick={resetFechaClaseForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-            Cancelar
-          </button>
-        </div>
-      </form>
-
-      <hr style={{ margin: "18px 0", opacity: 0.2 }} />
-
-      <h3>Reprogramar desde una fecha</h3>
-
-      <form className="form" onSubmit={handleReprogramarDesde}>
-        <label>
-          Materia por grupo
-          <select
-            value={fechaClaseForm.grupoMateriaId}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, grupoMateriaId: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            {gruposMateriaActivas.map((item) => (
-              <option key={item.GrupoMateriaId} value={item.GrupoMateriaId}>
-                {item.GrupoNombre || ""} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""} / {item.MateriaNombre || ""} {item.PeriodoNombre ? `- ${item.PeriodoNombre}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Período
-          <select
-            value={fechaClaseForm.periodoId}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, periodoId: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            {periodos.filter((p) => p.Activo).map((item) => (
-              <option key={item.PeriodoId} value={item.PeriodoId}>
-                {item.Nombre} {item.AnioNombre ? `- ${item.AnioNombre}` : ""} {item.FechaInicio ? `(${formatDate(item.FechaInicio)} a ${formatDate(item.FechaFin)})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Aplicar desde esta fecha
-          <input
-            type="date"
-            value={fechaClaseForm.fechaDesde}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, fechaDesde: e.target.value })}
-          />
-        </label>
-
-        <label>
-          Nueva sesión inicial
-          <select
-            value={fechaClaseForm.bloqueHorarioIdInicialNuevo}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, bloqueHorarioIdInicialNuevo: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            {bloquesCatalogo.map((item) => (
-              <option key={item.BloqueHorarioId} value={item.BloqueHorarioId}>
-                {item.Nombre} - {formatTime(item.HoraInicio)} a {formatTime(item.HoraFin)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Nuevo día
-          <select
-            value={fechaClaseForm.diaSemanaNuevo}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, diaSemanaNuevo: e.target.value })}
-          >
-            <option value="">Seleccione</option>
-            <option value="2">Lunes</option>
-            <option value="3">Martes</option>
-            <option value="4">Miércoles</option>
-            <option value="5">Jueves</option>
-            <option value="6">Viernes</option>
-            <option value="7">Sábado</option>
-            <option value="1">Domingo</option>
-          </select>
-        </label>
-
-        <label>
-          Nueva cantidad de lecciones por día
-          <input
-            type="number"
-            min="1"
-            value={fechaClaseForm.cantidadLeccionesPorDiaNueva}
-            onChange={(e) => setFechaClaseForm({ ...fechaClaseForm, cantidadLeccionesPorDiaNueva: e.target.value })}
-          />
-        </label>
-
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-          <button className="primary-btn" disabled={loadingFechaClase}>
-            {loadingFechaClase ? "Reprogramando..." : "Reprogramar desde fecha"}
-          </button>
-          <button type="button" onClick={resetFechaClaseForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-            Cancelar
-          </button>
-        </div>
-      </form>
-                </>
-              ) : (
-                <>
-                  <h3>Fechas de clase</h3>
-                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); setEditingFechaClaseId(null); setFechaClaseForm(initialFechaClaseForm); setFechasClaseMode("generar"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-                      Generación automática
-                    </button>
-                    <button type="button" style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }} onClick={() => { clearMessages(); setEditingFechaClaseId(null); setFechaClaseForm(initialFechaClaseForm); setFechasClaseMode("reprogramar"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-                      Reprogramar desde una fecha
-                    </button>
+              {fechaClaseSyncPreview && (
+                <div style={{ marginTop: "18px", display: "grid", gap: "14px" }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                      gap: "10px"
+                    }}
+                  >
+                    <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "12px", padding: "12px" }}>
+                      <div style={{ fontSize: "12px", color: "#1d4ed8" }}>Horarios activos</div>
+                      <strong>{fechaClaseSyncPreview.resumen.horariosActivos}</strong>
+                    </div>
+                    <div style={{ background: "#ecfdf3", border: "1px solid #bbf7d0", borderRadius: "12px", padding: "12px" }}>
+                      <div style={{ fontSize: "12px", color: "#166534" }}>Crear</div>
+                      <strong>{fechaClaseSyncPreview.resumen.crear}</strong>
+                    </div>
+                    <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: "12px", padding: "12px" }}>
+                      <div style={{ fontSize: "12px", color: "#c2410c" }}>Eliminar</div>
+                      <strong>{fechaClaseSyncPreview.resumen.eliminar}</strong>
+                    </div>
+                    <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: "12px", padding: "12px" }}>
+                      <div style={{ fontSize: "12px", color: "#334155" }}>Mantener</div>
+                      <strong>{fechaClaseSyncPreview.resumen.mantener}</strong>
+                    </div>
+                    <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "12px", padding: "12px" }}>
+                      <div style={{ fontSize: "12px", color: "#b91c1c" }}>Bloqueadas</div>
+                      <strong>{fechaClaseSyncPreview.resumen.bloqueadasPorAsistencia}</strong>
+                    </div>
+                    <div style={{ background: "#faf5ff", border: "1px solid #d8b4fe", borderRadius: "12px", padding: "12px" }}>
+                      <div style={{ fontSize: "12px", color: "#7c3aed" }}>Conflictos</div>
+                      <strong>{fechaClaseSyncPreview.resumen.conflictos}</strong>
+                    </div>
                   </div>
-                </>
+
+                  <div style={{ fontSize: "13px", color: "#475569" }}>
+                    Período aplicado: <strong>{fechaClaseSyncPreview.periodo.Nombre}</strong> | Rango del período: {formatDate(fechaClaseSyncPreview.periodo.FechaInicio)} a {formatDate(fechaClaseSyncPreview.periodo.FechaFin)} | Fecha efectiva de cambio: {formatDate(fechaClaseSyncPreview.fechaCorteAplicada)}
+                  </div>
+
+                  <div style={{ display: "grid", gap: "12px" }}>
+                    <div>
+                      <h4 style={{ marginBottom: "8px" }}>Fechas a crear</h4>
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Fecha</th>
+                              <th>Grupo</th>
+                              <th>Materia</th>
+                              <th>Bloque</th>
+                              <th>Día</th>
+                              <th>Motivo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fechaClaseSyncPreview.crear.slice(0, 15).map((item, index) => (
+                              <tr key={`${item.HorarioGrupoId}-${item.Fecha}-${index}`}>
+                                <td>{formatDate(item.Fecha)}</td>
+                                <td>{item.GrupoNombre} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>
+                                <td>{item.MateriaNombre}</td>
+                                <td>{item.BloqueNombre}</td>
+                                <td>{item.DiaSemanaNombre}</td>
+                                <td>{item.Motivo || ""}</td>
+                              </tr>
+                            ))}
+                            {!fechaClaseSyncPreview.crear.length && (
+                              <tr><td colSpan={6} style={{ textAlign: "center", padding: "12px" }}>No hay fechas nuevas por crear</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 style={{ marginBottom: "8px" }}>Fechas que no se tocarán</h4>
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Fecha</th>
+                              <th>Grupo</th>
+                              <th>Materia</th>
+                              <th>Bloque</th>
+                              <th>Motivo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fechaClaseSyncPreview.bloqueadas.slice(0, 15).map((item, index) => (
+                              <tr key={`${item.FechaClaseId}-${index}`}>
+                                <td>{formatDate(item.Fecha)}</td>
+                                <td>{item.GrupoNombre} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>
+                                <td>{item.MateriaNombre}</td>
+                                <td>{item.BloqueNombre}</td>
+                                <td>{item.Motivo || ""}</td>
+                              </tr>
+                            ))}
+                            {!fechaClaseSyncPreview.bloqueadas.length && (
+                              <tr><td colSpan={5} style={{ textAlign: "center", padding: "12px" }}>No hay fechas bloqueadas por asistencia</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 style={{ marginBottom: "8px" }}>Conflictos detectados</h4>
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Fecha</th>
+                              <th>Grupo</th>
+                              <th>Materia</th>
+                              <th>Bloque</th>
+                              <th>Motivo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fechaClaseSyncPreview.conflictos.slice(0, 15).map((item, index) => (
+                              <tr key={`${item.HorarioGrupoId}-${item.Fecha}-conflicto-${index}`}>
+                                <td>{formatDate(item.Fecha)}</td>
+                                <td>{item.GrupoNombre} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>
+                                <td>{item.MateriaNombre}</td>
+                                <td>{item.BloqueNombre}</td>
+                                <td>{item.Motivo || ""}</td>
+                              </tr>
+                            ))}
+                            {!fechaClaseSyncPreview.conflictos.length && (
+                              <tr><td colSpan={5} style={{ textAlign: "center", padding: "12px" }}>No se detectaron conflictos para este período</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
             </section>
 

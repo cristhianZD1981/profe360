@@ -6367,6 +6367,38 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     ? `${selected.GrupoNombre} - ${selected.MateriaNombre}`
     : "Seleccione un grupo y materia";
 
+  const horarioReferencia = selected || gruposOrdenados[0] || null;
+  const horarioContextoGrupos = useMemo(() => {
+    if (!horarioReferencia) return [] as GrupoProfesor[];
+    return gruposOrdenados.filter((item) =>
+      Number(item.AnioLectivoId) === Number(horarioReferencia.AnioLectivoId) &&
+      Number(item.PeriodoId) === Number(horarioReferencia.PeriodoId)
+    );
+  }, [gruposOrdenados, horarioReferencia]);
+
+  const horarioEntradasKeys = useMemo(() => {
+    return new Set(
+      horarioEntradas.map((item) => `${Number(item.GrupoId)}|${Number(item.MateriaId)}`)
+    );
+  }, [horarioEntradas]);
+
+  const horarioPendientes = useMemo(() => {
+    return horarioContextoGrupos.filter((item) => !horarioEntradasKeys.has(`${Number(item.GrupoId)}|${Number(item.MateriaId)}`));
+  }, [horarioContextoGrupos, horarioEntradasKeys]);
+
+  const horarioResumen = useMemo(() => {
+    const gruposConHorario = new Set(
+      horarioEntradas.map((item) => `${Number(item.GrupoId)}|${Number(item.MateriaId)}`)
+    );
+
+    return {
+      totalAsignacionesPeriodo: horarioContextoGrupos.length,
+      totalLeccionesProgramadas: horarioEntradas.length,
+      totalMateriasConHorario: gruposConHorario.size,
+      totalPendientes: horarioPendientes.length
+    };
+  }, [horarioContextoGrupos, horarioEntradas, horarioPendientes]);
+
   return (
     <div className="stack">
       <section className="card">
@@ -6422,6 +6454,32 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           </div>
         </div>
 
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "10px",
+            marginBottom: "12px"
+          }}
+        >
+          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "12px", padding: "12px" }}>
+            <div style={{ fontSize: "12px", color: "#1d4ed8", fontWeight: 800 }}>Grupos del período</div>
+            <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalAsignacionesPeriodo}</strong>
+          </div>
+          <div style={{ background: "#ecfdf3", border: "1px solid #bbf7d0", borderRadius: "12px", padding: "12px" }}>
+            <div style={{ fontSize: "12px", color: "#166534", fontWeight: 800 }}>Lecciones programadas</div>
+            <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalLeccionesProgramadas}</strong>
+          </div>
+          <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: "12px", padding: "12px" }}>
+            <div style={{ fontSize: "12px", color: "#334155", fontWeight: 800 }}>Materias con horario</div>
+            <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalMateriasConHorario}</strong>
+          </div>
+          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: "12px", padding: "12px" }}>
+            <div style={{ fontSize: "12px", color: "#c2410c", fontWeight: 800 }}>Pendientes de horario</div>
+            <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalPendientes}</strong>
+          </div>
+        </div>
+
         {!horarioVisible ? (
           <div style={{ padding: "14px", borderRadius: "14px", background: "#f8fafc", border: "1px solid #cbd5e1", color: "#0f172a", fontWeight: 800 }}>
             El horario está minimizado. Presioná “Ver horario” para desplegarlo.
@@ -6434,6 +6492,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           </div>
         ) : (
           <>
+            {horarioResumen.totalAsignacionesPeriodo > 0 && horarioResumen.totalLeccionesProgramadas === 0 && (
+              <div style={{ marginBottom: "12px", padding: "14px", borderRadius: "14px", background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412" }}>
+                <strong style={{ display: "block", marginBottom: "6px" }}>Todavía no hay horario cargado para tus grupos de este período.</strong>
+                <span style={{ display: "block", marginBottom: horarioPendientes.length ? "10px" : 0 }}>
+                  Tus grupos sí están asignados, pero aún no existe configuración de horario de clases para mostrarlos en el calendario.
+                </span>
+                {horarioPendientes.length > 0 && (
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    {horarioPendientes.slice(0, 12).map((item) => (
+                      <span
+                        key={`pendiente-horario-${item.AsignacionDocenteId}`}
+                        style={{
+                          border: "1px solid #fdba74",
+                          background: "#ffffff",
+                          color: "#9a3412",
+                          borderRadius: "999px",
+                          padding: "6px 10px",
+                          fontWeight: 800,
+                          fontSize: "13px"
+                        }}
+                      >
+                        {item.GrupoNombre} - {item.MateriaNombre}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {renderHorarioSemanal("horario-superior")}
             <div style={{ display: "none", overflowX: "auto", border: "1px solid #cbd5e1", borderRadius: "14px", background: "#ffffff" }}>
             <table style={{ width: "100%", minWidth: "820px", borderCollapse: "collapse", color: "#0f172a" }}>
@@ -7173,6 +7259,31 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </button>
                 </div>
 
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gap: "10px"
+                  }}
+                >
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "12px", padding: "12px" }}>
+                    <div style={{ fontSize: "12px", color: "#1d4ed8", fontWeight: 800 }}>Grupos del período</div>
+                    <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalAsignacionesPeriodo}</strong>
+                  </div>
+                  <div style={{ background: "#ecfdf3", border: "1px solid #bbf7d0", borderRadius: "12px", padding: "12px" }}>
+                    <div style={{ fontSize: "12px", color: "#166534", fontWeight: 800 }}>Lecciones programadas</div>
+                    <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalLeccionesProgramadas}</strong>
+                  </div>
+                  <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: "12px", padding: "12px" }}>
+                    <div style={{ fontSize: "12px", color: "#334155", fontWeight: 800 }}>Materias con horario</div>
+                    <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalMateriasConHorario}</strong>
+                  </div>
+                  <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: "12px", padding: "12px" }}>
+                    <div style={{ fontSize: "12px", color: "#c2410c", fontWeight: 800 }}>Pendientes de horario</div>
+                    <strong style={{ color: "#0f172a", fontSize: "22px" }}>{horarioResumen.totalPendientes}</strong>
+                  </div>
+                </div>
+
                 {loadingHorario ? (
                   <p style={{ color: "#0f172a", fontWeight: 700 }}>Cargando horario...</p>
                 ) : horarioBloques.length === 0 ? (
@@ -7181,6 +7292,34 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </div>
                 ) : (
                   <>
+                    {horarioResumen.totalAsignacionesPeriodo > 0 && horarioResumen.totalLeccionesProgramadas === 0 && (
+                      <div style={{ padding: "14px", borderRadius: "14px", background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412" }}>
+                        <strong style={{ display: "block", marginBottom: "6px" }}>Tus grupos están asignados, pero aún no tienen horario configurado.</strong>
+                        <span style={{ display: "block", marginBottom: horarioPendientes.length ? "10px" : 0 }}>
+                          Mientras no exista `Horario de clases` para estas materias por grupo, el calendario semanal aparecerá libre.
+                        </span>
+                        {horarioPendientes.length > 0 && (
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            {horarioPendientes.slice(0, 12).map((item) => (
+                              <span
+                                key={`panel-pendiente-horario-${item.AsignacionDocenteId}`}
+                                style={{
+                                  border: "1px solid #fdba74",
+                                  background: "#ffffff",
+                                  color: "#9a3412",
+                                  borderRadius: "999px",
+                                  padding: "6px 10px",
+                                  fontWeight: 800,
+                                  fontSize: "13px"
+                                }}
+                              >
+                                {item.GrupoNombre} - {item.MateriaNombre}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {renderHorarioSemanal("horario-panel")}
                     <div style={{ display: "none", overflowX: "auto", border: "1px solid #cbd5e1", borderRadius: "14px", background: "#ffffff" }}>
                     <table style={{ width: "100%", minWidth: "900px", borderCollapse: "collapse", color: "#0f172a" }}>

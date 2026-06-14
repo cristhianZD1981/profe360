@@ -22,6 +22,7 @@ import SeguimientoNotasPage from "./pages/SeguimientoNotasPage";
 import ParametrizacionesPage from "./pages/ParametrizacionesPage";
 import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
 import AssistantAdminPage from "./pages/AssistantAdminPage";
+import ExternalChatWidget from "./components/ExternalChatWidget";
 
 const ADMINISTRATIVO_ROLES = [
   "SUPER_ADMIN",
@@ -49,6 +50,7 @@ const REPORTE_CERTIFICACIONES_ROLES = [
 export default function App() {
   return (
     <AuthProvider>
+      <ExternalChatWidget />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/restablecer-clave" element={<ResetPasswordPage />} />
