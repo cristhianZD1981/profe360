@@ -37,6 +37,28 @@ function isValidNonNegativeId(value: any) {
   return Number.isInteger(n) && n >= 0;
 }
 
+async function hasMateriaEspecialColumn(pool: any) {
+  const result = await pool.request().query(`
+    SELECT CAST(
+      CASE
+        WHEN COL_LENGTH('dbo.Materia', 'EsMateriaEspecial') IS NULL THEN 0
+        ELSE 1
+      END AS BIT
+    ) AS HasColumn
+  `);
+
+  return Boolean(result.recordset[0]?.HasColumn);
+}
+
+function materiaEspecialSelectSql(hasColumn: boolean, alias?: string) {
+  if (!hasColumn) {
+    return "CAST(0 AS BIT)";
+  }
+
+  const prefix = alias ? `${alias}.` : "";
+  return `CAST(ISNULL(${prefix}EsMateriaEspecial, 0) AS BIT)`;
+}
+
 function normalizeSqlTime(value?: string | null) {
   if (!value) return null;
 
@@ -184,6 +206,7 @@ async function getHorarioDocenteConflictInfo(params: {
   excludeHorarioGrupoId?: number | null;
 }) {
   const { pool, institucionId, grupoMateriaId, bloqueHorarioId, diaSemana, excludeHorarioGrupoId } = params;
+  const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
   const targetResult = await pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -197,7 +220,7 @@ async function getHorarioDocenteConflictInfo(params: {
         g.Nombre AS GrupoNombre,
         g.AnioLectivoId,
         m.Nombre AS MateriaNombre,
-        CAST(ISNULL(m.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial
+        ${materiaEspecialSelectSql(hasEsMateriaEspecial, "m")} AS EsMateriaEspecial
       FROM dbo.GrupoMateria gm
       INNER JOIN dbo.Grupo g
         ON g.GrupoId = gm.GrupoId
@@ -275,7 +298,7 @@ async function getHorarioDocenteConflictInfo(params: {
         g.Nombre AS GrupoNombre,
         m.Nombre AS MateriaNombre,
         bh.Nombre AS BloqueNombre,
-        CAST(ISNULL(m.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial
+        ${materiaEspecialSelectSql(hasEsMateriaEspecial, "m")} AS EsMateriaEspecial
       FROM dbo.HorarioGrupo hg
       INNER JOIN dbo.GrupoMateria gm
         ON gm.GrupoMateriaId = hg.GrupoMateriaId
@@ -802,6 +825,7 @@ router.get("/catalogos", async (req, res) => {
     if (institucionId === null) return;
 
     const pool = await getPool();
+    const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
     const [anios, estudiantes, grupos, periodos, materias, especialidades, tiposEstudiante, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
       pool.request()
@@ -883,7 +907,7 @@ router.get("/catalogos", async (req, res) => {
             Codigo,
             Nombre,
             Descripcion,
-            CAST(ISNULL(EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
+            ${materiaEspecialSelectSql(hasEsMateriaEspecial)} AS EsMateriaEspecial,
             Activa AS Activo,
             CreatedAt,
             UpdatedAt
@@ -2043,49 +2067,6 @@ router.get("/anios-lectivos", async (req, res) => {
 
     const pool = await getPool();
 
-    const actual = await pool.request()
-      .input("id", sql.Int, id)
-      .input("institucionId", sql.Int, institucionId)
-      .query(`
-        SELECT TOP 1
-          hg.HorarioGrupoId,
-          hg.GrupoMateriaId,
-          hg.BloqueHorarioId,
-          hg.DiaSemana
-        FROM dbo.HorarioGrupo hg
-        INNER JOIN dbo.GrupoMateria gm
-          ON gm.GrupoMateriaId = hg.GrupoMateriaId
-        INNER JOIN dbo.Grupo g
-          ON g.GrupoId = gm.GrupoId
-        WHERE hg.HorarioGrupoId = @id
-          AND g.InstitucionId = @institucionId
-      `);
-
-    if (!actual.recordset.length) {
-      return res.status(404).json({
-        ok: false,
-        message: "Horario de clase no encontrado"
-      });
-    }
-
-    const conflictoDocente = await validateHorarioDocenteConflict({
-      pool,
-      institucionId,
-      grupoMateriaId: Number(actual.recordset[0].GrupoMateriaId),
-      bloqueHorarioId: Number(actual.recordset[0].BloqueHorarioId),
-      diaSemana: Number(actual.recordset[0].DiaSemana),
-      excludeHorarioGrupoId: id
-    });
-
-    if (conflictoDocente) {
-      return res.status(409).json({
-        ok: false,
-        code: conflictoDocente.code,
-        message: conflictoDocente.message,
-        data: conflictoDocente.details
-      });
-    }
-
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("q", sql.NVarChar, `%${q}%`)
@@ -3035,6 +3016,7 @@ router.get("/materias", async (req, res) => {
     const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
 
     const pool = await getPool();
+    const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -3047,7 +3029,7 @@ router.get("/materias", async (req, res) => {
           Codigo,
           Nombre,
           Descripcion,
-          CAST(ISNULL(EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
+          ${materiaEspecialSelectSql(hasEsMateriaEspecial)} AS EsMateriaEspecial,
           Activa AS Activo,
           CreatedAt,
           UpdatedAt
@@ -3085,6 +3067,7 @@ router.post("/materias", async (req, res) => {
     }
 
     const pool = await getPool();
+    const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
     const duplicado = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -3111,38 +3094,69 @@ router.post("/materias", async (req, res) => {
       .input("nombre", sql.NVarChar, nombre)
       .input("descripcion", sql.NVarChar, descripcion || null)
       .input("esMateriaEspecial", sql.Bit, esMateriaEspecial ? 1 : 0)
-      .query(`
-        INSERT INTO dbo.Materia
-        (
-          InstitucionId,
-          Codigo,
-          Nombre,
-          Descripcion,
-          EsMateriaEspecial,
-          Activa,
-          CreatedAt
-        )
-        OUTPUT
-          INSERTED.MateriaId,
-          INSERTED.InstitucionId,
-          INSERTED.Codigo,
-          INSERTED.Nombre,
-          INSERTED.Descripcion,
-          CAST(ISNULL(INSERTED.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
-          INSERTED.Activa AS Activo,
-          INSERTED.CreatedAt,
-          INSERTED.UpdatedAt
-        VALUES
-        (
-          @institucionId,
-          @codigo,
-          @nombre,
-          @descripcion,
-          @esMateriaEspecial,
-          1,
-          SYSDATETIME()
-        )
-      `);
+      .query(hasEsMateriaEspecial
+        ? `
+            INSERT INTO dbo.Materia
+            (
+              InstitucionId,
+              Codigo,
+              Nombre,
+              Descripcion,
+              EsMateriaEspecial,
+              Activa,
+              CreatedAt
+            )
+            OUTPUT
+              INSERTED.MateriaId,
+              INSERTED.InstitucionId,
+              INSERTED.Codigo,
+              INSERTED.Nombre,
+              INSERTED.Descripcion,
+              CAST(ISNULL(INSERTED.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
+              INSERTED.Activa AS Activo,
+              INSERTED.CreatedAt,
+              INSERTED.UpdatedAt
+            VALUES
+            (
+              @institucionId,
+              @codigo,
+              @nombre,
+              @descripcion,
+              @esMateriaEspecial,
+              1,
+              SYSDATETIME()
+            )
+          `
+        : `
+            INSERT INTO dbo.Materia
+            (
+              InstitucionId,
+              Codigo,
+              Nombre,
+              Descripcion,
+              Activa,
+              CreatedAt
+            )
+            OUTPUT
+              INSERTED.MateriaId,
+              INSERTED.InstitucionId,
+              INSERTED.Codigo,
+              INSERTED.Nombre,
+              INSERTED.Descripcion,
+              CAST(0 AS BIT) AS EsMateriaEspecial,
+              INSERTED.Activa AS Activo,
+              INSERTED.CreatedAt,
+              INSERTED.UpdatedAt
+            VALUES
+            (
+              @institucionId,
+              @codigo,
+              @nombre,
+              @descripcion,
+              1,
+              SYSDATETIME()
+            )
+          `);
 
     return created(res, result.recordset[0], "Materia creada correctamente");
   } catch (error: any) {
@@ -3180,6 +3194,7 @@ router.put("/materias/:id", async (req, res) => {
     }
 
     const pool = await getPool();
+    const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
     const duplicado = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -3209,27 +3224,48 @@ router.put("/materias/:id", async (req, res) => {
       .input("nombre", sql.NVarChar, nombre)
       .input("descripcion", sql.NVarChar, descripcion || null)
       .input("esMateriaEspecial", sql.Bit, esMateriaEspecial ? 1 : 0)
-      .query(`
-        UPDATE dbo.Materia
-        SET
-          Codigo = @codigo,
-          Nombre = @nombre,
-          Descripcion = @descripcion,
-          EsMateriaEspecial = @esMateriaEspecial,
-          UpdatedAt = SYSDATETIME()
-        OUTPUT
-          INSERTED.MateriaId,
-          INSERTED.InstitucionId,
-          INSERTED.Codigo,
-          INSERTED.Nombre,
-          INSERTED.Descripcion,
-          CAST(ISNULL(INSERTED.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
-          INSERTED.Activa AS Activo,
-          INSERTED.CreatedAt,
-          INSERTED.UpdatedAt
-        WHERE MateriaId = @id
-          AND InstitucionId = @institucionId
-      `);
+      .query(hasEsMateriaEspecial
+        ? `
+            UPDATE dbo.Materia
+            SET
+              Codigo = @codigo,
+              Nombre = @nombre,
+              Descripcion = @descripcion,
+              EsMateriaEspecial = @esMateriaEspecial,
+              UpdatedAt = SYSDATETIME()
+            OUTPUT
+              INSERTED.MateriaId,
+              INSERTED.InstitucionId,
+              INSERTED.Codigo,
+              INSERTED.Nombre,
+              INSERTED.Descripcion,
+              CAST(ISNULL(INSERTED.EsMateriaEspecial, 0) AS BIT) AS EsMateriaEspecial,
+              INSERTED.Activa AS Activo,
+              INSERTED.CreatedAt,
+              INSERTED.UpdatedAt
+            WHERE MateriaId = @id
+              AND InstitucionId = @institucionId
+          `
+        : `
+            UPDATE dbo.Materia
+            SET
+              Codigo = @codigo,
+              Nombre = @nombre,
+              Descripcion = @descripcion,
+              UpdatedAt = SYSDATETIME()
+            OUTPUT
+              INSERTED.MateriaId,
+              INSERTED.InstitucionId,
+              INSERTED.Codigo,
+              INSERTED.Nombre,
+              INSERTED.Descripcion,
+              CAST(0 AS BIT) AS EsMateriaEspecial,
+              INSERTED.Activa AS Activo,
+              INSERTED.CreatedAt,
+              INSERTED.UpdatedAt
+            WHERE MateriaId = @id
+              AND InstitucionId = @institucionId
+          `);
 
     if (!result.recordset.length) {
       return res.status(404).json({
@@ -8645,6 +8681,7 @@ async function processGrupoImportRow(pool: any, institucionId: number, row: any,
 }
 
 async function processMateriaImportRow(pool: any, institucionId: number, row: any, fila: number): Promise<AcademicoBulkImportResultRow> {
+  const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
   const codigo = toNullableImportString(getImportValue(row, ["codigo", "código"]));
   const nombre = getRowText(row, ["nombre", "materia"]);
   const descripcion = toNullableImportString(getImportValue(row, ["descripcion", "descripción"]));
@@ -8672,11 +8709,17 @@ async function processMateriaImportRow(pool: any, institucionId: number, row: an
       .input("nombre", sql.NVarChar, nombre)
       .input("descripcion", sql.NVarChar, descripcion)
       .input("esMateriaEspecial", sql.Bit, !!esMateriaEspecial)
-      .query(`
-        UPDATE dbo.Materia
-        SET Codigo = @codigo, Nombre = @nombre, Descripcion = @descripcion, EsMateriaEspecial = @esMateriaEspecial, Activa = 1, UpdatedAt = SYSDATETIME()
-        WHERE MateriaId = @id
-      `);
+      .query(hasEsMateriaEspecial
+        ? `
+            UPDATE dbo.Materia
+            SET Codigo = @codigo, Nombre = @nombre, Descripcion = @descripcion, EsMateriaEspecial = @esMateriaEspecial, Activa = 1, UpdatedAt = SYSDATETIME()
+            WHERE MateriaId = @id
+          `
+        : `
+            UPDATE dbo.Materia
+            SET Codigo = @codigo, Nombre = @nombre, Descripcion = @descripcion, Activa = 1, UpdatedAt = SYSDATETIME()
+            WHERE MateriaId = @id
+          `);
     return { fila, referencia, estado: "REACTIVADO", motivo: "Materia inactiva reactivada y actualizada" };
   }
 
@@ -8686,10 +8729,15 @@ async function processMateriaImportRow(pool: any, institucionId: number, row: an
     .input("nombre", sql.NVarChar, nombre)
     .input("descripcion", sql.NVarChar, descripcion)
     .input("esMateriaEspecial", sql.Bit, !!esMateriaEspecial)
-    .query(`
-      INSERT INTO dbo.Materia (InstitucionId, Codigo, Nombre, Descripcion, EsMateriaEspecial, Activa, CreatedAt)
-      VALUES (@institucionId, @codigo, @nombre, @descripcion, @esMateriaEspecial, 1, SYSDATETIME())
-    `);
+    .query(hasEsMateriaEspecial
+      ? `
+          INSERT INTO dbo.Materia (InstitucionId, Codigo, Nombre, Descripcion, EsMateriaEspecial, Activa, CreatedAt)
+          VALUES (@institucionId, @codigo, @nombre, @descripcion, @esMateriaEspecial, 1, SYSDATETIME())
+        `
+      : `
+          INSERT INTO dbo.Materia (InstitucionId, Codigo, Nombre, Descripcion, Activa, CreatedAt)
+          VALUES (@institucionId, @codigo, @nombre, @descripcion, 1, SYSDATETIME())
+        `);
   return { fila, referencia, estado: "CREADO", motivo: "Materia creada correctamente" };
 }
 
