@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import api from "../lib/http";
@@ -15,64 +15,64 @@ type HighlightSlide = {
 const slides: HighlightSlide[] = [
   {
     id: "ensenanza",
-    badge: "Ensenanza",
-    title: "Menos carga. Mas tiempo para educar.",
+    badge: "Enseñanza",
+    title: "Menos carga operativa. Más tiempo para educar.",
     description:
-      "Centraliza procesos clave y devuelve tiempo al trabajo docente.",
+      "Centralice procesos clave y devuelva tiempo real al trabajo docente y al liderazgo institucional.",
     image:
       "https://images.unsplash.com/photo-1509062522246-3755977927d7?auto=format&fit=crop&w=900&q=80",
-    accent: "linear-gradient(90deg, #d946ef 0%, #38bdf8 100%)"
+    accent: "linear-gradient(90deg, #10b7a4 0%, #0f6c86 100%)"
   },
   {
     id: "analitica",
-    badge: "Analitica",
+    badge: "Analítica",
     title: "Datos claros para decidir mejor.",
     description:
-      "Convierte la gestion academica en informacion util y accionable.",
+      "Convierta la gestión académica en información útil, visible y accionable para tomar mejores decisiones.",
     image:
       "https://images.unsplash.com/photo-1529390079861-591de354faf5?auto=format&fit=crop&w=900&q=80",
-    accent: "linear-gradient(90deg, #8b5cf6 0%, #22d3ee 100%)"
+    accent: "linear-gradient(90deg, #0f6c86 0%, #10b7a4 100%)"
   },
   {
     id: "acompanamiento",
-    badge: "Acompanamiento",
-    title: "Gestion educativa con vision de futuro.",
+    badge: "Acompañamiento",
+    title: "Gestión educativa con visión de futuro.",
     description:
-      "Una plataforma cercana, estable y lista para crecer con su institucion.",
+      "Una plataforma cercana, estable y lista para crecer con su institución sin complicar la operación diaria.",
     image:
       "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?auto=format&fit=crop&w=900&q=80",
-    accent: "linear-gradient(90deg, #f472b6 0%, #60a5fa 100%)"
+    accent: "linear-gradient(90deg, #f2b544 0%, #10b7a4 100%)"
   }
 ];
 
 const trustPoints = [
   {
-    icon: "◌",
+    icon: "✓",
     title: "Seguro, estable y confiable",
-    description: "Protegemos la información institucional y docente."
+    description: "Protegemos la información institucional, docente y académica con una experiencia estable."
   },
   {
-    icon: "☁",
-    title: "Disponibilidad y Asistencia 24/7",
-    description: "Accede desde cualquier lugar con una experiencia consistente."
+    icon: "◔",
+    title: "Disponibilidad y asistencia 24/7",
+    description: "Acceda desde cualquier lugar con una experiencia consistente y acompañamiento cercano."
   },
   {
     icon: "✦",
     title: "Hecho por educadores para educadores",
-    description: "Herramientas pensadas para simplificar el día a día."
+    description: "Herramientas pensadas para simplificar el día a día y responder a necesidades reales."
   }
 ];
 
 const storySections = [
   {
-    eyebrow: "Quienes somos",
-    title: "Hecho por profesores. Potenciado por ingeniería de software.",
+    eyebrow: "Quiénes somos",
+    title: "Hecho por educadores. Potenciado por ingeniería de software.",
     description:
       "Unimos experiencia educativa real y desarrollo tecnológico para crear una plataforma confiable, práctica y lista para responder a las exigencias del día a día institucional.",
     bullets: [
-      "Mas de 20 anos de trayectoria combinada",
-      "Vision educativa con enfoque tecnologico",
-      "Compromiso con Costa Rica y la region"
+      "Más de 20 años de trayectoria combinada",
+      "Visión educativa con enfoque tecnológico",
+      "Compromiso con Costa Rica y la región"
     ]
   },
   {
@@ -81,19 +81,19 @@ const storySections = [
     description:
       "Desarrollamos soluciones tecnológicas que simplifican la gestión académica y administrativa para liberar tiempo, reducir carga operativa y generar valor tangible.",
     bullets: [
-      "Menos operacion manual",
-      "Mas eficiencia institucional",
+      "Menos operación manual",
+      "Más eficiencia institucional",
       "Mejores decisiones"
     ]
   },
   {
     eyebrow: "Visión",
-    title: "Convertirnos en la referencia regional en tecnologia educativa.",
+    title: "Convertirnos en la referencia regional en tecnología educativa.",
     description:
       "Avanzamos para liderar en Costa Rica y la región con una propuesta de servicio cercana, estable e innovadora, orientada a resultados concretos para las instituciones.",
     bullets: [
-      "Innovacion aplicada",
-      "Cercania en el servicio",
+      "Innovación aplicada",
+      "Cercanía en el servicio",
       "Escalabilidad regional"
     ]
   }
@@ -103,17 +103,17 @@ const differentiators = [
   {
     title: "Ahorro real de tiempo",
     description:
-      "Procesos mas agiles para enfocar el esfuerzo donde realmente importa."
+      "Procesos más ágiles para enfocar el esfuerzo institucional donde realmente importa."
   },
   {
     title: "IA al servicio de la educación",
     description:
-      "Tecnologia aplicada para apoyar gestion, analisis y productividad."
+      "Tecnología aplicada para apoyar gestión, análisis y productividad diaria."
   },
   {
     title: "Plataforma estable y cercana",
     description:
-      "Una solucion confiable con acompanamiento y mejora continua."
+      "Una solución confiable con acompañamiento, evolución y mejora continua."
   }
 ];
 
@@ -141,15 +141,15 @@ const impactStats = [
 ];
 
 const ctaPoints = [
-  "Modernice su gestion academica y administrativa",
-  "Ahorre tiempo con procesos mas claros y ordenados",
-  "Impulse su institucion con tecnologia e inteligencia artificial"
+  "Modernice su gestión académica y administrativa",
+  "Ahorre tiempo con procesos más claros, visibles y ordenados",
+  "Impulse su institución con tecnología e inteligencia artificial"
 ];
 
 const topSignals = [
   "Costa Rica",
-  "IA aplicada a educacion",
-  "Soporte y acompanamiento",
+  "IA aplicada a educación",
+  "Soporte y acompañamiento",
   "Hecho por educadores"
 ];
 
@@ -280,6 +280,14 @@ export default function LoginPage() {
     return { prev, next };
   }, [slideIndex]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setSlideIndex((current) => (current + 1) % slides.length);
+    }, 4800);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   function moveSlide(direction: "prev" | "next") {
     setSlideIndex((current) =>
       direction === "next"
@@ -400,7 +408,7 @@ export default function LoginPage() {
         <div className="login-topbar">
           <div className="login-topbar__brandline">
             <span className="login-topbar__label">Profe360</span>
-            <p>Tecnologia educativa para una gestion mas clara, agil y confiable.</p>
+            <p>Tecnología educativa para una gestión más clara, ágil y confiable.</p>
           </div>
 
           <div className="login-topbar__signals">
@@ -425,8 +433,8 @@ export default function LoginPage() {
           </div>
 
           <div className="login-panel__heading">
-            <h1>La plataforma que ordena, agiliza y fortalece su gestion educativa.</h1>
-            <p>Ingrese a Profe360 y convierta tiempo operativo en valor real para su institucion.</p>
+            <h1>La plataforma que ordena, agiliza y fortalece su gestión educativa.</h1>
+            <p>Ingrese a Profe360 y convierta tiempo operativo en valor real para su institución.</p>
           </div>
 
           <form onSubmit={handleSubmit} className="login-form-panel">
@@ -629,6 +637,7 @@ export default function LoginPage() {
             </button>
 
             <article
+              key={`prev-${sideSlides.prev.id}`}
               className="login-showcase-card login-showcase-card--side"
               style={{ backgroundImage: `url(${sideSlides.prev.image})` }}
             >
@@ -640,6 +649,7 @@ export default function LoginPage() {
             </article>
 
             <article
+              key={slide.id}
               className="login-showcase-card login-showcase-card--main"
               style={{ backgroundImage: `url(${slide.image})` }}
             >
@@ -657,6 +667,7 @@ export default function LoginPage() {
             </article>
 
             <article
+              key={`next-${sideSlides.next.id}`}
               className="login-showcase-card login-showcase-card--side login-showcase-card--right"
               style={{ backgroundImage: `url(${sideSlides.next.image})` }}
             >
@@ -707,11 +718,11 @@ export default function LoginPage() {
         <div className="login-story-hero">
           <div className="login-story-hero__copy">
             <span className="login-story__eyebrow">Profe360</span>
-            <h2>Tecnologia educativa que simplifica la gestion y eleva resultados.</h2>
+            <h2>Tecnología educativa que simplifica la gestión y eleva resultados.</h2>
             <p>
-              Profe360 integra experiencia docente, ingenieria de software e inteligencia
-              artificial para ofrecer una gestion mas agil, clara y rentable para cada
-              institucion educativa.
+              Profe360 integra experiencia docente, ingeniería de software e inteligencia
+              artificial para ofrecer una gestión más ágil, clara y rentable para cada
+              institución educativa.
             </p>
           </div>
 
@@ -775,11 +786,11 @@ export default function LoginPage() {
 
       <section className="login-cta">
         <div className="login-cta__copy">
-          <span className="login-story__eyebrow">Llamado a la accion</span>
-          <h2>Modernice su gestion educativa con Profe360.</h2>
+          <span className="login-story__eyebrow">Llamado a la acción</span>
+          <h2>Modernice su gestión educativa con Profe360.</h2>
           <p>
-            Lleve su institucion a una operacion mas ordenada, eficiente y preparada para
-            los retos actuales de la educacion con una plataforma pensada para generar
+            Lleve su institución a una operación más ordenada, eficiente y preparada para
+            los retos actuales de la educación con una plataforma pensada para generar
             resultados reales.
           </p>
           <ul className="login-cta__list">
@@ -795,7 +806,7 @@ export default function LoginPage() {
             className="login-submit-btn"
             onClick={() => scrollToSection("login-access")}
           >
-            <span>Iniciar sesion</span>
+            <span>Iniciar sesión</span>
             <strong>→</strong>
           </button>
 

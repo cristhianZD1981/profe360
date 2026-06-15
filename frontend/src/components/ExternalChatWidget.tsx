@@ -6,14 +6,31 @@ const DEFAULT_WHATSAPP_TEXT =
   "Hola, quiero informacion sobre Profe360 para empezar cuanto antes.";
 const DEFAULT_WHATSAPP_NUMBER = "50686435071";
 
+function buildDefaultWhatsAppUrl(phone: string) {
+  const text = encodeURIComponent(DEFAULT_WHATSAPP_TEXT);
+  return `https://api.whatsapp.com/send?phone=${phone}&text=${text}`;
+}
+
 function buildWhatsAppHref() {
   const env = (import.meta as any).env || {};
   const configuredUrl = String(env.VITE_PROFE360_WHATSAPP_URL || "").trim();
-  if (configuredUrl) return configuredUrl;
-
   const configuredNumber = String(env.VITE_PROFE360_WHATSAPP_NUMBER || DEFAULT_WHATSAPP_NUMBER).replace(/\D/g, "");
-  const text = encodeURIComponent(DEFAULT_WHATSAPP_TEXT);
-  return `https://api.whatsapp.com/send?phone=${configuredNumber}&text=${text}`;
+
+  if (configuredUrl) {
+    try {
+      const parsed = new URL(configuredUrl);
+      const phoneFromUrl =
+        parsed.searchParams.get("phone") ||
+        parsed.pathname.replace(/\D/g, "") ||
+        configuredNumber;
+
+      return buildDefaultWhatsAppUrl(String(phoneFromUrl).replace(/\D/g, "") || configuredNumber);
+    } catch {
+      return buildDefaultWhatsAppUrl(configuredNumber);
+    }
+  }
+
+  return buildDefaultWhatsAppUrl(configuredNumber);
 }
 
 function WhatsAppIcon() {
