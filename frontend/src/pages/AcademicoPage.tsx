@@ -84,7 +84,7 @@ type MatriculaImportResultRow = {
   estudiante?: string | null;
   grupo?: string | null;
   matriculaId?: number | null;
-  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  estado: "CREADO" | "ACTUALIZADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
   motivo: string;
 };
 
@@ -93,6 +93,7 @@ type MatriculaImportResult = {
   totalOk: number;
   totalError: number;
   totalCreados: number;
+  totalActualizados: number;
   totalReactivados: number;
   totalOmitidos: number;
   resultados: MatriculaImportResultRow[];
@@ -1551,9 +1552,7 @@ function resetMatriculaForm() {
     }
   }
 
-  async function handleImportarMatriculas(e: FormEvent) {
-    e.preventDefault();
-
+  async function runImportarMatriculas() {
     if (!matriculaImportAnioId) {
       setErrorMessage("Debes seleccionar el año lectivo para la importación");
       return;
@@ -1567,7 +1566,21 @@ function resetMatriculaForm() {
     setImportandoMatriculas(true);
     clearMessages();
     setMatriculaImportResult(null);
-    setMatriculaImportProgress(null);
+    setMatriculaImportProgress({
+      jobId: "pending-local",
+      status: "PENDIENTE",
+      totalRegistros: 0,
+      totalOk: 0,
+      totalError: 0,
+      totalCreados: 0,
+      totalActualizados: 0,
+      totalReactivados: 0,
+      totalOmitidos: 0,
+      resultados: [],
+      procesados: 0,
+      porcentaje: 0,
+      error: null
+    });
 
     try {
       const formData = new FormData();
@@ -1606,6 +1619,7 @@ function resetMatriculaForm() {
         totalOk: finalProgress.totalOk,
         totalError: finalProgress.totalError,
         totalCreados: finalProgress.totalCreados,
+        totalActualizados: finalProgress.totalActualizados,
         totalReactivados: finalProgress.totalReactivados,
         totalOmitidos: finalProgress.totalOmitidos,
         resultados: finalProgress.resultados || []
@@ -1625,6 +1639,15 @@ function resetMatriculaForm() {
     } finally {
       setImportandoMatriculas(false);
     }
+  }
+
+  async function handleImportarMatriculas(e: FormEvent) {
+    e.preventDefault();
+    await runImportarMatriculas();
+  }
+
+  async function handleImportarMatriculasClick() {
+    await runImportarMatriculas();
   }
 
   async function handleDescargarResumenMatriculas() {
@@ -4187,8 +4210,10 @@ function resetMatriculaForm() {
 
                   <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                     <button
+                      type="button"
                       className="primary-btn"
-                      disabled={importandoMatriculas || !archivoImportacionMatricula || !matriculaImportAnioId}
+                      onClick={() => { void handleImportarMatriculasClick(); }}
+                      disabled={importandoMatriculas || !archivoImportacionMatricula}
                     >
                       {importandoMatriculas ? "Importando..." : "Importar matrículas"}
                     </button>
@@ -4207,40 +4232,57 @@ function resetMatriculaForm() {
                       Limpiar importación
                     </button>
                   </div>
+                  {importandoMatriculas && (
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        fontSize: "0.95rem",
+                        color: "rgba(191, 219, 254, 0.95)"
+                      }}
+                    >
+                      Iniciando importación de matrículas...
+                    </div>
+                  )}
+                  {!importandoMatriculas && errorMessage && (
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        fontSize: "0.95rem",
+                        color: "#fca5a5"
+                      }}
+                    >
+                      {errorMessage}
+                    </div>
+                  )}
                 </form>
 
-                {(importandoMatriculas || matriculaImportProgress) && (
-                  <div
-                    style={{
-                      marginTop: "12px",
-                      padding: "12px",
-                      borderRadius: "10px",
-                      background: "#0f172a",
-                      color: "#e5f3ff"
-                    }}
-                  >
-                    <strong>
-                      {importandoMatriculas
-                        ? "Procesando importación de matrículas"
-                        : "Importación de matrículas finalizada"}
-                    </strong>
-                    <div style={{ marginTop: "4px", opacity: 0.85 }}>
-                      {matriculaImportProgress
-                        ? `${matriculaImportProgress.procesados} de ${matriculaImportProgress.totalRegistros} registros procesados`
-                        : "Preparando archivo..."}
-                    </div>
-                    <div className="processing-progress-track" aria-label="Progreso de importación de matrículas">
-                      <div
-                        className="processing-progress-bar"
-                        style={{ width: `${Math.max(0, Math.min(100, matriculaImportProgress?.porcentaje || 0))}%` }}
-                      />
-                    </div>
-                    <div className="processing-progress-meta">
-                      <span>{matriculaImportProgress?.porcentaje || 0}%</span>
-                      <span>Creadas: {matriculaImportProgress?.totalCreados || 0}</span>
-                      <span>Reactivadas: {matriculaImportProgress?.totalReactivados || 0}</span>
-                      <span>Omitidas: {matriculaImportProgress?.totalOmitidos || 0}</span>
-                      <span>Errores: {matriculaImportProgress?.totalError || 0}</span>
+                {importandoMatriculas && (
+                  <div className="processing-indicator" role="status" aria-live="polite">
+                    <span className="processing-spinner" aria-hidden="true" />
+                    <div className="processing-body">
+                      <strong>Procesando importación de matrículas</strong>
+                      <span>
+                        {matriculaImportProgress
+                          ? matriculaImportProgress.jobId === "pending-local"
+                            ? "Enviando archivo e iniciando importación..."
+                            : `${matriculaImportProgress.procesados} de ${matriculaImportProgress.totalRegistros} registros procesados`
+                          : "Preparando archivo..."}
+                      </span>
+                      <div className="processing-progress-track" aria-label="Progreso de importación de matrículas">
+                        <div
+                          className="processing-progress-bar"
+                          style={{ width: `${Math.max(0, Math.min(100, matriculaImportProgress?.porcentaje || 0))}%` }}
+                        />
+                      </div>
+                      <div className="processing-progress-meta">
+                        <span>{matriculaImportProgress?.porcentaje || 0}%</span>
+                        <span>Creadas: {matriculaImportProgress?.totalCreados || 0}</span>
+                        <span>Actualizadas: {matriculaImportProgress?.totalActualizados || 0}</span>
+                        <span>Reactivadas: {matriculaImportProgress?.totalReactivados || 0}</span>
+                        <span>Omitidas: {matriculaImportProgress?.totalOmitidos || 0}</span>
+                        <span>Errores: {matriculaImportProgress?.totalError || 0}</span>
+                      </div>
+                      <span>No refresques ni cierres esta pantalla hasta que aparezca el resultado.</span>
                     </div>
                   </div>
                 )}
@@ -4250,6 +4292,7 @@ function resetMatriculaForm() {
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
                       <span><strong>Total:</strong> {matriculaImportResult.totalRegistros}</span>
                       <span><strong>Creadas:</strong> {matriculaImportResult.totalCreados}</span>
+                      <span><strong>Actualizadas:</strong> {matriculaImportResult.totalActualizados}</span>
                       <span><strong>Reactivadas:</strong> {matriculaImportResult.totalReactivados}</span>
                       <span><strong>Omitidas:</strong> {matriculaImportResult.totalOmitidos}</span>
                       <span><strong>Errores:</strong> {matriculaImportResult.totalError}</span>

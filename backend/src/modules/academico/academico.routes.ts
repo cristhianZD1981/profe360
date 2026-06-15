@@ -3563,7 +3563,7 @@ type MatriculaImportResultRow = {
   estudiante?: string | null;
   grupo?: string | null;
   matriculaId?: number | null;
-  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  estado: "CREADO" | "ACTUALIZADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
   motivo: string;
 };
 
@@ -3580,6 +3580,7 @@ type MatriculaImportJob = {
   totalOk: number;
   totalError: number;
   totalCreados: number;
+  totalActualizados: number;
   totalReactivados: number;
   totalOmitidos: number;
   resultados: MatriculaImportResultRow[];
@@ -3652,6 +3653,7 @@ function createMatriculaImportJob(params: {
     totalOk: 0,
     totalError: 0,
     totalCreados: 0,
+    totalActualizados: 0,
     totalReactivados: 0,
     totalOmitidos: 0,
     resultados: [],
@@ -3665,10 +3667,11 @@ function createMatriculaImportJob(params: {
 function updateMatriculaImportJobTotals(job: MatriculaImportJob) {
   job.procesados = job.resultados.length;
   job.totalCreados = job.resultados.filter((item) => item.estado === "CREADO").length;
+  job.totalActualizados = job.resultados.filter((item) => item.estado === "ACTUALIZADO").length;
   job.totalReactivados = job.resultados.filter((item) => item.estado === "REACTIVADO").length;
   job.totalOmitidos = job.resultados.filter((item) => item.estado === "OMITIDO").length;
   job.totalError = job.resultados.filter((item) => item.estado === "ERROR").length;
-  job.totalOk = job.totalCreados + job.totalReactivados;
+  job.totalOk = job.totalCreados + job.totalActualizados + job.totalReactivados;
   job.updatedAt = Date.now();
 }
 
@@ -3681,6 +3684,7 @@ function serializeMatriculaImportJob(job: MatriculaImportJob) {
     totalOk: job.totalOk,
     totalError: job.totalError,
     totalCreados: job.totalCreados,
+    totalActualizados: job.totalActualizados,
     totalReactivados: job.totalReactivados,
     totalOmitidos: job.totalOmitidos,
     porcentaje: job.totalRegistros ? Math.round((job.procesados / job.totalRegistros) * 100) : 0,
@@ -3693,15 +3697,17 @@ function serializeMatriculaImportJob(job: MatriculaImportJob) {
 
 function buildMatriculaImportResult(totalRegistros: number, resultados: MatriculaImportResultRow[]) {
   const totalCreados = resultados.filter((item) => item.estado === "CREADO").length;
+  const totalActualizados = resultados.filter((item) => item.estado === "ACTUALIZADO").length;
   const totalReactivados = resultados.filter((item) => item.estado === "REACTIVADO").length;
   const totalOmitidos = resultados.filter((item) => item.estado === "OMITIDO").length;
   const totalError = resultados.filter((item) => item.estado === "ERROR").length;
 
   return {
     totalRegistros,
-    totalOk: totalCreados + totalReactivados,
+    totalOk: totalCreados + totalActualizados + totalReactivados,
     totalError,
     totalCreados,
+    totalActualizados,
     totalReactivados,
     totalOmitidos,
     resultados
@@ -3950,25 +3956,6 @@ async function procesarMatriculaImportada(params: {
         ORDER BY m.MatriculaId DESC
       `);
 
-    if (activaMismoAnio.recordset.length > 0) {
-      const activa = activaMismoAnio.recordset[0];
-      await transaction.rollback();
-      started = false;
-
-      return {
-        fila: payload.fila,
-        cedula: payload.cedula,
-        seccion: payload.seccion,
-        estudiante: getEstudianteNombre(estudiante),
-        grupo: activa.GrupoNombre || null,
-        matriculaId: activa.MatriculaId,
-        estado: "OMITIDO",
-        motivo: Number(activa.GrupoId) === Number(grupoInfo.GrupoId)
-          ? "El estudiante ya tiene matricula activa en esta seccion"
-          : `El estudiante ya tiene matricula activa en el anio lectivo (${activa.GrupoNombre || "otro grupo"})`
-      };
-    }
-
     const duplicada = await transaction.request()
       .input("estudianteId", sql.Int, Number(estudiante.EstudianteId))
       .input("grupoId", sql.Int, Number(grupoInfo.GrupoId))
@@ -4009,6 +3996,52 @@ async function procesarMatriculaImportada(params: {
         matriculaId: null,
         estado: "ERROR",
         motivo: resultadoValidacion.message || "No cumple la progresion academica"
+      };
+    }
+
+    if (activaMismoAnio.recordset.length > 0) {
+      const activa = activaMismoAnio.recordset[0];
+
+      await transaction.request()
+        .input("matriculaId", sql.Int, activa.MatriculaId)
+        .input("grupoId", sql.Int, Number(grupoInfo.GrupoId))
+        .input("fechaMatricula", sql.Date, payload.fechaMatricula || null)
+        .input("observacion", sql.NVarChar, payload.observacion || null)
+        .input("usuarioActualizaId", sql.Int, usuarioId)
+        .query(`
+          UPDATE dbo.Matricula
+          SET
+            GrupoId = @grupoId,
+            FechaMatricula = ISNULL(@fechaMatricula, FechaMatricula),
+            Observacion = @observacion,
+            UsuarioActualizaId = @usuarioActualizaId,
+            Estado = N'Activa',
+            UpdatedAt = SYSDATETIME()
+          WHERE MatriculaId = @matriculaId
+        `);
+
+      await upsertDetalleMatriculaImportada({
+        transaction,
+        matriculaId: activa.MatriculaId,
+        grupoInfo,
+        payload
+      });
+
+      await transaction.commit();
+      started = false;
+
+      const mismoGrupo = Number(activa.GrupoId) === Number(grupoInfo.GrupoId);
+      return {
+        fila: payload.fila,
+        cedula: payload.cedula,
+        seccion: payload.seccion,
+        estudiante: getEstudianteNombre(estudiante),
+        grupo: grupoInfo.GrupoNombre || null,
+        matriculaId: activa.MatriculaId,
+        estado: "ACTUALIZADO",
+        motivo: mismoGrupo
+          ? "Matricula activa actualizada desde la importacion"
+          : `Matricula activa actualizada y movida desde ${activa.GrupoNombre || "otro grupo"}`
       };
     }
 
@@ -4458,8 +4491,9 @@ router.get("/matriculas/importar-excel/resumen/:jobId/excel", async (req, res) =
       { Concepto: "Total registros", Valor: job.totalRegistros },
       { Concepto: "Procesados", Valor: job.procesados },
       { Concepto: "Creados", Valor: job.totalCreados },
+      { Concepto: "Actualizados", Valor: job.totalActualizados },
       { Concepto: "Reactivados y actualizados", Valor: job.totalReactivados },
-      { Concepto: "Omitidos por existir activos", Valor: job.totalOmitidos },
+      { Concepto: "Omitidos", Valor: job.totalOmitidos },
       { Concepto: "Errores", Valor: job.totalError },
       { Concepto: "Estado", Valor: job.status }
     ];
@@ -4585,15 +4619,17 @@ router.post("/matriculas/importar-excel", upload.single("archivo"), async (req, 
     }
 
     const totalCreados = resultados.filter((item) => item.estado === "CREADO").length;
+    const totalActualizados = resultados.filter((item) => item.estado === "ACTUALIZADO").length;
     const totalReactivados = resultados.filter((item) => item.estado === "REACTIVADO").length;
     const totalOmitidos = resultados.filter((item) => item.estado === "OMITIDO").length;
     const totalError = resultados.filter((item) => item.estado === "ERROR").length;
 
     return ok(res, {
       totalRegistros: rows.length,
-      totalOk: totalCreados + totalReactivados,
+      totalOk: totalCreados + totalActualizados + totalReactivados,
       totalError,
       totalCreados,
+      totalActualizados,
       totalReactivados,
       totalOmitidos,
       resultados

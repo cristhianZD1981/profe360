@@ -37,7 +37,7 @@ type EncargadoPayload = {
 type ImportResultRow = {
   fila: number;
   identificacion: string;
-  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  estado: "CREADO" | "ACTUALIZADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
   motivo: string;
 };
 
@@ -53,6 +53,7 @@ type ImportJob = {
   totalOk: number;
   totalError: number;
   totalCreados: number;
+  totalActualizados: number;
   totalReactivados: number;
   totalOmitidos: number;
   resultados: ImportResultRow[];
@@ -235,6 +236,13 @@ function toBoolean(value: any, defaultValue = false) {
   return defaultValue;
 }
 
+function toNullablePositiveInt(value: any) {
+  if (value === undefined || value === null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num <= 0) return null;
+  return num;
+}
+
 function toExcelDate(value: any): string | null {
   if (!value) return null;
 
@@ -409,6 +417,8 @@ async function createStudentWithTransaction(params: {
     observacionMedica,
     encargados = []
   } = payload;
+  const tipoEstudianteIdResolved = await resolveTipoEstudianteId(transaction, institucionId, tipoEstudianteId);
+  const rutaTransporteIdResolved = await resolveRutaTransporteId(transaction, institucionId, rutaTransporteId);
 
   const existe = await transaction
     .request()
@@ -457,10 +467,10 @@ async function createStudentWithTransaction(params: {
     .input("sexo", sql.NVarChar, sexo || null)
     .input("fotoUrl", sql.NVarChar, fotoUrl || null)
     .input("codigoCarnet", sql.NVarChar, codigoCarnet)
-    .input("qrContenido", sql.NVarChar, qrContenido)
+     .input("qrContenido", sql.NVarChar, qrContenido)
      .input("nacionalidad", sql.NVarChar, nacionalidad || null)
-    .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
-    .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
+    .input("tipoEstudianteId", sql.Int, tipoEstudianteIdResolved)
+    .input("rutaTransporteId", sql.Int, rutaTransporteIdResolved)
     .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
     .input("adecuacion", sql.NVarChar, adecuacion || null)
     .input("discapacidad", sql.NVarChar, discapacidad || null)
@@ -571,13 +581,6 @@ async function importStudentWithTransaction(params: {
     `);
 
   const row = existing.recordset[0];
-  if (row && row.Activo !== false && row.Activo !== 0) {
-    return {
-      estado: "OMITIDO" as const,
-      motivo: "El estudiante ya existe activo; no se volvio a incluir"
-    };
-  }
-
   if (!row) {
     await createStudentWithTransaction({ transaction, institucionId, payload });
     return {
@@ -606,6 +609,8 @@ async function importStudentWithTransaction(params: {
     observacionMedica,
     encargados = []
   } = payload;
+  const tipoEstudianteIdResolved = await resolveTipoEstudianteId(transaction, institucionId, tipoEstudianteId);
+  const rutaTransporteIdResolved = await resolveRutaTransporteId(transaction, institucionId, rutaTransporteId);
 
   const codigoCarnet = buildCodigoCarnet(institucionId, identificacion);
   const qrContenido = codigoCarnet;
@@ -626,8 +631,8 @@ async function importStudentWithTransaction(params: {
     .input("codigoCarnet", sql.NVarChar, codigoCarnet)
     .input("qrContenido", sql.NVarChar, qrContenido)
     .input("nacionalidad", sql.NVarChar, nacionalidad || null)
-    .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
-    .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
+    .input("tipoEstudianteId", sql.Int, tipoEstudianteIdResolved)
+    .input("rutaTransporteId", sql.Int, rutaTransporteIdResolved)
     .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
     .input("adecuacion", sql.NVarChar, adecuacion || null)
     .input("discapacidad", sql.NVarChar, discapacidad || null)
@@ -684,9 +689,46 @@ async function importStudentWithTransaction(params: {
   });
 
   return {
-    estado: "REACTIVADO" as const,
-    motivo: "Registro reactivado y actualizado desde la importacion"
+    estado: row.Activo !== false && row.Activo !== 0 ? ("ACTUALIZADO" as const) : ("REACTIVADO" as const),
+    motivo:
+      row.Activo !== false && row.Activo !== 0
+        ? "Registro existente actualizado desde la importacion"
+        : "Registro reactivado y actualizado desde la importacion"
   };
+}
+
+async function resolveTipoEstudianteId(transaction: any, institucionId: number, tipoEstudianteId: any) {
+  const normalizedId = toNullablePositiveInt(tipoEstudianteId);
+  if (!normalizedId) return null;
+
+  const result = await transaction.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("tipoEstudianteId", sql.Int, normalizedId)
+    .query(`
+      SELECT TOP 1 TipoEstudianteId
+      FROM dbo.TipoEstudiante
+      WHERE InstitucionId = @institucionId
+        AND TipoEstudianteId = @tipoEstudianteId
+    `);
+
+  return result.recordset[0]?.TipoEstudianteId || null;
+}
+
+async function resolveRutaTransporteId(transaction: any, institucionId: number, rutaTransporteId: any) {
+  const normalizedId = toNullablePositiveInt(rutaTransporteId);
+  if (!normalizedId) return null;
+
+  const result = await transaction.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("rutaTransporteId", sql.Int, normalizedId)
+    .query(`
+      SELECT TOP 1 RutaTransporteId
+      FROM dbo.RutaTransporte
+      WHERE InstitucionId = @institucionId
+        AND RutaTransporteId = @rutaTransporteId
+    `);
+
+  return result.recordset[0]?.RutaTransporteId || null;
 }
 
 function cleanupImportJobs() {
@@ -712,6 +754,7 @@ function createImportJob(params: { institucionId: number; usuarioId: number | nu
     totalOk: 0,
     totalError: 0,
     totalCreados: 0,
+    totalActualizados: 0,
     totalReactivados: 0,
     totalOmitidos: 0,
     resultados: [],
@@ -731,6 +774,7 @@ function serializeImportJob(job: ImportJob) {
     totalOk: job.totalOk,
     totalError: job.totalError,
     totalCreados: job.totalCreados,
+    totalActualizados: job.totalActualizados,
     totalReactivados: job.totalReactivados,
     totalOmitidos: job.totalOmitidos,
     porcentaje: job.totalRegistros ? Math.round((job.procesados / job.totalRegistros) * 100) : 0,
@@ -913,8 +957,8 @@ function buildImportPayloadFromRow(row: any) {
       telefono: normalizePhoneWithDefaultCountryCode(row.telefono),
       fotoUrl: null,
       nacionalidad: toNullableString(row.nacionalidad),
-      tipoEstudianteId: row.tipoEstudianteId ? Number(row.tipoEstudianteId) : null,
-      rutaTransporteId: row.rutaTransporteId ? Number(row.rutaTransporteId) : null,
+      tipoEstudianteId: toNullablePositiveInt(row.tipoEstudianteId),
+      rutaTransporteId: toNullablePositiveInt(row.rutaTransporteId),
       autorizaWhatsAppEncargado: toBoolean(row.autorizaWhatsAppEncargado),
       adecuacion: toNullableString(row.adecuacion),
       discapacidad: toNullableString(row.discapacidad),
@@ -934,6 +978,7 @@ async function processStudentImportRows(params: { rows: any[]; institucionId: nu
   let totalOk = 0;
   let totalError = 0;
   let totalCreados = 0;
+  let totalActualizados = 0;
   let totalReactivados = 0;
   let totalOmitidos = 0;
 
@@ -976,6 +1021,9 @@ async function processStudentImportRows(params: { rows: any[]; institucionId: nu
         if (importResult.estado === "CREADO") {
           totalOk++;
           totalCreados++;
+        } else if (importResult.estado === "ACTUALIZADO") {
+          totalOk++;
+          totalActualizados++;
         } else if (importResult.estado === "REACTIVADO") {
           totalOk++;
           totalReactivados++;
@@ -1002,6 +1050,7 @@ async function processStudentImportRows(params: { rows: any[]; institucionId: nu
       job.totalOk = totalOk;
       job.totalError = totalError;
       job.totalCreados = totalCreados;
+      job.totalActualizados = totalActualizados;
       job.totalReactivados = totalReactivados;
       job.totalOmitidos = totalOmitidos;
       job.resultados = resultados;
@@ -1015,6 +1064,7 @@ async function processStudentImportRows(params: { rows: any[]; institucionId: nu
     job.totalOk = totalOk;
     job.totalError = totalError;
     job.totalCreados = totalCreados;
+    job.totalActualizados = totalActualizados;
     job.totalReactivados = totalReactivados;
     job.totalOmitidos = totalOmitidos;
     job.resultados = resultados;
@@ -1026,6 +1076,7 @@ async function processStudentImportRows(params: { rows: any[]; institucionId: nu
     totalOk,
     totalError,
     totalCreados,
+    totalActualizados,
     totalReactivados,
     totalOmitidos,
     resultados
@@ -1654,8 +1705,9 @@ router.get(
         { Concepto: "Total registros", Valor: job.totalRegistros },
         { Concepto: "Procesados", Valor: job.procesados },
         { Concepto: "Creados", Valor: job.totalCreados },
+        { Concepto: "Actualizados", Valor: job.totalActualizados },
         { Concepto: "Reactivados y actualizados", Valor: job.totalReactivados },
-        { Concepto: "Omitidos por existir activos", Valor: job.totalOmitidos },
+        { Concepto: "Omitidos", Valor: job.totalOmitidos },
         { Concepto: "Errores", Valor: job.totalError },
         { Concepto: "Estado", Valor: job.status }
       ];
@@ -1714,12 +1766,15 @@ router.post(
       const resultados: Array<{
         fila: number;
         identificacion: string;
-        estado: "OK" | "ERROR";
+        estado: "CREADO" | "ACTUALIZADO" | "REACTIVADO" | "ERROR";
         motivo: string;
       }> = [];
 
       let totalOk = 0;
       let totalError = 0;
+      let totalCreados = 0;
+      let totalActualizados = 0;
+      let totalReactivados = 0;
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -1810,7 +1865,7 @@ router.post(
 
         try {
           await transaction.begin();
-          await createStudentWithTransaction({
+          const importResult = await importStudentWithTransaction({
             transaction,
             institucionId: req.auth.institucionId,
             payload
@@ -1820,10 +1875,17 @@ router.post(
           resultados.push({
             fila,
             identificacion,
-            estado: "OK",
-            motivo: "Registro cargado correctamente"
+            estado: importResult.estado,
+            motivo: importResult.motivo
           });
           totalOk++;
+          if (importResult.estado === "CREADO") {
+            totalCreados++;
+          } else if (importResult.estado === "ACTUALIZADO") {
+            totalActualizados++;
+          } else if (importResult.estado === "REACTIVADO") {
+            totalReactivados++;
+          }
         } catch (error: any) {
           try {
             await transaction.rollback();
@@ -1843,6 +1905,9 @@ router.post(
         totalRegistros: rows.length,
         totalOk,
         totalError,
+        totalCreados,
+        totalActualizados,
+        totalReactivados,
         resultados
       }, "ImportaciÃ³n procesada");
     } catch (error) {

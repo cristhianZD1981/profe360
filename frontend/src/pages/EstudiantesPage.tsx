@@ -93,7 +93,7 @@ type RutaTransporte = {
 type ImportResultRow = {
   fila: number;
   identificacion: string;
-  estado: "CREADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
+  estado: "CREADO" | "ACTUALIZADO" | "REACTIVADO" | "OMITIDO" | "ERROR";
   motivo: string;
 };
 
@@ -105,6 +105,7 @@ type ImportProgress = {
   totalOk: number;
   totalError: number;
   totalCreados: number;
+  totalActualizados: number;
   totalReactivados: number;
   totalOmitidos: number;
   porcentaje: number;
@@ -337,6 +338,7 @@ export default function EstudiantesPage() {
     totalOk: number;
     totalError: number;
     totalCreados?: number;
+    totalActualizados?: number;
     totalReactivados?: number;
     totalOmitidos?: number;
     resultados: ImportResultRow[];
@@ -1034,6 +1036,7 @@ export default function EstudiantesPage() {
         totalOk: finalProgress.totalOk,
         totalError: finalProgress.totalError,
         totalCreados: finalProgress.totalCreados,
+        totalActualizados: finalProgress.totalActualizados,
         totalReactivados: finalProgress.totalReactivados,
         totalOmitidos: finalProgress.totalOmitidos,
         resultados: finalProgress.resultados || []
@@ -1784,6 +1787,7 @@ export default function EstudiantesPage() {
                 <div className="processing-progress-meta">
                   <span>{importProgress?.porcentaje || 0}%</span>
                   <span>Creados: {importProgress?.totalCreados || 0}</span>
+                  <span>Actualizados: {importProgress?.totalActualizados || 0}</span>
                   <span>Reactivados: {importProgress?.totalReactivados || 0}</span>
                   <span>Omitidos: {importProgress?.totalOmitidos || 0}</span>
                   <span>Errores: {importProgress?.totalError || 0}</span>
@@ -1797,8 +1801,9 @@ export default function EstudiantesPage() {
             <div style={{ marginTop: "14px" }}>
               <div><strong>Total registros:</strong> {importResult.totalRegistros}</div>
               <div><strong>Creados:</strong> {importResult.totalCreados || 0}</div>
+              <div><strong>Actualizados:</strong> {importResult.totalActualizados || 0}</div>
               <div><strong>Reactivados y actualizados:</strong> {importResult.totalReactivados || 0}</div>
-              <div><strong>Omitidos por existir activos:</strong> {importResult.totalOmitidos || 0}</div>
+              <div><strong>Omitidos:</strong> {importResult.totalOmitidos || 0}</div>
               <div><strong>Con error:</strong> {importResult.totalError}</div>
 
               <button
