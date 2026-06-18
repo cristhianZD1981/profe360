@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
-import { getPool, sql } from "../../config/database";
+import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, forbidden, ok } from "../../utils/http";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 import * as XLSX from "xlsx";
@@ -14,8 +14,17 @@ import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "..
 const router = Router();
 const uploadApoyoEducativo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 const BOOTSTRAP_CACHE_TTL_MS = 10000;
+const APOYO_SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 const bootstrapCache = new Map<string, { at: number; data: any }>();
 const bootstrapInFlight = new Map<string, Promise<any>>();
+let apoyoEducativoReadyCache: { at: number; ready: boolean } | null = null;
+let apoyoEducativoInformeColumnsEnsuredAt = 0;
+let estudianteApoyoColumnsCache: { at: number; columns: {
+  hasAdecuacion: boolean;
+  hasTieneAdecuacion: boolean;
+  hasNivelFuncionamiento: boolean;
+  hasObservaciones: boolean;
+} } | null = null;
 
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
@@ -175,7 +184,11 @@ async function resolverMensajeSeguimiento(pool: any, institucionId: number, tipo
 }
 
 async function ensureApoyoEducativoTablesReady(pool: any) {
-  const result = await pool.request().query(`
+  if (apoyoEducativoReadyCache && Date.now() - apoyoEducativoReadyCache.at <= APOYO_SCHEMA_CACHE_TTL_MS) {
+    return apoyoEducativoReadyCache.ready;
+  }
+
+  const result = await timedQuery("gestion.apoyos.schema.ready", () => pool.request().query(`
     SELECT
       CASE
         WHEN OBJECT_ID('dbo.TipoAdecuacion', 'U') IS NOT NULL
@@ -186,12 +199,16 @@ async function ensureApoyoEducativoTablesReady(pool: any) {
         THEN CAST(1 AS bit)
         ELSE CAST(0 AS bit)
       END AS Ready
-  `);
-  return !!result.recordset[0]?.Ready;
+  `));
+  const ready = !!result.recordset[0]?.Ready;
+  apoyoEducativoReadyCache = { at: Date.now(), ready };
+  return ready;
 }
 
 async function ensureApoyoEducativoInformeColumns(pool: any) {
-  await pool.request().query(`
+  if (Date.now() - apoyoEducativoInformeColumnsEnsuredAt <= APOYO_SCHEMA_CACHE_TTL_MS) return;
+
+  await timedQuery("gestion.apoyos.schema.informeColumns", () => pool.request().query(`
     IF OBJECT_ID('dbo.ApoyoEducativoEstudiante', 'U') IS NOT NULL
     BEGIN
       IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'InformeNombre') IS NULL
@@ -207,7 +224,8 @@ async function ensureApoyoEducativoInformeColumns(pool: any) {
       IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'DatosInformeJson') IS NULL
         ALTER TABLE dbo.ApoyoEducativoEstudiante ADD DatosInformeJson NVARCHAR(MAX) NULL;
     END
-  `);
+  `));
+  apoyoEducativoInformeColumnsEnsuredAt = Date.now();
 }
 
 function parseCsvIds(value: any) {
@@ -218,20 +236,26 @@ function parseCsvIds(value: any) {
 }
 
 async function getEstudianteApoyoColumns(pool: any) {
-  const result = await pool.request().query(`
+  if (estudianteApoyoColumnsCache && Date.now() - estudianteApoyoColumnsCache.at <= APOYO_SCHEMA_CACHE_TTL_MS) {
+    return estudianteApoyoColumnsCache.columns;
+  }
+
+  const result = await timedQuery("gestion.apoyos.schema.estudianteColumns", () => pool.request().query(`
     SELECT name
     FROM sys.columns
     WHERE object_id = OBJECT_ID('dbo.Estudiante')
       AND name IN ('Adecuacion', 'TieneAdecuacion', 'NivelFuncionamiento', 'Observaciones')
-  `);
+  `));
 
   const names = new Set((result.recordset || []).map((item: any) => String(item.name || "")));
-  return {
+  const columns = {
     hasAdecuacion: names.has("Adecuacion"),
     hasTieneAdecuacion: names.has("TieneAdecuacion"),
     hasNivelFuncionamiento: names.has("NivelFuncionamiento"),
     hasObservaciones: names.has("Observaciones")
   };
+  estudianteApoyoColumnsCache = { at: Date.now(), columns };
+  return columns;
 }
 
 function parseMaybeJsonArray(value: any) {
@@ -864,6 +888,7 @@ router.get("/mis-grupos", async (req, res) => {
 });
 
 router.get("/apoyos-educativos/bootstrap", async (req, res) => {
+  const t0 = Date.now();
   try {
     if (!assertCanAccessProfessorModule(req, res)) return;
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -929,7 +954,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
       )
     `;
 
-    const seccionesResult = await request.query(`
+    const seccionesResult = await timedQuery("gestion.apoyos.bootstrap.secciones", () => request.query(`
       ${baseCte}
       SELECT
         GrupoId,
@@ -940,7 +965,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
         PeriodoNombre
       FROM GruposFiltrados
       ORDER BY GrupoNombre, AnioNombre DESC, PeriodoNombre
-    `);
+    `));
 
     const tieneAdecuacionSelect = columnasEstudiante.hasTieneAdecuacion
       ? "CAST(ISNULL(e.TieneAdecuacion, 0) AS BIT)"
@@ -961,7 +986,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
       ? "NULLIF(LTRIM(RTRIM(e.Observaciones)), '')"
       : "CAST(NULL AS NVARCHAR(MAX))";
 
-    const estudiantesResult = await request.query(`
+    const estudiantesResult = await timedQuery("gestion.apoyos.bootstrap.estudiantes", () => request.query(`
       ${baseCte}
       SELECT DISTINCT
         e.EstudianteId,
@@ -991,10 +1016,10 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
        AND e.Activo = 1
       WHERE ${apoyoEducativoWhere}
       ORDER BY gf.GrupoNombre, NombreCompleto
-    `);
+    `));
 
     const adecuacionesResult = ready
-      ? await request.query(`
+      ? await timedQuery("gestion.apoyos.bootstrap.adecuaciones", () => request.query(`
           SELECT
             a.AdecuacionCatalogoId,
             a.TipoAdecuacionId,
@@ -1010,11 +1035,11 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
             ${!isSuperAdmin(req) ? "AND a.InstitucionId = @institucionId" : ""}
           ORDER BY ta.Descripcion, a.Tipo, a.Descripcion
-        `)
+        `))
       : { recordset: [] as any[] };
 
     const informesResult = ready
-      ? await request.query(`
+      ? await timedQuery("gestion.apoyos.bootstrap.informes", () => request.query(`
           ${baseCte}
           SELECT
             ae.ApoyoEducativoId,
@@ -1032,8 +1057,10 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             ON gf.GrupoId = aee.GrupoId
           WHERE aee.InformeDocx IS NOT NULL
           ORDER BY aee.InformeGeneradoAt DESC, aee.ApoyoEducativoEstudianteId DESC
-        `)
+        `))
       : { recordset: [] as any[] };
+
+    console.log(`[gestion.apoyos.bootstrap.total] ${Date.now() - t0}ms`);
 
     return ok(res, {
       secciones: seccionesResult.recordset,
