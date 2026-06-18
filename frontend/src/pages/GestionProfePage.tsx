@@ -11151,8 +11151,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         onChange={(event) => setTablaTipoFormato((event.target.value as any) === "DESPUES" ? "DESPUES" : "ANTES")}
                         style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px" }}
                       >
-                        <option value="ANTES">Antes de la Prueba</option>
-                        <option value="DESPUES">Después de la Prueba</option>
+                        <option value="ANTES">Después de la Prueba</option>
+                        <option value="DESPUES">Antes de la Prueba</option>
                       </select>
                     </label>
                     {tablaTipoFormato === "DESPUES" && Number(tablaPruebaSeleccionadaId || 0) > 0 ? (
