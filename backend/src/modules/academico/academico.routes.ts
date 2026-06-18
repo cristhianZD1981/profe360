@@ -827,7 +827,7 @@ router.get("/catalogos", async (req, res) => {
     const pool = await getPool();
     const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
-    const [anios, estudiantes, grupos, periodos, materias, especialidades, tiposEstudiante, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
+    const [anios, estudiantes, grupos, periodos, materias, especialidades, tiposAdecuacion, tiposEstudiante, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
       pool.request()
         .input("institucionId", sql.Int, institucionId)
         .query(`
@@ -938,6 +938,22 @@ router.get("/catalogos", async (req, res) => {
         .input("institucionId", sql.Int, institucionId)
         .query(`
           SELECT
+            TipoAdecuacionId,
+            InstitucionId,
+            Descripcion,
+            Activo,
+            CreatedAt,
+            UpdatedAt
+          FROM dbo.TipoAdecuacion
+          WHERE InstitucionId = @institucionId
+            AND Activo = 1
+          ORDER BY Descripcion
+        `),
+
+      pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .query(`
+          SELECT
             TipoEstudianteId,
             InstitucionId,
             Descripcion,
@@ -1034,6 +1050,7 @@ router.get("/catalogos", async (req, res) => {
       materias: materias.recordset,
       especialidades: especialidades.recordset,
       tiposEstudiante: tiposEstudiante.recordset,
+      tiposAdecuacion: tiposAdecuacion.recordset,
       rutasTransporte: rutasTransporte.recordset,
       docentes: docentes.recordset,
       bloquesHorarios: bloques.recordset,
@@ -1791,6 +1808,450 @@ router.patch("/tipos-estudiante/:id/reactivar", async (req, res) => {
   } catch (error) {
     console.error("Error al reactivar tipo de estudiante:", error);
     return res.status(500).json({ ok: false, message: "Error interno al reactivar tipo de estudiante" });
+  }
+});
+
+/* =========================================================
+   TIPOS DE ADECUACION
+   ========================================================= */
+router.get("/tipos-adecuacion", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const q = String(req.query.q || "").trim();
+    const incluirInactivos = String(req.query.incluirInactivos || "false") === "true";
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("incluirInactivos", sql.Bit, incluirInactivos)
+      .query(`
+        SELECT
+          TipoAdecuacionId,
+          InstitucionId,
+          Descripcion,
+          Activo,
+          CreatedAt,
+          UpdatedAt
+        FROM dbo.TipoAdecuacion
+        WHERE InstitucionId = @institucionId
+          AND (@incluirInactivos = 1 OR Activo = 1)
+          AND (
+            @q = '%%'
+            OR Descripcion LIKE @q
+          )
+        ORDER BY Descripcion
+      `);
+
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error al listar tipos de adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al listar tipos de adecuación" });
+  }
+});
+
+router.post("/tipos-adecuacion", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const descripcion = String(req.body?.descripcion || "").trim();
+    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+
+    const pool = await getPool();
+    const duplicado = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 TipoAdecuacionId
+        FROM dbo.TipoAdecuacion
+        WHERE InstitucionId = @institucionId
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe un tipo de adecuación con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        INSERT INTO dbo.TipoAdecuacion
+        (
+          InstitucionId,
+          Descripcion,
+          Activo,
+          CreatedAt
+        )
+        OUTPUT INSERTED.*
+        VALUES
+        (
+          @institucionId,
+          @descripcion,
+          1,
+          SYSDATETIME()
+        )
+      `);
+
+    return created(res, result.recordset[0], "Tipo de adecuación creado correctamente");
+  } catch (error) {
+    console.error("Error al crear tipo de adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al crear tipo de adecuación" });
+  }
+});
+
+router.put("/tipos-adecuacion/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const descripcion = String(req.body?.descripcion || "").trim();
+    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+
+    const pool = await getPool();
+    const duplicado = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 TipoAdecuacionId
+        FROM dbo.TipoAdecuacion
+        WHERE InstitucionId = @institucionId
+          AND TipoAdecuacionId <> @id
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe otro tipo de adecuación con esa descripción" });
+    }
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        UPDATE dbo.TipoAdecuacion
+        SET
+          Descripcion = @descripcion,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE TipoAdecuacionId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Tipo de adecuación no encontrado" });
+    }
+    return ok(res, result.recordset[0], "Tipo de adecuación actualizado correctamente");
+  } catch (error) {
+    console.error("Error al actualizar tipo de adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al actualizar tipo de adecuación" });
+  }
+});
+
+router.delete("/tipos-adecuacion/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.TipoAdecuacion
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.TipoAdecuacionId
+        WHERE TipoAdecuacionId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Tipo de adecuación no encontrado" });
+    }
+    return ok(res, { TipoAdecuacionId: id }, "Tipo de adecuación desactivado correctamente");
+  } catch (error) {
+    console.error("Error al desactivar tipo de adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al desactivar tipo de adecuación" });
+  }
+});
+
+router.patch("/tipos-adecuacion/:id/reactivar", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.TipoAdecuacion
+        SET Activo = 1, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE TipoAdecuacionId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Tipo de adecuación no encontrado" });
+    }
+    return ok(res, result.recordset[0], "Tipo de adecuación reactivado correctamente");
+  } catch (error) {
+    console.error("Error al reactivar tipo de adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al reactivar tipo de adecuación" });
+  }
+});
+
+/* =========================================================
+   ADECUACIONES
+   ========================================================= */
+router.get("/adecuaciones", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const q = String(req.query.q || "").trim();
+    const incluirInactivos = String(req.query.incluirInactivos || "false") === "true";
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("incluirInactivos", sql.Bit, incluirInactivos)
+      .query(`
+        SELECT
+          a.AdecuacionCatalogoId,
+          a.InstitucionId,
+          a.TipoAdecuacionId,
+          ta.Descripcion AS Adecuacion,
+          a.Tipo,
+          a.Descripcion,
+          a.Activo,
+          a.CreatedAt,
+          a.UpdatedAt
+        FROM dbo.AdecuacionCatalogo a
+        INNER JOIN dbo.TipoAdecuacion ta
+          ON ta.TipoAdecuacionId = a.TipoAdecuacionId
+        WHERE a.InstitucionId = @institucionId
+          AND (@incluirInactivos = 1 OR a.Activo = 1)
+          AND (
+            @q = '%%'
+            OR ta.Descripcion LIKE @q
+            OR a.Tipo LIKE @q
+            OR a.Descripcion LIKE @q
+          )
+        ORDER BY ta.Descripcion, a.Tipo, a.Descripcion
+      `);
+
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error al listar adecuaciones:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al listar adecuaciones" });
+  }
+});
+
+router.post("/adecuaciones", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const tipoAdecuacionId = Number(req.body?.tipoAdecuacionId || 0);
+    const tipo = String(req.body?.tipo || "").trim();
+    const descripcion = String(req.body?.descripcion || "").trim();
+
+    if (!isValidNonNegativeId(tipoAdecuacionId)) return badRequest(res, "tipoAdecuacionId es obligatorio");
+    if (!tipo || !descripcion) return badRequest(res, "tipo y descripcion son obligatorios");
+
+    const pool = await getPool();
+    const tipoAdecuacion = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoAdecuacionId", sql.Int, tipoAdecuacionId)
+      .query(`
+        SELECT TOP 1 TipoAdecuacionId
+        FROM dbo.TipoAdecuacion
+        WHERE InstitucionId = @institucionId
+          AND TipoAdecuacionId = @tipoAdecuacionId
+      `);
+    if (!tipoAdecuacion.recordset.length) {
+      return res.status(404).json({ ok: false, message: "La adecuación seleccionada no existe" });
+    }
+
+    const duplicado = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoAdecuacionId", sql.Int, tipoAdecuacionId)
+      .input("tipo", sql.NVarChar, tipo)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 AdecuacionCatalogoId
+        FROM dbo.AdecuacionCatalogo
+        WHERE InstitucionId = @institucionId
+          AND TipoAdecuacionId = @tipoAdecuacionId
+          AND UPPER(LTRIM(RTRIM(Tipo))) = UPPER(LTRIM(RTRIM(@tipo)))
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe una adecuación con esa combinación" });
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoAdecuacionId", sql.Int, tipoAdecuacionId)
+      .input("tipo", sql.NVarChar, tipo)
+      .input("descripcion", sql.NVarChar(sql.MAX), descripcion)
+      .query(`
+        INSERT INTO dbo.AdecuacionCatalogo
+        (
+          InstitucionId,
+          TipoAdecuacionId,
+          Tipo,
+          Descripcion,
+          Activo,
+          CreatedAt
+        )
+        OUTPUT INSERTED.*
+        VALUES
+        (
+          @institucionId,
+          @tipoAdecuacionId,
+          @tipo,
+          @descripcion,
+          1,
+          SYSDATETIME()
+        )
+      `);
+
+    return created(res, result.recordset[0], "Adecuación creada correctamente");
+  } catch (error) {
+    console.error("Error al crear adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al crear la adecuación" });
+  }
+});
+
+router.put("/adecuaciones/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const tipoAdecuacionId = Number(req.body?.tipoAdecuacionId || 0);
+    const tipo = String(req.body?.tipo || "").trim();
+    const descripcion = String(req.body?.descripcion || "").trim();
+
+    if (!isValidNonNegativeId(tipoAdecuacionId)) return badRequest(res, "tipoAdecuacionId es obligatorio");
+    if (!tipo || !descripcion) return badRequest(res, "tipo y descripcion son obligatorios");
+
+    const pool = await getPool();
+    const duplicado = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoAdecuacionId", sql.Int, tipoAdecuacionId)
+      .input("tipo", sql.NVarChar, tipo)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 AdecuacionCatalogoId
+        FROM dbo.AdecuacionCatalogo
+        WHERE InstitucionId = @institucionId
+          AND AdecuacionCatalogoId <> @id
+          AND TipoAdecuacionId = @tipoAdecuacionId
+          AND UPPER(LTRIM(RTRIM(Tipo))) = UPPER(LTRIM(RTRIM(@tipo)))
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+    if (duplicado.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe otra adecuación con esa combinación" });
+    }
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoAdecuacionId", sql.Int, tipoAdecuacionId)
+      .input("tipo", sql.NVarChar, tipo)
+      .input("descripcion", sql.NVarChar(sql.MAX), descripcion)
+      .query(`
+        UPDATE dbo.AdecuacionCatalogo
+        SET
+          TipoAdecuacionId = @tipoAdecuacionId,
+          Tipo = @tipo,
+          Descripcion = @descripcion,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE AdecuacionCatalogoId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Adecuación no encontrada" });
+    }
+    return ok(res, result.recordset[0], "Adecuación actualizada correctamente");
+  } catch (error) {
+    console.error("Error al actualizar adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al actualizar la adecuación" });
+  }
+});
+
+router.delete("/adecuaciones/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.AdecuacionCatalogo
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.AdecuacionCatalogoId
+        WHERE AdecuacionCatalogoId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Adecuación no encontrada" });
+    }
+    return ok(res, { AdecuacionCatalogoId: id }, "Adecuación desactivada correctamente");
+  } catch (error) {
+    console.error("Error al desactivar adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al desactivar la adecuación" });
+  }
+});
+
+router.patch("/adecuaciones/:id/reactivar", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.AdecuacionCatalogo
+        SET Activo = 1, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE AdecuacionCatalogoId = @id
+          AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Adecuación no encontrada" });
+    }
+    return ok(res, result.recordset[0], "Adecuación reactivada correctamente");
+  } catch (error) {
+    console.error("Error al reactivar adecuación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al reactivar la adecuación" });
   }
 });
 

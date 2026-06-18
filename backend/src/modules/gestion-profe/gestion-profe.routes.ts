@@ -4,11 +4,15 @@ import { getPool, sql } from "../../config/database";
 import { badRequest, forbidden, ok } from "../../utils/http";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 import * as XLSX from "xlsx";
+import multer from "multer";
+import JSZip from "jszip";
+import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
 import { sendEmail } from "../../services/email.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 const router = Router();
+const uploadApoyoEducativo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 const BOOTSTRAP_CACHE_TTL_MS = 10000;
 const bootstrapCache = new Map<string, { at: number; data: any }>();
 const bootstrapInFlight = new Map<string, Promise<any>>();
@@ -168,6 +172,427 @@ async function resolverMensajeSeguimiento(pool: any, institucionId: number, tipo
       ORDER BY CASE WHEN ValorNivel = @valorNivel THEN 0 ELSE 1 END, MensajeSeguimientoId DESC
     `);
   return result.recordset[0] || null;
+}
+
+async function ensureApoyoEducativoTablesReady(pool: any) {
+  const result = await pool.request().query(`
+    SELECT
+      CASE
+        WHEN OBJECT_ID('dbo.TipoAdecuacion', 'U') IS NOT NULL
+         AND OBJECT_ID('dbo.AdecuacionCatalogo', 'U') IS NOT NULL
+         AND OBJECT_ID('dbo.ApoyoEducativo', 'U') IS NOT NULL
+         AND OBJECT_ID('dbo.ApoyoEducativoEstudiante', 'U') IS NOT NULL
+         AND OBJECT_ID('dbo.ApoyoEducativoDetalle', 'U') IS NOT NULL
+        THEN CAST(1 AS bit)
+        ELSE CAST(0 AS bit)
+      END AS Ready
+  `);
+  return !!result.recordset[0]?.Ready;
+}
+
+async function ensureApoyoEducativoInformeColumns(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.ApoyoEducativoEstudiante', 'U') IS NOT NULL
+    BEGIN
+      IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'InformeNombre') IS NULL
+        ALTER TABLE dbo.ApoyoEducativoEstudiante ADD InformeNombre NVARCHAR(255) NULL;
+      IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'InformeMimeType') IS NULL
+        ALTER TABLE dbo.ApoyoEducativoEstudiante ADD InformeMimeType NVARCHAR(150) NULL;
+      IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'InformeDocx') IS NULL
+        ALTER TABLE dbo.ApoyoEducativoEstudiante ADD InformeDocx VARBINARY(MAX) NULL;
+      IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'InformeGeneradoAt') IS NULL
+        ALTER TABLE dbo.ApoyoEducativoEstudiante ADD InformeGeneradoAt DATETIME2 NULL;
+      IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'PlantillaNombre') IS NULL
+        ALTER TABLE dbo.ApoyoEducativoEstudiante ADD PlantillaNombre NVARCHAR(255) NULL;
+      IF COL_LENGTH('dbo.ApoyoEducativoEstudiante', 'DatosInformeJson') IS NULL
+        ALTER TABLE dbo.ApoyoEducativoEstudiante ADD DatosInformeJson NVARCHAR(MAX) NULL;
+    END
+  `);
+}
+
+function parseCsvIds(value: any) {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => Number(String(item).trim()))
+    .filter((item) => Number.isFinite(item) && item > 0);
+}
+
+async function getEstudianteApoyoColumns(pool: any) {
+  const result = await pool.request().query(`
+    SELECT name
+    FROM sys.columns
+    WHERE object_id = OBJECT_ID('dbo.Estudiante')
+      AND name IN ('Adecuacion', 'TieneAdecuacion', 'NivelFuncionamiento', 'Observaciones')
+  `);
+
+  const names = new Set((result.recordset || []).map((item: any) => String(item.name || "")));
+  return {
+    hasAdecuacion: names.has("Adecuacion"),
+    hasTieneAdecuacion: names.has("TieneAdecuacion"),
+    hasNivelFuncionamiento: names.has("NivelFuncionamiento"),
+    hasObservaciones: names.has("Observaciones")
+  };
+}
+
+function parseMaybeJsonArray(value: any) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return value.split(",").map((item) => item.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function joinNameParts(parts: any[]) {
+  return parts.map((item) => normalizeText(item)).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function formatDateApoyoCR(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Intl.DateTimeFormat("es-CR", { timeZone: "America/Costa_Rica", day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}
+
+function edadAniosMeses(fechaNacimiento: any) {
+  if (!fechaNacimiento) return "";
+  const birth = new Date(fechaNacimiento);
+  if (Number.isNaN(birth.getTime())) return "";
+  const todayParts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Costa_Rica", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const y = Number(todayParts.find((p) => p.type === "year")?.value || 0);
+  const m = Number(todayParts.find((p) => p.type === "month")?.value || 1) - 1;
+  const d = Number(todayParts.find((p) => p.type === "day")?.value || 1);
+  const today = new Date(Date.UTC(y, m, d));
+  let years = today.getUTCFullYear() - birth.getUTCFullYear();
+  let months = today.getUTCMonth() - birth.getUTCMonth();
+  if (today.getUTCDate() < birth.getUTCDate()) months -= 1;
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+  return `${Math.max(0, years)} años${months ? ` y ${months} meses` : ""}`;
+}
+
+function classifyApoyoTipo(tipo: any) {
+  const key = normalizeKey(tipo);
+  if (key.includes("MATERIAL") || key.includes("TECNOLOG")) return "material";
+  if (key.includes("ORGANIZ")) return "organizativo";
+  if (key.includes("EVALU")) return "evaluacion";
+  return "curricular";
+}
+
+function metodoFallback(descripcion: string, nivel: string, observaciones: string) {
+  const base = `${descripcion}`.trim();
+  const intensity = /todas|siempre|permanente|general/i.test(base)
+    ? "Generalizado: durante el desarrollo de las lecciones y procesos evaluativos."
+    : /tiempo|prueba|trabajo|actividad/i.test(base)
+      ? "Extenso: cuando la actividad demande mayor procesamiento, práctica o demostración de aprendizajes."
+      : "Intermitente: según la demanda de la actividad y las necesidades observadas.";
+  return {
+    estrategia: base,
+    intensidad: intensity,
+    evidencia: `Registro de aplicación de la estrategia: ${base}.`,
+    observaciones: `Se aplica considerando el nivel de funcionamiento${nivel ? ` (${nivel})` : ""}${observaciones ? ` y la condición identificada: ${observaciones}` : ""}.`
+  };
+}
+
+async function generarTextosApoyoConIA(contexto: any, catalogos: any[]) {
+  const fallback = new Map<number, any>();
+  for (const item of catalogos) fallback.set(Number(item.AdecuacionCatalogoId), metodoFallback(item.Descripcion || "", contexto.nivelFuncionamiento || "", contexto.observaciones || ""));
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !catalogos.length) return fallback;
+  const model = process.env.OPENAI_APOYO_EDUCATIVO_MODEL || process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
+  const prompt = `
+Generá datos breves y profesionales para un informe de apoyos educativos en Costa Rica.
+Devolvé SOLO JSON válido con esta forma:
+{"items":[{"id":123,"intensidad":"...","evidencia":"...","observaciones":"..."}]}
+
+Contexto:
+Estudiante: ${contexto.estudianteNombre}
+Adecuación: ${contexto.tipoAdecuacion}
+Nivel de funcionamiento: ${contexto.nivelFuncionamiento}
+Condición/observaciones: ${contexto.observaciones}
+Docente responsable: ${contexto.responsable}
+
+Estrategias seleccionadas:
+${catalogos.map((item) => `- id ${item.AdecuacionCatalogoId}: [${item.Tipo}] ${item.Descripcion}`).join("\n")}
+`;
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, input: prompt })
+    });
+    if (!response.ok) return fallback;
+    const data: any = await response.json();
+    const text = data.output_text || data.output?.[0]?.content?.[0]?.text || "";
+    const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || text);
+    for (const item of parsed.items || []) {
+      const id = Number(item.id);
+      const existing = fallback.get(id) || {};
+      fallback.set(id, {
+        ...existing,
+        intensidad: normalizeText(item.intensidad) || existing.intensidad,
+        evidencia: normalizeText(item.evidencia) || existing.evidencia,
+        observaciones: normalizeText(item.observaciones) || existing.observaciones
+      });
+    }
+  } catch (error) {
+    console.error("No se pudo generar texto IA para apoyo educativo; se usará fallback:", error);
+  }
+  return fallback;
+}
+
+function docText(text: any, opts: { bold?: boolean; size?: number; color?: string } = {}) {
+  return new TextRun({ text: String(text || ""), bold: opts.bold, size: opts.size || 20, color: opts.color });
+}
+
+function docP(text: any, opts: { bold?: boolean; size?: number; heading?: any; align?: any; color?: string } = {}) {
+  return new Paragraph({
+    heading: opts.heading,
+    alignment: opts.align,
+    spacing: { after: 90 },
+    children: [docText(text, opts)]
+  });
+}
+
+function docCell(children: any[], opts: { width?: number; fill?: string; span?: number } = {}) {
+  return new TableCell({
+    width: opts.width ? { size: opts.width, type: WidthType.DXA } : undefined,
+    columnSpan: opts.span,
+    shading: opts.fill ? { fill: opts.fill } : undefined,
+    margins: { top: 90, bottom: 90, left: 90, right: 90 },
+    borders: {
+      top: { style: BorderStyle.SINGLE, size: 1, color: "777777" },
+      bottom: { style: BorderStyle.SINGLE, size: 1, color: "777777" },
+      left: { style: BorderStyle.SINGLE, size: 1, color: "777777" },
+      right: { style: BorderStyle.SINGLE, size: 1, color: "777777" }
+    },
+    children: children.length ? children : [docP("")]
+  });
+}
+
+function rowKV(label: string, value: any) {
+  return new TableRow({ children: [docCell([docP(label, { bold: true })], { width: 3600, fill: "F2F2F2" }), docCell([docP(value || "")], { width: 5760 })] });
+}
+
+function supportTable(title: string, rows: any[], mode: "metodologica" | "evaluativa", responsable: string) {
+  const header = mode === "metodologica"
+    ? ["Estrategia Implementada", "Intensidad y frecuencia", "Responsable", "Observaciones"]
+    : ["Estrategia Evaluativa", "Evidencia", "Responsable", "Observaciones"];
+  const body = rows.length ? rows : [{ estrategia: "No aplica", intensidad: "No aplica", evidencia: "No aplica", observaciones: "No aplica" }];
+  return [
+    docP(title, { bold: true }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.FIXED,
+      rows: [
+        new TableRow({ children: header.map((h) => docCell([docP(h, { bold: true, align: AlignmentType.CENTER })], { fill: "EAF2F8" })) }),
+        ...body.map((item) => new TableRow({
+          children: mode === "metodologica"
+            ? [
+                docCell([docP(item.estrategia)]),
+                docCell([docP(item.intensidad)]),
+                docCell([docP(responsable)]),
+                docCell([docP(item.observaciones)])
+              ]
+            : [
+                docCell([docP(item.estrategia)]),
+                docCell([docP(item.evidencia)]),
+                docCell([docP(responsable)]),
+                docCell([docP(item.observaciones)])
+              ]
+        }))
+      ]
+    }),
+    docP("")
+  ];
+}
+
+async function buildApoyoEducativoDocx(data: any) {
+  const curricularMetodo = data.items.filter((x: any) => x.seccion === "curricular" && x.modo === "metodologica");
+  const curricularEval = data.items.filter((x: any) => x.modo === "evaluativa" && x.seccion === "curricular");
+  const materialMetodo = data.items.filter((x: any) => x.seccion === "material");
+  const organizativoMetodo = data.items.filter((x: any) => x.seccion === "organizativo");
+  const evaluativasGenerales = data.items.filter((x: any) => x.modo === "evaluativa");
+
+  const children: any[] = [
+    docP("Plantilla para Registro de Apoyos Educativos", { bold: true, size: 28, align: AlignmentType.CENTER }),
+    docP("I. Datos Administrativos", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        rowKV("Dirección Regional", data.regional),
+        rowKV("Circuito Educativo", data.circuito),
+        rowKV("Institución Educativa", data.institucion),
+        rowKV("Código Presupuestario", data.codigoPresupuestario),
+        rowKV("Docente", data.docente),
+        rowKV("Asignatura o especialidad", data.asignaturas),
+        rowKV("Sección", data.seccion),
+        rowKV("Curso Lectivo", data.cursoLectivo),
+        rowKV("Periodo Lectivo", data.periodoLectivo),
+        rowKV("Fecha", data.fecha)
+      ]
+    }),
+    docP("II. Información General de la Persona Estudiante", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        rowKV("Nombre completo", data.estudianteNombre),
+        rowKV("Edad", data.edad),
+        rowKV("Nivel Educativo", data.nivelFuncionamiento),
+        rowKV("Condición identificada (si aplica)", data.observaciones),
+        rowKV("Persona encargada legal", data.encargado)
+      ]
+    }),
+    docP("III. Apoyos Educativos Personales", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    ...supportTable("Estrategias Metodológicas", [], "metodologica", data.responsable),
+    ...supportTable("Estrategias Evaluativas", [], "evaluativa", data.responsable),
+    docP("IV. Apoyos Educativos Curriculares", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    docP(`Nombre de Apoyo Educativo Curricular: ${String(data.tipoAdecuacion || "").toUpperCase()}.`, { bold: true }),
+    ...supportTable("Estrategias Metodológicas", curricularMetodo, "metodologica", data.responsable),
+    ...supportTable("Estrategias Evaluativas", curricularEval, "evaluativa", data.responsable),
+    docP("V. Apoyos Educativos Materiales y Tecnológicos", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    ...supportTable("Estrategias Metodológicas", materialMetodo, "metodologica", data.responsable),
+    ...supportTable("Estrategias Evaluativas", evaluativasGenerales, "evaluativa", data.responsable),
+    docP("VI. Apoyos Educativos Organizativos", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    ...supportTable("Estrategias Metodológicas", organizativoMetodo, "metodologica", data.responsable),
+    ...supportTable("Estrategias Evaluativas", evaluativasGenerales, "evaluativa", data.responsable),
+    docP("Actor / Firmas", { bold: true }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({ children: ["Actor", "Nombre Completo", "Firma", "Puesto / Parentesco"].map((h) => docCell([docP(h, { bold: true })], { fill: "F2F2F2" })) }),
+        new TableRow({ children: [docCell([docP("Persona que elabora el informe")]), docCell([docP(data.docente)]), docCell([docP("")]), docCell([docP(data.responsable)])] }),
+        new TableRow({ children: [docCell([docP("Persona directora del Centro Educativo")]), docCell([docP("")]), docCell([docP("")]), docCell([docP("Dirección del Centro Educativo")])] }),
+        new TableRow({ children: [docCell([docP("Padre/Madre/Encargado legal")]), docCell([docP(data.encargado)]), docCell([docP("")]), docCell([docP("Encargado legal")])] })
+      ]
+    }),
+    docP("VII. Seguimiento y Valoración de los Apoyos", { bold: true, heading: HeadingLevel.HEADING_2 }),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({ children: ["Fecha", "Apoyo implementado", "Resultados observados", "Ajustes requeridos", "Responsable"].map((h) => docCell([docP(h, { bold: true })], { fill: "F2F2F2" })) }),
+        new TableRow({ children: [docCell([docP("")]), docCell([docP("")]), docCell([docP("")]), docCell([docP("")]), docCell([docP(data.responsable)])] })
+      ]
+    }),
+    docP("Cc. Expediente único del proceso educativo de la persona estudiante.", { size: 18 })
+  ];
+
+  const doc = new Document({ sections: [{ properties: {}, children }] });
+  return Packer.toBuffer(doc);
+}
+
+function getXmlAttr(xml: string, attr: string) {
+  const escaped = attr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return xml.match(new RegExp(`${escaped}="([^"]+)"`))?.[1] || "";
+}
+
+function upsertContentTypeOverride(contentTypesXml: string, partName: string, contentType: string) {
+  if (contentTypesXml.includes(`PartName="${partName}"`)) return contentTypesXml;
+  return contentTypesXml.replace(
+    "</Types>",
+    `<Override PartName="${partName}" ContentType="${contentType}"/></Types>`
+  );
+}
+
+function upsertContentTypeDefault(contentTypesXml: string, extension: string, contentType: string) {
+  if (contentTypesXml.includes(`Extension="${extension}"`)) return contentTypesXml;
+  return contentTypesXml.replace(
+    "</Types>",
+    `<Default Extension="${extension}" ContentType="${contentType}"/></Types>`
+  );
+}
+
+async function applyTemplateHeaderFooter(generatedBuffer: Buffer, templateBuffer?: Buffer | null) {
+  if (!templateBuffer?.length) return generatedBuffer;
+
+  try {
+    const generatedZip = await JSZip.loadAsync(generatedBuffer);
+    const templateZip = await JSZip.loadAsync(templateBuffer);
+    const templateDocumentXml = await templateZip.file("word/document.xml")?.async("string");
+    const templateRelsXml = await templateZip.file("word/_rels/document.xml.rels")?.async("string");
+    const generatedDocumentXml = await generatedZip.file("word/document.xml")?.async("string");
+    let generatedRelsXml = await generatedZip.file("word/_rels/document.xml.rels")?.async("string");
+    let contentTypesXml = await generatedZip.file("[Content_Types].xml")?.async("string");
+
+    if (!templateDocumentXml || !templateRelsXml || !generatedDocumentXml || !generatedRelsXml || !contentTypesXml) {
+      return generatedBuffer;
+    }
+
+    const sectPrMatch = templateDocumentXml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/);
+    const generatedSectPrMatch = generatedDocumentXml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/);
+    if (!sectPrMatch || !generatedSectPrMatch) return generatedBuffer;
+
+    const relMap = new Map<string, string>();
+    for (const match of templateRelsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+      const rel = match[0];
+      const id = getXmlAttr(rel, "Id");
+      const target = getXmlAttr(rel, "Target");
+      if (id && target) relMap.set(id, target);
+    }
+
+    const refs: Array<{ tag: string; oldId: string; target: string; newId: string }> = [];
+    let index = 1;
+    for (const match of sectPrMatch[0].matchAll(/<w:(headerReference|footerReference)\b[^>]*r:id="([^"]+)"[^>]*\/>/g)) {
+      const tag = match[0];
+      const oldId = match[2];
+      const target = relMap.get(oldId);
+      if (!target || !/^(header|footer)\d+\.xml$/i.test(target)) continue;
+      refs.push({ tag, oldId, target, newId: `rIdApoyo${index++}` });
+    }
+    if (!refs.length) return generatedBuffer;
+
+    for (const ref of refs) {
+      const sourcePath = `word/${ref.target}`;
+      const content = await templateZip.file(sourcePath)?.async("uint8array");
+      if (!content) continue;
+      generatedZip.file(sourcePath, content);
+      const relsPath = `word/_rels/${ref.target}.rels`;
+      const relsContent = await templateZip.file(relsPath)?.async("uint8array");
+      if (relsContent) generatedZip.file(relsPath, relsContent);
+      const partName = `/word/${ref.target}`;
+      const contentType = ref.target.startsWith("header")
+        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"
+        : "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml";
+      contentTypesXml = upsertContentTypeOverride(contentTypesXml, partName, contentType);
+    }
+
+    for (const fileName of Object.keys(templateZip.files)) {
+      if (!/^word\/media\//i.test(fileName)) continue;
+      const content = await templateZip.file(fileName)?.async("uint8array");
+      if (content) generatedZip.file(fileName, content);
+    }
+
+    const templateContentTypes = await templateZip.file("[Content_Types].xml")?.async("string");
+    if (templateContentTypes) {
+      for (const match of templateContentTypes.matchAll(/<Default\b[^>]*Extension="([^"]+)"[^>]*ContentType="([^"]+)"[^>]*\/>/g)) {
+        contentTypesXml = upsertContentTypeDefault(contentTypesXml, match[1], match[2]);
+      }
+    }
+
+    for (const ref of refs) {
+      generatedRelsXml = generatedRelsXml.replace(
+        "</Relationships>",
+        `<Relationship Id="${ref.newId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${ref.target.startsWith("header") ? "header" : "footer"}" Target="${ref.target}"/></Relationships>`
+      );
+    }
+
+    const refsXml = refs.map((ref) => ref.tag.replace(`r:id="${ref.oldId}"`, `r:id="${ref.newId}"`)).join("");
+    const cleanedSectPr = generatedSectPrMatch[0].replace(/<w:(headerReference|footerReference)\b[^>]*\/>/g, "");
+    const nextSectPr = cleanedSectPr.replace(/(<w:pgSz\b|<w:pgMar\b|<\/w:sectPr>)/, `${refsXml}$1`);
+    generatedZip.file("word/document.xml", generatedDocumentXml.replace(generatedSectPrMatch[0], nextSectPr));
+    generatedZip.file("word/_rels/document.xml.rels", generatedRelsXml);
+    generatedZip.file("[Content_Types].xml", contentTypesXml);
+
+    return generatedZip.generateAsync({ type: "nodebuffer" });
+  } catch (error) {
+    console.error("No se pudo copiar encabezado/pie de la plantilla de apoyo educativo:", error);
+    return generatedBuffer;
+  }
 }
 
 router.get("/mis-grupos", async (req, res) => {
@@ -435,6 +860,646 @@ router.get("/mis-grupos", async (req, res) => {
   } catch (error) {
     console.error("Error cargando mis grupos:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los grupos del profesor" });
+  }
+});
+
+router.get("/apoyos-educativos/bootstrap", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    const pool = await getPool();
+    const ready = await ensureApoyoEducativoTablesReady(pool);
+    if (ready) await ensureApoyoEducativoInformeColumns(pool);
+
+    const columnasEstudiante = await getEstudianteApoyoColumns(pool);
+
+    const userId = getUserId(req);
+    const grupoIds = parseCsvIds(req.query.grupoIds);
+    const gruposCsv = grupoIds.join(",");
+
+    const request = pool.request()
+      .input("usuarioId", sql.Int, userId)
+      .input("grupoIds", sql.NVarChar(sql.MAX), gruposCsv);
+
+    let filtroInstitucion = "";
+    if (!isSuperAdmin(req)) {
+      const institucionId = getInstitutionId(req, res);
+      if (institucionId === null) return;
+      request.input("institucionId", sql.Int, institucionId);
+      filtroInstitucion = "AND ad.InstitucionId = @institucionId";
+    }
+
+    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
+      ? "AND ad.UsuarioId = @usuarioId"
+      : "";
+
+    const baseCte = `
+      ;WITH GruposBase AS (
+        SELECT DISTINCT
+          ad.InstitucionId,
+          ad.AnioLectivoId,
+          al.Nombre AS AnioNombre,
+          ad.PeriodoId,
+          p.Nombre AS PeriodoNombre,
+          ad.GrupoId,
+          g.Nombre AS GrupoNombre
+        FROM dbo.AsignacionDocente ad
+        INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
+        INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ad.AnioLectivoId
+        LEFT JOIN dbo.Periodo p ON p.PeriodoId = ad.PeriodoId
+        WHERE ad.Activo = 1
+          AND ad.MateriaId IS NOT NULL
+          ${filtroInstitucion}
+          ${filtroProfesor}
+      ),
+      GruposFiltrados AS (
+        SELECT *
+        FROM GruposBase
+        WHERE (
+          NULLIF(@grupoIds, '') IS NULL
+          OR GrupoId IN (
+            SELECT DISTINCT TRY_CAST(value AS INT)
+            FROM STRING_SPLIT(@grupoIds, ',')
+            WHERE TRY_CAST(value AS INT) IS NOT NULL
+          )
+        )
+      )
+    `;
+
+    const seccionesResult = await request.query(`
+      ${baseCte}
+      SELECT
+        GrupoId,
+        GrupoNombre,
+        AnioLectivoId,
+        AnioNombre,
+        PeriodoId,
+        PeriodoNombre
+      FROM GruposFiltrados
+      ORDER BY GrupoNombre, AnioNombre DESC, PeriodoNombre
+    `);
+
+    const tieneAdecuacionSelect = columnasEstudiante.hasTieneAdecuacion
+      ? "CAST(ISNULL(e.TieneAdecuacion, 0) AS BIT)"
+      : "CASE WHEN NULLIF(LTRIM(RTRIM(ISNULL(e.Adecuacion, N''))), N'') IS NOT NULL THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END";
+    const tipoAdecuacionSelect = columnasEstudiante.hasAdecuacion
+      ? "NULLIF(LTRIM(RTRIM(e.Adecuacion)), '')"
+      : "CAST(NULL AS NVARCHAR(250))";
+    const adecuacionValidaWhere = columnasEstudiante.hasAdecuacion
+      ? "NULLIF(LTRIM(RTRIM(ISNULL(e.Adecuacion, N''))), N'') IS NOT NULL AND UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')"
+      : "1 = 1";
+    const apoyoEducativoWhere = columnasEstudiante.hasTieneAdecuacion
+      ? `ISNULL(e.TieneAdecuacion, 0) = 1 AND ${adecuacionValidaWhere}`
+      : adecuacionValidaWhere;
+    const nivelFuncionamientoSelect = columnasEstudiante.hasNivelFuncionamiento
+      ? "NULLIF(LTRIM(RTRIM(e.NivelFuncionamiento)), '')"
+      : "CAST(NULL AS NVARCHAR(250))";
+    const observacionesSelect = columnasEstudiante.hasObservaciones
+      ? "NULLIF(LTRIM(RTRIM(e.Observaciones)), '')"
+      : "CAST(NULL AS NVARCHAR(MAX))";
+
+    const estudiantesResult = await request.query(`
+      ${baseCte}
+      SELECT DISTINCT
+        e.EstudianteId,
+        e.Identificacion,
+        LTRIM(RTRIM(CONCAT(ISNULL(e.Nombre, ''), ' ', ISNULL(e.PrimerApellido, ''), ' ', ISNULL(e.SegundoApellido, '')))) AS NombreCompleto,
+        CASE
+          WHEN e.FechaNacimiento IS NULL THEN NULL
+          ELSE DATEDIFF(YEAR, e.FechaNacimiento, CAST(GETDATE() AS DATE))
+               - CASE
+                   WHEN DATEADD(YEAR, DATEDIFF(YEAR, e.FechaNacimiento, CAST(GETDATE() AS DATE)), e.FechaNacimiento) > CAST(GETDATE() AS DATE)
+                   THEN 1 ELSE 0
+                 END
+        END AS Edad,
+        gf.GrupoId,
+        gf.GrupoNombre AS Seccion,
+        ${tieneAdecuacionSelect} AS TieneAdecuacion,
+        ${tipoAdecuacionSelect} AS TipoAdecuacion,
+        ${nivelFuncionamientoSelect} AS NivelFuncionamiento,
+        ${observacionesSelect} AS Observaciones
+      FROM GruposFiltrados gf
+      INNER JOIN dbo.Matricula ma
+        ON ma.GrupoId = gf.GrupoId
+       AND ma.AnioLectivoId = gf.AnioLectivoId
+       AND ma.Estado <> N'Inactiva'
+      INNER JOIN dbo.Estudiante e
+        ON e.EstudianteId = ma.EstudianteId
+       AND e.Activo = 1
+      WHERE ${apoyoEducativoWhere}
+      ORDER BY gf.GrupoNombre, NombreCompleto
+    `);
+
+    const adecuacionesResult = ready
+      ? await request.query(`
+          SELECT
+            a.AdecuacionCatalogoId,
+            a.TipoAdecuacionId,
+            ta.Descripcion AS Adecuacion,
+            a.Tipo,
+            a.Descripcion,
+            ta.Descripcion AS TipoAdecuacion
+          FROM dbo.AdecuacionCatalogo a
+          INNER JOIN dbo.TipoAdecuacion ta
+            ON ta.TipoAdecuacionId = a.TipoAdecuacionId
+          WHERE a.Activo = 1
+            AND ta.Activo = 1
+            AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
+            ${!isSuperAdmin(req) ? "AND a.InstitucionId = @institucionId" : ""}
+          ORDER BY ta.Descripcion, a.Tipo, a.Descripcion
+        `)
+      : { recordset: [] as any[] };
+
+    const informesResult = ready
+      ? await request.query(`
+          ${baseCte}
+          SELECT
+            ae.ApoyoEducativoId,
+            aee.ApoyoEducativoEstudianteId,
+            aee.EstudianteId,
+            aee.GrupoId,
+            aee.InformeNombre,
+            aee.InformeGeneradoAt,
+            aee.PlantillaNombre
+          FROM dbo.ApoyoEducativoEstudiante aee
+          INNER JOIN dbo.ApoyoEducativo ae
+            ON ae.ApoyoEducativoId = aee.ApoyoEducativoId
+           AND ae.Activo = 1
+          INNER JOIN GruposFiltrados gf
+            ON gf.GrupoId = aee.GrupoId
+          WHERE aee.InformeDocx IS NOT NULL
+          ORDER BY aee.InformeGeneradoAt DESC, aee.ApoyoEducativoEstudianteId DESC
+        `)
+      : { recordset: [] as any[] };
+
+    return ok(res, {
+      secciones: seccionesResult.recordset,
+      estudiantes: estudiantesResult.recordset,
+      adecuaciones: adecuacionesResult.recordset,
+      informes: informesResult.recordset,
+      soporteGeneracion: ready
+    });
+  } catch (error) {
+    console.error("Error cargando apoyos educativos:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la información de apoyos educativos" });
+  }
+});
+
+router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla"), async (req, res) => {
+  const transaction = new sql.Transaction(await getPool());
+
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+
+    const pool = await getPool();
+    const ready = await ensureApoyoEducativoTablesReady(pool);
+    if (!ready) {
+      return badRequest(res, "Debés correr primero el script de BD de apoyos educativos para habilitar esta función");
+    }
+
+    await ensureApoyoEducativoInformeColumns(pool);
+
+    const userId = getUserId(req);
+    const institucionId = isSuperAdmin(req)
+      ? toOptionalNumber(req.body?.institucionId)
+      : getInstitutionId(req, res);
+    if (!institucionId) return;
+
+    const grupoIds = parseMaybeJsonArray(req.body?.grupoIds)
+      .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
+    const estudianteIds = parseMaybeJsonArray(req.body?.estudianteIds)
+      .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
+    const adecuacionIds = parseMaybeJsonArray(req.body?.adecuacionIds)
+      .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
+    const plantillaNombre = String((req as any).file?.originalname || req.body?.plantillaNombre || "plantilla-apoyos-educativos.docx").slice(0, 255);
+
+    if (!grupoIds.length) {
+      return badRequest(res, "Seleccioná al menos una sección");
+    }
+    if (!estudianteIds.length) {
+      return badRequest(res, "Seleccioná al menos un estudiante");
+    }
+    if (!adecuacionIds.length) {
+      return badRequest(res, "Seleccioná al menos un apoyo educativo");
+    }
+
+    const request = pool.request()
+      .input("usuarioId", sql.Int, userId)
+      .input("institucionId", sql.Int, institucionId)
+      .input("grupoIds", sql.NVarChar(sql.MAX), grupoIds.join(","))
+      .input("estudianteIds", sql.NVarChar(sql.MAX), estudianteIds.join(","))
+      .input("adecuacionIds", sql.NVarChar(sql.MAX), adecuacionIds.join(","));
+
+    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
+      ? "AND ad.UsuarioId = @usuarioId"
+      : "";
+
+    const gruposPermitidosResult = await request.query(`
+      ;WITH GruposPermitidos AS (
+        SELECT DISTINCT ad.GrupoId
+        FROM dbo.AsignacionDocente ad
+        WHERE ad.Activo = 1
+          AND ad.MateriaId IS NOT NULL
+          AND ad.InstitucionId = @institucionId
+          ${filtroProfesor}
+      )
+      SELECT GrupoId
+      FROM GruposPermitidos
+      WHERE GrupoId IN (
+        SELECT DISTINCT TRY_CAST(value AS INT)
+        FROM STRING_SPLIT(@grupoIds, ',')
+        WHERE TRY_CAST(value AS INT) IS NOT NULL
+      )
+    `);
+
+    const gruposPermitidos = new Set<number>((gruposPermitidosResult.recordset || []).map((item: any) => Number(item.GrupoId)));
+    if (gruposPermitidos.size !== grupoIds.length) {
+      return forbidden(res, "Hay secciones seleccionadas que no pertenecen a tus grupos asignados");
+    }
+
+    const estudiantesPermitidosResult = await request.query(`
+      SELECT DISTINCT
+        ma.EstudianteId,
+        ma.GrupoId,
+        g.Nombre AS Seccion,
+        al.Nombre AS AnioNombre,
+        p.Nombre AS PeriodoNombre,
+        e.Identificacion,
+        e.Nombre,
+        e.PrimerApellido,
+        e.SegundoApellido,
+        e.FechaNacimiento,
+        e.Adecuacion AS TipoAdecuacion,
+        e.NivelFuncionamiento,
+        e.Observaciones,
+        enc.NombreCompleto AS EncargadoNombre
+      FROM dbo.Matricula ma
+      INNER JOIN dbo.Estudiante e
+        ON e.EstudianteId = ma.EstudianteId
+       AND e.Activo = 1
+      INNER JOIN dbo.Grupo g ON g.GrupoId = ma.GrupoId
+      INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ma.AnioLectivoId
+      LEFT JOIN dbo.Periodo p ON p.PeriodoId = (
+        SELECT TOP 1 ad2.PeriodoId
+        FROM dbo.AsignacionDocente ad2
+        WHERE ad2.GrupoId = ma.GrupoId
+          AND ad2.AnioLectivoId = ma.AnioLectivoId
+          AND ad2.InstitucionId = @institucionId
+          AND ad2.Activo = 1
+        ORDER BY ad2.PeriodoId DESC
+      )
+      OUTER APPLY (
+        SELECT TOP 1
+          LTRIM(RTRIM(CONCAT(ISNULL(en.Nombre, ''), ' ', ISNULL(en.PrimerApellido, ''), ' ', ISNULL(en.SegundoApellido, '')))) AS NombreCompleto
+        FROM dbo.EstudianteEncargado ee
+        INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
+        WHERE ee.EstudianteId = e.EstudianteId
+          AND ee.Activo = 1
+        ORDER BY ee.EsPrincipal DESC, ee.EstudianteEncargadoId DESC
+      ) enc
+      WHERE ma.Estado <> N'Inactiva'
+        AND ma.GrupoId IN (
+          SELECT DISTINCT TRY_CAST(value AS INT)
+          FROM STRING_SPLIT(@grupoIds, ',')
+          WHERE TRY_CAST(value AS INT) IS NOT NULL
+        )
+        AND ma.EstudianteId IN (
+          SELECT DISTINCT TRY_CAST(value AS INT)
+          FROM STRING_SPLIT(@estudianteIds, ',')
+          WHERE TRY_CAST(value AS INT) IS NOT NULL
+        )
+    `);
+
+    const estudiantesPermitidos = estudiantesPermitidosResult.recordset || [];
+    const estudiantesPermitidosIds = new Set<number>(estudiantesPermitidos.map((item: any) => Number(item.EstudianteId)));
+    if (estudiantesPermitidosIds.size !== estudianteIds.length) {
+      return badRequest(res, "Hay estudiantes seleccionados que no pertenecen a las secciones elegidas");
+    }
+
+    const adecuacionesPermitidasResult = await request.query(`
+      SELECT
+        a.AdecuacionCatalogoId,
+        a.TipoAdecuacionId,
+        ta.Descripcion AS Adecuacion,
+        a.Tipo,
+        a.Descripcion
+      FROM dbo.AdecuacionCatalogo a
+      INNER JOIN dbo.TipoAdecuacion ta ON ta.TipoAdecuacionId = a.TipoAdecuacionId
+      WHERE a.InstitucionId = @institucionId
+        AND a.Activo = 1
+        AND ta.Activo = 1
+        AND a.AdecuacionCatalogoId IN (
+          SELECT DISTINCT TRY_CAST(value AS INT)
+          FROM STRING_SPLIT(@adecuacionIds, ',')
+          WHERE TRY_CAST(value AS INT) IS NOT NULL
+        )
+    `);
+
+    if ((adecuacionesPermitidasResult.recordset || []).length !== adecuacionIds.length) {
+      return badRequest(res, "Hay apoyos educativos seleccionados que no están disponibles");
+    }
+
+    const institucionResult = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TOP 1 Nombre, NombreComercial, NombreOficialBoleta, RegionalEducativa, CircuitoEducativo, CodigoPresupuestario
+        FROM dbo.Institucion
+        WHERE InstitucionId = @institucionId
+      `);
+    const docenteResult = await pool.request()
+      .input("usuarioId", sql.Int, userId)
+      .query(`SELECT TOP 1 Nombre, PrimerApellido, SegundoApellido FROM dbo.Usuario WHERE UsuarioId = @usuarioId`);
+    const materiasResult = await request.query(`
+      SELECT DISTINCT m.Nombre
+      FROM dbo.AsignacionDocente ad
+      INNER JOIN dbo.Materia m ON m.MateriaId = ad.MateriaId
+      WHERE ad.Activo = 1
+        AND ad.InstitucionId = @institucionId
+        ${filtroProfesor}
+        AND ad.GrupoId IN (
+          SELECT DISTINCT TRY_CAST(value AS INT)
+          FROM STRING_SPLIT(@grupoIds, ',')
+          WHERE TRY_CAST(value AS INT) IS NOT NULL
+        )
+      ORDER BY m.Nombre
+    `);
+
+    const institucion = institucionResult.recordset[0] || {};
+    const docente = docenteResult.recordset[0] || {};
+    const docenteNombre = joinNameParts([docente.Nombre, docente.PrimerApellido, docente.SegundoApellido]);
+    const materiasTexto = (materiasResult.recordset || []).map((item: any) => normalizeText(item.Nombre)).filter(Boolean).join(", ");
+    const responsable = `${docenteNombre}${materiasTexto ? ` - ${materiasTexto}` : ""}`;
+    const catalogos = adecuacionesPermitidasResult.recordset || [];
+    const informesPreparados: any[] = [];
+
+    for (const estudiante of estudiantesPermitidos) {
+      const estudianteNombre = joinNameParts([estudiante.Nombre, estudiante.PrimerApellido, estudiante.SegundoApellido]);
+      const contextoInforme = {
+        estudianteNombre,
+        tipoAdecuacion: estudiante.TipoAdecuacion,
+        nivelFuncionamiento: estudiante.NivelFuncionamiento,
+        observaciones: estudiante.Observaciones,
+        responsable
+      };
+      const textosIA = await generarTextosApoyoConIA(contextoInforme, catalogos);
+      const items = catalogos.map((catalogo: any) => {
+        const tipo = classifyApoyoTipo(catalogo.Tipo);
+        const ai = textosIA.get(Number(catalogo.AdecuacionCatalogoId)) || metodoFallback(catalogo.Descripcion, estudiante.NivelFuncionamiento, estudiante.Observaciones);
+        return {
+          id: Number(catalogo.AdecuacionCatalogoId),
+          seccion: tipo === "evaluacion" ? "curricular" : tipo,
+          modo: tipo === "evaluacion" ? "evaluativa" : "metodologica",
+          estrategia: catalogo.Descripcion,
+          intensidad: ai.intensidad,
+          evidencia: ai.evidencia,
+          observaciones: ai.observaciones
+        };
+      });
+      const dataInforme = {
+        regional: institucion.RegionalEducativa || "",
+        circuito: institucion.CircuitoEducativo || "",
+        institucion: institucion.NombreOficialBoleta || institucion.NombreComercial || institucion.Nombre || "",
+        codigoPresupuestario: institucion.CodigoPresupuestario || "",
+        docente: docenteNombre,
+        asignaturas: materiasTexto,
+        responsable,
+        seccion: estudiante.Seccion,
+        cursoLectivo: estudiante.AnioNombre,
+        periodoLectivo: estudiante.PeriodoNombre,
+        fecha: formatDateApoyoCR(),
+        estudianteNombre,
+        edad: edadAniosMeses(estudiante.FechaNacimiento),
+        nivelFuncionamiento: estudiante.NivelFuncionamiento || "",
+        observaciones: estudiante.Observaciones || "",
+        encargado: estudiante.EncargadoNombre || "",
+        tipoAdecuacion: estudiante.TipoAdecuacion || "",
+        items
+      };
+      const baseBuffer = await buildApoyoEducativoDocx(dataInforme);
+      const buffer = await applyTemplateHeaderFooter(baseBuffer, (req as any).file?.buffer || null);
+      const informeNombre = `informe-apoyo-${String(estudianteNombre || estudiante.EstudianteId).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 80)}.docx`;
+      informesPreparados.push({ estudiante, dataInforme, buffer, informeNombre });
+    }
+
+    await transaction.begin();
+
+    const headerResult = await new sql.Request(transaction)
+      .input("institucionId", sql.Int, institucionId)
+      .input("usuarioId", sql.Int, userId)
+      .query(`
+        INSERT INTO dbo.ApoyoEducativo
+        (
+          InstitucionId,
+          UsuarioId,
+          CreatedAt,
+          UpdatedAt,
+          Activo
+        )
+        OUTPUT INSERTED.ApoyoEducativoId
+        VALUES
+        (
+          @institucionId,
+          @usuarioId,
+          SYSDATETIME(),
+          SYSDATETIME(),
+          1
+        )
+      `);
+
+    const apoyoEducativoId = Number(headerResult.recordset[0]?.ApoyoEducativoId || 0);
+    if (!apoyoEducativoId) {
+      throw new Error("No se pudo generar el encabezado del apoyo educativo");
+    }
+
+    const informesGenerados: any[] = [];
+    for (const item of informesPreparados) {
+      const estudiante = item.estudiante;
+      const inserted = await new sql.Request(transaction)
+        .input("apoyoEducativoId", sql.Int, apoyoEducativoId)
+        .input("estudianteId", sql.Int, Number(estudiante.EstudianteId))
+        .input("grupoId", sql.Int, Number(estudiante.GrupoId))
+        .input("informeNombre", sql.NVarChar(255), item.informeNombre)
+        .input("informeMimeType", sql.NVarChar(150), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        .input("informeDocx", sql.VarBinary(sql.MAX), item.buffer)
+        .input("plantillaNombre", sql.NVarChar(255), plantillaNombre)
+        .input("datosInformeJson", sql.NVarChar(sql.MAX), JSON.stringify(item.dataInforme))
+        .query(`
+          INSERT INTO dbo.ApoyoEducativoEstudiante
+          (
+            ApoyoEducativoId,
+            EstudianteId,
+            GrupoId,
+            InformeNombre,
+            InformeMimeType,
+            InformeDocx,
+            InformeGeneradoAt,
+            PlantillaNombre,
+            DatosInformeJson,
+            CreatedAt
+          )
+          OUTPUT INSERTED.ApoyoEducativoEstudianteId, INSERTED.InformeNombre, INSERTED.InformeGeneradoAt
+          VALUES
+          (
+            @apoyoEducativoId,
+            @estudianteId,
+            @grupoId,
+            @informeNombre,
+            @informeMimeType,
+            @informeDocx,
+            SYSDATETIME(),
+            @plantillaNombre,
+            @datosInformeJson,
+            SYSDATETIME()
+          )
+        `);
+      informesGenerados.push({
+        ApoyoEducativoEstudianteId: Number(inserted.recordset[0]?.ApoyoEducativoEstudianteId || 0),
+        EstudianteId: Number(estudiante.EstudianteId),
+        GrupoId: Number(estudiante.GrupoId),
+        InformeNombre: item.informeNombre,
+        InformeGeneradoAt: inserted.recordset[0]?.InformeGeneradoAt
+      });
+    }
+
+    for (const adecuacionId of adecuacionIds) {
+      await new sql.Request(transaction)
+        .input("apoyoEducativoId", sql.Int, apoyoEducativoId)
+        .input("adecuacionCatalogoId", sql.Int, Number(adecuacionId))
+        .query(`
+          INSERT INTO dbo.ApoyoEducativoDetalle
+          (
+            ApoyoEducativoId,
+            AdecuacionCatalogoId,
+            CreatedAt
+          )
+          VALUES
+          (
+            @apoyoEducativoId,
+            @adecuacionCatalogoId,
+            SYSDATETIME()
+          )
+        `);
+    }
+
+    await transaction.commit();
+
+    return ok(res, {
+      ApoyoEducativoId: apoyoEducativoId,
+      totalEstudiantes: estudiantesPermitidos.length,
+      totalAdecuaciones: adecuacionIds.length,
+      informes: informesGenerados
+    }, "Informes educativos generados correctamente");
+  } catch (error) {
+    if (transaction._aborted !== true && transaction._acquiredConnection) {
+      try { await transaction.rollback(); } catch {}
+    }
+    console.error("Error generando apoyo educativo:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo generar el apoyo educativo" });
+  }
+});
+
+router.get("/apoyos-educativos/informes/:id/word", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return badRequest(res, "Informe inválido");
+
+    const pool = await getPool();
+    await ensureApoyoEducativoInformeColumns(pool);
+    const request = pool.request()
+      .input("id", sql.Int, id)
+      .input("usuarioId", sql.Int, getUserId(req));
+
+    let filtroInstitucion = "";
+    if (!isSuperAdmin(req)) {
+      const institucionId = getInstitutionId(req, res);
+      if (institucionId === null) return;
+      request.input("institucionId", sql.Int, institucionId);
+      filtroInstitucion = "AND ae.InstitucionId = @institucionId";
+    }
+
+    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
+      ? "AND ae.UsuarioId = @usuarioId"
+      : "";
+
+    const result = await request.query(`
+      SELECT TOP 1
+        aee.InformeNombre,
+        aee.InformeMimeType,
+        aee.InformeDocx
+      FROM dbo.ApoyoEducativoEstudiante aee
+      INNER JOIN dbo.ApoyoEducativo ae
+        ON ae.ApoyoEducativoId = aee.ApoyoEducativoId
+       AND ae.Activo = 1
+      WHERE aee.ApoyoEducativoEstudianteId = @id
+        AND aee.InformeDocx IS NOT NULL
+        ${filtroInstitucion}
+        ${filtroProfesor}
+    `);
+
+    const row = result.recordset[0];
+    if (!row?.InformeDocx) return res.status(404).json({ ok: false, message: "No se encontró el informe educativo" });
+
+    const fileName = String(row.InformeNombre || `informe-apoyo-${id}.docx`).replace(/["\r\n]/g, "");
+    res.setHeader("Content-Type", row.InformeMimeType || "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.send(Buffer.from(row.InformeDocx));
+  } catch (error) {
+    console.error("Error descargando informe educativo:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo descargar el informe educativo" });
+  }
+});
+
+router.delete("/apoyos-educativos/informes/:id", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return badRequest(res, "Informe inválido");
+
+    const pool = await getPool();
+    await ensureApoyoEducativoInformeColumns(pool);
+    const request = pool.request()
+      .input("id", sql.Int, id)
+      .input("usuarioId", sql.Int, getUserId(req));
+
+    let filtroInstitucion = "";
+    if (!isSuperAdmin(req)) {
+      const institucionId = getInstitutionId(req, res);
+      if (institucionId === null) return;
+      request.input("institucionId", sql.Int, institucionId);
+      filtroInstitucion = "AND ae.InstitucionId = @institucionId";
+    }
+
+    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
+      ? "AND ae.UsuarioId = @usuarioId"
+      : "";
+
+    const result = await request.query(`
+      UPDATE aee
+      SET InformeNombre = NULL,
+          InformeMimeType = NULL,
+          InformeDocx = NULL,
+          InformeGeneradoAt = NULL,
+          PlantillaNombre = NULL,
+          DatosInformeJson = NULL
+      OUTPUT INSERTED.ApoyoEducativoEstudianteId
+      FROM dbo.ApoyoEducativoEstudiante aee
+      INNER JOIN dbo.ApoyoEducativo ae
+        ON ae.ApoyoEducativoId = aee.ApoyoEducativoId
+       AND ae.Activo = 1
+      WHERE aee.ApoyoEducativoEstudianteId = @id
+        ${filtroInstitucion}
+        ${filtroProfesor}
+    `);
+
+    if (!result.recordset.length) return res.status(404).json({ ok: false, message: "No se encontró el registro del informe educativo" });
+    return ok(res, { ApoyoEducativoEstudianteId: id }, "Informe educativo eliminado correctamente");
+  } catch (error) {
+    console.error("Error eliminando informe educativo:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar el informe educativo" });
   }
 });
 

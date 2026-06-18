@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import api from "../lib/http";
@@ -16,7 +16,13 @@ const ADMINISTRATIVO_ROLES = [
   "ADMINISTRATIVO"
 ];
 
-const GESTION_PROFE_ROLES = ["PROFESOR"];
+const SUPER_ADMIN_ROLES = ["SUPER_ADMIN"];
+
+const GESTION_PROFE_ROLES = [
+  "SUPER_ADMIN",
+  "PROFESOR",
+  "PROFESOR_GUIA"
+];
 
 const REPORTE_CERTIFICACIONES_ROLES = [
   "SUPER_ADMIN",
@@ -86,8 +92,10 @@ export default function Layout() {
   const { user, logout, setUser } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const adminMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -101,10 +109,36 @@ export default function Layout() {
     "Sin institución";
 
   const roles = useMemo(() => user?.roles || [], [user?.roles]);
-  const canManageAssistant = useMemo(
-    () => ADMINISTRATIVO_ROLES.some((role) => roles.map(normalizeRole).includes(normalizeRole(role))),
+  const canSeeAdminMenu = useMemo(
+    () => SUPER_ADMIN_ROLES.some((role) => roles.map(normalizeRole).includes(normalizeRole(role))),
     [roles]
   );
+  const canAccessGestionProfe = useMemo(
+    () => GESTION_PROFE_ROLES.some((role) => roles.map(normalizeRole).includes(normalizeRole(role))),
+    [roles]
+  );
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!adminMenuRef.current) return;
+      if (!adminMenuRef.current.contains(event.target as Node)) {
+        setShowAdminMenu(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setShowAdminMenu(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   function renderMenuItem(item: MenuItem) {
     const allowed = hasAccess(item, roles);
@@ -194,6 +228,33 @@ export default function Layout() {
     padding: "12px 14px"
   };
 
+  const adminMenuPanelStyle: React.CSSProperties = {
+    position: "absolute",
+    top: "calc(100% + 10px)",
+    right: 0,
+    minWidth: "260px",
+    background: "#ffffff",
+    border: "1px solid #cbd5e1",
+    borderRadius: "16px",
+    boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)",
+    padding: "8px",
+    display: "grid",
+    gap: "6px",
+    zIndex: 1100
+  };
+
+  const adminMenuItemStyle: React.CSSProperties = {
+    width: "100%",
+    border: "1px solid transparent",
+    borderRadius: "12px",
+    padding: "10px 12px",
+    background: "#f8fafc",
+    color: "#0f172a",
+    textAlign: "left",
+    cursor: "pointer",
+    fontWeight: 700
+  };
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -244,15 +305,103 @@ export default function Layout() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-            {canManageAssistant ? (
-              <button
-                onClick={() => navigate("/assistant-admin")}
-                className="ghost-btn"
-                type="button"
-              >
-                Admin
-              </button>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", position: "relative" }} ref={adminMenuRef}>
+            {canSeeAdminMenu ? (
+              <div style={{ position: "relative" }}>
+                <button
+                  onClick={() => setShowAdminMenu((prev) => !prev)}
+                  className="ghost-btn"
+                  type="button"
+                  aria-expanded={showAdminMenu}
+                  aria-haspopup="menu"
+                >
+                  Admin
+                </button>
+
+                {showAdminMenu ? (
+                  <div role="menu" aria-label="Menú de administración" style={adminMenuPanelStyle}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        navigate("/assistant-admin");
+                      }}
+                    >
+                      Admin asistente
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        navigate("/super-admin/secciones");
+                      }}
+                    >
+                      Mantenimiento secciones
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        if (canAccessGestionProfe) navigate("/gestion-profe");
+                      }}
+                    >
+                      Gestión del Profe
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        navigate("/seguimiento-notas");
+                      }}
+                    >
+                      Seguimiento de notas
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        navigate("/parametrizaciones/evaluaciones");
+                      }}
+                    >
+                      Plantillas y evaluaciones
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        setShowChangePassword(true);
+                        setMessage("");
+                        setErrorMessage("");
+                      }}
+                    >
+                      Cambiar clave
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={{ ...adminMenuItemStyle, background: "#fee2e2", color: "#991b1b" }}
+                      onClick={() => {
+                        setShowAdminMenu(false);
+                        logout();
+                      }}
+                    >
+                      Salir
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
             <button
               onClick={() => {

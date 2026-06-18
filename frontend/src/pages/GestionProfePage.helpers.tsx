@@ -50,6 +50,47 @@ export type EstudianteGrupo = {
   TrasladoCreatedAt?: string | null;
 };
 
+export type ApoyoEducativoSeccion = {
+  GrupoId: number;
+  GrupoNombre: string;
+  AnioLectivoId?: number | null;
+  AnioNombre?: string | null;
+  PeriodoId?: number | null;
+  PeriodoNombre?: string | null;
+};
+
+export type ApoyoEducativoCatalogoItem = {
+  AdecuacionCatalogoId: number;
+  TipoAdecuacionId: number;
+  Adecuacion: string;
+  Tipo: string;
+  Descripcion: string;
+  TipoAdecuacion?: string | null;
+};
+
+export type ApoyoEducativoResumenItem = {
+  EstudianteId: number;
+  Identificacion: string;
+  NombreCompleto: string;
+  Edad?: number | null;
+  GrupoId: number;
+  Seccion: string;
+  TieneAdecuacion?: boolean | null;
+  TipoAdecuacion?: string | null;
+  NivelFuncionamiento?: string | null;
+  Observaciones?: string | null;
+};
+
+export type ApoyoEducativoInformeItem = {
+  ApoyoEducativoId: number;
+  ApoyoEducativoEstudianteId: number;
+  EstudianteId: number;
+  GrupoId: number;
+  InformeNombre?: string | null;
+  InformeGeneradoAt?: string | null;
+  PlantillaNombre?: string | null;
+};
+
 export type Plantilla = {
   EvaluacionPlantillaId: number;
   Nombre: string;

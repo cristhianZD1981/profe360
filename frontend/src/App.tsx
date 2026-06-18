@@ -22,6 +22,7 @@ import SeguimientoNotasPage from "./pages/SeguimientoNotasPage";
 import ParametrizacionesPage from "./pages/ParametrizacionesPage";
 import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
 import AssistantAdminPage from "./pages/AssistantAdminPage";
+import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
 
 const ADMINISTRATIVO_ROLES = [
@@ -38,7 +39,13 @@ const PARAMETRIZACIONES_ROLES = [
   "PROFESOR_GUIA"
 ];
 
-const GESTION_PROFE_ROLES = ["PROFESOR"];
+const GESTION_PROFE_ROLES = [
+  "SUPER_ADMIN",
+  "PROFESOR",
+  "PROFESOR_GUIA"
+];
+
+const SUPER_ADMIN_ROLES = ["SUPER_ADMIN"];
 
 const REPORTE_CERTIFICACIONES_ROLES = [
   "SUPER_ADMIN",
@@ -114,6 +121,8 @@ export default function App() {
                     "periodos",
                     "grupos",
                     "tiposEstudiante",
+                    "tiposAdecuacion",
+                    "adecuaciones",
                     "especialidades",
                     "rutasTransporte",
                     "materias",
@@ -144,6 +153,8 @@ export default function App() {
                     "periodos",
                     "grupos",
                     "tiposEstudiante",
+                    "tiposAdecuacion",
+                    "adecuaciones",
                     "especialidades",
                     "rutasTransporte",
                     "materias",
@@ -239,9 +250,19 @@ export default function App() {
             path="assistant-admin"
             element={
               <ProtectedRoute
-                allowedRoles={ADMINISTRATIVO_ROLES}
+                allowedRoles={SUPER_ADMIN_ROLES}
               >
                 <AssistantAdminPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="super-admin/secciones"
+            element={
+              <ProtectedRoute
+                allowedRoles={SUPER_ADMIN_ROLES}
+              >
+                <SuperAdminSeccionesPage />
               </ProtectedRoute>
             }
           />

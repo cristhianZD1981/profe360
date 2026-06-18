@@ -17,6 +17,7 @@ type Student = {
   Telefono: string | null;
   TipoEstudianteId?: number | null;
   TipoEstudianteDescripcion?: string | null;
+  NivelFuncionamiento: string | null;
   FotoUrl: string | null;
   CodigoCarnet: string | null;
   QrContenido: string | null;
@@ -24,10 +25,12 @@ type Student = {
   Adecuacion: string | null;
   Discapacidad: string | null;
   Enfermedad: string | null;
+  Observaciones: string | null;
   RutaTransporteId?: number | null;
   RutaTransporteDescripcion?: string | null;
   RutaTransporteHabitual: string | null;
   AutorizaWhatsAppEncargado?: boolean | null;
+  TieneAdecuacion?: boolean | null;
   ObservacionMedica: string | null;
   Activo?: boolean;
 };
@@ -74,6 +77,12 @@ type StudentDetalleResponse = {
 
 type StudentType = {
   TipoEstudianteId: number;
+  Descripcion: string;
+  Activo: boolean;
+};
+
+type TipoAdecuacion = {
+  TipoAdecuacionId: number;
   Descripcion: string;
   Activo: boolean;
 };
@@ -184,10 +193,13 @@ const initialForm = {
   sexo: "",
   fotoUrl: "",
   nacionalidad: "",
+  tieneAdecuacion: false,
   adecuacion: "",
+  nivelFuncionamiento: "",
   discapacidad: "",
   enfermedad: "",
   rutaTransporteHabitual: "",
+  observaciones: "",
   observacionMedica: ""
 };
 
@@ -205,6 +217,19 @@ function getStudentFullName(item: {
 function formatDate(value?: string | null) {
   if (!value) return "";
   return String(value).slice(0, 10);
+}
+
+function normalizeComparableText(value?: string | null) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function isValidAdecuacionOption(value?: string | null) {
+  const normalized = normalizeComparableText(value);
+  return !!normalized && !["regular", "sin adecuacion", "seleccione", "no"].includes(normalized);
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -313,12 +338,6 @@ export default function EstudiantesPage() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
 
   const [form, setForm] = useState(initialForm);
-  const [madreForm, setMadreForm] = useState<EncargadoForm>(
-    emptyEncargado("MADRE")
-  );
-  const [padreForm, setPadreForm] = useState<EncargadoForm>(
-    emptyEncargado("PADRE")
-  );
   const [encargadoForm, setEncargadoForm] = useState<EncargadoForm>(
     emptyEncargado("ENCARGADO")
   );
@@ -346,6 +365,7 @@ export default function EstudiantesPage() {
 
   const [dominioCorreoEstudiante, setDominioCorreoEstudiante] = useState("@est.mep.go.cr");
   const [studentTypes, setStudentTypes] = useState<StudentType[]>([]);
+  const [tiposAdecuacion, setTiposAdecuacion] = useState<TipoAdecuacion[]>([]);
   const [rutasTransporte, setRutasTransporte] = useState<RutaTransporte[]>([]);
   const [boletaConductaOpen, setBoletaConductaOpen] = useState(false);
   const [boletaConductaLoading, setBoletaConductaLoading] = useState(false);
@@ -371,21 +391,14 @@ export default function EstudiantesPage() {
     isProfesorRole ||
     roles.includes("PROFESOR_GUIA");
 
-  const detalleMadre = useMemo(
-    () => detalleEncargados.find((x) => x.TipoEncargado === "MADRE") || null,
-    [detalleEncargados]
-  );
-  const detallePadre = useMemo(
-    () => detalleEncargados.find((x) => x.TipoEncargado === "PADRE") || null,
-    [detalleEncargados]
-  );
   const detalleEncargado = useMemo(
-    () => detalleEncargados.find((x) => x.TipoEncargado === "ENCARGADO") || null,
+    () =>
+      detalleEncargados.find((x) => x.TipoEncargado === "ENCARGADO") ||
+      detalleEncargados.find((x) => x.EsPrincipal) ||
+      detalleEncargados[0] ||
+      null,
     [detalleEncargados]
   );
-
-
-
   function clearStudentResults() {
     setItems([]);
     setTotalItems(0);
@@ -456,6 +469,10 @@ export default function EstudiantesPage() {
       setStudentTypes(response.data?.data ?? []);
     }).catch(() => {});
 
+    api.get("/academico/tipos-adecuacion", { params: { incluirInactivos: false } }).then((response) => {
+      setTiposAdecuacion(response.data?.data ?? []);
+    }).catch(() => {});
+
     api.get("/academico/rutas-transporte", { params: { incluirInactivas: false } }).then((response) => {
       setRutasTransporte(response.data?.data ?? []);
     }).catch(() => {});
@@ -508,8 +525,6 @@ export default function EstudiantesPage() {
 
   function resetAllForms() {
     setForm(initialForm);
-    setMadreForm(emptyEncargado("MADRE"));
-    setPadreForm(emptyEncargado("PADRE"));
     setEncargadoForm(emptyEncargado("ENCARGADO"));
     setEditingId(null);
     setReactivableId(null);
@@ -638,7 +653,7 @@ export default function EstudiantesPage() {
   }
 
   function buildEncargadosPayload() {
-    return [madreForm, padreForm, encargadoForm].map((item) => ({
+    return [encargadoForm].map((item) => ({
       tipoEncargado: item.tipoEncargado,
       identificacion: item.identificacion || null,
       nombre: item.nombre || null,
@@ -667,6 +682,11 @@ export default function EstudiantesPage() {
       return;
     }
 
+    if (form.tieneAdecuacion && !String(form.adecuacion || "").trim()) {
+      setErrorMessage("Marcá Adecuación solo si seleccionás una opción del combo.");
+      return;
+    }
+
     setLoading(true);
     clearMessages();
     setReactivableId(null);
@@ -686,10 +706,13 @@ export default function EstudiantesPage() {
         sexo: form.sexo || null,
         fotoUrl: form.fotoUrl || null,
         nacionalidad: form.nacionalidad || null,
-        adecuacion: form.adecuacion || null,
+        tieneAdecuacion: !!form.tieneAdecuacion,
+        adecuacion: form.tieneAdecuacion ? form.adecuacion || null : null,
+        nivelFuncionamiento: form.nivelFuncionamiento || null,
         discapacidad: form.discapacidad || null,
         enfermedad: form.enfermedad || null,
         rutaTransporteHabitual: form.rutaTransporteHabitual || null,
+        observaciones: form.observaciones || null,
         observacionMedica: form.observacionMedica || null,
         encargados: buildEncargadosPayload()
       };
@@ -741,6 +764,11 @@ export default function EstudiantesPage() {
 
       const estudiante = detalle?.estudiante;
       const encargados = detalle?.encargados || [];
+      const adecuacionActual = estudiante?.Adecuacion || "";
+      const adecuacionActualValida = isValidAdecuacionOption(adecuacionActual);
+      const tieneAdecuacionActual = estudiante?.TieneAdecuacion == null
+        ? adecuacionActualValida
+        : Boolean(estudiante?.TieneAdecuacion) && adecuacionActualValida;
 
       setEditingId(item.EstudianteId);
       setForm({
@@ -759,57 +787,20 @@ export default function EstudiantesPage() {
         sexo: estudiante?.Sexo || "",
         fotoUrl: estudiante?.FotoUrl || "",
         nacionalidad: estudiante?.Nacionalidad || "",
-        adecuacion: estudiante?.Adecuacion || "",
+        tieneAdecuacion: tieneAdecuacionActual,
+        adecuacion: tieneAdecuacionActual ? adecuacionActual : "",
+        nivelFuncionamiento: estudiante?.NivelFuncionamiento || "",
         discapacidad: estudiante?.Discapacidad || "",
         enfermedad: estudiante?.Enfermedad || "",
         rutaTransporteHabitual: estudiante?.RutaTransporteHabitual || "",
+        observaciones: estudiante?.Observaciones || "",
         observacionMedica: estudiante?.ObservacionMedica || ""
       });
 
-      const madre = encargados.find((x) => x.TipoEncargado === "MADRE");
-      const padre = encargados.find((x) => x.TipoEncargado === "PADRE");
-      const encargado = encargados.find((x) => x.TipoEncargado === "ENCARGADO");
-
-      setMadreForm(
-        madre
-          ? {
-              tipoEncargado: "MADRE",
-              identificacion: madre.Identificacion || "",
-              nombre: madre.Nombre || "",
-              primerApellido: madre.PrimerApellido || "",
-              segundoApellido: madre.SegundoApellido || "",
-              correo: madre.Correo || "",
-              telefono: normalizePhoneForInput(madre.Telefono || ""),
-              direccionExacta: madre.DireccionExacta || "",
-              parentesco: madre.Parentesco || "Madre",
-              viveConEstudiante: !!madre.ViveConEstudiante,
-              esPrincipal: !!madre.EsPrincipal,
-              recibeNotificaciones:
-                madre.RecibeNotificaciones === false ? false : true
-            }
-          : emptyEncargado("MADRE")
-      );
-
-      setPadreForm(
-        padre
-          ? {
-              tipoEncargado: "PADRE",
-              identificacion: padre.Identificacion || "",
-              nombre: padre.Nombre || "",
-              primerApellido: padre.PrimerApellido || "",
-              segundoApellido: padre.SegundoApellido || "",
-              correo: padre.Correo || "",
-              telefono: normalizePhoneForInput(padre.Telefono || ""),
-              direccionExacta: padre.DireccionExacta || "",
-              parentesco: padre.Parentesco || "Padre",
-              viveConEstudiante: !!padre.ViveConEstudiante,
-              esPrincipal: !!padre.EsPrincipal,
-              recibeNotificaciones:
-                padre.RecibeNotificaciones === false ? false : true
-            }
-          : emptyEncargado("PADRE")
-      );
-
+      const encargado =
+        encargados.find((x) => x.TipoEncargado === "ENCARGADO") ||
+        encargados.find((x) => x.EsPrincipal) ||
+        encargados[0];
       setEncargadoForm(
         encargado
           ? {
@@ -1492,6 +1483,45 @@ export default function EstudiantesPage() {
               </select>
             </label>
 
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
+              <input
+                type="checkbox"
+                checked={!!form.tieneAdecuacion}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    tieneAdecuacion: e.target.checked,
+                    adecuacion: e.target.checked ? prev.adecuacion : ""
+                  }))
+                }
+              />
+              Adecuación
+            </label>
+
+            {form.tieneAdecuacion ? (
+              <label>
+                Seleccione la adecuación
+                <select
+                  value={form.adecuacion}
+                  onChange={(e) =>
+                    setForm({ ...form, adecuacion: e.target.value })
+                  }
+                >
+                  <option value="">Seleccione</option>
+                  {tiposAdecuacion.filter((item) => item.Activo && isValidAdecuacionOption(item.Descripcion)).map((item) => (
+                    <option key={item.TipoAdecuacionId} value={item.Descripcion}>
+                      {item.Descripcion}
+                    </option>
+                  ))}
+                  {form.adecuacion &&
+                  isValidAdecuacionOption(form.adecuacion) &&
+                  !tiposAdecuacion.some((item) => normalizeComparableText(item.Descripcion) === normalizeComparableText(form.adecuacion)) ? (
+                    <option value={form.adecuacion}>{form.adecuacion}</option>
+                  ) : null}
+                </select>
+              </label>
+            ) : null}
+
             <label>
               Ruta
               <select
@@ -1530,17 +1560,6 @@ export default function EstudiantesPage() {
             </label>
 
             <label>
-              Adecuación
-              <input
-                value={form.adecuacion}
-                onChange={(e) =>
-                  setForm({ ...form, adecuacion: e.target.value })
-                }
-                placeholder="Ejemplo: Curricular no significativa"
-              />
-            </label>
-
-            <label>
               Discapacidad
               <input
                 value={form.discapacidad}
@@ -1572,6 +1591,43 @@ export default function EstudiantesPage() {
                 }
               />
             </label>
+
+            <section
+              style={{
+                display: "grid",
+                gap: "12px",
+                padding: "14px",
+                borderRadius: "14px",
+                border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.04)"
+              }}
+            >
+              <strong style={{ fontSize: "14px" }}>Seguimiento de adecuación</strong>
+              <small style={{ opacity: 0.8, marginTop: "-6px" }}>
+                Estos dos campos se usan juntos para describir el apoyo y el seguimiento del estudiante.
+              </small>
+
+              <label>
+                Nivel de funcionamiento
+                <input
+                  value={form.nivelFuncionamiento}
+                  onChange={(e) =>
+                    setForm({ ...form, nivelFuncionamiento: e.target.value })
+                  }
+                />
+              </label>
+
+              <label>
+                Observaciones
+                <textarea
+                  value={form.observaciones}
+                  onChange={(e) =>
+                    setForm({ ...form, observaciones: e.target.value })
+                  }
+                  rows={3}
+                />
+              </label>
+            </section>
 
             <label>
               Observación médica
@@ -1642,12 +1698,6 @@ export default function EstudiantesPage() {
                 </div>
               )}
             </div>
-
-            <SectionTitle>Datos de la madre</SectionTitle>
-            <EncargadoBlockStable title="Madre" value={madreForm} onChange={setMadreForm} />
-
-            <SectionTitle>Datos del padre</SectionTitle>
-            <EncargadoBlockStable title="Padre" value={padreForm} onChange={setPadreForm} />
 
             <SectionTitle>Datos del encargado</SectionTitle>
             <EncargadoBlockStable
@@ -1962,6 +2012,8 @@ export default function EstudiantesPage() {
                 <th>Correo</th>
                 <th>Teléfono</th>
                 <th>Tipo</th>
+                <th>Nivel de funcionamiento</th>
+                <th>Observaciones</th>
                 <th>Ruta</th>
                 <th>VB WhatsApp</th>
                 <th>Estado</th>
@@ -1996,6 +2048,8 @@ export default function EstudiantesPage() {
                     <td>{item.Correo ?? ""}</td>
                     <td>{item.Telefono ?? ""}</td>
                     <td>{item.TipoEstudianteDescripcion ?? ""}</td>
+                    <td>{item.NivelFuncionamiento ?? ""}</td>
+                    <td>{item.Observaciones ?? ""}</td>
                     <td>{item.RutaTransporteDescripcion ?? item.RutaTransporteHabitual ?? ""}</td>
                     <td>{item.AutorizaWhatsAppEncargado ? "Sí" : "No"}</td>
                     <td>{item.Activo ? "Activo" : "Inactivo"}</td>
@@ -2156,10 +2210,12 @@ export default function EstudiantesPage() {
                               <div><strong>Nacionalidad:</strong> {detalleEstudiante.Nacionalidad || ""}</div>
                               <div><strong>Tipo de estudiante:</strong> {detalleEstudiante.TipoEstudianteDescripcion || ""}</div>
                               <div><strong>Adecuación:</strong> {detalleEstudiante.Adecuacion || ""}</div>
+                              <div><strong>Nivel de funcionamiento:</strong> {detalleEstudiante.NivelFuncionamiento || ""}</div>
                               <div><strong>Discapacidad:</strong> {detalleEstudiante.Discapacidad || ""}</div>
                               <div><strong>Enfermedad:</strong> {detalleEstudiante.Enfermedad || ""}</div>
                               <div><strong>Ruta transporte:</strong> {detalleEstudiante.RutaTransporteDescripcion || detalleEstudiante.RutaTransporteHabitual || ""}</div>
                               <div><strong>VB WhatsApp encargado:</strong> {detalleEstudiante.AutorizaWhatsAppEncargado ? "Sí" : "No"}</div>
+                              <div><strong>Observaciones:</strong> {detalleEstudiante.Observaciones || ""}</div>
                               <div><strong>Observación médica:</strong> {detalleEstudiante.ObservacionMedica || ""}</div>
                               <div><strong>Correo:</strong> {detalleEstudiante.Correo || ""}</div>
                               <div><strong>Teléfono:</strong> {detalleEstudiante.Telefono || ""}</div>
@@ -2175,8 +2231,6 @@ export default function EstudiantesPage() {
                                 gap: "12px"
                               }}
                             >
-                              <DetailCardStable title="Madre" encargado={detalleMadre} />
-                              <DetailCardStable title="Padre" encargado={detallePadre} />
                               <DetailCardStable title="Encargado" encargado={detalleEncargado} />
                             </div>
                           </div>

@@ -1080,9 +1080,29 @@ router.delete("/plantillas/:id", async (req, res) => {
       return badRequest(res, "No se puede eliminar la plantilla porque ya estÃ¡ asignada a uno o mÃ¡s grupos");
     }
 
+    const usoNotas = await pool.request()
+      .input("plantillaId", sql.Int, plantillaId)
+      .query(`
+        SELECT TOP 1 n.EvaluacionNotaId
+        FROM dbo.EvaluacionNota n
+        INNER JOIN dbo.EvaluacionActividad a ON a.EvaluacionActividadId = n.EvaluacionActividadId
+        INNER JOIN dbo.EvaluacionComponente c ON c.EvaluacionComponenteId = a.EvaluacionComponenteId
+        WHERE c.EvaluacionPlantillaId = @plantillaId
+      `);
+
+    if (usoNotas.recordset.length) {
+      return badRequest(res, "No se puede eliminar la plantilla porque ya tiene calificaciones registradas");
+    }
+
     await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
       .query(`
+        DELETE ai
+        FROM dbo.EvaluacionActividadIndicador ai
+        INNER JOIN dbo.EvaluacionActividad a ON a.EvaluacionActividadId = ai.EvaluacionActividadId
+        INNER JOIN dbo.EvaluacionComponente c ON c.EvaluacionComponenteId = a.EvaluacionComponenteId
+        WHERE c.EvaluacionPlantillaId = @plantillaId;
+
         DELETE FROM dbo.EvaluacionActividad
         WHERE EvaluacionComponenteId IN (
           SELECT EvaluacionComponenteId

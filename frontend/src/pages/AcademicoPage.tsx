@@ -165,6 +165,23 @@ type TipoEstudiante = {
   Activo: boolean;
 };
 
+type TipoAdecuacion = {
+  TipoAdecuacionId: number;
+  InstitucionId?: number;
+  Descripcion: string;
+  Activo: boolean;
+};
+
+type AdecuacionItem = {
+  AdecuacionCatalogoId: number;
+  InstitucionId?: number;
+  TipoAdecuacionId: number;
+  Adecuacion: string;
+  Tipo: string;
+  Descripcion: string;
+  Activo: boolean;
+};
+
 type RutaTransporte = {
   RutaTransporteId: number;
   InstitucionId?: number;
@@ -494,6 +511,16 @@ const initialTipoEstudianteForm = {
   descripcion: ""
 };
 
+const initialTipoAdecuacionForm = {
+  descripcion: ""
+};
+
+const initialAdecuacionForm = {
+  tipoAdecuacionId: "",
+  tipo: "",
+  descripcion: ""
+};
+
 const initialRutaTransporteForm = {
   descripcion: "",
   responsable: "",
@@ -659,6 +686,8 @@ type TabKey =
   | "grupos"
   | "matriculas"
   | "tiposEstudiante"
+  | "tiposAdecuacion"
+  | "adecuaciones"
   | "especialidades"
   | "rutasTransporte"
   | "evaluacion"
@@ -681,6 +710,8 @@ type FormSectionKey =
   | "grupos"
   | "matriculas"
   | "tiposEstudiante"
+  | "tiposAdecuacion"
+  | "adecuaciones"
   | "especialidades"
   | "rutasTransporte"
   | "materias"
@@ -698,6 +729,8 @@ const initialOpenSections: Record<FormSectionKey, boolean> = {
   grupos: false,
   matriculas: false,
   tiposEstudiante: false,
+  tiposAdecuacion: false,
+  adecuaciones: false,
   especialidades: false,
   rutasTransporte: false,
   materias: false,
@@ -722,6 +755,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [grupos, setGrupos] = useState<Grupo[]>([]);
   const [matriculas, setMatriculas] = useState<Matricula[]>([]);
   const [tiposEstudiante, setTiposEstudiante] = useState<TipoEstudiante[]>([]);
+  const [tiposAdecuacion, setTiposAdecuacion] = useState<TipoAdecuacion[]>([]);
+  const [adecuaciones, setAdecuaciones] = useState<AdecuacionItem[]>([]);
   const [especialidadesCatalogo, setEspecialidadesCatalogo] = useState<Especialidad[]>([]);
   const [especialidades, setEspecialidades] = useState<Especialidad[]>([]);
   const [rutasTransporteCatalogo, setRutasTransporteCatalogo] = useState<RutaTransporte[]>([]);
@@ -744,6 +779,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [grupoForm, setGrupoForm] = useState(initialGrupoForm);
   const [matriculaForm, setMatriculaForm] = useState(initialMatriculaForm);
   const [tipoEstudianteForm, setTipoEstudianteForm] = useState(initialTipoEstudianteForm);
+  const [tipoAdecuacionForm, setTipoAdecuacionForm] = useState(initialTipoAdecuacionForm);
+  const [adecuacionForm, setAdecuacionForm] = useState(initialAdecuacionForm);
   const [especialidadForm, setEspecialidadForm] = useState(initialEspecialidadForm);
   const [rutaTransporteForm, setRutaTransporteForm] = useState(initialRutaTransporteForm);
   const [materiaForm, setMateriaForm] = useState(initialMateriaForm);
@@ -765,6 +802,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [editingGrupoId, setEditingGrupoId] = useState<number | null>(null);
   const [editingMatriculaId, setEditingMatriculaId] = useState<number | null>(null);
   const [editingTipoEstudianteId, setEditingTipoEstudianteId] = useState<number | null>(null);
+  const [editingTipoAdecuacionId, setEditingTipoAdecuacionId] = useState<number | null>(null);
+  const [editingAdecuacionId, setEditingAdecuacionId] = useState<number | null>(null);
   const [editingEspecialidadId, setEditingEspecialidadId] = useState<number | null>(null);
   const [editingRutaTransporteId, setEditingRutaTransporteId] = useState<number | null>(null);
   const [editingMateriaId, setEditingMateriaId] = useState<number | null>(null);
@@ -802,6 +841,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [matriculaSearch, setMatriculaSearch] = useState("");
   const [matriculaHasSearched, setMatriculaHasSearched] = useState(false);
   const [tipoEstudianteSearch, setTipoEstudianteSearch] = useState("");
+  const [tipoAdecuacionSearch, setTipoAdecuacionSearch] = useState("");
+  const [adecuacionSearch, setAdecuacionSearch] = useState("");
   const [especialidadSearch, setEspecialidadSearch] = useState("");
   const [rutaTransporteSearch, setRutaTransporteSearch] = useState("");
   const [materiaSearch, setMateriaSearch] = useState("");
@@ -817,6 +858,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [incluirGruposInactivos, setIncluirGruposInactivos] = useState(false);
   const [incluirMatriculasInactivas, setIncluirMatriculasInactivas] = useState(false);
   const [incluirTiposEstudianteInactivos, setIncluirTiposEstudianteInactivos] = useState(false);
+  const [incluirTiposAdecuacionInactivos, setIncluirTiposAdecuacionInactivos] = useState(false);
+  const [incluirAdecuacionesInactivas, setIncluirAdecuacionesInactivas] = useState(false);
   const [incluirEspecialidadesInactivas, setIncluirEspecialidadesInactivas] = useState(false);
   const [incluirRutasTransporteInactivas, setIncluirRutasTransporteInactivas] = useState(false);
   const [incluirMateriasInactivas, setIncluirMateriasInactivas] = useState(false);
@@ -833,6 +876,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [loadingGrupo, setLoadingGrupo] = useState(false);
   const [loadingMatricula, setLoadingMatricula] = useState(false);
   const [loadingTipoEstudiante, setLoadingTipoEstudiante] = useState(false);
+  const [loadingTipoAdecuacion, setLoadingTipoAdecuacion] = useState(false);
+  const [loadingAdecuacion, setLoadingAdecuacion] = useState(false);
   const [loadingEspecialidad, setLoadingEspecialidad] = useState(false);
   const [loadingRutaTransporte, setLoadingRutaTransporte] = useState(false);
   const [loadingMateria, setLoadingMateria] = useState(false);
@@ -907,6 +952,8 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     setGruposCatalogo(data.grupos || []);
     setPeriodos(data.periodos || []);
     setEspecialidadesCatalogo(data.especialidades || []);
+    setTiposEstudiante(data.tiposEstudiante || []);
+    setTiposAdecuacion(data.tiposAdecuacion || []);
     setRutasTransporteCatalogo(data.rutasTransporte || []);
     setMateriasCatalogo(data.materias || []);
     setDocentesCatalogo(data.docentes || []);
@@ -967,6 +1014,20 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
       params: { q: query, incluirInactivos }
     });
     setTiposEstudiante(response.data?.data || []);
+  }
+
+  async function loadTiposAdecuacion(query = "", incluirInactivos = incluirTiposAdecuacionInactivos) {
+    const response = await api.get("/academico/tipos-adecuacion", {
+      params: { q: query, incluirInactivos }
+    });
+    setTiposAdecuacion(response.data?.data || []);
+  }
+
+  async function loadAdecuaciones(query = "", incluirInactivos = incluirAdecuacionesInactivas) {
+    const response = await api.get("/academico/adecuaciones", {
+      params: { q: query, incluirInactivos }
+    });
+    setAdecuaciones(response.data?.data || []);
   }
 
   async function loadRutasTransporte(query = "", incluirInactivas = incluirRutasTransporteInactivas) {
@@ -1129,6 +1190,12 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           break;
         case "tiposEstudiante":
           await loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos);
+          break;
+        case "tiposAdecuacion":
+          await loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos);
+          break;
+        case "adecuaciones":
+          await loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas);
           break;
         case "especialidades":
           await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
@@ -1295,6 +1362,18 @@ function resetMatriculaForm() {
     setTipoEstudianteForm(initialTipoEstudianteForm);
     setEditingTipoEstudianteId(null);
     closeSection("tiposEstudiante");
+  }
+
+  function resetTipoAdecuacionForm() {
+    setTipoAdecuacionForm(initialTipoAdecuacionForm);
+    setEditingTipoAdecuacionId(null);
+    closeSection("tiposAdecuacion");
+  }
+
+  function resetAdecuacionForm() {
+    setAdecuacionForm(initialAdecuacionForm);
+    setEditingAdecuacionId(null);
+    closeSection("adecuaciones");
   }
 
   function resetEspecialidadForm() {
@@ -2065,6 +2144,82 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleTipoAdecuacionSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingTipoAdecuacion(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        descripcion: tipoAdecuacionForm.descripcion
+      };
+
+      if (!payload.descripcion.trim()) {
+        setErrorMessage("La descripción del tipo de adecuación es obligatoria");
+        return;
+      }
+
+      if (editingTipoAdecuacionId !== null) {
+        await api.put(`/academico/tipos-adecuacion/${editingTipoAdecuacionId}`, payload);
+        setMessage("Tipo de adecuación actualizado correctamente");
+      } else {
+        await api.post("/academico/tipos-adecuacion", payload);
+        setMessage("Tipo de adecuación creado correctamente");
+      }
+
+      resetTipoAdecuacionForm();
+      await Promise.all([
+        loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      console.error("Error guardando tipo de adecuación:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar el tipo de adecuación");
+    } finally {
+      setLoadingTipoAdecuacion(false);
+    }
+  }
+
+  async function handleAdecuacionSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingAdecuacion(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        tipoAdecuacionId: Number(adecuacionForm.tipoAdecuacionId || 0),
+        tipo: adecuacionForm.tipo,
+        descripcion: adecuacionForm.descripcion
+      };
+
+      if (!payload.tipoAdecuacionId) {
+        setErrorMessage("La adecuación es obligatoria");
+        return;
+      }
+
+      if (!payload.tipo.trim() || !payload.descripcion.trim()) {
+        setErrorMessage("Tipo y descripción son obligatorios");
+        return;
+      }
+
+      if (editingAdecuacionId !== null) {
+        await api.put(`/academico/adecuaciones/${editingAdecuacionId}`, payload);
+        setMessage("Adecuación actualizada correctamente");
+      } else {
+        await api.post("/academico/adecuaciones", payload);
+        setMessage("Adecuación creada correctamente");
+      }
+
+      resetAdecuacionForm();
+      await loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas);
+    } catch (error: any) {
+      console.error("Error guardando adecuación:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la adecuación");
+    } finally {
+      setLoadingAdecuacion(false);
+    }
+  }
+
 
   async function handleRutaTransporteSubmit(e: FormEvent) {
     e.preventDefault();
@@ -2550,6 +2705,30 @@ function resetMatriculaForm() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function handleEditTipoAdecuacion(item: TipoAdecuacion) {
+    setTab("tiposAdecuacion");
+    openSection("tiposAdecuacion");
+    clearMessages();
+    setEditingTipoAdecuacionId(item.TipoAdecuacionId);
+    setTipoAdecuacionForm({
+      descripcion: item.Descripcion || ""
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function handleEditAdecuacion(item: AdecuacionItem) {
+    setTab("adecuaciones");
+    openSection("adecuaciones");
+    clearMessages();
+    setEditingAdecuacionId(item.AdecuacionCatalogoId);
+    setAdecuacionForm({
+      tipoAdecuacionId: String(item.TipoAdecuacionId || ""),
+      tipo: item.Tipo || "",
+      descripcion: item.Descripcion || ""
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function handleEditRutaTransporte(item: RutaTransporte) {
     setTab("rutasTransporte");
     openSection("rutasTransporte");
@@ -2808,6 +2987,64 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleDeleteTipoAdecuacion(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar este tipo de adecuación?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/tipos-adecuacion/${id}`);
+      setMessage("Tipo de adecuación eliminado correctamente");
+      if (editingTipoAdecuacionId === id) resetTipoAdecuacionForm();
+      await Promise.all([
+        loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el tipo de adecuación");
+    }
+  }
+
+  async function handleReactivateTipoAdecuacion(id: number) {
+    clearMessages();
+    try {
+      await api.patch(`/academico/tipos-adecuacion/${id}/reactivar`);
+      setMessage("Tipo de adecuación reactivado correctamente");
+      await Promise.all([
+        loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos),
+        loadCatalogos()
+      ]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo reactivar el tipo de adecuación");
+    }
+  }
+
+  async function handleDeleteAdecuacion(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar esta adecuación?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/adecuaciones/${id}`);
+      setMessage("Adecuación eliminada correctamente");
+      if (editingAdecuacionId === id) resetAdecuacionForm();
+      await loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la adecuación");
+    }
+  }
+
+  async function handleReactivateAdecuacion(id: number) {
+    clearMessages();
+    try {
+      await api.patch(`/academico/adecuaciones/${id}/reactivar`);
+      setMessage("Adecuación reactivada correctamente");
+      await loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo reactivar la adecuación");
+    }
+  }
+
   async function handleReactivateEspecialidad(id: number) {
     clearMessages();
     try {
@@ -3009,6 +3246,16 @@ function resetMatriculaForm() {
     await loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos);
   }
 
+  async function handleTipoAdecuacionSearch(e: FormEvent) {
+    e.preventDefault();
+    await loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos);
+  }
+
+  async function handleAdecuacionSearch(e: FormEvent) {
+    e.preventDefault();
+    await loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas);
+  }
+
   async function handleRutaTransporteSearch(e: FormEvent) {
     e.preventDefault();
     await loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas);
@@ -3161,6 +3408,8 @@ function resetMatriculaForm() {
     { key: "feriados", label: "Feriados", tone: "#2563eb", help: "Excepciones del calendario" },
     { key: "grupos", label: "Gestión de grupos", tone: "#0d9488", help: "Secciones del centro educativo" },
     { key: "tiposEstudiante", label: "Tipo de estudiante", tone: "#0d9488", help: "Clasificación estudiantil" },
+    { key: "tiposAdecuacion", label: "Tipo Adecuación", tone: "#0d9488", help: "Clasificación de adecuaciones" },
+    { key: "adecuaciones", label: "Apoyos Educativos (Adecuaciones)", tone: "#0d9488", help: "Catálogo de apoyos y ajustes" },
     { key: "especialidades", label: "Especialidades", tone: "#0d9488", help: "Oferta académica técnica" },
     { key: "rutasTransporte", label: "Rutas", tone: "#0d9488", help: "Logística de transporte" },
     { key: "materias", label: "Materias", tone: "#0d9488", help: "Catálogo de asignaturas" },
@@ -4480,6 +4729,198 @@ function resetMatriculaForm() {
                       </tr>
                     ))}
                     {!tiposEstudiante.length && <tr><td colSpan={4} style={{ textAlign: "center", padding: "16px" }}>No hay tipos de estudiante registrados</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+
+        {tab === "tiposAdecuacion" && (
+          <div className={isSectionOpen("tiposAdecuacion") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("tiposAdecuacion") ? (
+                <>
+                  <h3>{editingTipoAdecuacionId !== null ? "Editar tipo de adecuación" : "Crear tipo de adecuación"}</h3>
+                  <form className="form" onSubmit={handleTipoAdecuacionSubmit}>
+                    <label>
+                      Descripción
+                      <input
+                        value={tipoAdecuacionForm.descripcion}
+                        onChange={(e) => setTipoAdecuacionForm({ ...tipoAdecuacionForm, descripcion: e.target.value })}
+                        placeholder="Ejemplo: Curricular, No significativa"
+                        required
+                      />
+                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingTipoAdecuacion}>
+                        {loadingTipoAdecuacion ? (editingTipoAdecuacionId !== null ? "Actualizando..." : "Guardando...") : (editingTipoAdecuacionId !== null ? "Actualizar" : "Guardar")}
+                      </button>
+                      <button type="button" onClick={resetTipoAdecuacionForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Tipo de adecuación</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetTipoAdecuacionForm(); openSection("tiposAdecuacion"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar tipo de adecuación
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de tipos de adecuación</h3>
+              <form onSubmit={handleTipoAdecuacionSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
+                <input placeholder="Buscar por descripción" value={tipoAdecuacionSearch} onChange={(e) => setTipoAdecuacionSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                <button className="primary-btn" type="submit">Buscar</button>
+                <button type="button" onClick={() => { setTipoAdecuacionSearch(""); loadTiposAdecuacion("", incluirTiposAdecuacionInactivos); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                  Limpiar
+                </button>
+              </form>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <input type="checkbox" checked={incluirTiposAdecuacionInactivos} onChange={(e) => setIncluirTiposAdecuacionInactivos(e.target.checked)} />
+                Incluir tipos inactivos
+              </label>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>ID</th><th>Descripción</th><th>Estado</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                    {tiposAdecuacion.map((item) => (
+                      <tr key={item.TipoAdecuacionId}>
+                        <td>{item.TipoAdecuacionId}</td>
+                        <td>{item.Descripcion}</td>
+                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => handleEditTipoAdecuacion(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                            {item.Activo ? (
+                              <button type="button" onClick={() => handleDeleteTipoAdecuacion(item.TipoAdecuacionId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                            ) : (
+                              <button type="button" onClick={() => handleReactivateTipoAdecuacion(item.TipoAdecuacionId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!tiposAdecuacion.length && <tr><td colSpan={4} style={{ textAlign: "center", padding: "16px" }}>No hay tipos de adecuación registrados</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {tab === "adecuaciones" && (
+          <div className={isSectionOpen("adecuaciones") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("adecuaciones") ? (
+                <>
+                  <h3>{editingAdecuacionId !== null ? "Editar adecuación" : "Crear adecuación"}</h3>
+                  <form className="form" onSubmit={handleAdecuacionSubmit}>
+                    <label>
+                      Adecuación
+                      <select
+                        value={adecuacionForm.tipoAdecuacionId}
+                        onChange={(e) => setAdecuacionForm({ ...adecuacionForm, tipoAdecuacionId: e.target.value })}
+                        required
+                      >
+                        <option value="">Seleccione</option>
+                        {tiposAdecuacion.filter((item) => item.Activo).map((item) => (
+                          <option key={item.TipoAdecuacionId} value={item.TipoAdecuacionId}>
+                            {item.Descripcion}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Tipo
+                      <input
+                        value={adecuacionForm.tipo}
+                        onChange={(e) => setAdecuacionForm({ ...adecuacionForm, tipo: e.target.value })}
+                        placeholder="Ejemplo: Apoyos Curriculares (Metodología)"
+                        required
+                      />
+                    </label>
+                    <label>
+                      Descripción
+                      <textarea
+                        value={adecuacionForm.descripcion}
+                        onChange={(e) => setAdecuacionForm({ ...adecuacionForm, descripcion: e.target.value })}
+                        rows={4}
+                        placeholder="Detalle de la adecuación"
+                        required
+                      />
+                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingAdecuacion}>
+                        {loadingAdecuacion ? (editingAdecuacionId !== null ? "Actualizando..." : "Guardando...") : (editingAdecuacionId !== null ? "Actualizar" : "Guardar")}
+                      </button>
+                      <button type="button" onClick={resetAdecuacionForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Adecuación</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetAdecuacionForm(); openSection("adecuaciones"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                      Agregar nueva
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de adecuaciones</h3>
+              <form onSubmit={handleAdecuacionSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
+                <input placeholder="Buscar por tipo o descripción" value={adecuacionSearch} onChange={(e) => setAdecuacionSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                <button className="primary-btn" type="submit">Buscar</button>
+                <button type="button" onClick={() => { setAdecuacionSearch(""); loadAdecuaciones("", incluirAdecuacionesInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                  Limpiar
+                </button>
+              </form>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <input type="checkbox" checked={incluirAdecuacionesInactivas} onChange={(e) => setIncluirAdecuacionesInactivas(e.target.checked)} />
+                Incluir adecuaciones inactivas
+              </label>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>ID</th><th>Adecuación</th><th>Tipo</th><th>Descripción</th><th>Estado</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                    {adecuaciones.map((item) => (
+                      <tr key={item.AdecuacionCatalogoId}>
+                        <td>{item.AdecuacionCatalogoId}</td>
+                        <td>{item.Adecuacion}</td>
+                        <td>{item.Tipo}</td>
+                        <td>{item.Descripcion}</td>
+                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => handleEditAdecuacion(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                            {item.Activo ? (
+                              <button type="button" onClick={() => handleDeleteAdecuacion(item.AdecuacionCatalogoId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                            ) : (
+                              <button type="button" onClick={() => handleReactivateAdecuacion(item.AdecuacionCatalogoId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!adecuaciones.length && <tr><td colSpan={6} style={{ textAlign: "center", padding: "16px" }}>No hay adecuaciones registradas</td></tr>}
                   </tbody>
                 </table>
               </div>

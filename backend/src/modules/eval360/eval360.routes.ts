@@ -5814,6 +5814,128 @@ router.get("/estructuras/:id", async (req, res) => {
 
 
 
+router.delete("/estructuras/:id/calificaciones", async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+
+  try {
+    if (!assertCanAccess(req, res)) return;
+    if (!isSuperAdmin(req)) return forbidden(res, "Solo SUPER_ADMIN puede eliminar calificaciones");
+
+    const estructuraGrupoId = toRequiredNumber(req.params.id, "estructuraGrupoId", res);
+    if (estructuraGrupoId === null) return;
+
+    const estructuraResult = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .query(`
+        SELECT TOP 1 *
+        FROM dbo.Eval360_EstructuraGrupo
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND Activo = 1
+      `);
+
+    const estructura = estructuraResult.recordset[0] || null;
+    if (!estructura) return badRequest(res, "No se encontró la estructura indicada");
+
+    await ensureComponenteAjusteManualTables(pool);
+    await transaction.begin();
+
+    const actividadIdsResult = await new sql.Request(transaction)
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .query(`
+        SELECT ActividadId
+        FROM dbo.Eval360_Actividad
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND ISNULL(Activo, 1) = 1
+      `);
+
+    const actividadIds = (actividadIdsResult.recordset || [])
+      .map((row: any) => Number(row.ActividadId))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+
+    const actividadIdsClause = actividadIds.length ? actividadIds.join(",") : "NULL";
+
+    const seguimientosBorrados = actividadIds.length
+      ? await new sql.Request(transaction).query(`
+          DELETE FROM dbo.Eval360_SeguimientoIndicador
+          WHERE ActividadId IN (${actividadIdsClause});
+        `)
+      : { rowsAffected: [0] };
+
+    const notasBorradas = actividadIds.length
+      ? await new sql.Request(transaction).query(`
+          DELETE FROM dbo.Eval360_NotaActividad
+          WHERE ActividadId IN (${actividadIdsClause});
+        `)
+      : { rowsAffected: [0] };
+
+    const ajustesBorrados = await new sql.Request(transaction)
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .query(`
+        DELETE FROM dbo.Eval360_ComponenteAjusteManual
+        WHERE EstructuraGrupoId = @estructuraGrupoId;
+      `);
+
+    const asistenciasBorradas = await new sql.Request(transaction)
+      .input("grupoId", sql.Int, Number(estructura.GrupoId || 0))
+      .input("materiaId", sql.Int, Number(estructura.MateriaId || 0))
+      .input("anioLectivoId", sql.Int, Number(estructura.AnioLectivoId || 0))
+      .input("periodoId", sql.Int, Number(estructura.PeriodoId || 0))
+      .query(`
+        DELETE FROM dbo.AsistenciaRegistro
+        WHERE GrupoId = @grupoId
+          AND MateriaId = @materiaId
+          AND AnioLectivoId = @anioLectivoId
+          AND PeriodoId = @periodoId;
+      `);
+
+    await transaction.commit();
+
+    return ok(res, {
+      estructuraGrupoId,
+      actividadesBorradas: actividadIds.length,
+      seguimientosBorrados: Number(seguimientosBorrados.rowsAffected?.[0] || 0),
+      notasBorradas: Number(notasBorradas.rowsAffected?.[0] || 0),
+      ajustesBorrados: Number(ajustesBorrados.rowsAffected?.[0] || 0),
+      asistenciasBorradas: Number(asistenciasBorradas.rowsAffected?.[0] || 0)
+    }, "Calificaciones eliminadas correctamente");
+  } catch (error) {
+    try { await transaction.rollback(); } catch {}
+    console.error("Error eliminando calificaciones Eval360:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron eliminar las calificaciones" });
+  }
+});
+
+router.delete("/estructuras/:id/plantilla-asignada", async (req, res) => {
+  try {
+    if (!assertCanAccess(req, res)) return;
+    if (!isSuperAdmin(req)) return forbidden(res, "Solo SUPER_ADMIN puede eliminar la plantilla asignada");
+
+    const estructuraGrupoId = toRequiredNumber(req.params.id, "estructuraGrupoId", res);
+    if (estructuraGrupoId === null) return;
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .query(`
+        UPDATE dbo.Eval360_EstructuraGrupo
+        SET PlantillaBaseId = NULL,
+            UpdatedAt = SYSDATETIME()
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND Activo = 1;
+      `);
+
+    if (!result.rowsAffected?.[0]) {
+      return badRequest(res, "No se encontró la estructura indicada");
+    }
+
+    return ok(res, { estructuraGrupoId }, "Plantilla asignada eliminada correctamente");
+  } catch (error) {
+    console.error("Error eliminando plantilla asignada Eval360:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar la plantilla asignada" });
+  }
+});
+
 router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
   const pool = await getPool();

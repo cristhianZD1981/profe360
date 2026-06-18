@@ -5,6 +5,10 @@ import { getCostaRicaIsoDate, getCostaRicaIsoDateWithOffset } from "../utils/dat
 import {
   type ActivePanel,
   type Actividad,
+  type ApoyoEducativoCatalogoItem,
+  type ApoyoEducativoInformeItem,
+  type ApoyoEducativoResumenItem,
+  type ApoyoEducativoSeccion,
   type AsistenciaDraft,
   type AsistenciaLeccion,
   type AsistenciaNotificacionEstado,
@@ -96,6 +100,19 @@ import {
   stickyTableCellStyle,
   stickyTableHeaderStyle,
 } from "./GestionProfePage.helpers";
+
+function normalizeAdecuacionText(value?: string | null) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function isValidApoyoAdecuacion(value?: string | null) {
+  const normalized = normalizeAdecuacionText(value);
+  return !!normalized && !["regular", "sin adecuacion", "seleccione", "no"].includes(normalized);
+}
 
 export default function GestionProfePage() {
   const [grupos, setGrupos] = useState<GrupoProfesor[]>([]);
@@ -297,6 +314,27 @@ export default function GestionProfePage() {
   const [savingNotaPorcentajeKey, setSavingNotaPorcentajeKey] = useState<string>("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [apoyoEducativoVisible, setApoyoEducativoVisible] = useState(false);
+  const [loadingApoyoEducativo, setLoadingApoyoEducativo] = useState(false);
+  const [savingApoyoEducativo, setSavingApoyoEducativo] = useState(false);
+  const [apoyoEducativoProgress, setApoyoEducativoProgress] = useState(0);
+  const [deletingApoyoEducativoInformeId, setDeletingApoyoEducativoInformeId] = useState<number | null>(null);
+  const [apoyoEducativoGeneratorOpen, setApoyoEducativoGeneratorOpen] = useState(false);
+  const [apoyoEducativoSecciones, setApoyoEducativoSecciones] = useState<ApoyoEducativoSeccion[]>([]);
+  const [apoyoEducativoEstudiantes, setApoyoEducativoEstudiantes] = useState<ApoyoEducativoResumenItem[]>([]);
+  const [apoyoEducativoCatalogo, setApoyoEducativoCatalogo] = useState<ApoyoEducativoCatalogoItem[]>([]);
+  const [apoyoEducativoInformes, setApoyoEducativoInformes] = useState<ApoyoEducativoInformeItem[]>([]);
+  const [apoyoEducativoPlantilla, setApoyoEducativoPlantilla] = useState<File | null>(null);
+  const [apoyoEducativoResumenSearch, setApoyoEducativoResumenSearch] = useState("");
+  const [apoyoEducativoResumenGrupoId, setApoyoEducativoResumenGrupoId] = useState("");
+  const [apoyoEducativoGrupoIdsSeleccionados, setApoyoEducativoGrupoIdsSeleccionados] = useState<string[]>([]);
+  const [apoyoEducativoAlumnosDisponibles, setApoyoEducativoAlumnosDisponibles] = useState<ApoyoEducativoResumenItem[]>([]);
+  const [apoyoEducativoEstudianteIdsSeleccionados, setApoyoEducativoEstudianteIdsSeleccionados] = useState<string[]>([]);
+  const [apoyoEducativoFiltroAdecuacion, setApoyoEducativoFiltroAdecuacion] = useState("");
+  const [apoyoEducativoFiltroTipo, setApoyoEducativoFiltroTipo] = useState("");
+  const [apoyoEducativoCatalogoResultados, setApoyoEducativoCatalogoResultados] = useState<ApoyoEducativoCatalogoItem[]>([]);
+  const [apoyoEducativoCatalogoIdsSeleccionados, setApoyoEducativoCatalogoIdsSeleccionados] = useState<string[]>([]);
+  const [apoyoEducativoPasoAlumnosConfirmado, setApoyoEducativoPasoAlumnosConfirmado] = useState(false);
   const initialLoadStartedRef = useRef(false);
   const tablaMatrizRef = useRef<HTMLDivElement | null>(null);
 
@@ -317,10 +355,54 @@ export default function GestionProfePage() {
     };
   }, []);
   const detalleGrupoRef = useRef<HTMLElement | null>(null);
+  const apoyoEducativoRef = useRef<HTMLElement | null>(null);
 
   const gruposOrdenados = useMemo(() => {
     return [...grupos].sort(compararGruposProfesor);
   }, [grupos]);
+
+  const apoyoEducativoEstudiantesValidos = useMemo(() => {
+    return (apoyoEducativoEstudiantes || []).filter((item) => {
+      return !!item && !!item.TieneAdecuacion && isValidApoyoAdecuacion(item.TipoAdecuacion);
+    });
+  }, [apoyoEducativoEstudiantes]);
+
+  const apoyoEducativoResumenFiltrado = useMemo(() => {
+    const filtro = apoyoEducativoResumenSearch.trim().toLowerCase();
+    return apoyoEducativoEstudiantesValidos.filter((item) => {
+      if (!item) return false;
+      const pasaSeccion = !apoyoEducativoResumenGrupoId || String(item.GrupoId) === String(apoyoEducativoResumenGrupoId);
+      if (!pasaSeccion) return false;
+      if (!filtro) return true;
+      const texto = [
+        item.Identificacion,
+        item.NombreCompleto,
+        item.Seccion,
+        item.TipoAdecuacion,
+        item.NivelFuncionamiento
+      ].map((value) => String(value || "").toLowerCase()).join(" ");
+      return texto.includes(filtro);
+    });
+  }, [apoyoEducativoEstudiantesValidos, apoyoEducativoResumenGrupoId, apoyoEducativoResumenSearch]);
+
+  const apoyoEducativoOpcionesAdecuacion = useMemo(() => {
+    return Array.from(new Set((apoyoEducativoCatalogo || []).map((item) => String(item.Adecuacion || "").trim()).filter(isValidApoyoAdecuacion))).sort((a, b) => a.localeCompare(b));
+  }, [apoyoEducativoCatalogo]);
+
+  const apoyoEducativoOpcionesTipo = useMemo(() => {
+    return Array.from(new Set((apoyoEducativoCatalogo || []).map((item) => String(item.Tipo || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [apoyoEducativoCatalogo]);
+
+  const apoyoEducativoInformesPorEstudiante = useMemo(() => {
+    const map = new Map<string, ApoyoEducativoInformeItem[]>();
+    for (const informe of apoyoEducativoInformes || []) {
+      const key = `${informe.EstudianteId}|${informe.GrupoId}`;
+      const current = map.get(key) || [];
+      current.push(informe);
+      map.set(key, current);
+    }
+    return map;
+  }, [apoyoEducativoInformes]);
 
   const actividadesPorComponente = useMemo(() => {
     const map = new Map<number, Actividad[]>();
@@ -3471,6 +3553,181 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setErrorMessage(error?.response?.data?.message || "No se pudieron cargar los grupos asignados");
     } finally {
       setLoadingGrupos(false);
+    }
+  }
+
+  function resetApoyoEducativoGenerator() {
+    setApoyoEducativoGeneratorOpen(false);
+    setApoyoEducativoGrupoIdsSeleccionados([]);
+    setApoyoEducativoAlumnosDisponibles([]);
+    setApoyoEducativoEstudianteIdsSeleccionados([]);
+    setApoyoEducativoFiltroAdecuacion("");
+    setApoyoEducativoFiltroTipo("");
+    setApoyoEducativoCatalogoResultados([]);
+    setApoyoEducativoCatalogoIdsSeleccionados([]);
+    setApoyoEducativoPasoAlumnosConfirmado(false);
+  }
+
+  async function loadApoyoEducativoData() {
+    setLoadingApoyoEducativo(true);
+    setErrorMessage("");
+    try {
+      const response = await api.get("/gestion-profe/apoyos-educativos/bootstrap", {
+        params: { _: Date.now() },
+        headers: { "Cache-Control": "no-cache" }
+      });
+      const data = response.data?.data || response.data || {};
+      setApoyoEducativoSecciones(Array.isArray(data.secciones) ? data.secciones.filter(Boolean) : []);
+      setApoyoEducativoEstudiantes(Array.isArray(data.estudiantes) ? data.estudiantes.filter(Boolean) : []);
+      setApoyoEducativoCatalogo(Array.isArray(data.adecuaciones) ? data.adecuaciones.filter(Boolean) : []);
+      setApoyoEducativoInformes(Array.isArray(data.informes) ? data.informes.filter(Boolean) : []);
+    } catch (error: any) {
+      console.error("Error cargando apoyos educativos:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar el panel de apoyos educativos");
+    } finally {
+      setLoadingApoyoEducativo(false);
+    }
+  }
+
+  async function openApoyoEducativoPanel() {
+    setApoyoEducativoVisible(true);
+    if (!apoyoEducativoSecciones.length && !loadingApoyoEducativo) {
+      await loadApoyoEducativoData();
+    }
+    setTimeout(() => {
+      apoyoEducativoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
+  }
+
+  function handleBuscarAlumnosApoyoEducativo() {
+    if (!apoyoEducativoGrupoIdsSeleccionados.length) {
+      setErrorMessage("Seleccioná al menos una sección para generar el apoyo educativo");
+      return;
+    }
+    setErrorMessage("");
+    const permitidos = new Set(apoyoEducativoGrupoIdsSeleccionados.map((item) => String(item)));
+    const resultados = apoyoEducativoEstudiantesValidos.filter((item) => !!item && permitidos.has(String(item.GrupoId)));
+    setApoyoEducativoAlumnosDisponibles(resultados);
+    setApoyoEducativoEstudianteIdsSeleccionados([]);
+    setApoyoEducativoPasoAlumnosConfirmado(false);
+    setApoyoEducativoCatalogoResultados([]);
+    setApoyoEducativoCatalogoIdsSeleccionados([]);
+  }
+
+  function handleConfirmarAlumnosApoyoEducativo() {
+    if (!apoyoEducativoEstudianteIdsSeleccionados.length) {
+      setErrorMessage("Marcá al menos un estudiante para continuar");
+      return;
+    }
+    setErrorMessage("");
+    setApoyoEducativoPasoAlumnosConfirmado(true);
+  }
+
+  function handleBuscarCatalogoApoyoEducativo() {
+    if (!apoyoEducativoPasoAlumnosConfirmado) {
+      setErrorMessage("Confirmá primero los estudiantes seleccionados");
+      return;
+    }
+    setErrorMessage("");
+    const resultados = (apoyoEducativoCatalogo || []).filter((item) => {
+      if (!item) return false;
+      if (!isValidApoyoAdecuacion(item.Adecuacion)) return false;
+      const coincideAdecuacion = !apoyoEducativoFiltroAdecuacion || String(item.Adecuacion) === String(apoyoEducativoFiltroAdecuacion);
+      const coincideTipo = !apoyoEducativoFiltroTipo || String(item.Tipo) === String(apoyoEducativoFiltroTipo);
+      return coincideAdecuacion && coincideTipo;
+    });
+    setApoyoEducativoCatalogoResultados(resultados);
+    setApoyoEducativoCatalogoIdsSeleccionados([]);
+  }
+
+  async function handleGuardarApoyoEducativo() {
+    if (!apoyoEducativoGrupoIdsSeleccionados.length) {
+      setErrorMessage("Seleccioná al menos una sección");
+      return;
+    }
+    if (!apoyoEducativoEstudianteIdsSeleccionados.length) {
+      setErrorMessage("Seleccioná al menos un estudiante");
+      return;
+    }
+    if (!apoyoEducativoCatalogoIdsSeleccionados.length) {
+      setErrorMessage("Seleccioná al menos un apoyo educativo");
+      return;
+    }
+    if (!apoyoEducativoPlantilla) {
+      setErrorMessage("Cargá la plantilla Word para generar los informes educativos");
+      return;
+    }
+
+    setSavingApoyoEducativo(true);
+    setApoyoEducativoProgress(8);
+    setErrorMessage("");
+    let progressTimer: number | null = window.setInterval(() => {
+      setApoyoEducativoProgress((prev) => Math.min(92, prev + Math.max(1, Math.round((92 - prev) * 0.12))));
+    }, 650);
+    try {
+      const formData = new FormData();
+      formData.append("grupoIds", JSON.stringify(apoyoEducativoGrupoIdsSeleccionados.map(Number)));
+      formData.append("estudianteIds", JSON.stringify(apoyoEducativoEstudianteIdsSeleccionados.map(Number)));
+      formData.append("adecuacionIds", JSON.stringify(apoyoEducativoCatalogoIdsSeleccionados.map(Number)));
+      formData.append("plantilla", apoyoEducativoPlantilla);
+      const response = await api.post("/gestion-profe/apoyos-educativos/generar", formData);
+      const data = response.data?.data || response.data || {};
+      setMessage(
+        response.data?.message
+        || `Apoyo educativo generado para ${data.totalEstudiantes || apoyoEducativoEstudianteIdsSeleccionados.length} estudiante(s)`
+      );
+      setApoyoEducativoProgress(100);
+      resetApoyoEducativoGenerator();
+      await loadApoyoEducativoData();
+    } catch (error: any) {
+      console.error("Error guardando apoyo educativo:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo generar el apoyo educativo");
+    } finally {
+      if (progressTimer !== null) {
+        window.clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      setSavingApoyoEducativo(false);
+      window.setTimeout(() => setApoyoEducativoProgress(0), 900);
+    }
+  }
+
+  async function handleDescargarInformeApoyoEducativo(informeId: number, fileName?: string | null) {
+    try {
+      const response = await api.get(`/gestion-profe/apoyos-educativos/informes/${informeId}/word`, {
+        params: { _: Date.now() },
+        responseType: "blob"
+      });
+      const url = URL.createObjectURL(response.data);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName || `informe-apoyo-${informeId}.docx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error("Error descargando informe educativo:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo abrir el informe educativo");
+    }
+  }
+
+  async function handleEliminarInformeApoyoEducativo(informeId: number) {
+    const confirmado = window.confirm("¿Deseás eliminar este informe educativo generado?");
+    if (!confirmado) return;
+    setDeletingApoyoEducativoInformeId(informeId);
+    setErrorMessage("");
+    try {
+      await api.delete(`/gestion-profe/apoyos-educativos/informes/${informeId}`, {
+        params: { _: Date.now() }
+      });
+      setApoyoEducativoInformes((prev) => prev.filter((item) => Number(item.ApoyoEducativoEstudianteId) !== Number(informeId)));
+      setMessage("Informe educativo eliminado correctamente");
+    } catch (error: any) {
+      console.error("Error eliminando informe educativo:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el informe educativo");
+    } finally {
+      setDeletingApoyoEducativoInformeId(null);
     }
   }
 
@@ -6693,9 +6950,432 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => { void openApoyoEducativoPanel(); }}
+              style={{
+                ...cardStyle,
+                textAlign: "left",
+                cursor: "pointer",
+                justifyContent: "center",
+                minHeight: "148px",
+                background: apoyoEducativoVisible ? "linear-gradient(135deg, #ecfeff 0%, #f8fafc 100%)" : "#ffffff",
+                border: apoyoEducativoVisible ? "2px solid #2dd4bf" : "2px solid #cbd5e1",
+                color: "#0f172a",
+                boxShadow: apoyoEducativoVisible ? "0 14px 28px rgba(45, 212, 191, 0.18)" : "0 10px 24px rgba(15, 23, 42, 0.10)"
+              }}
+            >
+              <strong style={{ fontSize: "24px", lineHeight: 1.1, color: "#0f172a" }}>Apoyo Educativo</strong>
+              <span style={{ fontWeight: 700, color: "#0f766e" }}>(Adecuaciones)</span>
+              <span style={{ color: "#0f766e", fontWeight: 700 }}>
+                Ver estudiantes y generar apoyos
+              </span>
+            </button>
           </div>
         )}
       </section>
+
+      {apoyoEducativoVisible && (
+        <section
+          ref={apoyoEducativoRef}
+          style={{
+            marginTop: "18px",
+            padding: "18px",
+            borderRadius: "18px",
+            backgroundColor: "#071b29",
+            backgroundImage: "radial-gradient(circle at top right, rgba(20,184,166,0.16), transparent 32%), linear-gradient(180deg, rgba(15,34,51,0.98), rgba(7,27,41,0.99))",
+            color: "#e5eefb",
+            border: "1px solid rgba(148, 163, 184, 0.28)",
+            boxShadow: "0 18px 42px rgba(0, 0, 0, 0.26)",
+            backdropFilter: "blur(6px)"
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <h3>Apoyo Educativo (Adecuaciones)</h3>
+              <p style={{ margin: 0, opacity: 0.9, color: "#cbd5e1" }}>
+                Listado consolidado de estudiantes de todas las secciones asignadas al profesor.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={secondaryButtonStyle}
+                onClick={() => {
+                  resetApoyoEducativoGenerator();
+                  setApoyoEducativoVisible(false);
+                }}
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => {
+                  resetApoyoEducativoGenerator();
+                  setApoyoEducativoGeneratorOpen(true);
+                  if (!apoyoEducativoSecciones.length) {
+                    void loadApoyoEducativoData();
+                  }
+                }}
+              >
+                Generar Apoyo Educativo
+              </button>
+              <button type="button" style={secondaryButtonStyle} onClick={() => { void loadApoyoEducativoData(); }}>
+                {loadingApoyoEducativo ? "Actualizando..." : "Actualizar"}
+              </button>
+            </div>
+          </div>
+
+          {loadingApoyoEducativo ? (
+            <div style={{ marginTop: "16px", padding: "14px", borderRadius: "14px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", fontWeight: 800 }}>
+              Cargando información de apoyos educativos...
+            </div>
+          ) : (
+            <div style={{ marginTop: "16px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+              <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
+                <strong style={{ display: "block", color: "#5eead4" }}>Secciones cargadas</strong>
+                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoSecciones.length}</span>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
+                <strong style={{ display: "block", color: "#5eead4" }}>Estudiantes cargados</strong>
+                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoEstudiantesValidos.length}</span>
+              </div>
+              <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
+                <strong style={{ display: "block", color: "#5eead4" }}>Apoyos cargados</strong>
+                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoCatalogo.length}</span>
+              </div>
+              {!apoyoEducativoSecciones.length && !apoyoEducativoEstudiantesValidos.length ? (
+                <div style={{ gridColumn: "1 / -1", padding: "12px", borderRadius: "14px", border: "1px solid #fdba74", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>
+                  No llegaron datos de apoyo educativo para este docente.
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {apoyoEducativoGeneratorOpen && (
+            <div style={{ marginTop: "16px", display: "grid", gap: "14px", padding: "14px", borderRadius: "16px", border: "1px solid rgba(45, 212, 191, 0.55)", background: "rgba(15, 34, 51, 0.82)", color: "#e5eefb" }}>
+              <div style={{ display: "grid", gap: "8px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                  <strong style={{ color: "#0f766e" }}>1. Escogé la o las secciones</strong>
+                  <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={apoyoEducativoSecciones.length > 0 && apoyoEducativoGrupoIdsSeleccionados.length === apoyoEducativoSecciones.length}
+                      onChange={(event) => {
+                        setApoyoEducativoGrupoIdsSeleccionados(
+                          event.target.checked ? apoyoEducativoSecciones.map((item) => String(item.GrupoId)) : []
+                        );
+                      }}
+                    />
+                    Marcar todas
+                  </label>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
+                  {apoyoEducativoSecciones.map((item) => {
+                    const checked = apoyoEducativoGrupoIdsSeleccionados.includes(String(item.GrupoId));
+                    return (
+                      <label key={`apoyo-seccion-${item.GrupoId}`} style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "10px 12px", borderRadius: "12px", border: checked ? "1px solid #2dd4bf" : "1px solid rgba(148, 163, 184, 0.28)", background: checked ? "rgba(45, 212, 191, 0.16)" : "rgba(255,255,255,0.06)", color: "#e5eefb", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            setApoyoEducativoGrupoIdsSeleccionados((prev) => event.target.checked
+                              ? Array.from(new Set([...prev, String(item.GrupoId)]))
+                              : prev.filter((value) => value !== String(item.GrupoId)));
+                          }}
+                        />
+                        <span>
+                          <strong style={{ display: "block" }}>{item.GrupoNombre}</strong>
+                          <span style={{ color: "#cbd5e1", fontSize: "13px" }}>{item.AnioNombre || ""} {item.PeriodoNombre ? `/ ${item.PeriodoNombre}` : ""}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button type="button" className="primary-btn" onClick={handleBuscarAlumnosApoyoEducativo}>
+                    Buscar estudiantes
+                  </button>
+                  <button type="button" style={secondaryButtonStyle} onClick={resetApoyoEducativoGenerator}>
+                    Cerrar generador
+                  </button>
+                </div>
+              </div>
+
+              {apoyoEducativoAlumnosDisponibles.length > 0 && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                    <strong style={{ color: "#0f766e" }}>2. Seleccioná los estudiantes</strong>
+                    <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={apoyoEducativoAlumnosDisponibles.length > 0 && apoyoEducativoEstudianteIdsSeleccionados.length === apoyoEducativoAlumnosDisponibles.length}
+                        onChange={(event) => {
+                          setApoyoEducativoEstudianteIdsSeleccionados(
+                            event.target.checked ? apoyoEducativoAlumnosDisponibles.map((item) => String(item.EstudianteId)) : []
+                          );
+                        }}
+                      />
+                      Seleccionar todos
+                    </label>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th></th>
+                          <th>Cédula</th>
+                          <th>Nombre</th>
+                          <th>Edad</th>
+                          <th>Sección</th>
+                          <th>Tipo de adecuación</th>
+                          <th>Nivel de funcionamiento</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {apoyoEducativoAlumnosDisponibles.map((item) => (
+                          <tr key={`apoyo-estudiante-${item.EstudianteId}-${item.GrupoId}`}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={apoyoEducativoEstudianteIdsSeleccionados.includes(String(item.EstudianteId))}
+                                onChange={(event) => {
+                                  setApoyoEducativoEstudianteIdsSeleccionados((prev) => event.target.checked
+                                    ? Array.from(new Set([...prev, String(item.EstudianteId)]))
+                                    : prev.filter((value) => value !== String(item.EstudianteId)));
+                                }}
+                              />
+                            </td>
+                            <td>{item.Identificacion}</td>
+                            <td>{item.NombreCompleto}</td>
+                            <td>{item.Edad ?? "-"}</td>
+                            <td>{item.Seccion}</td>
+                            <td>{item.TipoAdecuacion || "-"}</td>
+                            <td>{item.NivelFuncionamiento || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div>
+                    <button type="button" className="primary-btn" onClick={handleConfirmarAlumnosApoyoEducativo}>
+                      Aceptar estudiantes
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {apoyoEducativoPasoAlumnosConfirmado && (
+                <div style={{ display: "grid", gap: "10px" }}>
+                  <strong style={{ color: "#0f766e" }}>3. Filtrá los apoyos educativos</strong>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+                    <label>
+                      Adecuación
+                      <select value={apoyoEducativoFiltroAdecuacion} onChange={(event) => setApoyoEducativoFiltroAdecuacion(event.target.value)}>
+                        <option value="">Todas</option>
+                        {apoyoEducativoOpcionesAdecuacion.map((item) => (
+                          <option key={`apoyo-adecuacion-${item}`} value={item}>{item}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Tipo
+                      <select value={apoyoEducativoFiltroTipo} onChange={(event) => setApoyoEducativoFiltroTipo(event.target.value)}>
+                        <option value="">Todos</option>
+                        {apoyoEducativoOpcionesTipo.map((item) => (
+                          <option key={`apoyo-tipo-${item}`} value={item}>{item}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div>
+                    <button type="button" className="primary-btn" onClick={handleBuscarCatalogoApoyoEducativo}>
+                      Buscar apoyos
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {apoyoEducativoCatalogoResultados.length > 0 && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                    <strong style={{ color: "#0f766e" }}>4. Seleccioná las descripciones que querés aplicar</strong>
+                    <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={apoyoEducativoCatalogoResultados.length > 0 && apoyoEducativoCatalogoIdsSeleccionados.length === apoyoEducativoCatalogoResultados.length}
+                        onChange={(event) => {
+                          setApoyoEducativoCatalogoIdsSeleccionados(
+                            event.target.checked ? apoyoEducativoCatalogoResultados.map((item) => String(item.AdecuacionCatalogoId)) : []
+                          );
+                        }}
+                      />
+                      Seleccionar todos
+                    </label>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th></th>
+                          <th>Adecuación</th>
+                          <th>Tipo</th>
+                          <th>Descripción</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {apoyoEducativoCatalogoResultados.map((item) => (
+                          <tr key={`catalogo-apoyo-${item.AdecuacionCatalogoId}`}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={apoyoEducativoCatalogoIdsSeleccionados.includes(String(item.AdecuacionCatalogoId))}
+                                onChange={(event) => {
+                                  setApoyoEducativoCatalogoIdsSeleccionados((prev) => event.target.checked
+                                    ? Array.from(new Set([...prev, String(item.AdecuacionCatalogoId)]))
+                                    : prev.filter((value) => value !== String(item.AdecuacionCatalogoId)));
+                                }}
+                              />
+                            </td>
+                            <td>{item.Adecuacion}</td>
+                            <td>{item.Tipo}</td>
+                            <td>{item.Descripcion}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <label style={{ display: "grid", gap: "6px", color: "#e5eefb", fontWeight: 700 }}>
+                    Cargar plantilla Word
+                    <input
+                      type="file"
+                      accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      onChange={(event) => setApoyoEducativoPlantilla(event.target.files?.[0] || null)}
+                      style={{ color: "#f8fafc" }}
+                    />
+                    {apoyoEducativoPlantilla ? (
+                      <span style={{ color: "#cbd5e1", fontSize: "13px" }}>{apoyoEducativoPlantilla.name}</span>
+                    ) : null}
+                  </label>
+                  <div>
+                    <button type="button" className="primary-btn" onClick={handleGuardarApoyoEducativo} disabled={savingApoyoEducativo}>
+                      {savingApoyoEducativo ? "Generando informes..." : "Generar Informes Educativos"}
+                    </button>
+                    {savingApoyoEducativo || apoyoEducativoProgress > 0 ? (
+                      <div style={{ marginTop: "10px", display: "grid", gap: "6px", minWidth: "280px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#cbd5e1", fontSize: "13px", fontWeight: 700 }}>
+                          <span>Generando informes educativos</span>
+                          <span>{apoyoEducativoProgress}%</span>
+                        </div>
+                        <div style={{ height: "10px", borderRadius: "999px", overflow: "hidden", background: "rgba(148, 163, 184, 0.24)", border: "1px solid rgba(148, 163, 184, 0.30)" }}>
+                          <div style={{ width: `${apoyoEducativoProgress}%`, height: "100%", borderRadius: "999px", background: "linear-gradient(90deg, #2dd4bf, #facc15)", transition: "width 260ms ease" }} />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!apoyoEducativoGeneratorOpen && (
+            <>
+              <form style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "16px", marginBottom: "14px" }} onSubmit={(event) => event.preventDefault()}>
+                <input
+                  value={apoyoEducativoResumenSearch}
+                  onChange={(event) => setApoyoEducativoResumenSearch(event.target.value)}
+                  placeholder="Buscar por cédula, nombre, sección o adecuación"
+                  style={{ flex: 1, minWidth: "260px" }}
+                />
+                <select value={apoyoEducativoResumenGrupoId} onChange={(event) => setApoyoEducativoResumenGrupoId(event.target.value)} style={{ minWidth: "220px" }}>
+                  <option value="">Todas las secciones</option>
+                  {apoyoEducativoSecciones.map((item) => (
+                    <option key={`filtro-apoyo-${item.GrupoId}`} value={item.GrupoId}>
+                      {item.GrupoNombre}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" style={secondaryButtonStyle} onClick={() => { setApoyoEducativoResumenSearch(""); setApoyoEducativoResumenGrupoId(""); }}>
+                  Limpiar
+                </button>
+              </form>
+
+              {loadingApoyoEducativo ? (
+                <p>Cargando apoyos educativos...</p>
+              ) : (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Cédula</th>
+                        <th>Nombre</th>
+                        <th>Edad</th>
+                        <th>Sección</th>
+                        <th>Tipo de adecuación</th>
+                        <th>Nivel de funcionamiento</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {apoyoEducativoResumenFiltrado.map((item) => {
+                        const informes = apoyoEducativoInformesPorEstudiante.get(`${item.EstudianteId}|${item.GrupoId}`) || [];
+                        return (
+                          <React.Fragment key={`resumen-apoyo-${item.EstudianteId}-${item.GrupoId}`}>
+                            <tr>
+                              <td>{item.Identificacion}</td>
+                              <td>{item.NombreCompleto}</td>
+                              <td>{item.Edad ?? "-"}</td>
+                              <td>{item.Seccion}</td>
+                              <td>{item.TipoAdecuacion || "-"}</td>
+                              <td>{item.NivelFuncionamiento || "-"}</td>
+                            </tr>
+                            {informes.map((informe) => (
+                              <tr key={`informe-apoyo-${informe.ApoyoEducativoEstudianteId}`} style={{ background: "rgba(20, 184, 166, 0.08)" }}>
+                                <td colSpan={6} style={{ padding: "10px 14px" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                                    <span>
+                                      Informe educativo generado: {informe.InformeGeneradoAt ? new Date(informe.InformeGeneradoAt).toLocaleDateString("es-CR") : "-"}
+                                      {informe.PlantillaNombre ? ` / Plantilla: ${informe.PlantillaNombre}` : ""}
+                                    </span>
+                                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        style={secondaryButtonStyle}
+                                        onClick={() => void handleDescargarInformeApoyoEducativo(informe.ApoyoEducativoEstudianteId, informe.InformeNombre)}
+                                      >
+                                        Abrir en Word
+                                      </button>
+                                      <button
+                                        type="button"
+                                        style={{ ...secondaryButtonStyle, borderColor: "#fca5a5", color: "#7f1d1d", background: "#fee2e2" }}
+                                        disabled={deletingApoyoEducativoInformeId === informe.ApoyoEducativoEstudianteId}
+                                        onClick={() => void handleEliminarInformeApoyoEducativo(informe.ApoyoEducativoEstudianteId)}
+                                      >
+                                        {deletingApoyoEducativoInformeId === informe.ApoyoEducativoEstudianteId ? "Eliminando..." : "Eliminar"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </React.Fragment>
+                        );
+                      })}
+                      {!apoyoEducativoResumenFiltrado.length && (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: "center", padding: "18px" }}>
+                            No hay estudiantes para mostrar en apoyos educativos.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       <section id="detalle-grupo-profesor" className="card" ref={detalleGrupoRef}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
