@@ -94,3 +94,18 @@ BEGIN
   WHERE InformeGeneradoAt IS NOT NULL;
 END
 GO
+
+IF OBJECT_ID('dbo.ApoyoEducativoEstudiante', 'U') IS NOT NULL
+AND NOT EXISTS (
+  SELECT 1
+  FROM sys.indexes
+  WHERE name = 'IX_ApoyoEducativoEstudiante_InformesRecientes'
+    AND object_id = OBJECT_ID('dbo.ApoyoEducativoEstudiante')
+)
+BEGIN
+  CREATE NONCLUSTERED INDEX IX_ApoyoEducativoEstudiante_InformesRecientes
+  ON dbo.ApoyoEducativoEstudiante (GrupoId, InformeGeneradoAt DESC, ApoyoEducativoEstudianteId DESC)
+  INCLUDE (ApoyoEducativoId, EstudianteId, InformeNombre, PlantillaNombre)
+  WHERE InformeGeneradoAt IS NOT NULL;
+END
+GO

@@ -1041,7 +1041,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
     const informesResult = ready
       ? await timedQuery("gestion.apoyos.bootstrap.informes", () => request.query(`
           ${baseCte}
-          SELECT
+          SELECT TOP (500)
             ae.ApoyoEducativoId,
             aee.ApoyoEducativoEstudianteId,
             aee.EstudianteId,
@@ -1055,7 +1055,8 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
            AND ae.Activo = 1
           INNER JOIN GruposFiltrados gf
             ON gf.GrupoId = aee.GrupoId
-          WHERE aee.InformeDocx IS NOT NULL
+          WHERE aee.InformeGeneradoAt IS NOT NULL
+            AND aee.InformeNombre IS NOT NULL
           ORDER BY aee.InformeGeneradoAt DESC, aee.ApoyoEducativoEstudianteId DESC
         `))
       : { recordset: [] as any[] };
