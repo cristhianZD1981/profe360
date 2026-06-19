@@ -222,6 +222,13 @@ function getAuthUserId(req: any) {
   return Number((req.auth as any)?.usuarioId || (req.auth as any)?.userId || (req.auth as any)?.id || 0) || null;
 }
 
+function resolveNotificationCc(req: any, ...candidates: any[]) {
+  const values = [req.auth?.correo, ...candidates]
+    .map((value) => String(value || "").trim())
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  return values[0] || "";
+}
+
 function formatDateCR(value?: any) {
   if (!value) return "";
   const d = new Date(value);
@@ -1444,7 +1451,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
 
     const correoEstudiante = String(row.EstudianteCorreo || `${String(row.Identificacion || "").trim()}@mep.go.cr`).trim();
     if (!correoEstudiante) return badRequest(res, "El estudiante no tiene correo registrado");
-    const correoProfesor = String(row.ProfesorCorreo || "").trim() || null;
+    const correoProfesor = resolveNotificationCc(req, row.ProfesorCorreo) || null;
     const estudianteNombre = fullName(row);
     const fechaIso = String(row.Fecha || "").slice(0, 10);
     const fechaCR = formatDateCR(row.Fecha);

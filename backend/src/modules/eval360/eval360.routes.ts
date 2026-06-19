@@ -70,6 +70,8 @@ type AuthUser = {
 
   usuarioId?: number;
 
+  correo?: string;
+
   institucionId?: number | null;
 
   roles?: string[];
@@ -91,6 +93,18 @@ function getUserId(req: any) {
   const auth = getAuth(req);
 
   return Number(auth.userId || auth.usuarioId || 0);
+
+}
+
+function resolveNotificationCc(req: any, ...candidates: any[]) {
+
+  const values = [getAuth(req)?.correo, ...candidates]
+
+    .map((value) => String(value || "").trim())
+
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+
+  return values[0] || "";
 
 }
 
@@ -16063,6 +16077,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
       const bodyFinal = correoCfg?.CuerpoTemplate ? renderTemplate(String(correoCfg.CuerpoTemplate), vars) : textoFinal;
 
+      const correoProfesorCopia = resolveNotificationCc(req, contextoCorreo.ProfesorCorreo);
+
       const htmlFinal = `
 
         <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
@@ -16085,7 +16101,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
             to: aviso.correoEstudiante,
 
-            cc: contextoCorreo.ProfesorCorreo || undefined,
+            cc: correoProfesorCopia || undefined,
 
             subject: subjectFinal,
 
@@ -16861,6 +16877,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
     const contextoCorreo = contextoCorreoResult.recordset[0] || {};
 
+    const correoProfesorCopia = resolveNotificationCc(req, contextoCorreo.ProfesorCorreo);
+
     const resultadosNotificacion: any[] = [];
 
 
@@ -16887,7 +16905,7 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
             to: aviso.correoEstudiante,
 
-            cc: contextoCorreo.ProfesorCorreo || undefined,
+            cc: correoProfesorCopia || undefined,
 
             subject: tituloFinal,
 

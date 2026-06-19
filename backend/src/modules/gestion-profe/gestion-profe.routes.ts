@@ -32,6 +32,7 @@ router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", 
 type AuthUser = {
   userId?: number;
   usuarioId?: number;
+  correo?: string;
   institucionId?: number | null;
   roles?: string[];
 };
@@ -43,6 +44,13 @@ function getAuth(req: any): AuthUser {
 function getUserId(req: any) {
   const auth = getAuth(req);
   return Number(auth.userId || auth.usuarioId || 0);
+}
+
+function resolveNotificationCc(req: any, ...candidates: any[]) {
+  const values = [getAuth(req)?.correo, ...candidates]
+    .map((value) => String(value || "").trim())
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  return values[0] || "";
 }
 
 function hasAnyRole(req: any, roles: string[]) {
@@ -4115,11 +4123,13 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
         const texto = correoCfg?.CuerpoTemplate
           ? renderTemplate(String(correoCfg.CuerpoTemplate), vars)
           : `Se registra asistencia para ${nombreEstudiante}. Fecha: ${fecha}. ${detalle}`;
+        const correoProfesorCopia = resolveNotificationCc(req);
 
         if (estudiante.Correo) {
           const correo = await sendEmail({
             from: String(correoCfg?.FromEmail || ""),
             to: estudiante.Correo,
+            cc: correoProfesorCopia || undefined,
             subject,
             text: texto,
             html: `<p>${toHtmlWithLineBreaks(texto)}</p>`
