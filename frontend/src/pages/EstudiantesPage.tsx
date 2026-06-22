@@ -149,6 +149,9 @@ type BoletaConductaContexto = {
   estudianteNombre: string;
   seccion: string;
   siguienteNumero: number;
+  prefijo?: string;
+  anioLectivo?: string;
+  codigoBoleta?: string;
   funcionarioNombre: string;
   institucion?: {
     Nombre?: string | null;
@@ -2266,7 +2269,7 @@ export default function EstudiantesPage() {
                 <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
                     <label>Fecha<input value={String(boletaConductaContexto?.fecha || "").slice(0, 10)} readOnly /></label>
-                    <label>N° (consecutivo)<input value={String(boletaConductaContexto?.siguienteNumero || "")} readOnly /></label>
+                    <label>N° (consecutivo)<input value={boletaConductaContexto?.codigoBoleta || String(boletaConductaContexto?.siguienteNumero || "")} readOnly /></label>
                     <label>Estudiante<input value={boletaConductaContexto?.estudianteNombre || getStudentFullName(boletaConductaItem || { Nombre: "", PrimerApellido: "", SegundoApellido: "" })} readOnly /></label>
                     <label>Sección<input value={boletaConductaContexto?.seccion || ""} readOnly /></label>
                     <label>Persona funcionaria<input value={boletaConductaContexto?.funcionarioNombre || ""} readOnly /></label>

@@ -632,6 +632,7 @@ export type AuditoriaEnvioFila = {
 export type BoletaConductaReporte = {
   BoletaConductaId: number;
   Consecutivo: number;
+  CodigoBoleta?: string | null;
   Fecha: string;
   Seccion?: string | null;
   NombreFuncionario?: string | null;

@@ -47,8 +47,7 @@ AND NOT EXISTS (
 )
 BEGIN
   CREATE NONCLUSTERED INDEX IX_AdecuacionCatalogo_ApoyoEducativo
-  ON dbo.AdecuacionCatalogo (InstitucionId, Activo, TipoAdecuacionId, Tipo)
-  INCLUDE (Descripcion);
+  ON dbo.AdecuacionCatalogo (InstitucionId, Activo, TipoAdecuacionId, Tipo);
 END
 GO
 
@@ -61,8 +60,7 @@ AND NOT EXISTS (
 )
 BEGIN
   CREATE NONCLUSTERED INDEX IX_TipoAdecuacion_ApoyoEducativo
-  ON dbo.TipoAdecuacion (InstitucionId, Activo, TipoAdecuacionId)
-  INCLUDE (Descripcion);
+  ON dbo.TipoAdecuacion (InstitucionId, Activo, TipoAdecuacionId);
 END
 GO
 

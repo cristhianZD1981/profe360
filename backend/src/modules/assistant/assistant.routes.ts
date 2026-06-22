@@ -326,6 +326,21 @@ type AssistantKnowledgeCache = {
   screenContexts: ScreenContext[];
   formGuides: FormGuide[];
   subflowContexts: SubflowContext[];
+  faqs: AssistantFaq[];
+};
+
+type AssistantScreenSnapshot = {
+  routeLabel?: string;
+  documentTitle?: string;
+  headings?: string[];
+  buttons?: string[];
+  labels?: string[];
+};
+
+type AssistantSuggestedAction = {
+  label: string;
+  type: "navigate" | "ask";
+  target: string;
 };
 
 type ConversationPattern = {
@@ -374,6 +389,19 @@ type SubflowContext = {
   aliases: string[];
   hints: string[];
   exampleQuestions: string[];
+};
+
+type AssistantFaq = {
+  faqKey: string;
+  moduleKey: string;
+  routePrefix: string;
+  title: string;
+  summary: string;
+  answer: string;
+  kind: string;
+  allowedRoles?: string[];
+  questionPatterns: string[];
+  steps: string[];
 };
 
 const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
@@ -1422,6 +1450,43 @@ async function loadAssistantKnowledge(pool: any) {
       END
     `);
 
+    const faqResult = await pool.request().query(`
+      IF OBJECT_ID('dbo.AsistenteFaq', 'U') IS NULL
+      BEGIN
+        SELECT
+          CAST(NULL AS nvarchar(80)) AS Clave,
+          CAST(NULL AS nvarchar(80)) AS ModuloClave,
+          CAST(NULL AS nvarchar(200)) AS RutaContexto,
+          CAST(NULL AS nvarchar(150)) AS Titulo,
+          CAST(NULL AS nvarchar(max)) AS Resumen,
+          CAST(NULL AS nvarchar(max)) AS Respuesta,
+          CAST(NULL AS nvarchar(30)) AS Tipo,
+          CAST(NULL AS nvarchar(max)) AS PreguntasJson,
+          CAST(NULL AS nvarchar(max)) AS PasosJson,
+          CAST(NULL AS nvarchar(max)) AS AllowedRolesJson,
+          CAST(NULL AS int) AS OrdenVisual
+        WHERE 1 = 0;
+      END
+      ELSE
+      BEGIN
+        SELECT
+          Clave,
+          ModuloClave,
+          RutaContexto,
+          Titulo,
+          Resumen,
+          Respuesta,
+          Tipo,
+          PreguntasJson,
+          PasosJson,
+          AllowedRolesJson,
+          OrdenVisual
+        FROM dbo.AsistenteFaq
+        WHERE Activo = 1
+        ORDER BY OrdenVisual, Titulo;
+      END
+    `);
+
     const moduleRows = modulesResult.recordset || [];
     if (!moduleRows.length) {
       assistantKnowledgeCache = {
@@ -1433,7 +1498,8 @@ async function loadAssistantKnowledge(pool: any) {
         exampleQuestions: [],
         screenContexts: DEFAULT_SCREEN_CONTEXTS,
         formGuides: DEFAULT_FORM_GUIDES,
-        subflowContexts: DEFAULT_SUBFLOW_CONTEXTS
+        subflowContexts: DEFAULT_SUBFLOW_CONTEXTS,
+        faqs: []
       };
       return assistantKnowledgeCache;
     }
@@ -1637,6 +1703,19 @@ async function loadAssistantKnowledge(pool: any) {
       };
     }).filter((item) => item.routePrefix && item.subflowKey && item.title);
 
+    const faqs: AssistantFaq[] = (faqResult.recordset || []).map((row: any) => ({
+      faqKey: String(row.Clave || "").trim(),
+      moduleKey: String(row.ModuloClave || "").trim(),
+      routePrefix: String(row.RutaContexto || "").trim(),
+      title: String(row.Titulo || "").trim(),
+      summary: String(row.Resumen || "").trim(),
+      answer: String(row.Respuesta || "").trim(),
+      kind: String(row.Tipo || "FAQ").trim().toUpperCase(),
+      questionPatterns: parseJsonArray(row.PreguntasJson),
+      steps: parseJsonArray(row.PasosJson),
+      allowedRoles: parseJsonArray(row.AllowedRolesJson)
+    })).filter((item) => item.faqKey && item.title && item.answer);
+
     assistantKnowledgeCache = {
       expiresAt: now + 5 * 60 * 1000,
       guides: guides.length ? guides : DEFAULT_MODULE_GUIDES,
@@ -1646,7 +1725,8 @@ async function loadAssistantKnowledge(pool: any) {
       exampleQuestions,
       screenContexts: screenContexts.length ? screenContexts : DEFAULT_SCREEN_CONTEXTS,
       formGuides: formGuides.length ? formGuides : DEFAULT_FORM_GUIDES,
-      subflowContexts: subflowContexts.length ? subflowContexts : DEFAULT_SUBFLOW_CONTEXTS
+      subflowContexts: subflowContexts.length ? subflowContexts : DEFAULT_SUBFLOW_CONTEXTS,
+      faqs
     };
     return assistantKnowledgeCache;
   } catch {
@@ -1659,7 +1739,8 @@ async function loadAssistantKnowledge(pool: any) {
       exampleQuestions: [],
       screenContexts: DEFAULT_SCREEN_CONTEXTS,
       formGuides: DEFAULT_FORM_GUIDES,
-      subflowContexts: DEFAULT_SUBFLOW_CONTEXTS
+      subflowContexts: DEFAULT_SUBFLOW_CONTEXTS,
+      faqs: []
     };
     return assistantKnowledgeCache;
   }
@@ -1682,6 +1763,14 @@ function getAccessibleDetailGuides(req: any, detailGuides: DetailGuide[] = []) {
   return detailGuides.filter((guide) => {
     if (!guide.allowedRoles?.length) return true;
     return guide.allowedRoles.some((role) => roles.includes(String(role || "").trim().toUpperCase()));
+  });
+}
+
+function getAccessibleFaqs(req: any, faqs: AssistantFaq[] = []) {
+  const roles = getUserRoles(req);
+  return faqs.filter((item) => {
+    if (!item.allowedRoles?.length) return true;
+    return item.allowedRoles.some((role) => roles.includes(String(role || "").trim().toUpperCase()));
   });
 }
 
@@ -1710,6 +1799,99 @@ function resolveDetailGuideFromQuestion(question: string, currentPath: string, d
   });
 
   return byRoute || null;
+}
+
+function resolveFaqFromQuestion(question: string, currentPath: string, faqs: AssistantFaq[]) {
+  const normalizedPath = normalizeText(currentPath).toLowerCase();
+  const prioritized = [...faqs].sort((a, b) => (b.routePrefix?.length || 0) - (a.routePrefix?.length || 0));
+  return prioritized.find((item) => {
+    const routeOk = !item.routePrefix || normalizedPath.startsWith(String(item.routePrefix || "").toLowerCase());
+    if (!routeOk) return false;
+    return item.questionPatterns.some((pattern) => matchesAlias(question, pattern));
+  }) || null;
+}
+
+function normalizeScreenSnapshot(value: any): AssistantScreenSnapshot {
+  const ensureArray = (items: any, max = 16) =>
+    Array.isArray(items)
+      ? items.map((item) => normalizeText(item)).filter(Boolean).slice(0, max)
+      : [];
+  return {
+    routeLabel: normalizeText(value?.routeLabel),
+    documentTitle: normalizeText(value?.documentTitle),
+    headings: ensureArray(value?.headings, 10),
+    buttons: ensureArray(value?.buttons, 16),
+    labels: ensureArray(value?.labels, 18)
+  };
+}
+
+function inferScreenFocus(snapshot: AssistantScreenSnapshot | null) {
+  const focusPool = [
+    ...(snapshot?.headings || []),
+    ...(snapshot?.labels || [])
+  ].filter(Boolean);
+  return focusPool.slice(0, 4);
+}
+
+function pushSuggestedAction(list: AssistantSuggestedAction[], action: AssistantSuggestedAction | null | undefined) {
+  if (!action?.label || !action?.target) return;
+  if (list.some((item) => item.type === action.type && item.target === action.target)) return;
+  list.push(action);
+}
+
+function buildSuggestedActions(question: string, context: any): AssistantSuggestedAction[] {
+  const actions: AssistantSuggestedAction[] = [];
+  const currentPath = normalizeText(context?.currentPath) || "/";
+  const accessibleGuides = Array.isArray(context?.accessibleModuleGuides) ? context.accessibleModuleGuides : [];
+  const accessibleDetailGuides = Array.isArray(context?.assistantDetailGuides) ? context.assistantDetailGuides : [];
+  const screenContexts = Array.isArray(context?.assistantScreenContexts) ? context.assistantScreenContexts : DEFAULT_SCREEN_CONTEXTS;
+  const faqs = Array.isArray(context?.assistantFaqs) ? context.assistantFaqs : [];
+  const matchedGuide = resolveGuideFromQuestion(question, currentPath, accessibleGuides);
+  const matchedDetailGuide = resolveDetailGuideFromQuestion(question, currentPath, accessibleDetailGuides);
+  const matchedFaq = resolveFaqFromQuestion(question, currentPath, faqs);
+  const currentScreenContext = getCurrentScreenContext(currentPath, screenContexts);
+
+  if (matchedGuide?.path) {
+    pushSuggestedAction(actions, { label: `Ir a ${matchedGuide.title}`, type: "navigate", target: matchedGuide.path });
+    pushSuggestedAction(actions, { label: `Explicame ${matchedGuide.title}`, type: "ask", target: `Explicame ${matchedGuide.title} paso a paso` });
+  }
+
+  if (matchedDetailGuide?.title) {
+    pushSuggestedAction(actions, { label: `Ver ${matchedDetailGuide.title}`, type: "ask", target: `Explicame ${matchedDetailGuide.title} campo por campo` });
+  }
+
+  if (matchedFaq?.kind === "DIAGNOSTICO") {
+    pushSuggestedAction(actions, { label: "Que reviso primero", type: "ask", target: `Que reviso primero en ${matchedFaq.title}` });
+  }
+
+  if (currentScreenContext?.moduleKey) {
+    const routeGuide = accessibleGuides.find((item) => item.key === currentScreenContext.moduleKey)
+      || accessibleGuides.find((item) => currentPath.startsWith(item.path));
+    if (routeGuide?.path) {
+      pushSuggestedAction(actions, { label: "Abrir modulo", type: "navigate", target: routeGuide.path });
+    }
+    pushSuggestedAction(actions, { label: "Que hago aqui", type: "ask", target: "Que hago aqui" });
+  }
+
+  if (currentPath.startsWith("/gestion-profe")) {
+    pushSuggestedAction(actions, { label: "Ir a Gestion del Profe", type: "navigate", target: "/gestion-profe" });
+    pushSuggestedAction(actions, { label: "Revisar esta pantalla", type: "ask", target: "Que hago aqui" });
+  } else if (currentPath.startsWith("/administrativo") || currentPath.startsWith("/academico")) {
+    pushSuggestedAction(actions, { label: "Ir a Administrativo", type: "navigate", target: "/administrativo" });
+    pushSuggestedAction(actions, { label: "Que reviso aqui", type: "ask", target: "Que hago aqui" });
+  } else if (currentPath.startsWith("/estudiantes")) {
+    pushSuggestedAction(actions, { label: "Ir a Estudiantes", type: "navigate", target: "/estudiantes" });
+  } else if (currentPath.startsWith("/matricula")) {
+    pushSuggestedAction(actions, { label: "Ir a Matricula", type: "navigate", target: "/matricula" });
+  }
+
+  if (!actions.length && accessibleGuides.length) {
+    const firstGuide = accessibleGuides[0];
+    pushSuggestedAction(actions, { label: `Ir a ${firstGuide.title}`, type: "navigate", target: firstGuide.path });
+    pushSuggestedAction(actions, { label: "Ver modulos disponibles", type: "ask", target: "Que modulos puedo usar" });
+  }
+
+  return actions.slice(0, 4);
 }
 
 function isAccessQuestion(question: string) {
@@ -1913,6 +2095,21 @@ function buildCurrentScreenReply(greetingName: string, screenContext: ScreenCont
   return `${intro} Estás en ${screenContext.title}.\n\n${screenContext.summary}${hints}${examples}`;
 }
 
+function buildLiveScreenSnapshotReply(greetingName: string, snapshot: AssistantScreenSnapshot | null, focus: string[] = []) {
+  if (!snapshot) return null;
+  const visibleFocus = focus.filter(Boolean);
+  if (!visibleFocus.length && !snapshot.routeLabel && !snapshot.documentTitle) return null;
+  const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
+  const routeLine = snapshot.routeLabel ? `EstÃ¡s trabajando en ${snapshot.routeLabel}.` : "EstÃ¡s trabajando dentro de PROFE360.";
+  const focusLine = visibleFocus.length
+    ? `\n\nAhorita veo estas referencias en tu pantalla:\n${visibleFocus.map((item) => `- ${item}`).join("\n")}`
+    : "";
+  const actionLine = snapshot.buttons?.length
+    ? `\n\nTambien veo acciones disponibles como: ${snapshot.buttons.slice(0, 5).join(", ")}.`
+    : "";
+  return `${intro} ${routeLine}${focusLine}${actionLine}\n\nDecime quÃ© parte querÃ©s resolver y te guÃ­o sobre esa vista exacta.`;
+}
+
 function isFormGuidanceQuestion(question: string) {
   const key = normalizeKey(question);
   return /(QUE LLENO PRIMERO|QUE VA PRIMERO|QUE CAMPO SIGUE|COMO LLENO ESTE FORMULARIO|QUE PONGO AQUI|QUE LLENO AQUI|CAMPOS REQUERIDOS|CAMPO POR CAMPO|QUE DATOS PIDE)/.test(key);
@@ -1968,6 +2165,16 @@ function buildSubflowReply(greetingName: string, subflow: SubflowContext | null)
   const hints = subflow.hints.length ? `\n\nEn este subflujo te recomiendo:\n${subflow.hints.map((item) => `- ${item}`).join("\n")}` : "";
   const examples = subflow.exampleQuestions.length ? `\n\nMe podés preguntar cosas como:\n${subflow.exampleQuestions.map((item) => `- ${item}`).join("\n")}` : "";
   return `${intro} Parece que estás en ${subflow.title}.\n\n${subflow.summary}${hints}${examples}`;
+}
+
+function buildFaqReply(greetingName: string, faq: AssistantFaq | null) {
+  if (!faq) return null;
+  const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
+  const summaryBlock = faq.summary ? `\n\n${faq.summary}` : "";
+  const stepsBlock = faq.steps.length
+    ? `\n\n${faq.kind === "DIAGNOSTICO" ? "Chequeo sugerido" : "Pasos sugeridos"}:\n${faq.steps.map((item, index) => `${index + 1}. ${item}`).join("\n")}`
+    : "";
+  return `${intro} ${faq.title}.${summaryBlock}\n\n${faq.answer}${stepsBlock}`.trim();
 }
 
 function buildGestionProfeDetailedReply(greetingName: string, question: string) {
@@ -2183,8 +2390,12 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
   const screenContexts = Array.isArray(context?.assistantScreenContexts) ? context.assistantScreenContexts : DEFAULT_SCREEN_CONTEXTS;
   const formGuides = Array.isArray(context?.assistantFormGuides) ? context.assistantFormGuides : DEFAULT_FORM_GUIDES;
   const subflowContexts = Array.isArray(context?.assistantSubflowContexts) ? context.assistantSubflowContexts : DEFAULT_SUBFLOW_CONTEXTS;
+  const faqs = Array.isArray(context?.assistantFaqs) ? context.assistantFaqs : [];
+  const screenSnapshot = (context?.screenSnapshot || null) as AssistantScreenSnapshot | null;
+  const screenFocus = Array.isArray(context?.screenFocus) ? context.screenFocus : [];
   const currentScreenContext = getCurrentScreenContext(currentPath, screenContexts);
   const currentSubflowContext = getCurrentSubflowContext(question, currentPath, history, subflowContexts);
+  const matchedFaq = resolveFaqFromQuestion(question, currentPath, faqs);
   const matchedGuide = resolveGuideFromQuestion(question, currentPath, accessibleGuides);
   const matchedDetailGuide = resolveDetailGuideFromQuestion(question, currentPath, accessibleDetailGuides);
   const actionGuide = inferGuideFromAction(question, accessibleGuides, actionPatterns);
@@ -2278,6 +2489,8 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
   if (isCurrentScreenQuestion(question)) {
     const reply = buildCurrentScreenReply(greetingName, currentScreenContext);
     if (reply) return reply;
+    const liveReply = buildLiveScreenSnapshotReply(greetingName, screenSnapshot, screenFocus);
+    if (liveReply) return liveReply;
   }
 
   if (isFormGuidanceQuestion(question)) {
@@ -2291,6 +2504,10 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
 
   if (isWhatElseQuestion(question) && accessibleGuides.length) {
     return buildWhatElseReply(greetingName, accessibleGuides);
+  }
+
+  if (matchedFaq) {
+    return buildFaqReply(greetingName, matchedFaq);
   }
 
   if (matchedDetailGuide && (isHowToQuestion(question) || isModuleSelection(question, { key: matchedDetailGuide.detailKey, title: matchedDetailGuide.title, path: matchedDetailGuide.routePrefix, aliases: matchedDetailGuide.aliases, summary: matchedDetailGuide.summary, steps: matchedDetailGuide.steps }))) {
@@ -2387,7 +2604,7 @@ async function callAssistantModel(prompt: string) {
   return data?.output_text || data?.output?.[0]?.content?.[0]?.text || null;
 }
 
-async function buildContext(pool: any, req: any, question: string, currentPath?: string) {
+async function buildContext(pool: any, req: any, question: string, currentPath?: string, screenSnapshotInput?: any) {
   const auth = getAuth(req);
   const institucionId = isSuperAdmin(req) ? null : Number(auth.institucionId || 0);
   const usuarioId = getUserId(req);
@@ -2399,6 +2616,9 @@ async function buildContext(pool: any, req: any, question: string, currentPath?:
   const sectionName = extractSectionName(question);
   const accessibleModuleGuides = getAccessibleModuleGuides(req, assistantKnowledge.guides);
   const assistantDetailGuides = getAccessibleDetailGuides(req, assistantKnowledge.detailGuides);
+  const assistantFaqs = getAccessibleFaqs(req, assistantKnowledge.faqs);
+  const screenSnapshot = normalizeScreenSnapshot(screenSnapshotInput);
+  const screenFocus = inferScreenFocus(screenSnapshot);
   const q = normalizeLike(lookup);
 
   const makeRequest = () => pool.request().input("q", sql.NVarChar(250), q).input("usuarioId", sql.Int, usuarioId);
@@ -2659,6 +2879,8 @@ async function buildContext(pool: any, req: any, question: string, currentPath?:
 
   return {
     currentPath: currentPath || "/",
+    screenSnapshot,
+    screenFocus,
     intent,
     lookup,
     studentId,
@@ -2669,6 +2891,7 @@ async function buildContext(pool: any, req: any, question: string, currentPath?:
     assistantScreenContexts: assistantKnowledge.screenContexts,
     assistantFormGuides: assistantKnowledge.formGuides,
     assistantSubflowContexts: assistantKnowledge.subflowContexts,
+    assistantFaqs,
     assistantAdminInstructions,
     accessibleModuleGuides,
     assistantDetailGuides,
@@ -2719,7 +2942,8 @@ router.get("/admin/knowledge", async (req, res) => {
       exampleQuestions: knowledge.exampleQuestions,
       screenContexts: knowledge.screenContexts,
       formGuides: knowledge.formGuides,
-      subflowContexts: knowledge.subflowContexts
+      subflowContexts: knowledge.subflowContexts,
+      faqs: knowledge.faqs
     });
   } catch (error) {
     console.error("Error cargando base de conocimiento del asistente:", error);
@@ -3117,6 +3341,112 @@ router.put("/admin/subflow-contexts", async (req, res) => {
   }
 });
 
+router.put("/admin/faqs", async (req, res) => {
+  try {
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+
+    const faqKey = normalizeText(req.body?.faqKey);
+    const moduleKey = normalizeText(req.body?.moduleKey);
+    const routePrefix = normalizeText(req.body?.routePrefix);
+    const title = normalizeText(req.body?.title);
+    const summary = normalizeText(req.body?.summary);
+    const answer = normalizeText(req.body?.answer);
+    const kind = normalizeText(req.body?.kind || "FAQ").toUpperCase();
+    const questionPatterns = normalizeTextArray(req.body?.questionPatterns);
+    const steps = normalizeTextArray(req.body?.steps);
+    const allowedRoles = normalizeTextArray(req.body?.allowedRoles);
+
+    if (!faqKey || !moduleKey || !routePrefix || !title || !answer) {
+      return badRequest(res, "Faltan datos obligatorios de la FAQ");
+    }
+
+    const pool = await getPool();
+    await pool.request()
+      .input("faqKey", sql.NVarChar(80), faqKey)
+      .input("moduleKey", sql.NVarChar(80), moduleKey)
+      .input("routePrefix", sql.NVarChar(200), routePrefix)
+      .input("title", sql.NVarChar(150), title)
+      .input("summary", sql.NVarChar(sql.MAX), summary)
+      .input("answer", sql.NVarChar(sql.MAX), answer)
+      .input("kind", sql.NVarChar(30), kind || "FAQ")
+      .input("questionPatternsJson", sql.NVarChar(sql.MAX), JSON.stringify(questionPatterns))
+      .input("stepsJson", sql.NVarChar(sql.MAX), JSON.stringify(steps))
+      .input("allowedRolesJson", sql.NVarChar(sql.MAX), JSON.stringify(allowedRoles))
+      .query(`
+        MERGE dbo.AsistenteFaq AS target
+        USING (
+          SELECT
+            @faqKey AS Clave,
+            @moduleKey AS ModuloClave,
+            @routePrefix AS RutaContexto,
+            @title AS Titulo,
+            @summary AS Resumen,
+            @answer AS Respuesta,
+            @kind AS Tipo,
+            @questionPatternsJson AS PreguntasJson,
+            @stepsJson AS PasosJson,
+            @allowedRolesJson AS AllowedRolesJson
+        ) AS source
+        ON target.Clave = source.Clave
+        WHEN MATCHED THEN
+          UPDATE SET
+            ModuloClave = source.ModuloClave,
+            RutaContexto = source.RutaContexto,
+            Titulo = source.Titulo,
+            Resumen = source.Resumen,
+            Respuesta = source.Respuesta,
+            Tipo = source.Tipo,
+            PreguntasJson = source.PreguntasJson,
+            PasosJson = source.PasosJson,
+            AllowedRolesJson = source.AllowedRolesJson,
+            Activo = 1,
+            UpdatedAt = SYSDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (
+            Clave, ModuloClave, RutaContexto, Titulo, Resumen, Respuesta, Tipo,
+            PreguntasJson, PasosJson, AllowedRolesJson, OrdenVisual, Activo, CreatedAt, UpdatedAt
+          )
+          VALUES (
+            source.Clave, source.ModuloClave, source.RutaContexto, source.Titulo, source.Resumen, source.Respuesta, source.Tipo,
+            source.PreguntasJson, source.PasosJson, source.AllowedRolesJson, 0, 1, SYSDATETIME(), SYSDATETIME()
+          );
+      `);
+    assistantKnowledgeCache = null;
+    return ok(res, { updated: true });
+  } catch (error) {
+    console.error("Error actualizando FAQ de Margarita:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la FAQ de Margarita" });
+  }
+});
+
+router.delete("/admin/faqs/:faqKey", async (req, res) => {
+  try {
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    const faqKey = normalizeText(req.params.faqKey);
+    if (!faqKey) return badRequest(res, "La clave de la FAQ es obligatoria");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("faqKey", sql.NVarChar(80), faqKey)
+      .query(`
+        UPDATE dbo.AsistenteFaq
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT inserted.Clave
+        WHERE Clave = @faqKey
+      `);
+
+    if (!result.recordset?.length) {
+      return res.status(404).json({ ok: false, message: "No se encontro la FAQ a quitar" });
+    }
+
+    assistantKnowledgeCache = null;
+    return ok(res, { removed: true });
+  } catch (error) {
+    console.error("Error quitando FAQ de Margarita:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo quitar la FAQ de Margarita" });
+  }
+});
+
 router.post("/admin/instructions", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
@@ -3285,17 +3615,20 @@ router.post("/chat", async (req, res) => {
     const question = normalizeText(req.body?.question);
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8) : [];
     const currentPath = normalizeText(req.body?.currentPath);
+    const screenSnapshot = normalizeScreenSnapshot(req.body?.screenSnapshot);
     const userName = normalizeText(req.body?.userName);
     const userDisplayName = normalizeText(req.body?.userDisplayName);
     const userRoleLabel = normalizeText(req.body?.userRoleLabel);
     if (!question) return badRequest(res, "La pregunta es obligatoria");
 
     const pool = await getPool();
-    const context = await buildContext(pool, req, question, currentPath);
+    const context = await buildContext(pool, req, question, currentPath, screenSnapshot);
+    const suggestedActions = buildSuggestedActions(question, context);
     const directReply = buildDirectReply(question, userName, userDisplayName, context, history);
     if (directReply) {
       return ok(res, {
         reply: sanitizeAssistantReply(directReply),
+        suggestedActions,
         contextPreview: {
           estudiantes: context.estudiantes.length,
           grupos: context.grupos.length,
@@ -3338,6 +3671,8 @@ router.post("/chat", async (req, res) => {
       systemPrompt,
       "",
       `Ruta actual: ${context.currentPath || "/"}`,
+      `Pantalla visible: ${JSON.stringify(context.screenSnapshot || {}, null, 2)}`,
+      `Foco visible detectado: ${JSON.stringify(context.screenFocus || [], null, 2)}`,
       `Búsqueda detectada: ${context.lookup || "(ninguna)"}`,
       "",
       "Contexto real del sistema:",
@@ -3360,6 +3695,7 @@ router.post("/chat", async (req, res) => {
 
     return ok(res, {
       reply: sanitizeAssistantReply(reply || fallback),
+      suggestedActions,
       contextPreview: {
         estudiantes: context.estudiantes.length,
         grupos: context.grupos.length,

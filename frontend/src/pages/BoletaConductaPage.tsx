@@ -1,14 +1,19 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useParams } from "react-router-dom";
 import api from "../lib/http";
 
 export default function BoletaConductaPage() {
   const { boletaConductaId } = useParams();
+  const location = useLocation();
   const [loading, setLoading] = useState(true);
   const [html, setHtml] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
   const [message, setMessage] = useState("");
+  const isReprintMode = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("modo") === "reimprimir";
+  }, [location.search]);
 
   async function loadBoleta() {
     setLoading(true);
@@ -32,6 +37,10 @@ export default function BoletaConductaPage() {
 
   async function handleImprimir() {
     if (!boletaConductaId) return;
+    if (isReprintMode) {
+      window.print();
+      return;
+    }
     setSendingEmail(true);
     setErrorMessage("");
     setMessage("");
@@ -55,7 +64,7 @@ export default function BoletaConductaPage() {
           <h3 style={{ margin: 0 }}>Boleta de reporte de conducta</h3>
           <div className="boleta-actions" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             <button type="button" className="primary-btn" onClick={handleImprimir} disabled={loading || !!errorMessage || sendingEmail}>
-              {sendingEmail ? "Enviando..." : "Imprimir"}
+              {sendingEmail ? "Enviando..." : (isReprintMode ? "Imprimir" : "Imprimir y enviar")}
             </button>
             <button
               type="button"

@@ -797,10 +797,60 @@ async function ensureBoletaConductaConfigTable(pool: any) {
       CREATE TABLE dbo.BoletaConductaConfig (
         InstitucionId INT NOT NULL PRIMARY KEY,
         SiguienteNumero INT NOT NULL CONSTRAINT DF_BoletaConductaConfig_SiguienteNumero DEFAULT(1),
+        Prefijo NVARCHAR(80) NULL,
+        AnioLectivo NVARCHAR(10) NULL,
         UpdatedAt DATETIME2 NULL
       );
     END
+
+    IF COL_LENGTH('dbo.BoletaConductaConfig', 'Prefijo') IS NULL
+      ALTER TABLE dbo.BoletaConductaConfig ADD Prefijo NVARCHAR(80) NULL;
+
+    IF COL_LENGTH('dbo.BoletaConductaConfig', 'AnioLectivo') IS NULL
+      ALTER TABLE dbo.BoletaConductaConfig ADD AnioLectivo NVARCHAR(10) NULL;
   `);
+}
+
+async function ensureCertificacionEstudioConfigTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.CertificacionEstudioConfig', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.CertificacionEstudioConfig (
+        InstitucionId INT NOT NULL PRIMARY KEY,
+        SiguienteNumero INT NOT NULL CONSTRAINT DF_CertificacionEstudioConfig_SiguienteNumero DEFAULT(1),
+        Prefijo NVARCHAR(80) NULL,
+        AnioLectivo NVARCHAR(10) NULL,
+        UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_CertificacionEstudioConfig_UpdatedAt DEFAULT(SYSDATETIME())
+      );
+    END
+
+    IF COL_LENGTH('dbo.CertificacionEstudioConfig', 'Prefijo') IS NULL
+      ALTER TABLE dbo.CertificacionEstudioConfig ADD Prefijo NVARCHAR(80) NULL;
+
+    IF COL_LENGTH('dbo.CertificacionEstudioConfig', 'AnioLectivo') IS NULL
+      ALTER TABLE dbo.CertificacionEstudioConfig ADD AnioLectivo NVARCHAR(10) NULL;
+  `);
+}
+
+async function resolveInstitucionCurrentYear(pool: any, institucionId: number) {
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .query(`
+      SELECT TOP 1 Nombre
+      FROM dbo.AnioLectivo
+      WHERE InstitucionId = @institucionId
+      ORDER BY CASE WHEN Activo = 1 THEN 0 ELSE 1 END, FechaInicio DESC, AnioLectivoId DESC
+    `);
+  const raw = String(result.recordset[0]?.Nombre || "").trim();
+  const match = raw.match(/\d{4}/);
+  return match?.[0] || String(new Date().getFullYear());
+}
+
+function buildConsecutivoCodigo(prefijo: string, siguienteNumero: number, anioLectivo: string) {
+  const prefijoSeguro = String(prefijo || "").trim();
+  const anioSeguro = String(anioLectivo || "").trim();
+  const numero = String(Number(siguienteNumero || 0)).padStart(2, "0");
+  return [prefijoSeguro, numero, anioSeguro].filter(Boolean).join("-");
 }
 
 function normalizeTipoUsoMensaje(value: any) {
@@ -1650,6 +1700,146 @@ router.get("/tipos-estudiante", async (req, res) => {
   } catch (error) {
     console.error("Error al listar tipos de estudiante:", error);
     return res.status(500).json({ ok: false, message: "Error interno al listar tipos de estudiante" });
+  }
+});
+
+router.get("/consecutivos-config", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const pool = await getPool();
+    await ensureBoletaConductaConfigTable(pool);
+    await ensureCertificacionEstudioConfigTable(pool);
+    const anioLectivoVigente = await resolveInstitucionCurrentYear(pool, institucionId);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoVigente", sql.NVarChar(10), anioLectivoVigente)
+      .query(`
+        IF NOT EXISTS (SELECT 1 FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId)
+        BEGIN
+          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero, Prefijo, AnioLectivo)
+          VALUES (@institucionId, 1, N'BOLETA', @anioLectivoVigente);
+        END;
+
+        IF NOT EXISTS (SELECT 1 FROM dbo.CertificacionEstudioConfig WHERE InstitucionId = @institucionId)
+        BEGIN
+          INSERT INTO dbo.CertificacionEstudioConfig (InstitucionId, SiguienteNumero, Prefijo, AnioLectivo, UpdatedAt)
+          VALUES (@institucionId, 1, N'CERTIFICACION', @anioLectivoVigente, SYSDATETIME());
+        END;
+
+        SELECT TOP 1
+          SiguienteNumero,
+          ISNULL(NULLIF(LTRIM(RTRIM(Prefijo)), N''), N'BOLETA') AS Prefijo,
+          ISNULL(NULLIF(LTRIM(RTRIM(AnioLectivo)), N''), @anioLectivoVigente) AS AnioLectivo
+        FROM dbo.BoletaConductaConfig
+        WHERE InstitucionId = @institucionId;
+
+        SELECT TOP 1
+          SiguienteNumero,
+          ISNULL(NULLIF(LTRIM(RTRIM(Prefijo)), N''), N'CERTIFICACION') AS Prefijo,
+          ISNULL(NULLIF(LTRIM(RTRIM(AnioLectivo)), N''), @anioLectivoVigente) AS AnioLectivo
+        FROM dbo.CertificacionEstudioConfig
+        WHERE InstitucionId = @institucionId;
+      `);
+
+    const boletas = result.recordsets[0]?.[0] || {};
+    const certificaciones = result.recordsets[1]?.[0] || {};
+    return ok(res, {
+      boletas: {
+        prefijo: String(boletas.Prefijo || "BOLETA"),
+        siguienteNumero: Number(boletas.SiguienteNumero || 1),
+        anioLectivo: String(boletas.AnioLectivo || anioLectivoVigente),
+        ejemploCodigo: buildConsecutivoCodigo(String(boletas.Prefijo || "BOLETA"), Number(boletas.SiguienteNumero || 1), String(boletas.AnioLectivo || anioLectivoVigente))
+      },
+      certificaciones: {
+        prefijo: String(certificaciones.Prefijo || "CERTIFICACION"),
+        siguienteNumero: Number(certificaciones.SiguienteNumero || 1),
+        anioLectivo: String(certificaciones.AnioLectivo || anioLectivoVigente),
+        ejemploCodigo: buildConsecutivoCodigo(String(certificaciones.Prefijo || "CERTIFICACION"), Number(certificaciones.SiguienteNumero || 1), String(certificaciones.AnioLectivo || anioLectivoVigente))
+      }
+    });
+  } catch (error) {
+    console.error("Error cargando configuración de consecutivos:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la configuración de consecutivos" });
+  }
+});
+
+router.put("/consecutivos-config", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const tipo = String(req.body?.tipo || "").trim().toUpperCase();
+    const prefijo = String(req.body?.prefijo || "").trim();
+    const anioLectivo = String(req.body?.anioLectivo || "").trim();
+    const siguienteNumero = Number(req.body?.siguienteNumero || 0);
+    if (!["BOLETA", "CERTIFICACION"].includes(tipo)) {
+      return badRequest(res, "Tipo de consecutivo inválido");
+    }
+    if (!prefijo) return badRequest(res, "Debés indicar el dato del colegio o prefijo");
+    if (!Number.isInteger(siguienteNumero) || siguienteNumero <= 0) {
+      return badRequest(res, "El consecutivo inicial debe ser un número entero mayor a 0");
+    }
+    if (!/^\d{4}$/.test(anioLectivo)) {
+      return badRequest(res, "Debés indicar un año lectivo válido de 4 dígitos");
+    }
+    const pool = await getPool();
+    await ensureBoletaConductaConfigTable(pool);
+    await ensureCertificacionEstudioConfigTable(pool);
+    if (tipo === "BOLETA") {
+      await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("prefijo", sql.NVarChar(80), prefijo)
+        .input("siguienteNumero", sql.Int, siguienteNumero)
+        .input("anioLectivo", sql.NVarChar(10), anioLectivo)
+        .query(`
+          IF EXISTS (SELECT 1 FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId)
+          BEGIN
+            UPDATE dbo.BoletaConductaConfig
+            SET Prefijo = @prefijo,
+                SiguienteNumero = @siguienteNumero,
+                AnioLectivo = @anioLectivo,
+                UpdatedAt = SYSDATETIME()
+            WHERE InstitucionId = @institucionId
+          END
+          ELSE
+          BEGIN
+            INSERT INTO dbo.BoletaConductaConfig (InstitucionId, Prefijo, SiguienteNumero, AnioLectivo, UpdatedAt)
+            VALUES (@institucionId, @prefijo, @siguienteNumero, @anioLectivo, SYSDATETIME())
+          END
+        `);
+    } else {
+      await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("prefijo", sql.NVarChar(80), prefijo)
+        .input("siguienteNumero", sql.Int, siguienteNumero)
+        .input("anioLectivo", sql.NVarChar(10), anioLectivo)
+        .query(`
+          IF EXISTS (SELECT 1 FROM dbo.CertificacionEstudioConfig WHERE InstitucionId = @institucionId)
+          BEGIN
+            UPDATE dbo.CertificacionEstudioConfig
+            SET Prefijo = @prefijo,
+                SiguienteNumero = @siguienteNumero,
+                AnioLectivo = @anioLectivo,
+                UpdatedAt = SYSDATETIME()
+            WHERE InstitucionId = @institucionId
+          END
+          ELSE
+          BEGIN
+            INSERT INTO dbo.CertificacionEstudioConfig (InstitucionId, Prefijo, SiguienteNumero, AnioLectivo, UpdatedAt)
+            VALUES (@institucionId, @prefijo, @siguienteNumero, @anioLectivo, SYSDATETIME())
+          END
+        `);
+    }
+    return ok(res, {
+      tipo,
+      prefijo,
+      siguienteNumero,
+      anioLectivo,
+      ejemploCodigo: buildConsecutivoCodigo(prefijo, siguienteNumero, anioLectivo)
+    }, "Consecutivo actualizado correctamente");
+  } catch (error) {
+    console.error("Error actualizando configuración de consecutivos:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la configuración de consecutivos" });
   }
 });
 

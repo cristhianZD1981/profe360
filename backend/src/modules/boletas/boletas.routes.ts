@@ -39,6 +39,13 @@ function formatDate(value?: any) {
   return String(value).slice(0, 10);
 }
 
+function buildConsecutivoCodigo(prefijo?: string | null, siguienteNumero?: number | null, anioLectivo?: string | null) {
+  const prefijoSeguro = String(prefijo || "").trim();
+  const anioSeguro = String(anioLectivo || "").trim();
+  const numero = String(Number(siguienteNumero || 0)).padStart(2, "0");
+  return [prefijoSeguro, numero, anioSeguro].filter(Boolean).join("-");
+}
+
 function getInstitutionId(req: any, res: any) {
   const institucionId = req.auth?.institucionId ?? null;
 
@@ -246,9 +253,17 @@ async function ensureBoletaConductaTables(pool: any) {
       CREATE TABLE dbo.BoletaConductaConfig (
         InstitucionId INT NOT NULL PRIMARY KEY,
         SiguienteNumero INT NOT NULL CONSTRAINT DF_BoletaConductaConfig_SiguienteNumero DEFAULT(1),
+        Prefijo NVARCHAR(80) NULL,
+        AnioLectivo NVARCHAR(10) NULL,
         UpdatedAt DATETIME2 NULL
       );
     END;
+
+    IF COL_LENGTH('dbo.BoletaConductaConfig', 'Prefijo') IS NULL
+      ALTER TABLE dbo.BoletaConductaConfig ADD Prefijo NVARCHAR(80) NULL;
+
+    IF COL_LENGTH('dbo.BoletaConductaConfig', 'AnioLectivo') IS NULL
+      ALTER TABLE dbo.BoletaConductaConfig ADD AnioLectivo NVARCHAR(10) NULL;
 
     IF OBJECT_ID('dbo.BoletaConducta', 'U') IS NULL
     BEGIN
@@ -256,6 +271,7 @@ async function ensureBoletaConductaTables(pool: any) {
         BoletaConductaId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
         InstitucionId INT NOT NULL,
         Consecutivo INT NOT NULL,
+        CodigoBoleta NVARCHAR(120) NULL,
         Fecha DATE NOT NULL,
         EstudianteId INT NOT NULL,
         GrupoId INT NULL,
@@ -273,6 +289,9 @@ async function ensureBoletaConductaTables(pool: any) {
         ON dbo.BoletaConducta (InstitucionId, EstudianteId, CreatedAt DESC);
     END;
 
+    IF COL_LENGTH('dbo.BoletaConducta', 'CodigoBoleta') IS NULL
+      ALTER TABLE dbo.BoletaConducta ADD CodigoBoleta NVARCHAR(120) NULL;
+
     IF OBJECT_ID('dbo.BoletaConductaEnvio', 'U') IS NULL
     BEGIN
       CREATE TABLE dbo.BoletaConductaEnvio (
@@ -283,12 +302,26 @@ async function ensureBoletaConductaTables(pool: any) {
         CorreoDestino NVARCHAR(320) NULL,
         CorreoCC NVARCHAR(320) NULL,
         Asunto NVARCHAR(300) NULL,
+        CorreoEnviado BIT NOT NULL CONSTRAINT DF_BoletaConductaEnvio_CorreoEnviado DEFAULT(0),
+        WhatsAppEnviado BIT NOT NULL CONSTRAINT DF_BoletaConductaEnvio_WhatsAppEnviado DEFAULT(0),
         Enviado BIT NOT NULL CONSTRAINT DF_BoletaConductaEnvio_Enviado DEFAULT(0),
         Error NVARCHAR(MAX) NULL,
         CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_BoletaConductaEnvio_CreatedAt DEFAULT(SYSDATETIME())
       );
       CREATE INDEX IX_BoletaConductaEnvio_Boleta
         ON dbo.BoletaConductaEnvio (BoletaConductaId, CreatedAt DESC);
+    END;
+
+    IF COL_LENGTH('dbo.BoletaConductaEnvio', 'CorreoEnviado') IS NULL
+    BEGIN
+      ALTER TABLE dbo.BoletaConductaEnvio
+      ADD CorreoEnviado BIT NOT NULL CONSTRAINT DF_BoletaConductaEnvio_CorreoEnviado_Alt DEFAULT(0);
+    END;
+
+    IF COL_LENGTH('dbo.BoletaConductaEnvio', 'WhatsAppEnviado') IS NULL
+    BEGIN
+      ALTER TABLE dbo.BoletaConductaEnvio
+      ADD WhatsAppEnviado BIT NOT NULL CONSTRAINT DF_BoletaConductaEnvio_WhatsAppEnviado_Alt DEFAULT(0);
     END;
   `);
 }
@@ -304,7 +337,7 @@ function buildBoletaConductaHtml(params: {
     institucion?.NombreComercial ||
     institucion?.Nombre ||
     "";
-  const consecutivo = String(Number(boleta?.Consecutivo || 0)).padStart(4, "0");
+  const consecutivo = String(boleta?.CodigoBoleta || "").trim() || String(Number(boleta?.Consecutivo || 0)).padStart(2, "0");
   const fechaTexto = formatDateCR(boleta?.Fecha || new Date());
   const lugarCompleto = [String(boleta?.LugarAcontecimiento || "").trim(), String(nombreInstitucionCabecera || "").trim()].filter(Boolean).join(" - ");
 
@@ -1175,17 +1208,27 @@ router.get("/conducta/contexto/:estudianteId", async (req, res) => {
     const row = rowResult.recordset[0];
     if (!row) return res.status(404).json({ ok: false, message: "No se encontró el estudiante" });
 
+    const currentYear = String(new Date().getFullYear());
     const configResult = await pool.request()
       .input("institucionId", sql.Int, institucionId)
+      .input("currentYear", sql.NVarChar(10), currentYear)
       .query(`
         IF NOT EXISTS (SELECT 1 FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId)
         BEGIN
-          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero)
-          VALUES (@institucionId, 1)
+          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero, Prefijo, AnioLectivo)
+          VALUES (@institucionId, 1, N'BOLETA', @currentYear)
         END
-        SELECT TOP 1 SiguienteNumero FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId
+        SELECT TOP 1
+          SiguienteNumero,
+          ISNULL(NULLIF(LTRIM(RTRIM(Prefijo)), N''), N'BOLETA') AS Prefijo,
+          ISNULL(NULLIF(LTRIM(RTRIM(AnioLectivo)), N''), @currentYear) AS AnioLectivo
+        FROM dbo.BoletaConductaConfig
+        WHERE InstitucionId = @institucionId
       `);
     const siguienteNumero = Number(configResult.recordset[0]?.SiguienteNumero || 1);
+    const prefijo = String(configResult.recordset[0]?.Prefijo || "BOLETA");
+    const anioLectivo = String(configResult.recordset[0]?.AnioLectivo || currentYear);
+    const codigoBoleta = buildConsecutivoCodigo(prefijo, siguienteNumero, anioLectivo);
     const usuarioNombreResult = await pool.request()
       .input("usuarioId", sql.Int, getAuthUserId(req))
       .query(`
@@ -1202,6 +1245,9 @@ router.get("/conducta/contexto/:estudianteId", async (req, res) => {
       matriculaId: row.MatriculaId ? Number(row.MatriculaId) : null,
       grupoId: row.GrupoId ? Number(row.GrupoId) : null,
       siguienteNumero,
+      prefijo,
+      anioLectivo,
+      codigoBoleta,
       institucion: {
         Nombre: row.InstitucionNombre,
         NombreComercial: row.InstitucionNombreComercial,
@@ -1269,19 +1315,27 @@ router.post("/conducta", async (req, res) => {
       return res.status(404).json({ ok: false, message: "No se encontró el estudiante" });
     }
 
+    const currentYear = String(new Date().getFullYear());
     const nextResult = await new sql.Request(transaction)
       .input("institucionId", sql.Int, institucionId)
+      .input("currentYear", sql.NVarChar(10), currentYear)
       .query(`
         IF NOT EXISTS (SELECT 1 FROM dbo.BoletaConductaConfig WHERE InstitucionId = @institucionId)
         BEGIN
-          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero)
-          VALUES (@institucionId, 1)
+          INSERT INTO dbo.BoletaConductaConfig (InstitucionId, SiguienteNumero, Prefijo, AnioLectivo)
+          VALUES (@institucionId, 1, N'BOLETA', @currentYear)
         END
-        SELECT TOP 1 SiguienteNumero
+        SELECT TOP 1
+          SiguienteNumero,
+          ISNULL(NULLIF(LTRIM(RTRIM(Prefijo)), N''), N'BOLETA') AS Prefijo,
+          ISNULL(NULLIF(LTRIM(RTRIM(AnioLectivo)), N''), @currentYear) AS AnioLectivo
         FROM dbo.BoletaConductaConfig
         WHERE InstitucionId = @institucionId
       `);
     const consecutivo = Number(nextResult.recordset[0]?.SiguienteNumero || 1);
+    const prefijo = String(nextResult.recordset[0]?.Prefijo || "BOLETA");
+    const anioLectivo = String(nextResult.recordset[0]?.AnioLectivo || currentYear);
+    const codigoBoleta = buildConsecutivoCodigo(prefijo, consecutivo, anioLectivo);
 
     const usuarioNombreResult = await new sql.Request(transaction)
       .input("usuarioId", sql.Int, getAuthUserId(req))
@@ -1294,6 +1348,7 @@ router.post("/conducta", async (req, res) => {
     const insertResult = await new sql.Request(transaction)
       .input("institucionId", sql.Int, institucionId)
       .input("consecutivo", sql.Int, consecutivo)
+      .input("codigoBoleta", sql.NVarChar(120), codigoBoleta)
       .input("fecha", sql.Date, getCostaRicaIsoDate())
       .input("estudianteId", sql.Int, estudianteId)
       .input("grupoId", sql.Int, row.GrupoId ? Number(row.GrupoId) : null)
@@ -1305,10 +1360,10 @@ router.post("/conducta", async (req, res) => {
       .input("nombreFuncionario", sql.NVarChar(200), funcionarioNombre || null)
       .query(`
         INSERT INTO dbo.BoletaConducta
-          (InstitucionId, Consecutivo, Fecha, EstudianteId, GrupoId, MatriculaId, Seccion, DetalleHechos, LugarAcontecimiento, UsuarioReportaId, NombreFuncionario, CreatedAt)
+          (InstitucionId, Consecutivo, CodigoBoleta, Fecha, EstudianteId, GrupoId, MatriculaId, Seccion, DetalleHechos, LugarAcontecimiento, UsuarioReportaId, NombreFuncionario, CreatedAt)
         OUTPUT INSERTED.BoletaConductaId
         VALUES
-          (@institucionId, @consecutivo, @fecha, @estudianteId, @grupoId, @matriculaId, @seccion, @detalleHechos, @lugarAcontecimiento, @usuarioReportaId, @nombreFuncionario, SYSDATETIME())
+          (@institucionId, @consecutivo, @codigoBoleta, @fecha, @estudianteId, @grupoId, @matriculaId, @seccion, @detalleHechos, @lugarAcontecimiento, @usuarioReportaId, @nombreFuncionario, SYSDATETIME())
       `);
     const boletaConductaId = Number(insertResult.recordset[0]?.BoletaConductaId || 0);
 
@@ -1455,7 +1510,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
     const estudianteNombre = fullName(row);
     const fechaIso = String(row.Fecha || "").slice(0, 10);
     const fechaCR = formatDateCR(row.Fecha);
-    const consecutivo = String(Number(row.Consecutivo || 0)).padStart(4, "0");
+    const consecutivo = String(row.CodigoBoleta || "").trim() || String(Number(row.Consecutivo || 0)).padStart(2, "0");
     const nombreColegio = String(row.NombreOficialBoleta || row.InstitucionNombreComercial || row.InstitucionNombre || "");
     const mensajeWhatsApp = buildBoletaConductaWhatsAppText({
       consecutivo,
@@ -1548,13 +1603,15 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
       .input("correoDestino", sql.NVarChar(320), correoEstudiante)
       .input("correoCC", sql.NVarChar(320), correoProfesor)
       .input("asunto", sql.NVarChar(300), asunto)
+      .input("correoEnviado", sql.Bit, enviado ? 1 : 0)
+      .input("whatsAppEnviado", sql.Bit, whatsappEnviado ? 1 : 0)
       .input("enviado", sql.Bit, envioExitoso ? 1 : 0)
       .input("error", sql.NVarChar(sql.MAX), errorMsg)
       .query(`
         INSERT INTO dbo.BoletaConductaEnvio
-          (BoletaConductaId, InstitucionId, EstudianteId, CorreoDestino, CorreoCC, Asunto, Enviado, Error, CreatedAt)
+          (BoletaConductaId, InstitucionId, EstudianteId, CorreoDestino, CorreoCC, Asunto, CorreoEnviado, WhatsAppEnviado, Enviado, Error, CreatedAt)
         VALUES
-          (@boletaConductaId, @institucionId, @estudianteId, @correoDestino, @correoCC, @asunto, @enviado, @error, SYSDATETIME())
+          (@boletaConductaId, @institucionId, @estudianteId, @correoDestino, @correoCC, @asunto, @correoEnviado, @whatsAppEnviado, @enviado, @error, SYSDATETIME())
       `);
 
     if (!envioExitoso) {

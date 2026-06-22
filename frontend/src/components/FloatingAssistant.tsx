@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import api from "../lib/http";
 
@@ -7,6 +7,15 @@ type Message = {
   id: string;
   role: "assistant" | "user";
   text: string;
+  actions?: Array<{ label: string; type: "navigate" | "ask"; target: string }>;
+};
+
+type ScreenSnapshot = {
+  routeLabel: string;
+  documentTitle: string;
+  headings: string[];
+  buttons: string[];
+  labels: string[];
 };
 
 function getRouteLabel(pathname: string) {
@@ -51,9 +60,31 @@ function buildWelcomeMessage(displayName: string) {
   return "Hola! Bienvenido a PROFE360. Soy Margarita, tu asistente virtual, y con mucho gusto te ayudare a resolver cualquier consulta relacionada con el uso de los modulos de la plataforma.\n\nDecime que necesitas hacer en la plataforma y te guio paso a paso.";
 }
 
+function collectScreenSnapshot(routeLabel: string): ScreenSnapshot {
+  if (typeof document === "undefined") {
+    return { routeLabel, documentTitle: "", headings: [], buttons: [], labels: [] };
+  }
+
+  const readTexts = (selector: string, limit: number) =>
+    Array.from(document.querySelectorAll(selector))
+      .map((node) => String((node as HTMLElement).innerText || (node as HTMLInputElement).value || "").trim())
+      .filter(Boolean)
+      .filter((value, index, array) => array.indexOf(value) === index)
+      .slice(0, limit);
+
+  return {
+    routeLabel,
+    documentTitle: String(document.title || "").trim(),
+    headings: readTexts("h1, h2, h3, [data-assistant-heading='true']", 8),
+    buttons: readTexts("button", 12),
+    labels: readTexts("label, th, .card strong", 14)
+  };
+}
+
 export default function FloatingAssistant() {
   const { user } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -89,8 +120,15 @@ export default function FloatingAssistant() {
     });
   }, [displayName]);
 
-  async function handleSend() {
-    const question = String(input || "").trim();
+  useEffect(() => {
+    if (!open) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  }, [messages, loading, open]);
+
+  async function sendQuestion(rawQuestion: string) {
+    const question = String(rawQuestion || "").trim();
     if (!question || loading) return;
     let nextUserName = userName;
 
@@ -116,26 +154,26 @@ export default function FloatingAssistant() {
     setLoading(true);
 
     try {
+      const screenSnapshot = collectScreenSnapshot(routeLabel);
       const response = await api.post("/assistant/chat", {
         question,
         currentPath: location.pathname,
+        screenSnapshot,
         userName: nextUserName || undefined,
         userDisplayName: displayName || nextUserName || undefined,
         userRoleLabel: userRoleLabel || undefined,
         history: nextHistory.map((item) => ({ role: item.role, text: item.text }))
       });
-      const data = response.data?.data || response.data;
+      const data = response.data?.data || response.data || {};
       setMessages((prev) => [
         ...prev,
         {
           id: `a-${Date.now()}`,
           role: "assistant",
-          text: String(data?.reply || "No pude responder en este momento.")
+          text: String(data?.reply || "No pude responder en este momento."),
+          actions: Array.isArray(data?.suggestedActions) ? data.suggestedActions : []
         }
       ]);
-      window.setTimeout(() => {
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-      }, 50);
     } catch (error: any) {
       setMessages((prev) => [
         ...prev,
@@ -148,6 +186,19 @@ export default function FloatingAssistant() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSend() {
+    await sendQuestion(input);
+  }
+
+  async function handleAction(action: { label: string; type: "navigate" | "ask"; target: string }) {
+    if (action.type === "navigate") {
+      navigate(action.target);
+      setOpen(false);
+      return;
+    }
+    await sendQuestion(action.target);
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -271,7 +322,30 @@ export default function FloatingAssistant() {
                   lineHeight: 1.45
                 }}
               >
-                {message.text}
+                <div>{message.text}</div>
+                {message.role === "assistant" && Array.isArray(message.actions) && message.actions.length ? (
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
+                    {message.actions.map((action, index) => (
+                      <button
+                        key={`${message.id}-action-${index}`}
+                        type="button"
+                        onClick={() => void handleAction(action)}
+                        style={{
+                          border: "1px solid #93c5fd",
+                          background: action.type === "navigate" ? "#dbeafe" : "#ecfeff",
+                          color: "#0f172a",
+                          borderRadius: "999px",
+                          padding: "7px 10px",
+                          cursor: "pointer",
+                          fontWeight: 700,
+                          fontSize: "12px"
+                        }}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ))}
             {loading ? (

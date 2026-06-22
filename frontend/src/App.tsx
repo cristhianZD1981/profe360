@@ -23,6 +23,7 @@ import ParametrizacionesPage from "./pages/ParametrizacionesPage";
 import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
 import AssistantAdminPage from "./pages/AssistantAdminPage";
 import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
+import SuperAdminConsecutivosPage from "./pages/SuperAdminConsecutivosPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
 
 const ADMINISTRATIVO_ROLES = [
@@ -134,6 +135,7 @@ export default function App() {
                     "fechasClase",
                     "diasLectivos",
                     "feriados",
+                    "consecutivos",
                     "configuracionCorreo",
                     "mensajes"
                   ]}
@@ -166,6 +168,7 @@ export default function App() {
                     "fechasClase",
                     "diasLectivos",
                     "feriados",
+                    "consecutivos",
                     "configuracionCorreo",
                     "mensajes"
                   ]}
@@ -267,6 +270,16 @@ export default function App() {
             }
           />
           <Route
+            path="super-admin/consecutivos"
+            element={
+              <ProtectedRoute
+                allowedRoles={SUPER_ADMIN_ROLES}
+              >
+                <SuperAdminConsecutivosPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="configuracion-ia"
             element={
               <ProtectedRoute
@@ -277,7 +290,7 @@ export default function App() {
             }
           />
           <Route
-            path="reportes"
+            path="reportes/*"
             element={
               <ProtectedRoute
                 allowedRoles={REPORTE_CERTIFICACIONES_ROLES}

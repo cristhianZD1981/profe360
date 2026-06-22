@@ -14,6 +14,7 @@ type User = {
   SegundoApellido?: string | null;
   Telefono?: string | null;
   Cargo?: string | null;
+  Sexo?: string | null;
   Roles: string;
   Activo: boolean;
 };
@@ -46,6 +47,7 @@ const initialForm = {
   segundoApellido: "",
   telefono: "",
   cargo: "",
+  sexo: "",
   roleNames: ["PROFESOR"]
 };
 
@@ -262,6 +264,7 @@ export default function UsuariosPage() {
         segundoApellido: form.segundoApellido || null,
         telefono: form.telefono || null,
         cargo: form.cargo || null,
+        sexo: form.sexo || null,
         roleNames: form.roleNames
       };
 
@@ -326,6 +329,7 @@ export default function UsuariosPage() {
       segundoApellido: item.SegundoApellido || "",
       telefono: item.Telefono || "",
       cargo: item.Cargo || "",
+      sexo: item.Sexo || "",
       roleNames: [roleSeguro]
     });
     setIsFormExpanded(true);
@@ -699,6 +703,18 @@ export default function UsuariosPage() {
                 </label>
 
                 <label>
+                  Sexo
+                  <select
+                    value={form.sexo}
+                    onChange={(e) => setForm({ ...form, sexo: e.target.value })}
+                  >
+                    <option value="">Seleccione</option>
+                    <option value="FEMENINO">Femenino</option>
+                    <option value="MASCULINO">Masculino</option>
+                  </select>
+                </label>
+
+                <label>
                   Rol
                   <select
                     value={form.roleNames[0]}
@@ -910,6 +926,7 @@ export default function UsuariosPage() {
                 <th>Cédula</th>
                 <th>Nombre</th>
                 <th>Cargo</th>
+                <th>Sexo</th>
                 <th>Institución</th>
                 <th>Roles</th>
                 <th>Estado</th>
@@ -936,6 +953,7 @@ export default function UsuariosPage() {
                         .trim()}
                     </td>
                     <td>{item.Cargo || ""}</td>
+                    <td>{item.Sexo === "FEMENINO" ? "Femenino" : item.Sexo === "MASCULINO" ? "Masculino" : ""}</td>
                     <td>{institucionNombre}</td>
                     <td>{item.Roles || "Sin rol"}</td>
                     <td>{item.Activo ? "Activo" : "Inactivo"}</td>
@@ -1031,7 +1049,7 @@ export default function UsuariosPage() {
 
               {!items.length && (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>
+                  <td colSpan={10} style={{ textAlign: "center", padding: "16px" }}>
                     {search.trim()
                       ? "No hay usuarios que coincidan con la bésqueda"
                       : "Digite un correo, nombre o cédula para buscar usuarios"}

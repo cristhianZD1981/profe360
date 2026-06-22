@@ -1,6 +1,7 @@
 ﻿// @ts-nocheck
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
+import { useAuth } from "../context/auth";
 import { getCostaRicaIsoDate, getCostaRicaIsoDateWithOffset } from "../utils/date";
 import {
   type ActivePanel,
@@ -115,11 +116,20 @@ function isValidApoyoAdecuacion(value?: string | null) {
 }
 
 export default function GestionProfePage() {
+  const { user } = useAuth();
   const [grupos, setGrupos] = useState<GrupoProfesor[]>([]);
   const [selected, setSelected] = useState<GrupoProfesor | null>(null);
   const [detalle, setDetalle] = useState<DetalleGrupo | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<NoteDrafts>({});
   const [q, setQ] = useState("");
+  const [adminInstitucionesFiltro, setAdminInstitucionesFiltro] = useState<any[]>([]);
+  const [adminGradosFiltro, setAdminGradosFiltro] = useState<any[]>([]);
+  const [adminProfesoresFiltro, setAdminProfesoresFiltro] = useState<any[]>([]);
+  const [adminModoCarga, setAdminModoCarga] = useState<"GRADO" | "PROFESOR">("GRADO");
+  const [adminInstitucionId, setAdminInstitucionId] = useState("");
+  const [adminGrado, setAdminGrado] = useState("");
+  const [adminProfesorId, setAdminProfesorId] = useState("");
+  const [loadingAdminFiltros, setLoadingAdminFiltros] = useState(false);
   const [loadingGrupos, setLoadingGrupos] = useState(false);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
   const [loadingDetalleCardId, setLoadingDetalleCardId] = useState<number | null>(null);
@@ -337,6 +347,12 @@ export default function GestionProfePage() {
   const [apoyoEducativoPasoAlumnosConfirmado, setApoyoEducativoPasoAlumnosConfirmado] = useState(false);
   const initialLoadStartedRef = useRef(false);
   const tablaMatrizRef = useRef<HTMLDivElement | null>(null);
+  const userRoles = useMemo(() => (Array.isArray(user?.roles) ? user.roles : []), [user?.roles]);
+  const isSuperAdminRole = useMemo(() => userRoles.includes("SUPER_ADMIN"), [userRoles]);
+  const isGestionAdminRole = useMemo(
+    () => userRoles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role)),
+    [userRoles]
+  );
 
   useEffect(() => {
     return () => {
@@ -2179,7 +2195,7 @@ export default function GestionProfePage() {
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
-      const rows = boletasConductaFiltradas.map((b) => [String(Number(b.Consecutivo || 0)).padStart(4, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
+      const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(2, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
       return exportarTablaGenericaExcel(`reporte-boletas-${base}`, "Reporte de Boletas", headers, rows);
     }
     if (tipoReporteGestion === "BITACORA") {
@@ -2212,7 +2228,7 @@ export default function GestionProfePage() {
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
-      const rows = boletasConductaFiltradas.map((b) => [String(Number(b.Consecutivo || 0)).padStart(4, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
+      const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(2, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
       return exportarTablaGenericaPdf("Reporte de Boletas", headers, rows);
     }
     if (tipoReporteGestion === "BITACORA") {
@@ -2297,7 +2313,7 @@ function estadoAsistenciaLabel(estado: EstadoAsistencia) {
       case "AUSENTE_JUSTIFICADA": return "Ausente justificada";
       case "AUSENTE_INJUSTIFICADA": return "Ausente injustificada";
       case "TARDIA_MENOR_10": return "Tardía menor a 10 min";
-      case "TARDIA_MAYOR_10": return "Tardía mayor a 10 min";
+      case "TARDIA_MAYOR_10": return "Ausente (Llega 10 minutos tarde)";
       default: return estado;
     }
 }
@@ -3544,7 +3560,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setErrorMessage("");
     try {
       const response = await api.get("/gestion-profe/mis-grupos", {
-        params: { q: search }
+        params: {
+          q: search,
+          institucionId: isGestionAdminRole ? (adminInstitucionId || undefined) : undefined,
+          grado: isGestionAdminRole && adminModoCarga === "GRADO" ? (adminGrado || undefined) : undefined,
+          profesorId: isGestionAdminRole && adminModoCarga === "PROFESOR" ? (adminProfesorId || undefined) : undefined
+        }
       });
       const data = response.data?.data || response.data || [];
       setGrupos(Array.isArray(data) ? deduplicarGruposProfesor(data).sort(compararGruposProfesor) : []);
@@ -3553,6 +3574,31 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setErrorMessage(error?.response?.data?.message || "No se pudieron cargar los grupos asignados");
     } finally {
       setLoadingGrupos(false);
+    }
+  }
+
+  async function loadAdminGestionFiltros(nextInstitucionId?: string) {
+    if (!isGestionAdminRole) return;
+    setLoadingAdminFiltros(true);
+    setErrorMessage("");
+    try {
+      const response = await api.get("/gestion-profe/mis-grupos/filtros-admin", {
+        params: {
+          institucionId: nextInstitucionId || undefined
+        }
+      });
+      const data = response.data?.data || response.data || {};
+      const instituciones = Array.isArray(data.instituciones) ? data.instituciones : [];
+      const grados = Array.isArray(data.grados) ? data.grados : [];
+      const profesores = Array.isArray(data.profesores) ? data.profesores : [];
+      setAdminInstitucionesFiltro(instituciones);
+      setAdminGradosFiltro(grados);
+      setAdminProfesoresFiltro(profesores);
+    } catch (error: any) {
+      console.error("Error cargando filtros administrativos de Gestión del Profe:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudieron cargar los filtros administrativos");
+    } finally {
+      setLoadingAdminFiltros(false);
     }
   }
 
@@ -6360,15 +6406,37 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   function handleSearch(e: FormEvent) {
     e.preventDefault();
+    if (isGestionAdminRole) {
+      if (!adminInstitucionId) {
+        setErrorMessage("Seleccioná el colegio antes de cargar las secciones.");
+        return;
+      }
+      if (adminModoCarga === "GRADO" && !adminGrado) {
+        setErrorMessage("Seleccioná el grado a consultar.");
+        return;
+      }
+      if (adminModoCarga === "PROFESOR" && !adminProfesorId) {
+        setErrorMessage("Seleccioná el profesor a consultar.");
+        return;
+      }
+    }
     loadGrupos(q);
   }
 
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
-    loadGrupos("");
+    if (isGestionAdminRole) {
+      const institucionInicial = !isSuperAdminRole && user?.institucionId ? String(user.institucionId) : "";
+      if (institucionInicial) {
+        setAdminInstitucionId(institucionInicial);
+      }
+      loadAdminGestionFiltros(institucionInicial);
+    } else {
+      loadGrupos("");
+    }
     loadNivelesDesempeno();
-  }, []);
+  }, [isGestionAdminRole, isSuperAdminRole, user?.institucionId]);
 
   useEffect(() => {
     if (activePanel === "reportes" && selected) {
@@ -6845,6 +6913,93 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
       <section className="card">
         <h3>Mis grupos</h3>
+        {isGestionAdminRole ? (
+          <div style={{ display: "grid", gap: "12px", marginBottom: "14px" }}>
+            <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+              <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
+                Colegio
+                <select
+                  value={adminInstitucionId}
+                  disabled={loadingAdminFiltros || (!isSuperAdminRole && !!user?.institucionId)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setAdminInstitucionId(value);
+                    setAdminGrado("");
+                    setAdminProfesorId("");
+                    setGrupos([]);
+                    setSelected(null);
+                    setDetalle(null);
+                    void loadAdminGestionFiltros(value);
+                  }}
+                >
+                  <option value="">{loadingAdminFiltros ? "Cargando..." : "Seleccioná un colegio"}</option>
+                  {adminInstitucionesFiltro.map((item) => (
+                    <option key={item.InstitucionId} value={item.InstitucionId}>{item.InstitucionNombre}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
+                Modo de carga
+                <select
+                  value={adminModoCarga}
+                  onChange={(e) => {
+                    const value = e.target.value as "GRADO" | "PROFESOR";
+                    setAdminModoCarga(value);
+                    setAdminGrado("");
+                    setAdminProfesorId("");
+                    setGrupos([]);
+                    setSelected(null);
+                    setDetalle(null);
+                  }}
+                >
+                  <option value="GRADO">Colegio + grado</option>
+                  <option value="PROFESOR">Colegio + profesor</option>
+                </select>
+              </label>
+
+              {adminModoCarga === "GRADO" ? (
+                <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
+                  Grado
+                  <select
+                    value={adminGrado}
+                    disabled={!adminInstitucionId || loadingAdminFiltros}
+                    onChange={(e) => {
+                      setAdminGrado(e.target.value);
+                      setGrupos([]);
+                      setSelected(null);
+                      setDetalle(null);
+                    }}
+                  >
+                    <option value="">{loadingAdminFiltros ? "Cargando..." : "Seleccioná un grado"}</option>
+                    {adminGradosFiltro.map((item) => (
+                      <option key={item.Grado} value={item.Grado}>{item.Grado}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
+                  Profesor
+                  <select
+                    value={adminProfesorId}
+                    disabled={!adminInstitucionId || loadingAdminFiltros}
+                    onChange={(e) => {
+                      setAdminProfesorId(e.target.value);
+                      setGrupos([]);
+                      setSelected(null);
+                      setDetalle(null);
+                    }}
+                  >
+                    <option value="">{loadingAdminFiltros ? "Cargando..." : "Seleccioná un profesor"}</option>
+                    {adminProfesoresFiltro.map((item) => (
+                      <option key={item.ProfesorId} value={item.ProfesorId}>{item.ProfesorNombre}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </div>
+        ) : null}
         <form onSubmit={handleSearch} style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "14px" }}>
           <input
             value={q}
@@ -6860,7 +7015,19 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             style={secondaryButtonStyle}
             onClick={() => {
               setQ("");
-              loadGrupos("");
+              if (isGestionAdminRole) {
+                setAdminModoCarga("GRADO");
+                const institucionInicial = !isSuperAdminRole && user?.institucionId ? String(user.institucionId) : "";
+                setAdminInstitucionId(institucionInicial);
+                setAdminGrado("");
+                setAdminProfesorId("");
+                setGrupos([]);
+                setSelected(null);
+                setDetalle(null);
+                void loadAdminGestionFiltros(institucionInicial);
+              } else {
+                loadGrupos("");
+              }
             }}
           >
             Limpiar
@@ -8241,7 +8408,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     {(["PRESENTE", "AUSENTE_JUSTIFICADA", "AUSENTE_INJUSTIFICADA", "TARDIA_MENOR_10", "TARDIA_MAYOR_10"] as EstadoAsistencia[]).map((estado) => (
                                       <th key={estado} style={{ padding: "10px", textAlign: "center" }}>{estadoAsistenciaLabel(estado)}</th>
                                     ))}
-                                    <th style={{ minWidth: "120px", padding: "10px" }} title="Minutos de tardía (solo cuando corresponde)">Minutos tardóa</th>
+                                    <th style={{ minWidth: "120px", padding: "10px" }} title="Minutos de tardía (solo cuando corresponde)">Minutos tarde</th>
                                     <th style={{ minWidth: "220px", padding: "10px" }}>Observación</th>
                                     <th style={{ minWidth: "120px", padding: "10px" }} title="Marcar para notificar al encargado del estudiante">Informar al encargado</th>
                                     <th style={{ minWidth: "160px", padding: "10px" }}>Estado envío</th>
@@ -9101,7 +9268,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           <th style={stickyTableHeaderStyle}>Estudiante</th>
                           <th>Identificación</th>
                           <th>Estado</th>
-                          <th>Minutos tardóa</th>
+                          <th>Minutos tarde</th>
                           <th>Observación</th>
                           <th>Ausencias equiv.</th>
                           <th>% ausencias</th>
@@ -9133,7 +9300,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   <option value="AUSENTE_JUSTIFICADA">Ausente justificada</option>
                                   <option value="AUSENTE_INJUSTIFICADA">Ausente injustificada</option>
                                   <option value="TARDIA_MENOR_10">Tardía menor a 10 min</option>
-                                  <option value="TARDIA_MAYOR_10">Tardía mayor a 10 min</option>
+                                  <option value="TARDIA_MAYOR_10">Ausente (Llega 10 minutos tarde)</option>
                                 </select>
                               </td>
                               <td>
@@ -11788,7 +11955,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             </tr>
                           ) : boletasConductaFiltradas.map((item) => (
                             <tr key={item.BoletaConductaId}>
-                              <td>{String(Number(item.Consecutivo || 0)).padStart(4, "0")}</td>
+                              <td>{String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(2, "0")}</td>
                               <td>{String(item.Fecha || "").slice(0, 10)}</td>
                               <td>{[item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre || ""].join(" ").replace(/\s+/g, " ").trim()}</td>
                               <td>{item.Seccion || ""}</td>
@@ -11799,7 +11966,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   type="button"
                                   className="primary-btn"
                                   style={{ padding: "6px 10px" }}
-                                  onClick={() => window.open(`/boletas/conducta/${item.BoletaConductaId}`, "_blank")}
+                                  onClick={() => window.open(`/boletas/conducta/${item.BoletaConductaId}?modo=reimprimir`, "_blank")}
                                 >
                                   Reimprimir
                                 </button>

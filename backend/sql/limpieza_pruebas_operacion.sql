@@ -6,6 +6,7 @@
     - Asistencia
     - Planeamientos e indicadores
     - Estructuras Eval360
+    - Evaluación académica
     - Alertas/log de correos enviados a alumnos
     - Historial de generación IA de planeamiento
 
@@ -22,18 +23,20 @@
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
-DECLARE @InstitucionId INT = 1;      -- CAMBIAR,  NULL = todos las Instituciones
+DECLARE @InstitucionId INT = 1;      -- CAMBIAR, NULL = todas las instituciones
 DECLARE @AnioLectivoId INT = NULL;   -- opcional: NULL = todos los años
 DECLARE @PeriodoId INT = NULL;       -- opcional: NULL = todos los periodos
 DECLARE @DryRun BIT = 0;             -- 1 = solo vista previa, 0 = borrar
 
-DECLARE @LimpiarBoletas BIT = 1;       -- 1 = borra dbo.BoletaConducta (y su envío)
-DECLARE @LimpiarTokens BIT = 1;        -- 1 = borra dbo.UsuarioResetPasswordToken
-DECLARE @LimpiarAuditoria BIT = 1;     -- 1 = borra tablas detectadas tipo log/auditoría
+DECLARE @LimpiarBoletas BIT = 1;     -- 1 = borra dbo.BoletaConducta (y su envío)
+DECLARE @LimpiarTokens BIT = 1;      -- 1 = borra dbo.UsuarioResetPasswordToken
+DECLARE @LimpiarAuditoria BIT = 1;   -- 1 = borra tablas detectadas tipo log/auditoría
+DECLARE @LimpiarEvaluacion BIT = 1;  -- 1 = borra evaluaciones / plantillas / notas
 
 IF OBJECT_ID('tempdb..#TargetEstructura') IS NOT NULL DROP TABLE #TargetEstructura;
 IF OBJECT_ID('tempdb..#TargetPlaneamiento') IS NOT NULL DROP TABLE #TargetPlaneamiento;
 IF OBJECT_ID('tempdb..#TargetAsistenciaSesion') IS NOT NULL DROP TABLE #TargetAsistenciaSesion;
+IF OBJECT_ID('tempdb..#TargetEvaluacionPlantilla') IS NOT NULL DROP TABLE #TargetEvaluacionPlantilla;
 IF OBJECT_ID('tempdb..#AuditTables') IS NOT NULL DROP TABLE #AuditTables;
 
 SELECT eg.EstructuraGrupoId
@@ -49,6 +52,13 @@ FROM dbo.Planeamiento p
 WHERE (@InstitucionId IS NULL OR p.InstitucionId = @InstitucionId)
   AND (@AnioLectivoId IS NULL OR p.AnioLectivoId = @AnioLectivoId)
   AND (@PeriodoId IS NULL OR p.PeriodoId = @PeriodoId);
+
+SELECT ep.EvaluacionPlantillaId
+INTO #TargetEvaluacionPlantilla
+FROM dbo.EvaluacionPlantilla ep
+WHERE (@InstitucionId IS NULL OR ep.InstitucionId = @InstitucionId)
+  AND (@AnioLectivoId IS NULL OR ep.AnioLectivoId = @AnioLectivoId)
+  AND (@PeriodoId IS NULL OR ep.PeriodoId = @PeriodoId);
 
 CREATE TABLE #TargetAsistenciaSesion (
   AsistenciaSesionId INT NOT NULL PRIMARY KEY
@@ -193,6 +203,45 @@ UNION ALL
 SELECT 'Eval360_EstructuraGrupo (solo inactivar)', COUNT(1)
 FROM dbo.Eval360_EstructuraGrupo eg
 WHERE EXISTS (SELECT 1 FROM #TargetEstructura t WHERE t.EstructuraGrupoId = eg.EstructuraGrupoId)
+
+UNION ALL
+SELECT 'EvaluacionNota', COUNT(1)
+FROM dbo.EvaluacionNota n
+WHERE EXISTS (
+  SELECT 1
+  FROM dbo.EvaluacionActividad a
+  INNER JOIN dbo.EvaluacionComponente c ON c.EvaluacionComponenteId = a.EvaluacionComponenteId
+  WHERE a.EvaluacionActividadId = n.EvaluacionActividadId
+    AND EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+)
+UNION ALL
+SELECT 'EvaluacionActividadIndicador', COUNT(1)
+FROM dbo.EvaluacionActividadIndicador ai
+WHERE EXISTS (
+  SELECT 1
+  FROM dbo.EvaluacionActividad a
+  INNER JOIN dbo.EvaluacionComponente c ON c.EvaluacionComponenteId = a.EvaluacionComponenteId
+  WHERE a.EvaluacionActividadId = ai.EvaluacionActividadId
+    AND EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+)
+UNION ALL
+SELECT 'EvaluacionActividad', COUNT(1)
+FROM dbo.EvaluacionActividad a
+WHERE EXISTS (
+  SELECT 1
+  FROM dbo.EvaluacionComponente c
+  WHERE c.EvaluacionComponenteId = a.EvaluacionComponenteId
+    AND EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+)
+UNION ALL
+SELECT 'EvaluacionComponente', COUNT(1)
+FROM dbo.EvaluacionComponente c
+WHERE EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+UNION ALL
+SELECT 'EvaluacionPlantilla', COUNT(1)
+FROM dbo.EvaluacionPlantilla ep
+WHERE EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = ep.EvaluacionPlantillaId)
+
 UNION ALL
 SELECT 'PlaneamientoIndicador', COUNT(1)
 FROM dbo.PlaneamientoIndicador pi
@@ -248,7 +297,7 @@ END;
 BEGIN TRY
   BEGIN TRAN;
 
-  /* 1) Notas y seguimiento */
+  /* 1) Eval360 */
   DELETE n
   FROM dbo.Eval360_NotaActividad n
   WHERE EXISTS (
@@ -276,7 +325,6 @@ BEGIN TRY
       AND EXISTS (SELECT 1 FROM #TargetEstructura t WHERE t.EstructuraGrupoId = a.EstructuraGrupoId)
   );
 
-  /* 2) Indicadores y actividades Eval360 */
   DELETE ig
   FROM dbo.Eval360_IndicadorGrupo ig
   WHERE EXISTS (SELECT 1 FROM #TargetEstructura t WHERE t.EstructuraGrupoId = ig.EstructuraGrupoId);
@@ -298,6 +346,47 @@ BEGIN TRY
   SET Activo = 0
   FROM dbo.Eval360_EstructuraGrupo eg
   WHERE EXISTS (SELECT 1 FROM #TargetEstructura t WHERE t.EstructuraGrupoId = eg.EstructuraGrupoId);
+
+  /* 2) Evaluación académica */
+  IF @LimpiarEvaluacion = 1
+  BEGIN
+    DELETE ai
+    FROM dbo.EvaluacionActividadIndicador ai
+    WHERE EXISTS (
+      SELECT 1
+      FROM dbo.EvaluacionActividad a
+      INNER JOIN dbo.EvaluacionComponente c ON c.EvaluacionComponenteId = a.EvaluacionComponenteId
+      WHERE a.EvaluacionActividadId = ai.EvaluacionActividadId
+        AND EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+    );
+
+    DELETE n
+    FROM dbo.EvaluacionNota n
+    WHERE EXISTS (
+      SELECT 1
+      FROM dbo.EvaluacionActividad a
+      INNER JOIN dbo.EvaluacionComponente c ON c.EvaluacionComponenteId = a.EvaluacionComponenteId
+      WHERE a.EvaluacionActividadId = n.EvaluacionActividadId
+        AND EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+    );
+
+    DELETE a
+    FROM dbo.EvaluacionActividad a
+    WHERE EXISTS (
+      SELECT 1
+      FROM dbo.EvaluacionComponente c
+      WHERE c.EvaluacionComponenteId = a.EvaluacionComponenteId
+        AND EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId)
+    );
+
+    DELETE c
+    FROM dbo.EvaluacionComponente c
+    WHERE EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = c.EvaluacionPlantillaId);
+
+    DELETE ep
+    FROM dbo.EvaluacionPlantilla ep
+    WHERE EXISTS (SELECT 1 FROM #TargetEvaluacionPlantilla t WHERE t.EvaluacionPlantillaId = ep.EvaluacionPlantillaId);
+  END;
 
   /* 3) Planeamientos */
   DELETE pi

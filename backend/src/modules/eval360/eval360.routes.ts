@@ -5782,6 +5782,204 @@ router.get("/estructuras/grupo", async (req, res) => {
 
 
 
+router.get("/super-admin/secciones-mantenimiento", async (req, res) => {
+
+  try {
+
+    if (!assertCanAccess(req, res)) return;
+
+    if (!isSuperAdmin(req)) return forbidden(res, "Solo SUPER_ADMIN puede acceder a esta opcion");
+
+    const pool = await getPool();
+    const institucionId = toOptionalNumber(req.query.institucionId);
+    const grupoId = toOptionalNumber(req.query.grupoId);
+    const profesorId = toOptionalNumber(req.query.profesorId);
+
+    if (!institucionId || (!grupoId && !profesorId)) {
+      return ok(res, []);
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("grupoId", sql.Int, grupoId)
+      .input("profesorId", sql.Int, profesorId)
+      .query(`
+      ;WITH Asignaciones AS (
+        SELECT
+          ad.InstitucionId,
+          i.Nombre AS InstitucionNombre,
+          ad.GrupoId,
+          g.Nombre AS GrupoNombre,
+          ad.MateriaId,
+          m.Nombre AS MateriaNombre,
+          ad.AnioLectivoId,
+          al.Nombre AS AnioNombre,
+          ad.PeriodoId,
+          p.Nombre AS PeriodoNombre,
+          u.Nombre AS ProfesorNombre,
+          u.PrimerApellido AS ProfesorPrimerApellido,
+          u.SegundoApellido AS ProfesorSegundoApellido,
+          ROW_NUMBER() OVER (
+            PARTITION BY ad.InstitucionId, ad.GrupoId, ad.MateriaId, ad.AnioLectivoId, ad.PeriodoId
+            ORDER BY ad.AsignacionDocenteId DESC
+          ) AS rn
+        FROM dbo.AsignacionDocente ad
+        INNER JOIN dbo.Institucion i ON i.InstitucionId = ad.InstitucionId
+        INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
+        LEFT JOIN dbo.Materia m ON m.MateriaId = ad.MateriaId
+        INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ad.AnioLectivoId
+        LEFT JOIN dbo.Periodo p ON p.PeriodoId = ad.PeriodoId
+        INNER JOIN dbo.Usuario u ON u.UsuarioId = ad.UsuarioId
+        WHERE ad.Activo = 1
+          AND ad.MateriaId IS NOT NULL
+          AND ad.InstitucionId = @institucionId
+          AND (@grupoId IS NULL OR ad.GrupoId = @grupoId)
+          AND (@profesorId IS NULL OR ad.UsuarioId = @profesorId)
+      )
+      SELECT
+        InstitucionId,
+        InstitucionNombre,
+        GrupoId,
+        MateriaId,
+        AnioLectivoId,
+        PeriodoId,
+        GrupoNombre,
+        MateriaNombre,
+        AnioNombre,
+        PeriodoNombre,
+        ProfesorNombre,
+        ProfesorPrimerApellido,
+        ProfesorSegundoApellido
+      FROM Asignaciones
+      WHERE rn = 1
+      ORDER BY
+        InstitucionNombre,
+        TRY_CONVERT(int, LEFT(GrupoNombre, CHARINDEX('-', GrupoNombre + '-') - 1)),
+        TRY_CONVERT(int, SUBSTRING(GrupoNombre, CHARINDEX('-', GrupoNombre + '-') + 1, 20)),
+        GrupoNombre,
+        MateriaNombre,
+        AnioNombre,
+        PeriodoNombre
+    `);
+
+    return ok(res, result.recordset);
+
+  } catch (error) {
+
+    console.error("Error cargando secciones de mantenimiento super admin:", error);
+
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar las secciones de mantenimiento" });
+
+  }
+
+});
+
+
+
+router.get("/super-admin/secciones-mantenimiento/filtros", async (req, res) => {
+
+  try {
+
+    if (!assertCanAccess(req, res)) return;
+
+    if (!isSuperAdmin(req)) return forbidden(res, "Solo SUPER_ADMIN puede acceder a esta opcion");
+
+    const pool = await getPool();
+    const institucionId = toOptionalNumber(req.query.institucionId);
+    const grado = String(req.query.grado || "").trim();
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("grado", sql.NVarChar(20), grado || null)
+      .query(`
+        CREATE TABLE #Base (
+          InstitucionId int NOT NULL,
+          InstitucionNombre nvarchar(250) NOT NULL,
+          GrupoId int NOT NULL,
+          GrupoNombre nvarchar(120) NOT NULL,
+          Grado nvarchar(20) NULL,
+          ProfesorId int NOT NULL,
+          ProfesorNombre nvarchar(250) NOT NULL
+        );
+
+        INSERT INTO #Base (
+          InstitucionId,
+          InstitucionNombre,
+          GrupoId,
+          GrupoNombre,
+          Grado,
+          ProfesorId,
+          ProfesorNombre
+        )
+        SELECT DISTINCT
+          ad.InstitucionId,
+          i.Nombre AS InstitucionNombre,
+          ad.GrupoId,
+          g.Nombre AS GrupoNombre,
+          LEFT(g.Nombre, CHARINDEX('-', g.Nombre + '-') - 1) AS Grado,
+          ad.UsuarioId AS ProfesorId,
+          LTRIM(RTRIM(CONCAT(ISNULL(u.Nombre, N''), N' ', ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N'')))) AS ProfesorNombre
+        FROM dbo.AsignacionDocente ad
+        INNER JOIN dbo.Institucion i ON i.InstitucionId = ad.InstitucionId
+        INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
+        INNER JOIN dbo.Usuario u ON u.UsuarioId = ad.UsuarioId
+        WHERE ad.Activo = 1
+          AND ad.MateriaId IS NOT NULL;
+
+        SELECT DISTINCT InstitucionId, InstitucionNombre
+        FROM #Base
+        ORDER BY InstitucionNombre;
+
+        SELECT Grado
+        FROM (
+          SELECT DISTINCT Grado
+          FROM #Base
+          WHERE @institucionId IS NOT NULL
+            AND InstitucionId = @institucionId
+        ) AS Grados
+        ORDER BY TRY_CONVERT(int, Grado), Grado;
+
+        SELECT GrupoId, GrupoNombre
+        FROM (
+          SELECT DISTINCT GrupoId, GrupoNombre
+          FROM #Base
+          WHERE @institucionId IS NOT NULL
+            AND InstitucionId = @institucionId
+            AND (@grado IS NULL OR Grado = @grado)
+        ) AS Secciones
+        ORDER BY
+          TRY_CONVERT(int, LEFT(GrupoNombre, CHARINDEX('-', GrupoNombre + '-') - 1)),
+          TRY_CONVERT(int, SUBSTRING(GrupoNombre, CHARINDEX('-', GrupoNombre + '-') + 1, 20)),
+          GrupoNombre;
+
+        SELECT DISTINCT ProfesorId, ProfesorNombre
+        FROM #Base
+        WHERE @institucionId IS NOT NULL
+          AND InstitucionId = @institucionId
+        ORDER BY ProfesorNombre;
+
+        DROP TABLE #Base;
+      `);
+
+    return ok(res, {
+      instituciones: result.recordsets[0] || [],
+      grados: result.recordsets[1] || [],
+      secciones: result.recordsets[2] || [],
+      profesores: result.recordsets[3] || []
+    });
+
+  } catch (error) {
+
+    console.error("Error cargando filtros de mantenimiento super admin:", error);
+
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar los filtros de mantenimiento" });
+
+  }
+
+});
+
+
+
 router.get("/estructuras/:id", async (req, res) => {
 
   try {
@@ -5838,6 +6036,8 @@ router.delete("/estructuras/:id/calificaciones", async (req, res) => {
 
     const estructuraGrupoId = toRequiredNumber(req.params.id, "estructuraGrupoId", res);
     if (estructuraGrupoId === null) return;
+    const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
+    if (!institucionSeleccionadaId) return badRequest(res, "Debes indicar el colegio seleccionado");
 
     const estructuraResult = await pool.request()
       .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
@@ -5850,6 +6050,9 @@ router.delete("/estructuras/:id/calificaciones", async (req, res) => {
 
     const estructura = estructuraResult.recordset[0] || null;
     if (!estructura) return badRequest(res, "No se encontró la estructura indicada");
+    if (Number(estructura.InstitucionId || 0) !== institucionSeleccionadaId) {
+      return forbidden(res, "La estructura no pertenece al colegio seleccionado");
+    }
 
     await ensureComponenteAjusteManualTables(pool);
     await transaction.begin();
@@ -5927,8 +6130,27 @@ router.delete("/estructuras/:id/plantilla-asignada", async (req, res) => {
 
     const estructuraGrupoId = toRequiredNumber(req.params.id, "estructuraGrupoId", res);
     if (estructuraGrupoId === null) return;
+    const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
+    if (!institucionSeleccionadaId) return badRequest(res, "Debes indicar el colegio seleccionado");
 
     const pool = await getPool();
+    const estructuraResult = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .query(`
+        SELECT TOP 1 EstructuraGrupoId, InstitucionId
+        FROM dbo.Eval360_EstructuraGrupo
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND Activo = 1;
+      `);
+
+    const estructura = estructuraResult.recordset[0] || null;
+    if (!estructura) {
+      return badRequest(res, "No se encontró la estructura indicada");
+    }
+    if (Number(estructura.InstitucionId || 0) !== institucionSeleccionadaId) {
+      return forbidden(res, "La estructura no pertenece al colegio seleccionado");
+    }
+
     const result = await pool.request()
       .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
       .query(`

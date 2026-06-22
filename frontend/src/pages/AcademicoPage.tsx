@@ -683,6 +683,7 @@ function diaSemanaLabel(value?: number | null) {
 type TabKey =
   | "anios"
   | "periodos"
+  | "consecutivos"
   | "grupos"
   | "matriculas"
   | "tiposEstudiante"
@@ -904,6 +905,12 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     cuerpoTemplate: ""
   });
   const [boletaConductaConsecutivo, setBoletaConductaConsecutivo] = useState("1");
+  const [consecutivoTipo, setConsecutivoTipo] = useState<"BOLETA" | "CERTIFICACION">("BOLETA");
+  const [consecutivosConfig, setConsecutivosConfig] = useState({
+    boletas: { prefijo: "", siguienteNumero: "1", anioLectivo: "", ejemploCodigo: "" },
+    certificaciones: { prefijo: "", siguienteNumero: "1", anioLectivo: "", ejemploCodigo: "" }
+  });
+  const [loadingConsecutivos, setLoadingConsecutivos] = useState(false);
   const [openSections, setOpenSections] = useState<Record<FormSectionKey, boolean>>(initialOpenSections);
 
   function openSection(section: FormSectionKey) {
@@ -1108,6 +1115,30 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     setBoletaConductaConsecutivo(String(data?.siguienteNumero || 1));
   }
 
+  async function loadConsecutivosConfig() {
+    setLoadingConsecutivos(true);
+    try {
+      const response = await api.get("/academico/consecutivos-config");
+      const data = response.data?.data || {};
+      setConsecutivosConfig({
+        boletas: {
+          prefijo: String(data?.boletas?.prefijo || ""),
+          siguienteNumero: String(data?.boletas?.siguienteNumero || 1),
+          anioLectivo: String(data?.boletas?.anioLectivo || ""),
+          ejemploCodigo: String(data?.boletas?.ejemploCodigo || "")
+        },
+        certificaciones: {
+          prefijo: String(data?.certificaciones?.prefijo || ""),
+          siguienteNumero: String(data?.certificaciones?.siguienteNumero || 1),
+          anioLectivo: String(data?.certificaciones?.anioLectivo || ""),
+          ejemploCodigo: String(data?.certificaciones?.ejemploCodigo || "")
+        }
+      });
+    } finally {
+      setLoadingConsecutivos(false);
+    }
+  }
+
   function handleToggleDiaLectivo(diaSemana: number) {
     setDiasLectivos((prev) =>
       prev.map((item) =>
@@ -1181,6 +1212,9 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           break;
         case "periodos":
           await loadPeriodos(periodoSearch, incluirPeriodosInactivos);
+          break;
+        case "consecutivos":
+          await loadConsecutivosConfig();
           break;
         case "grupos":
           await loadGrupos(grupoSearch, incluirGruposInactivos);
@@ -3406,6 +3440,7 @@ function resetMatriculaForm() {
     { key: "periodos", label: "Periodos", tone: "#2563eb", help: "Trimestres o periodos" },
     { key: "diasLectivos", label: "Días Lectivos", tone: "#2563eb", help: "Días hábiles de clase" },
     { key: "feriados", label: "Feriados", tone: "#2563eb", help: "Excepciones del calendario" },
+    { key: "consecutivos", label: "Consecutivos", tone: "#2563eb", help: "Boletas y certificaciones" },
     { key: "grupos", label: "Gestión de grupos", tone: "#0d9488", help: "Secciones del centro educativo" },
     { key: "tiposEstudiante", label: "Tipo de estudiante", tone: "#0d9488", help: "Clasificación estudiantil" },
     { key: "tiposAdecuacion", label: "Tipo Adecuación", tone: "#0d9488", help: "Clasificación de adecuaciones" },
@@ -3441,6 +3476,28 @@ function resetMatriculaForm() {
       border: isActive ? `1px solid ${item.tone}` : `1px solid ${item.tone}aa`,
       transition: "all 0.2s ease"
     };
+  }
+
+  async function handleConsecutivosSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingConsecutivos(true);
+    clearMessages();
+    try {
+      const current = consecutivoTipo === "BOLETA" ? consecutivosConfig.boletas : consecutivosConfig.certificaciones;
+      const payload = {
+        tipo: consecutivoTipo,
+        prefijo: current.prefijo,
+        siguienteNumero: Number(current.siguienteNumero || 0),
+        anioLectivo: current.anioLectivo
+      };
+      await api.put("/academico/consecutivos-config", payload);
+      setMessage("Consecutivo actualizado correctamente");
+      await loadConsecutivosConfig();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la configuración de consecutivos");
+    } finally {
+      setLoadingConsecutivos(false);
+    }
   }
 
   return (
@@ -3495,6 +3552,111 @@ function resetMatriculaForm() {
 
 
         {tab === "habilidadesPlaneamiento" && <HabilidadesPlaneamientoAcademicoPage />}
+
+        {tab === "consecutivos" && (
+          <div className="stack">
+            <div className="card">
+              <h3>Consecutivos</h3>
+              <p style={{ marginTop: 0 }}>
+                Configurá cómo se formarán los códigos de boletas de conducta y certificaciones usando el dato del colegio, el número inicial y el año lectivo vigente.
+              </p>
+              <form onSubmit={handleConsecutivosSubmit} className="form">
+                <label>
+                  Tipo
+                  <select value={consecutivoTipo} onChange={(e) => setConsecutivoTipo(e.target.value as "BOLETA" | "CERTIFICACION")}>
+                    <option value="BOLETA">Boleta</option>
+                    <option value="CERTIFICACION">Certificación</option>
+                  </select>
+                </label>
+                <label>
+                  Dato del colegio
+                  <input
+                    value={consecutivoTipo === "BOLETA" ? consecutivosConfig.boletas.prefijo : consecutivosConfig.certificaciones.prefijo}
+                    onChange={(e) => setConsecutivosConfig((prev) => ({
+                      ...prev,
+                      [consecutivoTipo === "BOLETA" ? "boletas" : "certificaciones"]: {
+                        ...(consecutivoTipo === "BOLETA" ? prev.boletas : prev.certificaciones),
+                        prefijo: e.target.value
+                      }
+                    }))}
+                    placeholder="Ejemplo: DREC-SCE06-CTPAS"
+                  />
+                </label>
+                <label>
+                  Número inicial
+                  <input
+                    type="number"
+                    min="1"
+                    value={consecutivoTipo === "BOLETA" ? consecutivosConfig.boletas.siguienteNumero : consecutivosConfig.certificaciones.siguienteNumero}
+                    onChange={(e) => setConsecutivosConfig((prev) => ({
+                      ...prev,
+                      [consecutivoTipo === "BOLETA" ? "boletas" : "certificaciones"]: {
+                        ...(consecutivoTipo === "BOLETA" ? prev.boletas : prev.certificaciones),
+                        siguienteNumero: e.target.value
+                      }
+                    }))}
+                  />
+                </label>
+                <label>
+                  Año lectivo vigente
+                  <input
+                    value={consecutivoTipo === "BOLETA" ? consecutivosConfig.boletas.anioLectivo : consecutivosConfig.certificaciones.anioLectivo}
+                    onChange={(e) => setConsecutivosConfig((prev) => ({
+                      ...prev,
+                      [consecutivoTipo === "BOLETA" ? "boletas" : "certificaciones"]: {
+                        ...(consecutivoTipo === "BOLETA" ? prev.boletas : prev.certificaciones),
+                        anioLectivo: e.target.value
+                      }
+                    }))}
+                    placeholder="2026"
+                  />
+                </label>
+                <div style={{ opacity: 0.85 }}>
+                  <strong>Ejemplo actual:</strong>{" "}
+                  {consecutivoTipo === "BOLETA" ? consecutivosConfig.boletas.ejemploCodigo : consecutivosConfig.certificaciones.ejemploCodigo || "Sin definir"}
+                </div>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button type="submit" className="primary-btn" disabled={loadingConsecutivos}>
+                    {loadingConsecutivos ? "Guardando..." : "Guardar consecutivo"}
+                  </button>
+                  <button type="button" className="ghost-btn" onClick={() => void loadConsecutivosConfig()} disabled={loadingConsecutivos}>
+                    Recargar
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tipo</th>
+                    <th>Dato del colegio</th>
+                    <th>Número inicial</th>
+                    <th>Año lectivo</th>
+                    <th>Ejemplo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Boleta</td>
+                    <td>{consecutivosConfig.boletas.prefijo || "-"}</td>
+                    <td>{consecutivosConfig.boletas.siguienteNumero || "-"}</td>
+                    <td>{consecutivosConfig.boletas.anioLectivo || "-"}</td>
+                    <td>{consecutivosConfig.boletas.ejemploCodigo || "-"}</td>
+                  </tr>
+                  <tr>
+                    <td>Certificación</td>
+                    <td>{consecutivosConfig.certificaciones.prefijo || "-"}</td>
+                    <td>{consecutivosConfig.certificaciones.siguienteNumero || "-"}</td>
+                    <td>{consecutivosConfig.certificaciones.anioLectivo || "-"}</td>
+                    <td>{consecutivosConfig.certificaciones.ejemploCodigo || "-"}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {tab === "configuracionCorreo" && (
           <div className={isSectionOpen("configuracionCorreo") ? "two-col" : "stack"}>
@@ -3748,22 +3910,13 @@ function resetMatriculaForm() {
               </table>
             </div>
             <div className="card">
-              <h3>Boleta de conducta: consecutivo</h3>
-              <p style={{ marginTop: 0 }}>Definí el número desde el cual iniciará el consecutivo de la boleta de reporte de conducta.</p>
-              <form onSubmit={handleBoletaConductaConfigSubmit} style={{ display: "flex", gap: "10px", alignItems: "end", flexWrap: "wrap" }}>
-                <label style={{ minWidth: "220px" }}>
-                  Siguiente número
-                  <input
-                    type="number"
-                    min="1"
-                    value={boletaConductaConsecutivo}
-                    onChange={(e) => setBoletaConductaConsecutivo(e.target.value)}
-                  />
-                </label>
-                <button type="submit" className="primary-btn" disabled={loadingConfigCorreo}>
-                  {loadingConfigCorreo ? "Guardando..." : "Guardar consecutivo"}
-                </button>
-              </form>
+              <h3>Consecutivos</h3>
+              <p style={{ marginTop: 0 }}>
+                La configuración de boletas y certificaciones ahora se administra desde la pestaña <strong>Consecutivos</strong>.
+              </p>
+              <button type="button" className="primary-btn" onClick={() => setTab("consecutivos")}>
+                Ir a Consecutivos
+              </button>
             </div>
             <div className="card">
               <h3>Plantillas de configuración de correo</h3>

@@ -74,6 +74,19 @@ type SubflowContext = {
   exampleQuestions: string[];
 };
 
+type AssistantFaq = {
+  faqKey: string;
+  moduleKey: string;
+  routePrefix: string;
+  title: string;
+  summary: string;
+  answer: string;
+  kind: string;
+  allowedRoles?: string[];
+  questionPatterns: string[];
+  steps: string[];
+};
+
 type KnowledgePayload = {
   modules: ModuleGuide[];
   details: DetailGuide[];
@@ -82,6 +95,7 @@ type KnowledgePayload = {
   screenContexts: ScreenContext[];
   formGuides: FormGuide[];
   subflowContexts: SubflowContext[];
+  faqs: AssistantFaq[];
 };
 
 const EMPTY_FORM = {
@@ -150,6 +164,19 @@ const EMPTY_SUBFLOW_FORM = {
   examplesText: ""
 };
 
+const EMPTY_FAQ_FORM = {
+  faqKey: "",
+  moduleKey: "",
+  routePrefix: "",
+  title: "",
+  summary: "",
+  answer: "",
+  kind: "FAQ",
+  allowedRolesText: "",
+  questionPatternsText: "",
+  stepsText: ""
+};
+
 const TABS = [
   { key: "indicaciones", label: "Indicaciones" },
   { key: "modulos", label: "Modulos" },
@@ -157,7 +184,8 @@ const TABS = [
   { key: "conversacion", label: "Conversacion" },
   { key: "pantallas", label: "Contextos" },
   { key: "formularios", label: "Formularios" },
-  { key: "subflujos", label: "Subflujos" }
+  { key: "subflujos", label: "Subflujos" },
+  { key: "faqs", label: "FAQ y diagnostico" }
 ] as const;
 
 const cardBorder = "1px solid #93c5fd";
@@ -206,7 +234,8 @@ export default function AssistantAdminPage() {
     exampleQuestions: [],
     screenContexts: [],
     formGuides: [],
-    subflowContexts: []
+    subflowContexts: [],
+    faqs: []
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -220,6 +249,7 @@ export default function AssistantAdminPage() {
   const [screenForm, setScreenForm] = useState(EMPTY_SCREEN_FORM);
   const [formGuideForm, setFormGuideForm] = useState(EMPTY_FORMGUIDE_FORM);
   const [subflowForm, setSubflowForm] = useState(EMPTY_SUBFLOW_FORM);
+  const [faqForm, setFaqForm] = useState(EMPTY_FAQ_FORM);
   const [savingBase, setSavingBase] = useState(false);
 
   const sortedItems = useMemo(
@@ -235,8 +265,9 @@ export default function AssistantAdminPage() {
     if (hasDraftValue(screenForm.routePrefix)) return "pantallas";
     if (hasDraftValue(formGuideForm.formKey)) return "formularios";
     if (hasDraftValue(subflowForm.subflowKey)) return "subflujos";
+    if (hasDraftValue(faqForm.faqKey)) return "faqs";
     return null;
-  }, [form, moduleForm, detailForm, conversationForm, screenForm, formGuideForm, subflowForm]);
+  }, [form, moduleForm, detailForm, conversationForm, screenForm, formGuideForm, subflowForm, faqForm]);
 
   async function loadInstructions() {
     const response = await api.get("/assistant/admin/instructions");
@@ -264,7 +295,8 @@ export default function AssistantAdminPage() {
       exampleQuestions: Array.isArray(data?.exampleQuestions) ? data.exampleQuestions : [],
       screenContexts: Array.isArray(data?.screenContexts) ? data.screenContexts : [],
       formGuides: Array.isArray(data?.formGuides) ? data.formGuides : [],
-      subflowContexts: Array.isArray(data?.subflowContexts) ? data.subflowContexts : []
+      subflowContexts: Array.isArray(data?.subflowContexts) ? data.subflowContexts : [],
+      faqs: Array.isArray(data?.faqs) ? data.faqs : []
     } satisfies KnowledgePayload;
   }
 
@@ -312,6 +344,10 @@ export default function AssistantAdminPage() {
 
   function resetSubflowForm() {
     setSubflowForm(EMPTY_SUBFLOW_FORM);
+  }
+
+  function resetFaqForm() {
+    setFaqForm(EMPTY_FAQ_FORM);
   }
 
   function prepareOverride(category: string, title: string, instruction: string, order = 50) {
@@ -435,6 +471,25 @@ export default function AssistantAdminPage() {
       examplesText: item.exampleQuestions.join("\n")
     });
     setActiveTab("subflujos");
+    setMessage("");
+    setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function startEditFaq(item: AssistantFaq) {
+    setFaqForm({
+      faqKey: item.faqKey,
+      moduleKey: item.moduleKey,
+      routePrefix: item.routePrefix,
+      title: item.title,
+      summary: item.summary,
+      answer: item.answer,
+      kind: item.kind || "FAQ",
+      allowedRolesText: (item.allowedRoles || []).join("\n"),
+      questionPatternsText: item.questionPatterns.join("\n"),
+      stepsText: item.steps.join("\n")
+    });
+    setActiveTab("faqs");
     setMessage("");
     setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -636,6 +691,47 @@ export default function AssistantAdminPage() {
       setError(err?.response?.data?.message || "No se pudo actualizar el subflujo base.");
     } finally {
       setSavingBase(false);
+    }
+  }
+
+  async function handleSaveFaq() {
+    setSavingBase(true);
+    setMessage("");
+    setError("");
+    try {
+      await api.put("/assistant/admin/faqs", {
+        faqKey: faqForm.faqKey,
+        moduleKey: faqForm.moduleKey,
+        routePrefix: faqForm.routePrefix,
+        title: faqForm.title,
+        summary: faqForm.summary,
+        answer: faqForm.answer,
+        kind: faqForm.kind,
+        allowedRoles: faqForm.allowedRolesText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
+        questionPatterns: faqForm.questionPatternsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
+        steps: faqForm.stepsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+      });
+      setMessage("FAQ o diagnostico actualizado correctamente.");
+      resetFaqForm();
+      setKnowledge(await loadKnowledge());
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "No se pudo actualizar la FAQ de Margarita.");
+    } finally {
+      setSavingBase(false);
+    }
+  }
+
+  async function handleRemoveFaq(item: AssistantFaq) {
+    if (!window.confirm(`Vas a quitar la FAQ "${item.title}". Deseas continuar?`)) return;
+    setError("");
+    setMessage("");
+    try {
+      await api.delete(`/assistant/admin/faqs/${item.faqKey}`);
+      setMessage("FAQ quitada correctamente.");
+      if (faqForm.faqKey === item.faqKey) resetFaqForm();
+      setKnowledge(await loadKnowledge());
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "No se pudo quitar la FAQ.");
     }
   }
 
@@ -1084,6 +1180,51 @@ export default function AssistantAdminPage() {
     );
   }
 
+  function renderFaqsTab() {
+    return (
+      <div style={{ display: "grid", gap: "12px" }}>
+        {renderInfoBanner('Aqui definis respuestas directas y chequeos de diagnostico para que Margarita resuelva dudas frecuentes como "no me aparece", "no me deja" o "como hago".')}
+        <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
+          <strong style={{ color: "#0f172a", fontSize: "18px" }}>{faqForm.faqKey ? "Editar FAQ o diagnostico" : "Nueva FAQ o diagnostico"}</strong>
+          <input value={faqForm.faqKey} onChange={(e) => setFaqForm((prev) => ({ ...prev, faqKey: e.target.value }))} placeholder="Clave unica" style={assistantFieldStyle} />
+          <input value={faqForm.moduleKey} onChange={(e) => setFaqForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Modulo" style={assistantFieldStyle} />
+          <input value={faqForm.routePrefix} onChange={(e) => setFaqForm((prev) => ({ ...prev, routePrefix: e.target.value }))} placeholder="Ruta" style={assistantFieldStyle} />
+          <input value={faqForm.title} onChange={(e) => setFaqForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Titulo" style={assistantFieldStyle} />
+          <select value={faqForm.kind} onChange={(e) => setFaqForm((prev) => ({ ...prev, kind: e.target.value }))} style={assistantFieldStyle}>
+            <option value="FAQ">FAQ</option>
+            <option value="DIAGNOSTICO">Diagnostico</option>
+          </select>
+          <textarea rows={3} value={faqForm.summary} onChange={(e) => setFaqForm((prev) => ({ ...prev, summary: e.target.value }))} placeholder="Resumen corto" style={assistantTextareaStyle} />
+          <textarea rows={5} value={faqForm.answer} onChange={(e) => setFaqForm((prev) => ({ ...prev, answer: e.target.value }))} placeholder="Respuesta principal" style={assistantTextareaStyle} />
+          <textarea rows={4} value={faqForm.allowedRolesText} onChange={(e) => setFaqForm((prev) => ({ ...prev, allowedRolesText: e.target.value }))} placeholder="Roles permitidos, uno por linea. Vacio = todos" style={assistantTextareaStyle} />
+          <textarea rows={5} value={faqForm.questionPatternsText} onChange={(e) => setFaqForm((prev) => ({ ...prev, questionPatternsText: e.target.value }))} placeholder="Patrones o preguntas gatillo, uno por linea" style={assistantTextareaStyle} />
+          <textarea rows={5} value={faqForm.stepsText} onChange={(e) => setFaqForm((prev) => ({ ...prev, stepsText: e.target.value }))} placeholder="Pasos o chequeos sugeridos, uno por linea" style={assistantTextareaStyle} />
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+            <button className="primary-btn" type="button" onClick={() => void handleSaveFaq()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar FAQ"}</button>
+            <button type="button" onClick={resetFaqForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 700 }}>Cancelar</button>
+          </div>
+        </div>
+        {knowledge.faqs.map((item) =>
+          renderKnowledgeCard(
+            `${item.title} (${item.kind})`,
+            `${item.summary || "Sin resumen"} Ruta: ${item.routePrefix} / Modulo: ${item.moduleKey}`,
+            [
+              `Roles: ${(item.allowedRoles || []).join(", ") || "Todos"}`,
+              `Patrones: ${item.questionPatterns.join(" | ") || "Sin patrones"}`,
+              `Respuesta: ${item.answer}`,
+              ...item.steps.map((step, index) => `Paso ${index + 1}: ${step}`)
+            ],
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => startEditFaq(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
+              <button type="button" onClick={() => void handleRemoveFaq(item)} style={{ ...actionButtonStyle, background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5" }}>Quitar</button>
+              <button type="button" onClick={() => prepareOverride("FAQ", `Refuerzo FAQ: ${item.title}`, `Cuando la persona pregunte algo cercano a ${item.questionPatterns.join(" | ")}, reforza esta respuesta: ${item.answer}`, 70)} style={actionButtonStyle}>Crear indicacion sobre esta FAQ</button>
+            </div>
+          )
+        )}
+      </div>
+    );
+  }
+
   function renderActiveTab() {
     switch (activeTab) {
       case "indicaciones":
@@ -1100,6 +1241,8 @@ export default function AssistantAdminPage() {
         return renderFormsTab();
       case "subflujos":
         return renderSubflowsTab();
+      case "faqs":
+        return renderFaqsTab();
       default:
         return null;
     }

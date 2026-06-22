@@ -627,6 +627,119 @@ async function applyTemplateHeaderFooter(generatedBuffer: Buffer, templateBuffer
   }
 }
 
+router.get("/mis-grupos/filtros-admin", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    if (!isSuperAdmin(req) && !isInstitutionAdmin(req)) {
+      return forbidden(res, "Solo el perfil administrativo puede consultar estos filtros");
+    }
+
+    const pool = await getPool();
+    const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
+
+    let institucionFiltroId = institucionSeleccionadaId;
+    if (!isSuperAdmin(req)) {
+      const institucionId = getInstitutionId(req, res);
+      if (institucionId === null) return;
+      institucionFiltroId = institucionId;
+      if (institucionSeleccionadaId && institucionSeleccionadaId !== institucionId) {
+        return forbidden(res, "No podés consultar filtros de otro colegio");
+      }
+    }
+
+    const request = pool.request()
+      .input("institucionId", sql.Int, institucionFiltroId);
+
+    const filtroInstitucion = institucionFiltroId ? "AND ad.InstitucionId = @institucionId" : "";
+
+    const result = await request.query(`
+      CREATE TABLE #Base (
+        InstitucionId int NOT NULL,
+        InstitucionNombre nvarchar(250) NOT NULL,
+        GrupoId int NOT NULL,
+        GrupoNombre nvarchar(120) NOT NULL,
+        Grado nvarchar(20) NULL,
+        ProfesorId int NOT NULL,
+        ProfesorNombre nvarchar(250) NOT NULL
+      );
+
+      INSERT INTO #Base (
+        InstitucionId,
+        InstitucionNombre,
+        GrupoId,
+        GrupoNombre,
+        Grado,
+        ProfesorId,
+        ProfesorNombre
+      )
+      SELECT DISTINCT
+        ad.InstitucionId,
+        i.Nombre AS InstitucionNombre,
+        ad.GrupoId,
+        g.Nombre AS GrupoNombre,
+        LEFT(g.Nombre, CHARINDEX('-', g.Nombre + '-') - 1) AS Grado,
+        ad.UsuarioId AS ProfesorId,
+        LTRIM(RTRIM(CONCAT(ISNULL(u.Nombre, N''), N' ', ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N'')))) AS ProfesorNombre
+      FROM dbo.AsignacionDocente ad
+      INNER JOIN dbo.Institucion i ON i.InstitucionId = ad.InstitucionId
+      INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
+      INNER JOIN dbo.Usuario u ON u.UsuarioId = ad.UsuarioId
+      WHERE ad.Activo = 1
+        AND ad.MateriaId IS NOT NULL
+        ${filtroInstitucion};
+
+      SELECT InstitucionId, InstitucionNombre
+      FROM (
+        SELECT DISTINCT InstitucionId, InstitucionNombre
+        FROM #Base
+      ) AS Instituciones
+      ORDER BY InstitucionNombre;
+
+      SELECT Grado
+      FROM (
+        SELECT DISTINCT Grado
+        FROM #Base
+        WHERE @institucionId IS NOT NULL
+          AND InstitucionId = @institucionId
+      ) AS Grados
+      ORDER BY TRY_CONVERT(int, Grado), Grado;
+
+      SELECT GrupoId, GrupoNombre
+      FROM (
+        SELECT DISTINCT GrupoId, GrupoNombre
+        FROM #Base
+        WHERE @institucionId IS NOT NULL
+          AND InstitucionId = @institucionId
+      ) AS Secciones
+      ORDER BY
+        TRY_CONVERT(int, LEFT(GrupoNombre, CHARINDEX('-', GrupoNombre + '-') - 1)),
+        TRY_CONVERT(int, SUBSTRING(GrupoNombre, CHARINDEX('-', GrupoNombre + '-') + 1, 20)),
+        GrupoNombre;
+
+      SELECT ProfesorId, ProfesorNombre
+      FROM (
+        SELECT DISTINCT ProfesorId, ProfesorNombre
+        FROM #Base
+        WHERE @institucionId IS NOT NULL
+          AND InstitucionId = @institucionId
+      ) AS Profesores
+      ORDER BY ProfesorNombre;
+
+      DROP TABLE #Base;
+    `);
+
+    return ok(res, {
+      instituciones: result.recordsets[0] || [],
+      grados: result.recordsets[1] || [],
+      secciones: result.recordsets[2] || [],
+      profesores: result.recordsets[3] || []
+    });
+  } catch (error) {
+    console.error("Error cargando filtros administrativos de gestion-profe:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar los filtros administrativos" });
+  }
+});
+
 router.get("/mis-grupos", async (req, res) => {
   try {
     if (!assertCanAccessProfessorModule(req, res)) return;
@@ -639,6 +752,9 @@ router.get("/mis-grupos", async (req, res) => {
     const periodoId = toOptionalNumber(req.query.periodoId);
     const materiaId = toOptionalNumber(req.query.materiaId);
     const grupoId = toOptionalNumber(req.query.grupoId);
+    const profesorId = toOptionalNumber(req.query.profesorId);
+    const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
+    const grado = String(req.query.grado || "").trim();
     const cacheKey = [
       "gestion.mis-grupos",
       `u:${userId || 0}`,
@@ -648,6 +764,9 @@ router.get("/mis-grupos", async (req, res) => {
       `p:${periodoId ?? ""}`,
       `m:${materiaId ?? ""}`,
       `g:${grupoId ?? ""}`,
+      `profsel:${profesorId ?? ""}`,
+      `instsel:${institucionSeleccionadaId ?? ""}`,
+      `grado:${grado}`,
       `prof:${isProfesor(req) ? 1 : 0}`,
       `adm:${isInstitutionAdmin(req) ? 1 : 0}`,
       `sa:${isSuperAdmin(req) ? 1 : 0}`
@@ -668,18 +787,33 @@ router.get("/mis-grupos", async (req, res) => {
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
       .input("materiaId", sql.Int, materiaId)
-      .input("grupoId", sql.Int, grupoId);
+      .input("grupoId", sql.Int, grupoId)
+      .input("profesorId", sql.Int, profesorId)
+      .input("grado", sql.NVarChar(20), grado || null);
 
     let filtroInstitucion = "";
+    let institucionFiltroId: number | null = null;
     if (!isSuperAdmin(req)) {
       const institucionId = getInstitutionId(req, res);
       if (institucionId === null) return;
+      institucionFiltroId = institucionId;
       request.input("institucionId", sql.Int, institucionId);
+      filtroInstitucion = "AND ad.InstitucionId = @institucionId";
+      if (institucionSeleccionadaId && institucionSeleccionadaId !== institucionId) {
+        return forbidden(res, "No podés consultar grupos de otro colegio");
+      }
+    } else if (institucionSeleccionadaId) {
+      institucionFiltroId = institucionSeleccionadaId;
+      request.input("institucionId", sql.Int, institucionSeleccionadaId);
       filtroInstitucion = "AND ad.InstitucionId = @institucionId";
     }
 
     const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
       ? "AND ad.UsuarioId = @usuarioId"
+      : (profesorId ? "AND ad.UsuarioId = @profesorId" : "");
+
+    const filtroGrado = grado
+      ? "AND LEFT(g.Nombre, CHARINDEX('-', g.Nombre + '-') - 1) = @grado"
       : "";
 
     const tMisGrupos = Date.now();
@@ -731,6 +865,7 @@ router.get("/mis-grupos", async (req, res) => {
           )
           ${filtroInstitucion}
           ${filtroProfesor}
+          ${filtroGrado}
       ),
       Matriculados AS (
         SELECT ma.GrupoId, ma.AnioLectivoId, COUNT(DISTINCT ma.MatriculaId) AS TotalEstudiantes

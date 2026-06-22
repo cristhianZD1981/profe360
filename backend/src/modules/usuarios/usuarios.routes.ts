@@ -63,6 +63,23 @@ function toNullableString(value: any) {
   return str ? str : null;
 }
 
+function normalizeSexo(value: any) {
+  const str = String(value || "").trim().toUpperCase();
+  if (!str) return null;
+  if (str === "MASCULINO" || str === "FEMENINO") return str;
+  return null;
+}
+
+async function ensureUsuarioSexoColumn(pool: Awaited<ReturnType<typeof getPool>>) {
+  await pool.request().query(`
+    IF COL_LENGTH('dbo.Usuario', 'Sexo') IS NULL
+    BEGIN
+      ALTER TABLE dbo.Usuario
+      ADD Sexo NVARCHAR(20) NULL;
+    END
+  `);
+}
+
 function escapeHtml(value: string) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -160,6 +177,7 @@ router.get("/", async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     const pool = await getPool();
+    await ensureUsuarioSexoColumn(pool);
 
 
     const esSuperAdmin = (req.auth?.roles || []).includes("SUPER_ADMIN");
@@ -185,6 +203,7 @@ router.get("/", async (req, res) => {
           u.SegundoApellido,
           u.Telefono,
           u.Cargo,
+          u.Sexo,
           u.Activo,
           COALESCE(STRING_AGG(r.Nombre, ', '), '') AS Roles
         FROM dbo.Usuario u
@@ -217,6 +236,7 @@ router.get("/", async (req, res) => {
           u.SegundoApellido,
           u.Telefono,
           u.Cargo,
+          u.Sexo,
           u.Activo
       )
       SELECT
@@ -283,6 +303,11 @@ router.get("/plantilla-excel", async (req, res) => {
         Descripcion: "Cargo del usuario. Ejemplo: Directora, Profesor, Auxiliar Administrativo"
       },
       {
+        Campo: "sexo",
+        Obligatorio: "No",
+        Descripcion: "Masculino o Femenino"
+      },
+      {
         Campo: "rol",
         Obligatorio: "Sí",
         Descripcion: esSuperAdmin
@@ -307,6 +332,7 @@ router.get("/plantilla-excel", async (req, res) => {
         segundoApellido: "Rojas",
         telefono: "88888888",
         cargo: "Profesor",
+        sexo: "Femenino",
         rol: "PROFESOR",
         institucionId: esSuperAdmin ? "1" : ""
       }
@@ -342,6 +368,7 @@ router.get("/plantilla-excel", async (req, res) => {
 router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
   try {
     const pool = await getPool();
+    await ensureUsuarioSexoColumn(pool);
 
     if (!req.file?.buffer) {
       return badRequest(res, "Debés adjuntar un archivo Excel");
@@ -384,6 +411,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
       const segundoApellido = toNullableString(row.segundoApellido);
       const telefono = toNullableString(row.telefono);
       const cargo = toNullableString(row.cargo);
+      const sexo = normalizeSexo(row.sexo);
       const roleName = String(row.rol || "").trim();
 
       const targetInstitucionId = esSuperAdmin
@@ -478,6 +506,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
             .input("segundoApellido", sql.NVarChar, segundoApellido)
             .input("telefono", sql.NVarChar, telefono)
             .input("cargo", sql.NVarChar, cargo)
+            .input("sexo", sql.NVarChar, sexo)
             .query(`
               INSERT INTO dbo.Usuario
               (
@@ -490,6 +519,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 SegundoApellido,
                 Telefono,
                 Cargo,
+                Sexo,
                 Activo,
                 DebeCambiarPassword
               )
@@ -498,7 +528,8 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 INSERTED.Correo,
                 INSERTED.NumeroCedula,
                 INSERTED.Nombre,
-                INSERTED.PrimerApellido
+                INSERTED.PrimerApellido,
+                INSERTED.Sexo
               VALUES
               (
                 @institucionId,
@@ -510,6 +541,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 @segundoApellido,
                 @telefono,
                 @cargo,
+                @sexo,
                 1,
                 1
               )
@@ -608,12 +640,14 @@ router.post("/", async (req, res) => {
       segundoApellido,
       telefono,
       cargo,
+      sexo,
       institucionId,
       roleNames = []
     } = req.body;
 
     const correoNormalizado = normalizeCorreo(correo);
     const numeroCedulaNormalizado = normalizeCedula(numeroCedula);
+    const sexoNormalizado = normalizeSexo(sexo);
 
     if (!correoNormalizado || !numeroCedulaNormalizado || !nombre) {
       return badRequest(res, "correo, numeroCedula y nombre son obligatorios");
@@ -639,6 +673,7 @@ router.post("/", async (req, res) => {
     }
 
     const pool = await getPool();
+    await ensureUsuarioSexoColumn(pool);
 
     const existeCorreo = await pool.request()
       .input("correo", sql.NVarChar, correoNormalizado)
@@ -686,6 +721,7 @@ router.post("/", async (req, res) => {
       .input("segundoApellido", sql.NVarChar, segundoApellido || null)
        .input("telefono", sql.NVarChar, telefono || null)
       .input("cargo", sql.NVarChar, cargo || null)
+      .input("sexo", sql.NVarChar, sexoNormalizado)
       .query(`
         INSERT INTO dbo.Usuario
         (
@@ -698,6 +734,7 @@ router.post("/", async (req, res) => {
           SegundoApellido,
           Telefono,
           Cargo,
+          Sexo,
           Activo,
           DebeCambiarPassword
         )
@@ -709,6 +746,7 @@ router.post("/", async (req, res) => {
           INSERTED.Nombre,
           INSERTED.PrimerApellido,
           INSERTED.Cargo,
+          INSERTED.Sexo,
           INSERTED.Activo
         VALUES
         (
@@ -721,6 +759,7 @@ router.post("/", async (req, res) => {
           @segundoApellido,
           @telefono,
           @cargo,
+          @sexo,
           1,
           1
         )
@@ -798,12 +837,14 @@ router.put("/:id", async (req, res) => {
       segundoApellido,
       telefono,
       cargo,
+      sexo,
       roleNames = [],
       institucionId
     } = req.body;
 
     const correoNormalizado = normalizeCorreo(correo);
     const numeroCedulaNormalizado = normalizeCedula(numeroCedula);
+    const sexoNormalizado = normalizeSexo(sexo);
 
     if (!id) {
       return badRequest(res, "Id inválido");
@@ -834,6 +875,7 @@ router.put("/:id", async (req, res) => {
     }
 
     const pool = await getPool();
+    await ensureUsuarioSexoColumn(pool);
 
     const existeCorreo = await pool.request()
       .input("correo", sql.NVarChar, correoNormalizado)
@@ -884,6 +926,7 @@ router.put("/:id", async (req, res) => {
       .input("segundoApellido", sql.NVarChar, segundoApellido || null)
        .input("telefono", sql.NVarChar, telefono || null)
       .input("cargo", sql.NVarChar, cargo || null)
+      .input("sexo", sql.NVarChar, sexoNormalizado)
       .query(`
         UPDATE dbo.Usuario
         SET
@@ -895,6 +938,7 @@ router.put("/:id", async (req, res) => {
           SegundoApellido = @segundoApellido,
           Telefono = @telefono,
           Cargo = @cargo,
+          Sexo = @sexo,
           UpdatedAt = SYSDATETIME()
         OUTPUT
           INSERTED.UsuarioId,
@@ -904,6 +948,7 @@ router.put("/:id", async (req, res) => {
           INSERTED.Nombre,
           INSERTED.PrimerApellido,
           INSERTED.Cargo,
+          INSERTED.Sexo,
           INSERTED.Activo
         WHERE UsuarioId = @id
           AND (@institucionFiltro IS NULL OR InstitucionId = @institucionFiltro)
