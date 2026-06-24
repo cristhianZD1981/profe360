@@ -902,8 +902,33 @@ router.get("/catalogos", async (req, res) => {
             Nombre,
             PrimerApellido,
             SegundoApellido,
+            matriculaActual.GrupoId AS GrupoActualId,
+            matriculaActual.GrupoNombre AS GrupoActualNombre,
+            matriculaActual.EspecialidadActualId AS EspecialidadActualId,
+            matriculaActual.EspecialidadActual AS EspecialidadActual,
             Activo
           FROM dbo.Estudiante
+          OUTER APPLY (
+            SELECT TOP 1
+              m.GrupoId,
+              g.Nombre AS GrupoNombre,
+              md.EspecialidadId AS EspecialidadActualId,
+              COALESCE(
+                NULLIF(LTRIM(RTRIM(esp.Descripcion)), ''),
+                NULLIF(LTRIM(RTRIM(md.Especialidad)), ''),
+                NULLIF(LTRIM(RTRIM(g.Especialidad)), '')
+              ) AS EspecialidadActual
+            FROM dbo.Matricula m
+            INNER JOIN dbo.Grupo g
+              ON g.GrupoId = m.GrupoId
+            LEFT JOIN dbo.MatriculaDetalle md
+              ON md.MatriculaId = m.MatriculaId
+            LEFT JOIN dbo.Especialidad esp
+              ON esp.EspecialidadId = md.EspecialidadId
+            WHERE m.EstudianteId = dbo.Estudiante.EstudianteId
+              AND m.Estado = N'Activa'
+            ORDER BY m.AnioLectivoId DESC, m.MatriculaId DESC
+          ) AS matriculaActual
           WHERE InstitucionId = @institucionId
             AND Activo = 1
           ORDER BY PrimerApellido, SegundoApellido, Nombre
@@ -4201,6 +4226,7 @@ type MatriculaImportPayload = {
   seccion: string;
   fechaMatricula?: string | null;
   tipoMatricula?: string | null;
+  especialidad?: string | null;
   observacion?: string | null;
   esRepitente: boolean;
   permiteExcepcionProgresion: boolean;
@@ -4401,8 +4427,9 @@ function parseMatriculaImportRowsFromFile(file?: Express.Multer.File): Matricula
       "grupo nombre",
       "nombre grupo"
     ])),
-    fechaMatricula: toNullableImportString(getImportValue(row, ["fecha matricula", "fecha"])),
+    fechaMatricula: toImportDateString(getImportValue(row, ["fecha matricula", "fecha"])) || null,
     tipoMatricula: toNullableImportString(getImportValue(row, ["tipo matricula", "tipo"])),
+    especialidad: toNullableImportString(getImportValue(row, ["especialidad"])),
     observacion: toNullableImportString(getImportValue(row, ["observacion", "observaciones"])),
     esRepitente: toImportBoolean(getImportValue(row, ["repitente", "es repitente"])),
     permiteExcepcionProgresion: toImportBoolean(getImportValue(row, [
@@ -4507,7 +4534,7 @@ async function upsertDetalleMatriculaImportada(params: {
     .input("tipoMatricula", sql.NVarChar, payload.tipoMatricula || "Importacion")
     .input("nivelAcademico", sql.TinyInt, Number(grupoInfo.NivelAcademico || 0) || null)
     .input("especialidadId", sql.Int, null)
-    .input("especialidad", sql.NVarChar, grupoInfo.Especialidad || null)
+    .input("especialidad", sql.NVarChar, payload.especialidad || grupoInfo.Especialidad || null)
     .input("seccionTexto", sql.NVarChar, grupoInfo.GrupoNombre || payload.seccion || null)
     .input("rutaTransporte", sql.NVarChar, null)
     .input("esRepitente", sql.Bit, !!payload.esRepitente)
@@ -5017,6 +5044,7 @@ router.get("/matriculas/plantilla-excel", async (_req, res) => {
       { Campo: "seccion", Obligatorio: "Si", Descripcion: "Nombre de la seccion/grupo activo en el anio lectivo seleccionado" },
       { Campo: "fecha matricula", Obligatorio: "No", Descripcion: "Fecha en formato AAAA-MM-DD. Si se deja vacia se usa la fecha actual" },
       { Campo: "tipo matricula", Obligatorio: "No", Descripcion: "Ejemplo: Regular" },
+      { Campo: "especialidad", Obligatorio: "No", Descripcion: "Descripcion de la especialidad que se desea dejar registrada en la matricula" },
       { Campo: "observacion", Obligatorio: "No", Descripcion: "Observacion general de la matricula" },
       { Campo: "repitente", Obligatorio: "No", Descripcion: "Indicar Si/No cuando aplica" },
       { Campo: "excepcion progresion", Obligatorio: "No", Descripcion: "Indicar Si/No si se autoriza excepcion de progresion" },
@@ -5028,6 +5056,7 @@ router.get("/matriculas/plantilla-excel", async (_req, res) => {
         seccion: "12-1",
         "fecha matricula": "",
         "tipo matricula": "Regular",
+        especialidad: "Contabilidad",
         observacion: "",
         repitente: "No",
         "excepcion progresion": "No",

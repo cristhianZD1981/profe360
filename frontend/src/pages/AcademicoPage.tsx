@@ -29,6 +29,10 @@ type EstudianteCatalogo = {
   Nombre: string;
   PrimerApellido: string | null;
   SegundoApellido: string | null;
+  GrupoActualId?: number | null;
+  GrupoActualNombre?: string | null;
+  EspecialidadActualId?: number | null;
+  EspecialidadActual?: string | null;
   Activo: boolean;
 };
 
@@ -656,6 +660,14 @@ function getStudentFullName(item: {
     .trim();
 }
 
+function getStudentCatalogLabel(item: EstudianteCatalogo) {
+  const nombreCompleto = getStudentFullName(item);
+  const especialidad = String(item.EspecialidadActual || "").trim();
+  return especialidad
+    ? `${item.Identificacion} - ${nombreCompleto} - ${especialidad}`
+    : `${item.Identificacion} - ${nombreCompleto}`;
+}
+
 function getTeacherFullName(item: {
   Nombre: string;
   PrimerApellido?: string | null;
@@ -841,6 +853,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [grupoSearch, setGrupoSearch] = useState("");
   const [matriculaSearch, setMatriculaSearch] = useState("");
   const [matriculaHasSearched, setMatriculaHasSearched] = useState(false);
+  const [matriculaStudentSearch, setMatriculaStudentSearch] = useState("");
   const [tipoEstudianteSearch, setTipoEstudianteSearch] = useState("");
   const [tipoAdecuacionSearch, setTipoAdecuacionSearch] = useState("");
   const [adecuacionSearch, setAdecuacionSearch] = useState("");
@@ -939,6 +952,27 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     () => especialidadesCatalogo.filter((e) => e.Activo),
     [especialidadesCatalogo]
   );
+
+  const estudiantesMatriculaFiltrados = useMemo(() => {
+    const query = String(matriculaStudentSearch || "").trim().toLowerCase();
+    if (!query) return estudiantes;
+
+    return estudiantes.filter((item) => {
+      const tokens = [
+        item.Identificacion,
+        item.Nombre,
+        item.PrimerApellido || "",
+        item.SegundoApellido || "",
+        getStudentFullName(item),
+        item.GrupoActualNombre || "",
+        item.EspecialidadActual || ""
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return tokens.includes(query);
+    });
+  }, [estudiantes, matriculaStudentSearch]);
 
   const materiasActivas = useMemo(
     () => materiasCatalogo.filter((m) => m.Activo),
@@ -1305,6 +1339,15 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     openMatriculaPrefilled(navigationState.matriculaPrefill);
   }, [location.key, location.state, anios.length]);
 
+  useEffect(() => {
+    if (!matriculaForm.estudianteId || matriculaStudentSearch.trim()) return;
+    const estudianteSeleccionado = estudiantes.find(
+      (item) => String(item.EstudianteId) === String(matriculaForm.estudianteId)
+    );
+    if (!estudianteSeleccionado) return;
+    setMatriculaStudentSearch(getStudentCatalogLabel(estudianteSeleccionado));
+  }, [estudiantes, matriculaForm.estudianteId, matriculaStudentSearch]);
+
   function clearMessages() {
     setMessage("");
     setErrorMessage("");
@@ -1332,12 +1375,14 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           ? String(aniosActivos[0].AnioLectivoId)
           : "";
 
+    const estudiantePrefillId =
+      prefill?.estudianteId !== undefined && prefill?.estudianteId !== null
+        ? String(prefill.estudianteId)
+        : "";
+
     setMatriculaForm({
       ...initialMatriculaForm,
-      estudianteId:
-        prefill?.estudianteId !== undefined && prefill?.estudianteId !== null
-          ? String(prefill.estudianteId)
-          : "",
+      estudianteId: estudiantePrefillId,
       grupoId:
         prefill?.grupoId !== undefined && prefill?.grupoId !== null
           ? String(prefill.grupoId)
@@ -1363,6 +1408,12 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
       correoEnvioBoleta: prefill?.correoEnvioBoleta || "",
       observacionesDetalle: prefill?.observacionesDetalle || ""
     });
+    const estudianteSeleccionado = estudiantes.find(
+      (item) => String(item.EstudianteId) === estudiantePrefillId
+    );
+    setMatriculaStudentSearch(
+      estudianteSeleccionado ? getStudentCatalogLabel(estudianteSeleccionado) : ""
+    );
 
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1387,6 +1438,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
 
 function resetMatriculaForm() {
   setMatriculaForm(initialMatriculaForm);
+  setMatriculaStudentSearch("");
   setEditingMatriculaId(null);
   setReactivableMatriculaId(null);
   closeSection("matriculas");
@@ -2713,6 +2765,14 @@ function resetMatriculaForm() {
       correoEnvioBoleta: item.CorreoEnvioBoleta || "",
       observacionesDetalle: item.ObservacionesDetalle || ""
     });
+    const estudianteSeleccionado = estudiantes.find(
+      (student) => Number(student.EstudianteId) === Number(item.EstudianteId)
+    );
+    setMatriculaStudentSearch(
+      estudianteSeleccionado
+        ? getStudentCatalogLabel(estudianteSeleccionado)
+        : `${item.Identificacion} - ${getStudentFullName(item)}`
+    );
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -4244,23 +4304,40 @@ function resetMatriculaForm() {
 <form className="form" onSubmit={handleMatriculaSubmit}>
   <label>
     Estudiante
+    <input
+      value={matriculaStudentSearch}
+      onChange={(e) => setMatriculaStudentSearch(e.target.value)}
+      placeholder="Buscar por cédula, nombre, sección o especialidad"
+      style={{ marginBottom: "8px" }}
+    />
     <select
       value={matriculaForm.estudianteId}
-      onChange={(e) =>
+      onChange={(e) => {
+        const estudianteId = e.target.value;
+        const estudianteSeleccionado = estudiantes.find(
+          (item) => String(item.EstudianteId) === String(estudianteId)
+        );
+
         setMatriculaForm((prev: any) => ({
           ...prev,
-          estudianteId: e.target.value
-        }))
-      }
+          estudianteId
+        }));
+        setMatriculaStudentSearch(
+          estudianteSeleccionado ? getStudentCatalogLabel(estudianteSeleccionado) : ""
+        );
+      }}
       required
     >
       <option value="">Seleccione</option>
-      {estudiantes.map((item) => (
+      {estudiantesMatriculaFiltrados.map((item) => (
         <option key={item.EstudianteId} value={item.EstudianteId}>
-          {item.Identificacion} - {getStudentFullName(item)}
+          {getStudentCatalogLabel(item)}
         </option>
       ))}
     </select>
+    <small style={{ opacity: 0.75 }}>
+      {estudiantesMatriculaFiltrados.length} estudiante(s) encontrado(s)
+    </small>
   </label>
 
   <label>
@@ -4761,6 +4838,7 @@ function resetMatriculaForm() {
                       <th>Estado</th>
                       <th>Tipo</th>
                       <th>Nivel</th>
+                      <th>Especialidad</th>
                       <th>Repitente</th>
                       <th>Excepción</th>
                       <th>Acciones</th>
@@ -4777,6 +4855,7 @@ function resetMatriculaForm() {
                         <td>{item.Estado}</td>
                         <td>{item.TipoMatricula || ""}</td>
                         <td>{item.NivelAcademico || item.GrupoNivelAcademico || ""}</td>
+                        <td>{item.EspecialidadDescripcion || item.Especialidad || item.GrupoEspecialidad || ""}</td>
                         <td>{item.EsRepitente ? "Sí" : "No"}</td>
                         <td>{item.PermiteExcepcionProgresion ? "Sí" : "No"}</td>
                         <td>
@@ -4798,7 +4877,7 @@ function resetMatriculaForm() {
                         </td>
                       </tr>
                     ))}
-                    {!matriculas.length && <tr><td colSpan={11} style={{ textAlign: "center", padding: "16px" }}>{matriculaHasSearched ? "No hay matrículas que coincidan con la bésqueda" : "Digite estudiante, grupo o año para buscar matrículas"}</td></tr>}
+                    {!matriculas.length && <tr><td colSpan={12} style={{ textAlign: "center", padding: "16px" }}>{matriculaHasSearched ? "No hay matrículas que coincidan con la búsqueda" : "Digite estudiante, grupo o año para buscar matrículas"}</td></tr>}
                   </tbody>
                 </table>
               </div>

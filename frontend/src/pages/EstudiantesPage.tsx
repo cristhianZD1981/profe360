@@ -12,11 +12,14 @@ type Student = {
   PrimerApellido: string;
   SegundoApellido: string;
   FechaNacimiento: string | null;
+  TipoIdentificacion?: string | null;
   Sexo: string | null;
   Correo: string | null;
   Telefono: string | null;
   TipoEstudianteId?: number | null;
   TipoEstudianteDescripcion?: string | null;
+  Repitente?: boolean | null;
+  Refugiado?: boolean | null;
   NivelFuncionamiento: string | null;
   FotoUrl: string | null;
   CodigoCarnet: string | null;
@@ -24,6 +27,7 @@ type Student = {
   Nacionalidad: string | null;
   Adecuacion: string | null;
   Discapacidad: string | null;
+  TipoDiscapacidad?: string | null;
   Enfermedad: string | null;
   Observaciones: string | null;
   RutaTransporteId?: number | null;
@@ -37,16 +41,20 @@ type Student = {
 
 type EncargadoForm = {
   tipoEncargado: "MADRE" | "PADRE" | "ENCARGADO";
+  titulo: string;
   identificacion: string;
   nombre: string;
   primerApellido: string;
   segundoApellido: string;
   correo: string;
   telefono: string;
+  telefonoSecundario: string;
   direccionExacta: string;
   parentesco: string;
   viveConEstudiante: boolean;
   esPrincipal: boolean;
+  aceptaWhatsApp: boolean;
+  aceptaCorreo: boolean;
   recibeNotificaciones: boolean;
 };
 
@@ -54,6 +62,8 @@ type DetalleEncargado = {
   EstudianteEncargadoId?: number;
   Parentesco?: string | null;
   EsPrincipal?: boolean;
+  AceptaWhatsApp?: boolean;
+  AceptaCorreo?: boolean;
   RecibeNotificaciones?: boolean;
   ViveConEstudiante?: boolean;
   VigenciaDesde?: string | null;
@@ -61,12 +71,14 @@ type DetalleEncargado = {
   Activo?: boolean;
   EncargadoId?: number;
   TipoEncargado?: "MADRE" | "PADRE" | "ENCARGADO";
+  Titulo?: string | null;
   Identificacion?: string | null;
   Nombre?: string | null;
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
   Correo?: string | null;
   Telefono?: string | null;
+  TelefonoSecundario?: string | null;
   DireccionExacta?: string | null;
 };
 
@@ -168,17 +180,21 @@ const emptyEncargado = (
   tipo: "MADRE" | "PADRE" | "ENCARGADO"
 ): EncargadoForm => ({
   tipoEncargado: tipo,
+  titulo: "",
   identificacion: "",
   nombre: "",
   primerApellido: "",
   segundoApellido: "",
   correo: "",
   telefono: "",
+  telefonoSecundario: "",
   direccionExacta: "",
   parentesco:
     tipo === "MADRE" ? "Madre" : tipo === "PADRE" ? "Padre" : "Encargado",
   viveConEstudiante: false,
   esPrincipal: tipo === "MADRE",
+  aceptaWhatsApp: true,
+  aceptaCorreo: true,
   recibeNotificaciones: true
 });
 
@@ -188,6 +204,7 @@ const initialForm = {
   primerApellido: "",
   segundoApellido: "",
   fechaNacimiento: "",
+  tipoIdentificacion: "",
   correo: "",
   telefono: "",
   tipoEstudianteId: "",
@@ -196,10 +213,13 @@ const initialForm = {
   sexo: "",
   fotoUrl: "",
   nacionalidad: "",
+  repitente: false,
+  refugiado: false,
   tieneAdecuacion: false,
   adecuacion: "",
   nivelFuncionamiento: "",
   discapacidad: "",
+  tipoDiscapacidad: "",
   enfermedad: "",
   rutaTransporteHabitual: "",
   observaciones: "",
@@ -273,17 +293,21 @@ function EncargadoBlockStable({
       }}
     >
       <h4 style={{ margin: 0 }}>{title}</h4>
+      <label>Tratamiento<input value={value.titulo} onChange={(e) => onChange({ ...value, titulo: e.target.value })} placeholder="Ejemplo: Sr., Sra." /></label>
       <label>Identificación<input value={value.identificacion} onChange={(e) => onChange({ ...value, identificacion: e.target.value })} /></label>
       <label>Nombre<input value={value.nombre} onChange={(e) => onChange({ ...value, nombre: e.target.value })} /></label>
       <label>Primer apellido<input value={value.primerApellido} onChange={(e) => onChange({ ...value, primerApellido: e.target.value })} /></label>
       <label>Segundo apellido<input value={value.segundoApellido} onChange={(e) => onChange({ ...value, segundoApellido: e.target.value })} /></label>
       <label>Correo<input type="email" value={value.correo} onChange={(e) => onChange({ ...value, correo: e.target.value })} /></label>
       <label>Teléfono<input value={value.telefono} onChange={(e) => onChange({ ...value, telefono: normalizePhoneForInput(e.target.value) })} /></label>
+      <label>Otro celular<input value={value.telefonoSecundario} onChange={(e) => onChange({ ...value, telefonoSecundario: normalizePhoneForInput(e.target.value) })} /></label>
       <label>Dirección exacta<textarea rows={2} value={value.direccionExacta} onChange={(e) => onChange({ ...value, direccionExacta: e.target.value })} /></label>
       <label>Parentesco<input value={value.parentesco} onChange={(e) => onChange({ ...value, parentesco: e.target.value })} /></label>
       <label style={{ display: "flex", alignItems: "center", gap: "8px" }}><input type="checkbox" checked={value.viveConEstudiante} onChange={(e) => onChange({ ...value, viveConEstudiante: e.target.checked })} />Vive con el estudiante</label>
       <label style={{ display: "flex", alignItems: "center", gap: "8px" }}><input type="checkbox" checked={value.esPrincipal} onChange={(e) => onChange({ ...value, esPrincipal: e.target.checked })} />Encargado principal</label>
-      <label style={{ display: "flex", alignItems: "center", gap: "8px" }}><input type="checkbox" checked={value.recibeNotificaciones} onChange={(e) => onChange({ ...value, recibeNotificaciones: e.target.checked })} />Recibe notificaciones</label>
+      <label style={{ display: "flex", alignItems: "center", gap: "8px" }}><input type="checkbox" checked={value.aceptaWhatsApp} onChange={(e) => onChange({ ...value, aceptaWhatsApp: e.target.checked, recibeNotificaciones: e.target.checked || value.aceptaCorreo })} />Acepta WhatsApp</label>
+      <label style={{ display: "flex", alignItems: "center", gap: "8px" }}><input type="checkbox" checked={value.aceptaCorreo} onChange={(e) => onChange({ ...value, aceptaCorreo: e.target.checked, recibeNotificaciones: value.aceptaWhatsApp || e.target.checked })} />Acepta correo</label>
+      <label style={{ display: "flex", alignItems: "center", gap: "8px", opacity: 0.85 }}><input type="checkbox" checked={value.aceptaWhatsApp || value.aceptaCorreo} readOnly disabled />Recibe notificaciones</label>
     </section>
   );
 }
@@ -294,14 +318,18 @@ function DetailCardStable({ title, encargado }: { title: string; encargado: Deta
       <strong>{title}</strong>
       {encargado ? (
         <>
+          <div><strong>Tratamiento:</strong> {encargado.Titulo || ""}</div>
           <div><strong>Nombre:</strong> {getStudentFullName({ Nombre: encargado.Nombre || "", PrimerApellido: encargado.PrimerApellido || "", SegundoApellido: encargado.SegundoApellido || "" })}</div>
           <div><strong>Identificación:</strong> {encargado.Identificacion || ""}</div>
           <div><strong>Correo:</strong> {encargado.Correo || ""}</div>
           <div><strong>Teléfono:</strong> {encargado.Telefono || ""}</div>
+          <div><strong>Otro celular:</strong> {encargado.TelefonoSecundario || ""}</div>
           <div><strong>Dirección:</strong> {encargado.DireccionExacta || ""}</div>
           <div><strong>Parentesco:</strong> {encargado.Parentesco || ""}</div>
           <div><strong>Vive con el estudiante:</strong> {encargado.ViveConEstudiante ? "Sí" : "No"}</div>
           <div><strong>Principal:</strong> {encargado.EsPrincipal ? "Sí" : "No"}</div>
+          <div><strong>Acepta WhatsApp:</strong> {encargado.AceptaWhatsApp ? "Sí" : "No"}</div>
+          <div><strong>Acepta correo:</strong> {encargado.AceptaCorreo ? "Sí" : "No"}</div>
           <div><strong>Recibe notificaciones:</strong> {encargado.RecibeNotificaciones ? "Sí" : "No"}</div>
         </>
       ) : <div style={{ opacity: 0.8 }}>No hay datos registrados</div>}
@@ -341,7 +369,10 @@ export default function EstudiantesPage() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
 
   const [form, setForm] = useState(initialForm);
-  const [encargadoForm, setEncargadoForm] = useState<EncargadoForm>(
+  const [encargadoPrincipalForm, setEncargadoPrincipalForm] = useState<EncargadoForm>(
+    { ...emptyEncargado("ENCARGADO"), esPrincipal: true }
+  );
+  const [encargadoSecundarioForm, setEncargadoSecundarioForm] = useState<EncargadoForm>(
     emptyEncargado("ENCARGADO")
   );
 
@@ -394,13 +425,18 @@ export default function EstudiantesPage() {
     isProfesorRole ||
     roles.includes("PROFESOR_GUIA");
 
-  const detalleEncargado = useMemo(
+  const detalleEncargadoPrincipal = useMemo(
     () =>
-      detalleEncargados.find((x) => x.TipoEncargado === "ENCARGADO") ||
       detalleEncargados.find((x) => x.EsPrincipal) ||
       detalleEncargados[0] ||
       null,
     [detalleEncargados]
+  );
+  const detalleEncargadoSecundario = useMemo(
+    () =>
+      detalleEncargados.find((x) => x.EncargadoId !== detalleEncargadoPrincipal?.EncargadoId) ||
+      null,
+    [detalleEncargados, detalleEncargadoPrincipal]
   );
   function clearStudentResults() {
     setItems([]);
@@ -528,7 +564,8 @@ export default function EstudiantesPage() {
 
   function resetAllForms() {
     setForm(initialForm);
-    setEncargadoForm(emptyEncargado("ENCARGADO"));
+    setEncargadoPrincipalForm({ ...emptyEncargado("ENCARGADO"), esPrincipal: true });
+    setEncargadoSecundarioForm(emptyEncargado("ENCARGADO"));
     setEditingId(null);
     setReactivableId(null);
   }
@@ -656,20 +693,34 @@ export default function EstudiantesPage() {
   }
 
   function buildEncargadosPayload() {
-    return [encargadoForm].map((item) => ({
-      tipoEncargado: item.tipoEncargado,
-      identificacion: item.identificacion || null,
-      nombre: item.nombre || null,
-      primerApellido: item.primerApellido || null,
-      segundoApellido: item.segundoApellido || null,
-      correo: item.correo || null,
-      telefono: item.telefono || null,
-      direccionExacta: item.direccionExacta || null,
-      parentesco: item.parentesco || null,
-      viveConEstudiante: item.viveConEstudiante,
-      esPrincipal: item.esPrincipal,
-      recibeNotificaciones: item.recibeNotificaciones
-    }));
+    return [encargadoPrincipalForm, encargadoSecundarioForm]
+      .map((item) => ({
+        tipoEncargado: item.tipoEncargado,
+        titulo: item.titulo || null,
+        identificacion: item.identificacion || null,
+        nombre: item.nombre || null,
+        primerApellido: item.primerApellido || null,
+        segundoApellido: item.segundoApellido || null,
+        correo: item.correo || null,
+        telefono: item.telefono || null,
+        telefonoSecundario: item.telefonoSecundario || null,
+        direccionExacta: item.direccionExacta || null,
+        parentesco: item.parentesco || null,
+        viveConEstudiante: item.viveConEstudiante,
+        esPrincipal: item.esPrincipal,
+        aceptaWhatsApp: item.aceptaWhatsApp,
+        aceptaCorreo: item.aceptaCorreo,
+        recibeNotificaciones: item.aceptaWhatsApp || item.aceptaCorreo
+      }))
+      .filter((item) =>
+        !!(
+          item.identificacion ||
+          item.nombre ||
+          item.telefono ||
+          item.telefonoSecundario ||
+          item.direccionExacta
+        )
+      );
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -701,6 +752,7 @@ export default function EstudiantesPage() {
         primerApellido: form.primerApellido,
         segundoApellido: form.segundoApellido,
         fechaNacimiento: form.fechaNacimiento || null,
+        tipoIdentificacion: form.tipoIdentificacion || null,
         correo: form.correo || null,
         telefono: form.telefono || null,
         tipoEstudianteId: form.tipoEstudianteId ? Number(form.tipoEstudianteId) : null,
@@ -709,10 +761,15 @@ export default function EstudiantesPage() {
         sexo: form.sexo || null,
         fotoUrl: form.fotoUrl || null,
         nacionalidad: form.nacionalidad || null,
+        repitente: !!form.repitente,
+        refugiado: !!form.refugiado,
         tieneAdecuacion: !!form.tieneAdecuacion,
         adecuacion: form.tieneAdecuacion ? form.adecuacion || null : null,
         nivelFuncionamiento: form.nivelFuncionamiento || null,
         discapacidad: form.discapacidad || null,
+        tipoDiscapacidad: String(form.discapacidad || "").toLowerCase() === "sí" || String(form.discapacidad || "").toLowerCase() === "si"
+          ? form.tipoDiscapacidad || null
+          : null,
         enfermedad: form.enfermedad || null,
         rutaTransporteHabitual: form.rutaTransporteHabitual || null,
         observaciones: form.observaciones || null,
@@ -782,6 +839,7 @@ export default function EstudiantesPage() {
         fechaNacimiento: estudiante?.FechaNacimiento
           ? String(estudiante.FechaNacimiento).slice(0, 10)
           : "",
+        tipoIdentificacion: estudiante?.TipoIdentificacion || "",
         correo: estudiante?.Correo || "",
         telefono: normalizePhoneForInput(estudiante?.Telefono || ""),
         tipoEstudianteId: estudiante?.TipoEstudianteId ? String(estudiante.TipoEstudianteId) : "",
@@ -790,36 +848,68 @@ export default function EstudiantesPage() {
         sexo: estudiante?.Sexo || "",
         fotoUrl: estudiante?.FotoUrl || "",
         nacionalidad: estudiante?.Nacionalidad || "",
+        repitente: !!estudiante?.Repitente,
+        refugiado: !!estudiante?.Refugiado,
         tieneAdecuacion: tieneAdecuacionActual,
         adecuacion: tieneAdecuacionActual ? adecuacionActual : "",
         nivelFuncionamiento: estudiante?.NivelFuncionamiento || "",
         discapacidad: estudiante?.Discapacidad || "",
+        tipoDiscapacidad: estudiante?.TipoDiscapacidad || "",
         enfermedad: estudiante?.Enfermedad || "",
         rutaTransporteHabitual: estudiante?.RutaTransporteHabitual || "",
         observaciones: estudiante?.Observaciones || "",
         observacionMedica: estudiante?.ObservacionMedica || ""
       });
 
-      const encargado =
-        encargados.find((x) => x.TipoEncargado === "ENCARGADO") ||
+      const encargadoPrincipal =
         encargados.find((x) => x.EsPrincipal) ||
         encargados[0];
-      setEncargadoForm(
-        encargado
+      const encargadoSecundario =
+        encargados.find((x) => x.EncargadoId !== encargadoPrincipal?.EncargadoId) ||
+        null;
+      setEncargadoPrincipalForm(
+        encargadoPrincipal
           ? {
               tipoEncargado: "ENCARGADO",
-              identificacion: encargado.Identificacion || "",
-              nombre: encargado.Nombre || "",
-              primerApellido: encargado.PrimerApellido || "",
-              segundoApellido: encargado.SegundoApellido || "",
-              correo: encargado.Correo || "",
-              telefono: normalizePhoneForInput(encargado.Telefono || ""),
-              direccionExacta: encargado.DireccionExacta || "",
-              parentesco: encargado.Parentesco || "Encargado",
-              viveConEstudiante: !!encargado.ViveConEstudiante,
-              esPrincipal: !!encargado.EsPrincipal,
+              titulo: encargadoPrincipal.Titulo || "",
+              identificacion: encargadoPrincipal.Identificacion || "",
+              nombre: encargadoPrincipal.Nombre || "",
+              primerApellido: encargadoPrincipal.PrimerApellido || "",
+              segundoApellido: encargadoPrincipal.SegundoApellido || "",
+              correo: encargadoPrincipal.Correo || "",
+              telefono: normalizePhoneForInput(encargadoPrincipal.Telefono || ""),
+              telefonoSecundario: normalizePhoneForInput(encargadoPrincipal.TelefonoSecundario || ""),
+              direccionExacta: encargadoPrincipal.DireccionExacta || "",
+              parentesco: encargadoPrincipal.Parentesco || "Encargado",
+              viveConEstudiante: !!encargadoPrincipal.ViveConEstudiante,
+              esPrincipal: true,
+              aceptaWhatsApp: !!encargadoPrincipal.AceptaWhatsApp,
+              aceptaCorreo: !!encargadoPrincipal.AceptaCorreo,
               recibeNotificaciones:
-                encargado.RecibeNotificaciones === false ? false : true
+                encargadoPrincipal.RecibeNotificaciones === false ? false : true
+            }
+          : { ...emptyEncargado("ENCARGADO"), esPrincipal: true }
+      );
+      setEncargadoSecundarioForm(
+        encargadoSecundario
+          ? {
+              tipoEncargado: "ENCARGADO",
+              titulo: encargadoSecundario.Titulo || "",
+              identificacion: encargadoSecundario.Identificacion || "",
+              nombre: encargadoSecundario.Nombre || "",
+              primerApellido: encargadoSecundario.PrimerApellido || "",
+              segundoApellido: encargadoSecundario.SegundoApellido || "",
+              correo: encargadoSecundario.Correo || "",
+              telefono: normalizePhoneForInput(encargadoSecundario.Telefono || ""),
+              telefonoSecundario: normalizePhoneForInput(encargadoSecundario.TelefonoSecundario || ""),
+              direccionExacta: encargadoSecundario.DireccionExacta || "",
+              parentesco: encargadoSecundario.Parentesco || "Encargado",
+              viveConEstudiante: !!encargadoSecundario.ViveConEstudiante,
+              esPrincipal: !!encargadoSecundario.EsPrincipal,
+              aceptaWhatsApp: !!encargadoSecundario.AceptaWhatsApp,
+              aceptaCorreo: !!encargadoSecundario.AceptaCorreo,
+              recibeNotificaciones:
+                encargadoSecundario.RecibeNotificaciones === false ? false : true
             }
           : emptyEncargado("ENCARGADO")
       );
@@ -1424,6 +1514,17 @@ export default function EstudiantesPage() {
             </label>
 
             <label>
+              Tipo de identificación
+              <input
+                value={form.tipoIdentificacion}
+                onChange={(e) =>
+                  setForm({ ...form, tipoIdentificacion: e.target.value })
+                }
+                placeholder="Ejemplo: Cédula nacional, DIMEX, Pasaporte"
+              />
+            </label>
+
+            <label>
               Sexo
               <select
                 value={form.sexo}
@@ -1469,6 +1570,24 @@ export default function EstudiantesPage() {
                 value={form.telefono}
                 onChange={(e) => setForm({ ...form, telefono: normalizePhoneForInput(e.target.value) })}
               />
+            </label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
+              <input
+                type="checkbox"
+                checked={!!form.repitente}
+                onChange={(e) => setForm({ ...form, repitente: e.target.checked })}
+              />
+              Repitente
+            </label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
+              <input
+                type="checkbox"
+                checked={!!form.refugiado}
+                onChange={(e) => setForm({ ...form, refugiado: e.target.checked })}
+              />
+              Refugiado
             </label>
 
             <label>
@@ -1564,13 +1683,34 @@ export default function EstudiantesPage() {
 
             <label>
               Discapacidad
-              <input
+              <select
                 value={form.discapacidad}
                 onChange={(e) =>
-                  setForm({ ...form, discapacidad: e.target.value })
+                  setForm({
+                    ...form,
+                    discapacidad: e.target.value,
+                    tipoDiscapacidad:
+                      e.target.value === "Sí" ? form.tipoDiscapacidad : ""
+                  })
                 }
-              />
+              >
+                <option value="">Seleccione</option>
+                <option value="Sí">Sí</option>
+                <option value="No">No</option>
+              </select>
             </label>
+
+            {form.discapacidad === "Sí" ? (
+              <label>
+                Tipo de discapacidad
+                <input
+                  value={form.tipoDiscapacidad}
+                  onChange={(e) =>
+                    setForm({ ...form, tipoDiscapacidad: e.target.value })
+                  }
+                />
+              </label>
+            ) : null}
 
             <label>
               Enfermedad
@@ -1702,11 +1842,16 @@ export default function EstudiantesPage() {
               )}
             </div>
 
-            <SectionTitle>Datos del encargado</SectionTitle>
+            <SectionTitle>Datos de encargados</SectionTitle>
             <EncargadoBlockStable
-              title="Encargado"
-              value={encargadoForm}
-              onChange={setEncargadoForm}
+              title="Encargado 1"
+              value={encargadoPrincipalForm}
+              onChange={setEncargadoPrincipalForm}
+            />
+            <EncargadoBlockStable
+              title="Encargado 2"
+              value={encargadoSecundarioForm}
+              onChange={setEncargadoSecundarioForm}
             />
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
@@ -2209,12 +2354,16 @@ export default function EstudiantesPage() {
                               <div><strong>Nombre:</strong> {getStudentFullName(detalleEstudiante)}</div>
                               <div><strong>Identificación:</strong> {detalleEstudiante.Identificacion}</div>
                               <div><strong>Fecha nacimiento:</strong> {formatDate(detalleEstudiante.FechaNacimiento)}</div>
+                              <div><strong>Tipo de identificación:</strong> {detalleEstudiante.TipoIdentificacion || ""}</div>
                               <div><strong>Sexo:</strong> {detalleEstudiante.Sexo || ""}</div>
                               <div><strong>Nacionalidad:</strong> {detalleEstudiante.Nacionalidad || ""}</div>
+                              <div><strong>Repitente:</strong> {detalleEstudiante.Repitente ? "Sí" : "No"}</div>
+                              <div><strong>Refugiado:</strong> {detalleEstudiante.Refugiado ? "Sí" : "No"}</div>
                               <div><strong>Tipo de estudiante:</strong> {detalleEstudiante.TipoEstudianteDescripcion || ""}</div>
                               <div><strong>Adecuación:</strong> {detalleEstudiante.Adecuacion || ""}</div>
                               <div><strong>Nivel de funcionamiento:</strong> {detalleEstudiante.NivelFuncionamiento || ""}</div>
                               <div><strong>Discapacidad:</strong> {detalleEstudiante.Discapacidad || ""}</div>
+                              <div><strong>Tipo de discapacidad:</strong> {detalleEstudiante.TipoDiscapacidad || ""}</div>
                               <div><strong>Enfermedad:</strong> {detalleEstudiante.Enfermedad || ""}</div>
                               <div><strong>Ruta transporte:</strong> {detalleEstudiante.RutaTransporteDescripcion || detalleEstudiante.RutaTransporteHabitual || ""}</div>
                               <div><strong>VB WhatsApp encargado:</strong> {detalleEstudiante.AutorizaWhatsAppEncargado ? "Sí" : "No"}</div>
@@ -2234,7 +2383,8 @@ export default function EstudiantesPage() {
                                 gap: "12px"
                               }}
                             >
-                              <DetailCardStable title="Encargado" encargado={detalleEncargado} />
+                              <DetailCardStable title="Encargado 1" encargado={detalleEncargadoPrincipal} />
+                              <DetailCardStable title="Encargado 2" encargado={detalleEncargadoSecundario} />
                             </div>
                           </div>
                         ) : (

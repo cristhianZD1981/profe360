@@ -22,16 +22,20 @@ router.use(requireAuth);
 
 type EncargadoPayload = {
   tipoEncargado: "MADRE" | "PADRE" | "ENCARGADO";
+  titulo?: string | null;
   identificacion?: string | null;
   nombre?: string | null;
   primerApellido?: string | null;
   segundoApellido?: string | null;
   correo?: string | null;
   telefono?: string | null;
+  telefonoSecundario?: string | null;
   direccionExacta?: string | null;
   parentesco?: string | null;
   viveConEstudiante?: boolean;
   esPrincipal?: boolean;
+  aceptaWhatsApp?: boolean;
+  aceptaCorreo?: boolean;
   recibeNotificaciones?: boolean;
 };
 
@@ -185,16 +189,20 @@ function normalizeEncargados(encargados: any[]): EncargadoPayload[] {
         | "MADRE"
         | "PADRE"
         | "ENCARGADO",
+      titulo: item?.titulo || null,
       identificacion: item?.identificacion || null,
       nombre: item?.nombre || null,
       primerApellido: item?.primerApellido || null,
       segundoApellido: item?.segundoApellido || null,
       correo: item?.correo || null,
       telefono: normalizePhoneWithDefaultCountryCode(item?.telefono),
+      telefonoSecundario: normalizePhoneWithDefaultCountryCode(item?.telefonoSecundario),
       direccionExacta: item?.direccionExacta || null,
       parentesco: item?.parentesco || null,
       viveConEstudiante: !!item?.viveConEstudiante,
       esPrincipal: !!item?.esPrincipal,
+      aceptaWhatsApp: !!item?.aceptaWhatsApp,
+      aceptaCorreo: !!item?.aceptaCorreo,
       recibeNotificaciones: item?.recibeNotificaciones === false ? false : true
     }))
     .filter((item) => {
@@ -218,6 +226,39 @@ function toNullableString(value: any) {
   return str ? str : null;
 }
 
+function splitFullName(value: any) {
+  const clean = String(value || "").replace(/\s+/g, " ").trim();
+  if (!clean) {
+    return {
+      nombre: null,
+      primerApellido: null,
+      segundoApellido: null
+    };
+  }
+
+  const parts = clean.split(" ").filter(Boolean);
+  if (parts.length === 1) {
+    return {
+      nombre: parts[0],
+      primerApellido: null,
+      segundoApellido: null
+    };
+  }
+  if (parts.length === 2) {
+    return {
+      nombre: parts[0],
+      primerApellido: parts[1],
+      segundoApellido: null
+    };
+  }
+
+  return {
+    nombre: parts.slice(0, -2).join(" "),
+    primerApellido: parts.at(-2) || null,
+    segundoApellido: parts.at(-1) || null
+  };
+}
+
 function normalizeComparableText(value: any) {
   return String(value || "")
     .normalize("NFD")
@@ -229,6 +270,17 @@ function normalizeComparableText(value: any) {
 function isValidAdecuacionValue(value: any) {
   const normalized = normalizeComparableText(value);
   return !!normalized && !["regular", "sin adecuacion", "seleccione", "no"].includes(normalized);
+}
+
+function isTruthyText(value: any) {
+  return ["1", "si", "true", "x", "yes", "sí"].includes(
+    String(value ?? "").trim().toLowerCase()
+  );
+}
+
+function isValidTipoDiscapacidad(value: any) {
+  const normalized = normalizeComparableText(value);
+  return !!normalized && !["sin discapacidad", "no", "ninguna", "seleccione"].includes(normalized);
 }
 
 function normalizePhoneWithDefaultCountryCode(value: any) {
@@ -320,24 +372,28 @@ async function replaceEncargadosHistorico(params: {
       .request()
       .input("institucionId", sql.Int, institucionId)
       .input("tipoEncargado", sql.NVarChar, item.tipoEncargado)
+      .input("titulo", sql.NVarChar, item.titulo || null)
       .input("identificacion", sql.NVarChar, item.identificacion || null)
       .input("nombre", sql.NVarChar, item.nombre || "")
       .input("primerApellido", sql.NVarChar, item.primerApellido || null)
       .input("segundoApellido", sql.NVarChar, item.segundoApellido || null)
       .input("correo", sql.NVarChar, item.correo || null)
       .input("telefono", sql.NVarChar, item.telefono || null)
+      .input("telefonoSecundario", sql.NVarChar, item.telefonoSecundario || null)
       .input("direccionExacta", sql.NVarChar, item.direccionExacta || null)
       .query(`
         INSERT INTO dbo.Encargado
         (
           InstitucionId,
           TipoEncargado,
+          Titulo,
           Identificacion,
           Nombre,
           PrimerApellido,
           SegundoApellido,
           Correo,
           Telefono,
+          TelefonoSecundario,
           DireccionExacta,
           Activo,
           CreatedAt
@@ -347,12 +403,14 @@ async function replaceEncargadosHistorico(params: {
         (
           @institucionId,
           @tipoEncargado,
+          @titulo,
           @identificacion,
           @nombre,
           @primerApellido,
           @segundoApellido,
           @correo,
           @telefono,
+          @telefonoSecundario,
           @direccionExacta,
           1,
           SYSDATETIME()
@@ -367,10 +425,16 @@ async function replaceEncargadosHistorico(params: {
       .input("encargadoId", sql.Int, encargadoId)
       .input("parentesco", sql.NVarChar, item.parentesco || null)
       .input("esPrincipal", sql.Bit, !!item.esPrincipal)
+      .input("aceptaWhatsApp", sql.Bit, !!item.aceptaWhatsApp)
+      .input("aceptaCorreo", sql.Bit, !!item.aceptaCorreo)
       .input(
         "recibeNotificaciones",
         sql.Bit,
-        item.recibeNotificaciones === false ? false : true
+        item.aceptaWhatsApp || item.aceptaCorreo
+          ? true
+          : item.recibeNotificaciones === false
+            ? false
+            : true
       )
       .input("viveConEstudiante", sql.Bit, !!item.viveConEstudiante)
       .query(`
@@ -380,6 +444,8 @@ async function replaceEncargadosHistorico(params: {
           EncargadoId,
           Parentesco,
           EsPrincipal,
+          AceptaWhatsApp,
+          AceptaCorreo,
           RecibeNotificaciones,
           ViveConEstudiante,
           Activo,
@@ -392,6 +458,8 @@ async function replaceEncargadosHistorico(params: {
           @encargadoId,
           @parentesco,
           @esPrincipal,
+          @aceptaWhatsApp,
+          @aceptaCorreo,
           @recibeNotificaciones,
           @viveConEstudiante,
           1,
@@ -418,20 +486,26 @@ async function createStudentWithTransaction(params: {
     fechaNacimiento,
     correo,
     telefono,
+    tipoIdentificacion,
     sexo,
     fotoUrl,
     nacionalidad,
     tipoEstudianteId,
     rutaTransporteId,
     autorizaWhatsAppEncargado,
+    repitente,
+    refugiado,
     tieneAdecuacion,
     adecuacion,
     nivelFuncionamiento,
     discapacidad,
+    tipoDiscapacidad,
     enfermedad,
     rutaTransporteHabitual,
     observaciones,
     observacionMedica,
+    especialidad,
+    movimiento,
     encargados = []
   } = payload;
   const tipoEstudianteIdResolved = await resolveTipoEstudianteId(transaction, institucionId, tipoEstudianteId);
@@ -483,6 +557,7 @@ async function createStudentWithTransaction(params: {
     .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
     .input("correo", sql.NVarChar, correoGenerado)
     .input("telefono", sql.NVarChar, telefono || null)
+    .input("tipoIdentificacion", sql.NVarChar, tipoIdentificacion || null)
     .input("sexo", sql.NVarChar, sexo || null)
     .input("fotoUrl", sql.NVarChar, fotoUrl || null)
     .input("codigoCarnet", sql.NVarChar, codigoCarnet)
@@ -491,10 +566,13 @@ async function createStudentWithTransaction(params: {
     .input("tipoEstudianteId", sql.Int, tipoEstudianteIdResolved)
     .input("rutaTransporteId", sql.Int, rutaTransporteIdResolved)
     .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
+    .input("repitente", sql.Bit, !!repitente)
+    .input("refugiado", sql.Bit, !!refugiado)
     .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
     .input("adecuacion", sql.NVarChar, adecuacionNormalizada)
     .input("nivelFuncionamiento", sql.NVarChar, nivelFuncionamiento || null)
     .input("discapacidad", sql.NVarChar, discapacidad || null)
+    .input("tipoDiscapacidad", sql.NVarChar, tipoDiscapacidad || null)
     .input("enfermedad", sql.NVarChar, enfermedad || null)
     .input(
       "rutaTransporteHabitual",
@@ -514,6 +592,7 @@ async function createStudentWithTransaction(params: {
         FechaNacimiento,
         Correo,
         Telefono,
+        TipoIdentificacion,
         Sexo,
         FotoUrl,
         CodigoCarnet,
@@ -522,10 +601,13 @@ async function createStudentWithTransaction(params: {
         TipoEstudianteId,
         RutaTransporteId,
         AutorizaWhatsAppEncargado,
+        Repitente,
+        Refugiado,
         TieneAdecuacion,
         Adecuacion,
         NivelFuncionamiento,
         Discapacidad,
+        TipoDiscapacidad,
         Enfermedad,
         RutaTransporteHabitual,
         Observaciones,
@@ -542,6 +624,7 @@ async function createStudentWithTransaction(params: {
         @fechaNacimiento,
         @correo,
         @telefono,
+        @tipoIdentificacion,
         @sexo,
         @fotoUrl,
         @codigoCarnet,
@@ -550,10 +633,13 @@ async function createStudentWithTransaction(params: {
         @tipoEstudianteId,
         @rutaTransporteId,
         @autorizaWhatsAppEncargado,
+        @repitente,
+        @refugiado,
         @tieneAdecuacion,
         @adecuacion,
         @nivelFuncionamiento,
         @discapacidad,
+        @tipoDiscapacidad,
         @enfermedad,
         @rutaTransporteHabitual,
         @observaciones,
@@ -572,6 +658,21 @@ async function createStudentWithTransaction(params: {
       encargados: encargadosNormalizados
     });
   }
+
+  await syncStudentMovement({
+    transaction,
+    institucionId,
+    estudianteId: estudiante.EstudianteId,
+    movimiento
+  });
+
+  await syncActiveMatriculaDetailFromStudentImport({
+    transaction,
+    institucionId,
+    estudianteId: estudiante.EstudianteId,
+    especialidad,
+    repitente: !!repitente
+  });
 
   await ensureParentPortalUser({
     transaction,
@@ -624,20 +725,26 @@ async function importStudentWithTransaction(params: {
     segundoApellido,
     fechaNacimiento,
     telefono,
+    tipoIdentificacion,
     sexo,
     fotoUrl,
     nacionalidad,
     tipoEstudianteId,
     rutaTransporteId,
     autorizaWhatsAppEncargado,
+    repitente,
+    refugiado,
     tieneAdecuacion,
     adecuacion,
     nivelFuncionamiento,
     discapacidad,
+    tipoDiscapacidad,
     enfermedad,
     rutaTransporteHabitual,
     observaciones,
     observacionMedica,
+    especialidad,
+    movimiento,
     encargados = []
   } = payload;
   const tipoEstudianteIdResolved = await resolveTipoEstudianteId(transaction, institucionId, tipoEstudianteId);
@@ -659,6 +766,7 @@ async function importStudentWithTransaction(params: {
     .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
     .input("correo", sql.NVarChar, correoGenerado)
     .input("telefono", sql.NVarChar, telefono || null)
+    .input("tipoIdentificacion", sql.NVarChar, tipoIdentificacion || null)
     .input("sexo", sql.NVarChar, sexo || null)
     .input("fotoUrl", sql.NVarChar, fotoUrl || null)
     .input("codigoCarnet", sql.NVarChar, codigoCarnet)
@@ -667,10 +775,13 @@ async function importStudentWithTransaction(params: {
     .input("tipoEstudianteId", sql.Int, tipoEstudianteIdResolved)
     .input("rutaTransporteId", sql.Int, rutaTransporteIdResolved)
     .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
+    .input("repitente", sql.Bit, !!repitente)
+    .input("refugiado", sql.Bit, !!refugiado)
     .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
     .input("adecuacion", sql.NVarChar, adecuacionNormalizada)
     .input("nivelFuncionamiento", sql.NVarChar, nivelFuncionamiento || null)
     .input("discapacidad", sql.NVarChar, discapacidad || null)
+    .input("tipoDiscapacidad", sql.NVarChar, tipoDiscapacidad || null)
     .input("enfermedad", sql.NVarChar, enfermedad || null)
     .input("rutaTransporteHabitual", sql.NVarChar, rutaTransporteHabitual || null)
     .input("observaciones", sql.NVarChar(sql.MAX), observaciones || null)
@@ -684,6 +795,7 @@ async function importStudentWithTransaction(params: {
           FechaNacimiento = @fechaNacimiento,
           Correo = @correo,
           Telefono = @telefono,
+          TipoIdentificacion = @tipoIdentificacion,
           Sexo = @sexo,
           FotoUrl = COALESCE(@fotoUrl, FotoUrl),
           CodigoCarnet = @codigoCarnet,
@@ -692,10 +804,13 @@ async function importStudentWithTransaction(params: {
           TipoEstudianteId = @tipoEstudianteId,
           RutaTransporteId = @rutaTransporteId,
           AutorizaWhatsAppEncargado = @autorizaWhatsAppEncargado,
+          Repitente = @repitente,
+          Refugiado = @refugiado,
           TieneAdecuacion = @tieneAdecuacion,
           Adecuacion = @adecuacion,
           NivelFuncionamiento = @nivelFuncionamiento,
           Discapacidad = @discapacidad,
+          TipoDiscapacidad = @tipoDiscapacidad,
           Enfermedad = @enfermedad,
           RutaTransporteHabitual = @rutaTransporteHabitual,
           Observaciones = @observaciones,
@@ -714,6 +829,21 @@ async function importStudentWithTransaction(params: {
       encargados: encargadosNormalizados
     });
   }
+
+  await syncStudentMovement({
+    transaction,
+    institucionId,
+    estudianteId: row.EstudianteId,
+    movimiento
+  });
+
+  await syncActiveMatriculaDetailFromStudentImport({
+    transaction,
+    institucionId,
+    estudianteId: row.EstudianteId,
+    especialidad,
+    repitente: !!repitente
+  });
 
   await ensureParentPortalUser({
     transaction,
@@ -738,16 +868,31 @@ async function importStudentWithTransaction(params: {
 
 async function resolveTipoEstudianteId(transaction: any, institucionId: number, tipoEstudianteId: any) {
   const normalizedId = toNullablePositiveInt(tipoEstudianteId);
-  if (!normalizedId) return null;
+  if (normalizedId) {
+    const result = await transaction.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoEstudianteId", sql.Int, normalizedId)
+      .query(`
+        SELECT TOP 1 TipoEstudianteId
+        FROM dbo.TipoEstudiante
+        WHERE InstitucionId = @institucionId
+          AND TipoEstudianteId = @tipoEstudianteId
+      `);
+
+    return result.recordset[0]?.TipoEstudianteId || null;
+  }
 
   const result = await transaction.request()
     .input("institucionId", sql.Int, institucionId)
-    .input("tipoEstudianteId", sql.Int, normalizedId)
+    .input("descripcion", sql.NVarChar, toNullableString(tipoEstudianteId))
     .query(`
       SELECT TOP 1 TipoEstudianteId
       FROM dbo.TipoEstudiante
       WHERE InstitucionId = @institucionId
-        AND TipoEstudianteId = @tipoEstudianteId
+        AND (
+          UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+          OR UPPER(LTRIM(RTRIM(REPLACE(Descripcion, N'  ', N' ')))) = UPPER(LTRIM(RTRIM(REPLACE(@descripcion, N'  ', N' '))))
+        )
     `);
 
   return result.recordset[0]?.TipoEstudianteId || null;
@@ -755,19 +900,206 @@ async function resolveTipoEstudianteId(transaction: any, institucionId: number, 
 
 async function resolveRutaTransporteId(transaction: any, institucionId: number, rutaTransporteId: any) {
   const normalizedId = toNullablePositiveInt(rutaTransporteId);
-  if (!normalizedId) return null;
+  if (normalizedId) {
+    const result = await transaction.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("rutaTransporteId", sql.Int, normalizedId)
+      .query(`
+        SELECT TOP 1 RutaTransporteId
+        FROM dbo.RutaTransporte
+        WHERE InstitucionId = @institucionId
+          AND RutaTransporteId = @rutaTransporteId
+      `);
+
+    return result.recordset[0]?.RutaTransporteId || null;
+  }
 
   const result = await transaction.request()
     .input("institucionId", sql.Int, institucionId)
-    .input("rutaTransporteId", sql.Int, normalizedId)
+    .input("descripcion", sql.NVarChar, toNullableString(rutaTransporteId))
     .query(`
       SELECT TOP 1 RutaTransporteId
       FROM dbo.RutaTransporte
       WHERE InstitucionId = @institucionId
-        AND RutaTransporteId = @rutaTransporteId
+        AND (
+          UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+          OR UPPER(LTRIM(RTRIM(REPLACE(Descripcion, N'  ', N' ')))) = UPPER(LTRIM(RTRIM(REPLACE(@descripcion, N'  ', N' '))))
+        )
     `);
 
   return result.recordset[0]?.RutaTransporteId || null;
+}
+
+function classifyStudentMovementType(value: any) {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return null;
+  if (normalized.includes("traslado")) return "TRASLADO";
+  if (normalized.includes("retiro")) return "RETIRO";
+  if (normalized.includes("reingreso")) return "REINGRESO";
+  if (normalized.includes("matricula")) return "MATRICULA";
+  return "OTRO";
+}
+
+async function syncStudentMovement(params: {
+  transaction: any;
+  institucionId: number;
+  estudianteId: number;
+  movimiento?: any;
+}) {
+  const descripcionMovimiento = toNullableString(params.movimiento);
+  if (!descripcionMovimiento) return;
+
+  const latest = await params.transaction.request()
+    .input("institucionId", sql.Int, params.institucionId)
+    .input("estudianteId", sql.Int, params.estudianteId)
+    .query(`
+      SELECT TOP 1 DescripcionMovimiento
+      FROM dbo.EstudianteMovimiento
+      WHERE InstitucionId = @institucionId
+        AND EstudianteId = @estudianteId
+      ORDER BY FechaMovimiento DESC, EstudianteMovimientoId DESC
+    `);
+
+  if (normalizeComparableText(latest.recordset[0]?.DescripcionMovimiento) === normalizeComparableText(descripcionMovimiento)) {
+    return;
+  }
+
+  await params.transaction.request()
+    .input("institucionId", sql.Int, params.institucionId)
+    .input("estudianteId", sql.Int, params.estudianteId)
+    .input("tipoMovimiento", sql.NVarChar, classifyStudentMovementType(descripcionMovimiento))
+    .input("descripcionMovimiento", sql.NVarChar, descripcionMovimiento)
+    .query(`
+      INSERT INTO dbo.EstudianteMovimiento
+      (
+        InstitucionId,
+        EstudianteId,
+        TipoMovimiento,
+        DescripcionMovimiento,
+        Fuente,
+        FechaMovimiento,
+        CreatedAt
+      )
+      VALUES
+      (
+        @institucionId,
+        @estudianteId,
+        @tipoMovimiento,
+        @descripcionMovimiento,
+        N'IMPORTACION_ESTUDIANTES',
+        CAST(GETDATE() AS DATE),
+        SYSDATETIME()
+      )
+    `);
+}
+
+function isSinEspecialidad(value: any) {
+  const normalized = normalizeComparableText(value);
+  return !normalized || ["sin especialidad", "ninguna", "no aplica", "na"].includes(normalized);
+}
+
+async function resolveEspecialidadIdByDescription(transaction: any, institucionId: number, especialidad: any) {
+  const descripcion = toNullableString(especialidad);
+  if (!descripcion || isSinEspecialidad(descripcion)) return null;
+
+  const result = await transaction.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("descripcion", sql.NVarChar, descripcion)
+    .query(`
+      SELECT TOP 1 EspecialidadId, Descripcion
+      FROM dbo.Especialidad
+      WHERE InstitucionId = @institucionId
+        AND Activo = 1
+        AND (
+          UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+          OR UPPER(LTRIM(RTRIM(REPLACE(Descripcion, N'  ', N' ')))) = UPPER(LTRIM(RTRIM(REPLACE(@descripcion, N'  ', N' '))))
+        )
+      ORDER BY Descripcion
+    `);
+
+  return result.recordset[0] || null;
+}
+
+async function syncActiveMatriculaDetailFromStudentImport(params: {
+  transaction: any;
+  institucionId: number;
+  estudianteId: number;
+  especialidad?: any;
+  repitente?: boolean;
+}) {
+  const { transaction, institucionId, estudianteId, especialidad, repitente } = params;
+  const especialidadInfo = await resolveEspecialidadIdByDescription(transaction, institucionId, especialidad);
+  const especialidadTexto = isSinEspecialidad(especialidad)
+    ? null
+    : toNullableString(especialidadInfo?.Descripcion || especialidad);
+
+  const activeMatricula = await transaction.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("estudianteId", sql.Int, estudianteId)
+    .query(`
+      DECLARE @anioLectivoActualId INT;
+
+      SELECT TOP 1 @anioLectivoActualId = AnioLectivoId
+      FROM dbo.AnioLectivo
+      WHERE InstitucionId = @institucionId
+        AND Activo = 1
+      ORDER BY FechaInicio DESC, AnioLectivoId DESC;
+
+      SELECT TOP 1
+        m.MatriculaId,
+        md.MatriculaDetalleId
+      FROM dbo.Matricula m
+      INNER JOIN dbo.Estudiante e
+        ON e.EstudianteId = m.EstudianteId
+      LEFT JOIN dbo.MatriculaDetalle md
+        ON md.MatriculaId = m.MatriculaId
+      WHERE e.InstitucionId = @institucionId
+        AND m.EstudianteId = @estudianteId
+        AND m.Estado = N'Activa'
+        AND (@anioLectivoActualId IS NULL OR m.AnioLectivoId = @anioLectivoActualId)
+      ORDER BY m.MatriculaId DESC
+    `);
+
+  const matricula = activeMatricula.recordset[0];
+  if (!matricula?.MatriculaId) return;
+
+  const request = transaction.request()
+    .input("matriculaId", sql.Int, matricula.MatriculaId)
+    .input("especialidadId", sql.Int, especialidadInfo?.EspecialidadId || null)
+    .input("especialidad", sql.NVarChar, especialidadTexto)
+    .input("esRepitente", sql.Bit, !!repitente);
+
+  if (matricula.MatriculaDetalleId) {
+    await request.query(`
+      UPDATE dbo.MatriculaDetalle
+      SET
+        EspecialidadId = @especialidadId,
+        Especialidad = @especialidad,
+        EsRepitente = @esRepitente,
+        UpdatedAt = SYSDATETIME()
+      WHERE MatriculaId = @matriculaId
+    `);
+    return;
+  }
+
+  await request.query(`
+    INSERT INTO dbo.MatriculaDetalle
+    (
+      MatriculaId,
+      EspecialidadId,
+      Especialidad,
+      EsRepitente,
+      CreatedAt
+    )
+    VALUES
+    (
+      @matriculaId,
+      @especialidadId,
+      @especialidad,
+      @esRepitente,
+      SYSDATETIME()
+    )
+  `);
 }
 
 function cleanupImportJobs() {
@@ -864,37 +1196,51 @@ function normalizeStudentImportRowKeys(row: any) {
   }
 
   const aliases: Record<string, string[]> = {
-    identificacion: ["identificacion", "cedula", "numeroidentificacion"],
+    identificacion: ["identificacion", "identificacionestudiante", "cedula", "numeroidentificacion"],
+    tipoIdentificacion: ["tipoidentificacionestudiante", "tipoidentificacion"],
     nombre: ["nombre", "nombres"],
     primerApellido: ["primerapellido", "apellido1", "primerapellidodelestudiante"],
     segundoApellido: ["segundoapellido", "apellido2", "segundoapellidodelestudiante"],
     fechaNacimiento: ["fechanacimiento", "fecnacimiento", "nacimiento"],
     sexo: ["sexo", "genero"],
-    correo: ["correo", "email", "correoelectronico"],
-    telefono: ["telefono", "celular", "telefono1"],
+    correo: ["correo", "email", "correoelectronico", "correoestuduante"],
+    telefono: ["telefono", "celular", "telefono1", "celularestudiante"],
     tipoEstudianteId: ["tipoestudianteid", "tipoestudiante"],
     nacionalidad: ["nacionalidad"],
-    tieneAdecuacion: ["tieneadecuacion", "adecuacionhabilitada", "conadecuacion"],
-    adecuacion: ["adecuacion"],
+    repitente: ["repitente"],
+    refugiado: ["refugiado"],
+    tieneAdecuacion: ["tieneadecuacion", "adecuacionhabilitada", "conadecuacion", "adecuacion"],
+    adecuacion: ["tipoadecuacion", "adecuaciondetalle"],
     nivelFuncionamiento: ["nivelfuncionamiento", "niveldefuncionamiento"],
     discapacidad: ["discapacidad"],
-    enfermedad: ["enfermedad"],
-    rutaTransporteId: ["rutatransporteid", "idrutatransporte"],
+    tipoDiscapacidad: ["tipodiscapacidad"],
+    enfermedad: ["enfermedad", "tipoenfermedad"],
+    especialidad: ["especialidad"],
+    rutaTransporteId: ["rutatransporteid", "idrutatransporte", "rutatransporte"],
     rutaTransporteHabitual: ["rutatransportehabitual", "rutahabitual", "ruta"],
     autorizaWhatsAppEncargado: ["autorizawhatsappencargado", "autorizaencargadowhatsapp", "autorizawhatsapp"],
-    observaciones: ["observaciones", "observaciongeneral", "observacionestudiante"],
+    observaciones: ["observaciones", "observaciongeneral", "observacionestudiante", "observacionesnivelfuncionamieto", "observacionesnivelfuncionamiento"],
     observacionMedica: ["observacionmedica", "observacionesmedicas", "observacion"],
-    encargado_nombre: ["encargadonombre"],
-    encargado_primerApellido: ["encargadoprimerapellido", "encargadoapellido1"],
-    encargado_segundoApellido: ["encargadosegundoapellido", "encargadoapellido2"],
-    encargado_identificacion: ["encargadoidentificacion", "encargadocedula"],
-    encargado_correo: ["encargadocorreo", "encargadoemail"],
-    encargado_telefono: ["encargadotelefono", "encargadocelular"],
-    encargado_direccionExacta: ["encargadodireccionexacta", "encargadodireccion"],
-    encargado_parentesco: ["encargadoparentesco", "parentescoencargado"],
-    encargado_viveConEstudiante: ["encargadoviveconestudiante"],
-    encargado_esPrincipal: ["encargadoesprincipal"],
-    encargado_recibeNotificaciones: ["encargadorecibenotificaciones"]
+    encargado1_titulo: ["titulo"],
+    encargado1_nombreCompleto: ["encargado1", "encargado_1"],
+    encargado1_identificacion: ["cedula1"],
+    encargado1_telefono: ["celular1"],
+    encargado1_parentesco: ["parentesco1"],
+    encargado1_viveConEstudiante: ["viveconestudiante1"],
+    encargado1_direccionExacta: ["direccionexacta1"],
+    encargado1_aceptaWhatsApp: ["aceptawa1"],
+    encargado1_aceptaCorreo: ["aceptacorreo1"],
+    encargado2_nombreCompleto: ["encargado2"],
+    encargado2_identificacion: ["cedula2"],
+    encargado2_telefono: ["celular2"],
+    encargado2_parentesco: ["parentezco2", "parentesco2"],
+    encargado2_viveConEstudiante: ["viveconestudiante2"],
+    encargado2_telefonoSecundario: ["otrocel"],
+    encargado2_direccionExacta: ["direccion2"],
+    encargado2_aceptaWhatsApp: ["aceptawa2"],
+    encargado2_aceptaCorreo: ["aceptacorreo2"],
+    movimiento: ["movimiento"],
+    fotoUrl: ["fotoestudiante"]
   };
 
   const normalized: Record<string, any> = { ...source };
@@ -916,6 +1262,11 @@ function buildImportPayloadFromRow(row: any) {
   const tieneAdecuacionSolicitada = toBoolean(row.tieneAdecuacion, adecuacionValida);
   const tieneAdecuacion = tieneAdecuacionSolicitada && adecuacionValida;
   const adecuacion = tieneAdecuacion ? adecuacionImportada : null;
+  const discapacidadSolicitada = isTruthyText(row.discapacidad);
+  const tipoDiscapacidad = discapacidadSolicitada && isValidTipoDiscapacidad(row.tipoDiscapacidad)
+    ? toNullableString(row.tipoDiscapacidad)
+    : null;
+  const discapacidad = discapacidadSolicitada ? "Sí" : "No";
 
   if (!identificacion || !nombre || !primerApellido || !segundoApellido || !fechaNacimiento) {
     return {
@@ -941,32 +1292,80 @@ function buildImportPayloadFromRow(row: any) {
     };
   }
 
-  const buildEncargadoCandidate = (prefix: "encargado", parentescoDefault: string) => ({
-    tipoEncargado: "ENCARGADO" as const,
-    identificacion: toNullableString(row[`${prefix}_identificacion`]),
-    nombre: toNullableString(row[`${prefix}_nombre`]),
-    primerApellido: toNullableString(row[`${prefix}_primerApellido`]),
-    segundoApellido: toNullableString(row[`${prefix}_segundoApellido`]),
-    correo: toNullableString(row[`${prefix}_correo`]),
-    telefono: normalizePhoneWithDefaultCountryCode(row[`${prefix}_telefono`]),
-    direccionExacta: toNullableString(row[`${prefix}_direccionExacta`]),
-    parentesco: toNullableString(row[`${prefix}_parentesco`]) || parentescoDefault,
-    viveConEstudiante: toBoolean(row[`${prefix}_viveConEstudiante`]),
-    esPrincipal: toBoolean(row[`${prefix}_esPrincipal`], true),
-    recibeNotificaciones: toBoolean(row[`${prefix}_recibeNotificaciones`], true)
+  const buildEncargadoFromFullName = (params: {
+    nombreCompleto: any;
+    identificacion: any;
+    telefono: any;
+    telefonoSecundario?: any;
+    direccionExacta?: any;
+    parentesco?: any;
+    viveConEstudiante?: any;
+    aceptaWhatsApp?: any;
+    aceptaCorreo?: any;
+    esPrincipal?: boolean;
+    titulo?: any;
+  }) => {
+    const parsed = splitFullName(params.nombreCompleto);
+    return {
+      tipoEncargado: "ENCARGADO" as const,
+      titulo: toNullableString(params.titulo),
+      identificacion: toNullableString(params.identificacion),
+      nombre: parsed.nombre,
+      primerApellido: parsed.primerApellido,
+      segundoApellido: parsed.segundoApellido,
+      correo: null,
+      telefono: normalizePhoneWithDefaultCountryCode(params.telefono),
+      telefonoSecundario: normalizePhoneWithDefaultCountryCode(params.telefonoSecundario),
+      direccionExacta: toNullableString(params.direccionExacta),
+      parentesco: toNullableString(params.parentesco) || "Encargado",
+      viveConEstudiante: toBoolean(params.viveConEstudiante),
+      esPrincipal: !!params.esPrincipal,
+      aceptaWhatsApp: isTruthyText(params.aceptaWhatsApp),
+      aceptaCorreo: isTruthyText(params.aceptaCorreo),
+      recibeNotificaciones: isTruthyText(params.aceptaWhatsApp) || isTruthyText(params.aceptaCorreo)
+    };
+  };
+
+  const encargado1 = buildEncargadoFromFullName({
+    nombreCompleto: row.encargado1_nombreCompleto,
+    identificacion: row.encargado1_identificacion,
+    telefono: row.encargado1_telefono,
+    direccionExacta: row.encargado1_direccionExacta,
+    parentesco: row.encargado1_parentesco,
+    viveConEstudiante: row.encargado1_viveConEstudiante,
+    aceptaWhatsApp: row.encargado1_aceptaWhatsApp,
+    aceptaCorreo: row.encargado1_aceptaCorreo,
+    esPrincipal: true,
+    titulo: row.encargado1_titulo
+  });
+  const encargado2 = buildEncargadoFromFullName({
+    nombreCompleto: row.encargado2_nombreCompleto,
+    identificacion: row.encargado2_identificacion,
+    telefono: row.encargado2_telefono,
+    telefonoSecundario: row.encargado2_telefonoSecundario,
+    direccionExacta: row.encargado2_direccionExacta,
+    parentesco: row.encargado2_parentesco,
+    viveConEstudiante: row.encargado2_viveConEstudiante,
+    aceptaWhatsApp: row.encargado2_aceptaWhatsApp,
+    aceptaCorreo: row.encargado2_aceptaCorreo,
+    esPrincipal: false
   });
 
-  const encargadoPrincipal =
-    [buildEncargadoCandidate("encargado", "Encargado")]
-      .find((item) => item.identificacion || item.nombre || item.correo || item.telefono) || null;
+  const encargados = [encargado1, encargado2].filter(
+    (item) => item.identificacion || item.nombre || item.telefono || item.telefonoSecundario
+  );
 
-  const encargados = encargadoPrincipal ? [encargadoPrincipal] : [];
+  const autorizaWhatsAppEncargado =
+    toBoolean(row.autorizaWhatsAppEncargado) ||
+    isTruthyText(row.encargado1_aceptaWhatsApp) ||
+    isTruthyText(row.encargado2_aceptaWhatsApp);
 
   return {
     identificacion,
     error: null,
     payload: {
       identificacion,
+      tipoIdentificacion: toNullableString(row.tipoIdentificacion),
       nombre,
       primerApellido,
       segundoApellido,
@@ -974,19 +1373,24 @@ function buildImportPayloadFromRow(row: any) {
       sexo: toNullableString(row.sexo),
       correo: toNullableString(row.correo),
       telefono: normalizePhoneWithDefaultCountryCode(row.telefono),
-      fotoUrl: null,
+      fotoUrl: toNullableString(row.fotoUrl),
       nacionalidad: toNullableString(row.nacionalidad),
-      tipoEstudianteId: toNullablePositiveInt(row.tipoEstudianteId),
-      rutaTransporteId: toNullablePositiveInt(row.rutaTransporteId),
-      autorizaWhatsAppEncargado: toBoolean(row.autorizaWhatsAppEncargado),
+      tipoEstudianteId: toNullableString(row.tipoEstudianteId),
+      rutaTransporteId: toNullableString(row.rutaTransporteId),
+      autorizaWhatsAppEncargado,
+      repitente: toBoolean(row.repitente),
+      refugiado: toBoolean(row.refugiado),
       tieneAdecuacion,
       adecuacion,
       nivelFuncionamiento: toNullableString(row.nivelFuncionamiento),
-      discapacidad: toNullableString(row.discapacidad),
+      discapacidad,
+      tipoDiscapacidad,
       enfermedad: toNullableString(row.enfermedad),
-      rutaTransporteHabitual: toNullableString(row.rutaTransporteHabitual),
+      rutaTransporteHabitual: toNullableString(row.rutaTransporteHabitual) || toNullableString(row.rutaTransporteId),
       observaciones: toNullableString(row.observaciones),
       observacionMedica: toNullableString(row.observacionMedica),
+      especialidad: toNullableString(row.especialidad),
+      movimiento: toNullableString(row.movimiento),
       encargados
     }
   };
@@ -1152,6 +1556,7 @@ router.get("/", async (req, res) => {
             e.Sexo,
             e.Correo,
             e.Telefono,
+            e.TipoIdentificacion,
             e.FotoUrl,
             e.CodigoCarnet,
             e.QrContenido,
@@ -1161,10 +1566,13 @@ router.get("/", async (req, res) => {
             e.RutaTransporteId,
             rt.Descripcion AS RutaTransporteDescripcion,
             e.AutorizaWhatsAppEncargado,
+            e.Repitente,
+            e.Refugiado,
             e.TieneAdecuacion,
             e.Adecuacion,
             e.NivelFuncionamiento,
             e.Discapacidad,
+            e.TipoDiscapacidad,
             e.Enfermedad,
             e.RutaTransporteHabitual,
             e.Observaciones,
@@ -1422,136 +1830,94 @@ router.get(
         "Adecuación curricular no significativa";
 
       const instrucciones = [
-        {
-          Campo: "identificacion",
-          Obligatorio: "Si",
-          Descripcion: "Identificacion del estudiante"
-        },
-        { Campo: "nombre", Obligatorio: "Si", Descripcion: "Nombre del estudiante" },
-        { Campo: "primerApellido", Obligatorio: "Si", Descripcion: "Primer apellido" },
-        { Campo: "segundoApellido", Obligatorio: "Si", Descripcion: "Segundo apellido" },
-        {
-          Campo: "fechaNacimiento",
-          Obligatorio: "Si",
-          Descripcion: "Formato recomendado YYYY-MM-DD"
-        },
-        { Campo: "sexo", Obligatorio: "No", Descripcion: "Masculino, Femenino u Otro" },
-        { Campo: "correo", Obligatorio: "No", Descripcion: "Se genera automaticamente con Identificacion + dominio institucional" },
-        { Campo: "telefono", Obligatorio: "No", Descripcion: "Teléfono del estudiante. Si no inicia con + se antepone +506 automáticamente" },
-        { Campo: "tipoEstudianteId", Obligatorio: "No", Descripcion: "Id del tipo de estudiante configurado en Academico" },
-        { Campo: "nacionalidad", Obligatorio: "No", Descripcion: "Nacionalidad" },
-        { Campo: "tieneAdecuacion", Obligatorio: "No", Descripcion: "Si o No. Marque Si solo cuando el estudiante tenga adecuación" },
-        { Campo: "adecuacion", Obligatorio: "Condicional", Descripcion: "Seleccione la adecuación cuando tieneAdecuacion sea Si" },
-        { Campo: "nivelFuncionamiento", Obligatorio: "No", Descripcion: "Nivel de funcionamiento del estudiante. Completar junto con observaciones." },
-        { Campo: "discapacidad", Obligatorio: "No", Descripcion: "Discapacidad" },
-        { Campo: "enfermedad", Obligatorio: "No", Descripcion: "Enfermedad" },
-        { Campo: "rutaTransporteId", Obligatorio: "No", Descripcion: "Id de la ruta de transporte configurada en Academico" },
-        {
-          Campo: "rutaTransporteHabitual",
-          Obligatorio: "No",
-          Descripcion: "Nombre o referencia de ruta de transporte"
-        },
-        { Campo: "autorizaWhatsAppEncargado", Obligatorio: "No", Descripcion: "Si o No. Indica si padre, madre o encargado autoriza recibir informacion por WhatsApp" },
-        {
-          Campo: "observaciones",
-          Obligatorio: "No",
-          Descripcion: "Observaciones del nivel de funcionamiento y seguimiento de la adecuacion."
-        },
-        {
-          Campo: "observacionMedica",
-          Obligatorio: "No",
-          Descripcion: "Observacion medica"
-        },
-        {
-          Campo: "encargado_nombre",
-          Obligatorio: "No",
-          Descripcion: "Nombre del encargado"
-        },
-        {
-          Campo: "encargado_primerApellido",
-          Obligatorio: "No",
-          Descripcion: "Primer apellido del encargado"
-        },
-        {
-          Campo: "encargado_segundoApellido",
-          Obligatorio: "No",
-          Descripcion: "Segundo apellido del encargado"
-        },
-        {
-          Campo: "encargado_identificacion",
-          Obligatorio: "No",
-          Descripcion: "Identificacion del encargado"
-        },
-        {
-          Campo: "encargado_correo",
-          Obligatorio: "No",
-          Descripcion: "Correo del encargado"
-        },
-        {
-          Campo: "encargado_telefono",
-          Obligatorio: "No",
-          Descripcion: "Teléfono del encargado. Si no inicia con + se antepone +506 automáticamente"
-        },
-        {
-          Campo: "encargado_direccionExacta",
-          Obligatorio: "No",
-          Descripcion: "Direccion exacta del encargado"
-        },
-        {
-          Campo: "encargado_parentesco",
-          Obligatorio: "No",
-          Descripcion: "Ejemplo: Tia, abuelo, tutor"
-        },
-        {
-          Campo: "encargado_viveConEstudiante",
-          Obligatorio: "No",
-          Descripcion: "Si o No"
-        },
-        {
-          Campo: "encargado_esPrincipal",
-          Obligatorio: "No",
-          Descripcion: "Si o No"
-        },
-        {
-          Campo: "encargado_recibeNotificaciones",
-          Obligatorio: "No",
-          Descripcion: "Si o No"
-        }
+        { Campo: "identificación_estudiante", Obligatorio: "Si", Descripcion: "Identificacion del estudiante" },
+        { Campo: "Tipo_ identificacion_estudiante", Obligatorio: "No", Descripcion: "Ejemplo: Cédula nacional, DIMEX o Pasaporte" },
+        { Campo: "Apellido1", Obligatorio: "Si", Descripcion: "Primer apellido" },
+        { Campo: "Apellido2", Obligatorio: "Si", Descripcion: "Segundo apellido" },
+        { Campo: "Nombre", Obligatorio: "Si", Descripcion: "Nombre del estudiante" },
+        { Campo: "Fecha_Nacimiento", Obligatorio: "Si", Descripcion: "Formato recomendado YYYY-MM-DD" },
+        { Campo: "Sexo", Obligatorio: "No", Descripcion: "Masculino, Femenino u Otro" },
+        { Campo: "Nacionalidad", Obligatorio: "No", Descripcion: "Nacionalidad" },
+        { Campo: "Repitente", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Refugiado", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Discapacidad", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Tipo_Discapacidad", Obligatorio: "Condicional", Descripcion: "Se usa solo cuando Discapacidad = Si" },
+        { Campo: "Adecuacion", Obligatorio: "No", Descripcion: "Si o No. Marque Si solo cuando el estudiante tenga adecuación" },
+        { Campo: "Tipo_Adecuacion", Obligatorio: "Condicional", Descripcion: "Seleccione la adecuación cuando Adecuacion sea Si" },
+        { Campo: "Tipo_Enfermedad", Obligatorio: "No", Descripcion: "Detalle de enfermedad o condición médica" },
+        { Campo: "Especialidad", Obligatorio: "No", Descripcion: "Dato de matrícula. Se conserva en la plantilla para procesos posteriores." },
+        { Campo: "correo_estuduante", Obligatorio: "No", Descripcion: "Referencia. El sistema genera el correo institucional automáticamente con identificación + dominio del colegio." },
+        { Campo: "Ruta_ transporte", Obligatorio: "No", Descripcion: "Descripción o código de la ruta configurada en Académico" },
+        { Campo: "Titulo", Obligatorio: "No", Descripcion: "Tratamiento del encargado principal. Ejemplo: Sr., Sra." },
+        { Campo: "Celular_estudiante", Obligatorio: "No", Descripcion: "Teléfono del estudiante. Si no inicia con + se antepone +506 automáticamente" },
+        { Campo: "Nivel_funcionamiento", Obligatorio: "No", Descripcion: "Nivel de funcionamiento del estudiante" },
+        { Campo: "Observaciones_nivel Funcionamieto", Obligatorio: "No", Descripcion: "Observaciones del nivel de funcionamiento y seguimiento de la adecuación" },
+        { Campo: "Encargado_1", Obligatorio: "No", Descripcion: "Nombre completo del encargado principal" },
+        { Campo: "cedula1", Obligatorio: "No", Descripcion: "Identificación del encargado 1" },
+        { Campo: "Celular1", Obligatorio: "No", Descripcion: "Teléfono del encargado 1. Si no inicia con + se antepone +506 automáticamente" },
+        { Campo: "Parentesco1", Obligatorio: "No", Descripcion: "Ejemplo: Madre, Padre, Tía, Tutor" },
+        { Campo: "Vive_con_estudiante1", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Direccion_exacta1", Obligatorio: "No", Descripcion: "Dirección exacta del encargado 1" },
+        { Campo: "Acepta_WA1", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Acepta_Correo1", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Encargado2", Obligatorio: "No", Descripcion: "Nombre completo del segundo encargado" },
+        { Campo: "Cedula2", Obligatorio: "No", Descripcion: "Identificación del encargado 2" },
+        { Campo: "Celular2", Obligatorio: "No", Descripcion: "Teléfono del encargado 2. Si no inicia con + se antepone +506 automáticamente" },
+        { Campo: "Parentezco2", Obligatorio: "No", Descripcion: "Ejemplo: Madre, Padre, Tía, Tutor" },
+        { Campo: "Vive_con_estudiante2", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Otro_Cel", Obligatorio: "No", Descripcion: "Teléfono adicional del encargado 2. Si no inicia con + se antepone +506 automáticamente" },
+        { Campo: "Dirección2", Obligatorio: "No", Descripcion: "Dirección exacta del encargado 2" },
+        { Campo: "Acepta_WA2", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "Acepta_Correo2", Obligatorio: "No", Descripcion: "Si o No" },
+        { Campo: "MOVIMIENTO", Obligatorio: "No", Descripcion: "Ejemplo: Nueva matrícula, Traslado, Reingreso" },
+        { Campo: "Tipo_estudiante", Obligatorio: "No", Descripcion: "Descripción del tipo de estudiante configurado en Académico" },
+        { Campo: "Foto_Estudiante", Obligatorio: "No", Descripcion: "URL de la foto si ya existe en línea" }
       ];
 
       const ejemplo = [
         {
-          identificacion: "123456789",
-          nombre: "Ana",
-          primerApellido: "PÃ©rez",
-          segundoApellido: "Rojas",
-          fechaNacimiento: "2012-03-15",
-          sexo: "Femenino",
-          correo: "ana@email.com",
-          telefono: "88888888",
-          tipoEstudianteId: tiposEstudianteResult.recordset?.[0]?.TipoEstudianteId || "",
-          nacionalidad: "Costarricense",
-          tieneAdecuacion: "Si",
-          adecuacion: adecuacionEjemplo,
-          nivelFuncionamiento: "Intermedio",
-          discapacidad: "",
-          enfermedad: "",
-          rutaTransporteId: "",
-          rutaTransporteHabitual: "Ruta 1",
-          autorizaWhatsAppEncargado: "Si",
-          observaciones: "Requiere seguimiento pedagógico y apoyos específicos en clase.",
-          observacionMedica: "",
-          encargado_nombre: "Laura",
-          encargado_primerApellido: "Pérez",
-          encargado_segundoApellido: "Solano",
-          encargado_identificacion: "111111111",
-          encargado_correo: "laura@email.com",
-          encargado_telefono: "70000000",
-          encargado_direccionExacta: "San Vito",
-          encargado_parentesco: "Madre",
-          encargado_viveConEstudiante: "Si",
-          encargado_esPrincipal: "Si",
-          encargado_recibeNotificaciones: "Si"
+          identificación_estudiante: "123456789",
+          "Tipo_ identificacion_estudiante": "Cédula nacional",
+          Apellido1: "Pérez",
+          Apellido2: "Rojas",
+          Nombre: "Ana",
+          Fecha_Nacimiento: "2012-03-15",
+          Sexo: "Femenino",
+          Nacionalidad: "Costarricense",
+          Repitente: "No",
+          Refugiado: "No",
+          Discapacidad: "No",
+          Tipo_Discapacidad: "",
+          Adecuacion: "Si",
+          Tipo_Adecuacion: adecuacionEjemplo,
+          Tipo_Enfermedad: "",
+          Especialidad: "Sin especialidad",
+          correo_estuduante: "",
+          "Ruta_ transporte": rutasResult.recordset?.[0]?.Descripcion || "",
+          Titulo: "Sra.",
+          Celular_estudiante: "88888888",
+          Nivel_funcionamiento: "Intermedio",
+          "Observaciones_nivel Funcionamieto": "Requiere seguimiento pedagógico y apoyos específicos en clase.",
+          Encargado_1: "Laura Pérez Solano",
+          cedula1: "111111111",
+          Celular1: "70000000",
+          Parentesco1: "Madre",
+          Vive_con_estudiante1: "Si",
+          Direccion_exacta1: "San Vito",
+          Acepta_WA1: "Si",
+          Acepta_Correo1: "Si",
+          Encargado2: "Carlos Rojas Salazar",
+          Cedula2: "222222222",
+          Celular2: "71111111",
+          Parentezco2: "Padre",
+          Vive_con_estudiante2: "No",
+          Otro_Cel: "72222222",
+          "Dirección2": "Sabalito",
+          Acepta_WA2: "No",
+          Acepta_Correo2: "Si",
+          MOVIMIENTO: "NUEVA MATRÍCULA 2026",
+          Tipo_estudiante: tiposEstudianteResult.recordset?.[0]?.Descripcion || "",
+          Foto_Estudiante: ""
         }
       ];
       const workbook = new ExcelJS.Workbook();
@@ -1647,11 +2013,11 @@ router.get(
       styleHeaderRow(sheetEstudiantes, colores.encabezado);
 
       const requiredFields = new Set([
-        "identificacion",
-        "nombre",
-        "primerApellido",
-        "segundoApellido",
-        "fechaNacimiento"
+        "identificación_estudiante",
+        "Apellido1",
+        "Apellido2",
+        "Nombre",
+        "Fecha_Nacimiento"
       ]);
 
       headers.forEach((header, index) => {
@@ -1673,7 +2039,7 @@ router.get(
         }
       });
 
-      sheetEstudiantes.getColumn("fechaNacimiento").numFmt = "yyyy-mm-dd";
+      sheetEstudiantes.getColumn("Fecha_Nacimiento").numFmt = "yyyy-mm-dd";
 
       const addListValidation = (columnKey: string, formulae: string[], promptTitle: string, prompt: string) => {
         const colNumber = headers.findIndex((item) => item === columnKey) + 1;
@@ -1695,45 +2061,48 @@ router.get(
       };
 
       addListValidation(
-        "sexo",
+        "Sexo",
         ['"Masculino,Femenino,Otro"'],
         "Sexo",
         "Seleccione Masculino, Femenino u Otro."
       );
       addListValidation(
-        "autorizaWhatsAppEncargado",
+        "Repitente",
         ['"Si,No"'],
-        "Autorización WhatsApp",
+        "Repitente",
         "Seleccione Si o No."
       );
+      addListValidation("Refugiado", ['"Si,No"'], "Refugiado", "Seleccione Si o No.");
+      addListValidation("Discapacidad", ['"Si,No"'], "Discapacidad", "Seleccione Si o No.");
+      addListValidation("Adecuacion", ['"Si,No"'], "Adecuación", "Seleccione Si o No.");
+      addListValidation("Vive_con_estudiante1", ['"Si,No"'], "Vive con estudiante", "Seleccione Si o No.");
+      addListValidation("Vive_con_estudiante2", ['"Si,No"'], "Vive con estudiante", "Seleccione Si o No.");
+      addListValidation("Acepta_WA1", ['"Si,No"'], "Acepta WhatsApp", "Seleccione Si o No.");
+      addListValidation("Acepta_WA2", ['"Si,No"'], "Acepta WhatsApp", "Seleccione Si o No.");
+      addListValidation("Acepta_Correo1", ['"Si,No"'], "Acepta correo", "Seleccione Si o No.");
+      addListValidation("Acepta_Correo2", ['"Si,No"'], "Acepta correo", "Seleccione Si o No.");
 
       const tiposEstudianteEnd = Math.max(2, tiposEstudianteResult.recordset.length + 1);
       const tiposAdecuacionEnd = Math.max(2, tiposAdecuacionResult.recordset.length + 1);
       const rutasEnd = Math.max(2, rutasResult.recordset.length + 1);
 
       addListValidation(
-        "tipoEstudianteId",
-        [`Catalogos!$A$2:$A$${tiposEstudianteEnd}`],
+        "Tipo_estudiante",
+        [`Catalogos!$B$2:$B$${tiposEstudianteEnd}`],
         "Tipo de estudiante",
-        "Use un ID existente de la hoja Catalogos."
+        "Use una descripción existente de la hoja Catalogos."
       );
       addListValidation(
-        "tieneAdecuacion",
-        ['"Si,No"'],
-        "Adecuación",
-        "Seleccione Si o No."
-      );
-      addListValidation(
-        "adecuacion",
+        "Tipo_Adecuacion",
         [`Catalogos!$D$2:$D$${tiposAdecuacionEnd}`],
         "Tipo de adecuación",
-        "Seleccione una adecuación activa desde Catalogos cuando tieneAdecuacion sea Si."
+        "Seleccione una adecuación activa desde Catalogos cuando Adecuacion sea Si."
       );
       addListValidation(
-        "rutaTransporteId",
-        [`Catalogos!$E$2:$E$${rutasEnd}`],
+        "Ruta_ transporte",
+        [`Catalogos!$F$2:$F$${rutasEnd}`],
         "Ruta de transporte",
-        "Use un ID existente de la hoja Catalogos."
+        "Use una descripción existente de la hoja Catalogos."
       );
 
       const buffer = await workbook.xlsx.writeBuffer();
@@ -2034,6 +2403,7 @@ router.get("/:id/detalle", async (req, res) => {
           e.Sexo,
           e.Correo,
           e.Telefono,
+          e.TipoIdentificacion,
           e.FotoUrl,
           e.CodigoCarnet,
           e.QrContenido,
@@ -2043,10 +2413,13 @@ router.get("/:id/detalle", async (req, res) => {
           e.RutaTransporteId,
           rt.Descripcion AS RutaTransporteDescripcion,
           e.AutorizaWhatsAppEncargado,
+          e.Repitente,
+          e.Refugiado,
           e.TieneAdecuacion,
           e.Adecuacion,
           e.NivelFuncionamiento,
           e.Discapacidad,
+          e.TipoDiscapacidad,
           e.Enfermedad,
           e.RutaTransporteHabitual,
           e.Observaciones,
@@ -2076,6 +2449,8 @@ router.get("/:id/detalle", async (req, res) => {
           ee.EstudianteEncargadoId,
           ee.Parentesco,
           ee.EsPrincipal,
+          ee.AceptaWhatsApp,
+          ee.AceptaCorreo,
           ee.RecibeNotificaciones,
           ee.ViveConEstudiante,
           ee.VigenciaDesde,
@@ -2084,11 +2459,13 @@ router.get("/:id/detalle", async (req, res) => {
           e.EncargadoId,
           e.TipoEncargado,
           e.Identificacion,
+          e.Titulo,
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
           e.Correo,
           e.Telefono,
+          e.TelefonoSecundario,
           e.DireccionExacta
         FROM dbo.EstudianteEncargado ee
         INNER JOIN dbo.Encargado e
@@ -2146,16 +2523,20 @@ router.get("/:id/carnet", async (req, res) => {
           e.Sexo,
           e.Correo,
           e.Telefono,
+          e.TipoIdentificacion,
           e.FotoUrl,
           e.CodigoCarnet,
           e.QrContenido,
           e.Nacionalidad,
           e.RutaTransporteId,
           e.AutorizaWhatsAppEncargado,
+          e.Repitente,
+          e.Refugiado,
           e.TieneAdecuacion,
           e.Adecuacion,
           e.NivelFuncionamiento,
           e.Discapacidad,
+          e.TipoDiscapacidad,
           e.Enfermedad,
           e.RutaTransporteHabitual,
           e.Observaciones,
@@ -2223,9 +2604,12 @@ router.post(
         fechaNacimiento,
         correo,
         telefono,
+        tipoIdentificacion,
         tipoEstudianteId,
         rutaTransporteId,
         autorizaWhatsAppEncargado,
+        repitente,
+        refugiado,
         tieneAdecuacion,
         sexo,
         fotoUrl,
@@ -2233,10 +2617,12 @@ router.post(
         adecuacion,
         nivelFuncionamiento,
         discapacidad,
+        tipoDiscapacidad,
         enfermedad,
         rutaTransporteHabitual,
         observaciones,
         observacionMedica,
+        movimiento,
         encargados = []
       } = req.body;
 
@@ -2267,9 +2653,12 @@ router.post(
           fechaNacimiento,
           correo,
           telefono: telefonoNormalizado,
+          tipoIdentificacion,
           tipoEstudianteId,
           rutaTransporteId,
           autorizaWhatsAppEncargado,
+          repitente,
+          refugiado,
           tieneAdecuacion: tieneAdecuacionNormalizada,
           sexo,
           fotoUrl,
@@ -2277,10 +2666,12 @@ router.post(
           adecuacion: adecuacionNormalizada,
           nivelFuncionamiento,
           discapacidad,
+          tipoDiscapacidad,
           enfermedad,
           rutaTransporteHabitual,
           observaciones,
           observacionMedica,
+          movimiento,
           encargados
         }
       });
@@ -2341,9 +2732,12 @@ router.put(
         fechaNacimiento,
         correo,
         telefono,
+        tipoIdentificacion,
         tipoEstudianteId,
         rutaTransporteId,
         autorizaWhatsAppEncargado,
+        repitente,
+        refugiado,
         tieneAdecuacion,
         sexo,
         fotoUrl,
@@ -2351,6 +2745,7 @@ router.put(
         adecuacion,
         nivelFuncionamiento,
         discapacidad,
+        tipoDiscapacidad,
         enfermedad,
         rutaTransporteHabitual,
         observaciones,
@@ -2442,9 +2837,12 @@ router.put(
         .input("fechaNacimiento", sql.Date, fechaNacimiento || null)
         .input("correo", sql.NVarChar, correoFinal)
         .input("telefono", sql.NVarChar, telefonoNormalizado || null)
+        .input("tipoIdentificacion", sql.NVarChar, tipoIdentificacion || null)
         .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
         .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
         .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
+        .input("repitente", sql.Bit, !!repitente)
+        .input("refugiado", sql.Bit, !!refugiado)
         .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
         .input("sexo", sql.NVarChar, sexo || null)
         .input("fotoUrl", sql.NVarChar, fotoUrl || null)
@@ -2454,6 +2852,7 @@ router.put(
         .input("adecuacion", sql.NVarChar, adecuacionNormalizada)
         .input("nivelFuncionamiento", sql.NVarChar, nivelFuncionamiento || null)
         .input("discapacidad", sql.NVarChar, discapacidad || null)
+        .input("tipoDiscapacidad", sql.NVarChar, tipoDiscapacidad || null)
         .input("enfermedad", sql.NVarChar, enfermedad || null)
         .input(
           "rutaTransporteHabitual",
@@ -2472,9 +2871,12 @@ router.put(
             FechaNacimiento = @fechaNacimiento,
             Correo = @correo,
             Telefono = @telefono,
+            TipoIdentificacion = @tipoIdentificacion,
             TipoEstudianteId = @tipoEstudianteId,
             RutaTransporteId = @rutaTransporteId,
             AutorizaWhatsAppEncargado = @autorizaWhatsAppEncargado,
+            Repitente = @repitente,
+            Refugiado = @refugiado,
             TieneAdecuacion = @tieneAdecuacion,
             Sexo = @sexo,
             FotoUrl = @fotoUrl,
@@ -2484,6 +2886,7 @@ router.put(
             Adecuacion = @adecuacion,
             NivelFuncionamiento = @nivelFuncionamiento,
             Discapacidad = @discapacidad,
+            TipoDiscapacidad = @tipoDiscapacidad,
             Enfermedad = @enfermedad,
             RutaTransporteHabitual = @rutaTransporteHabitual,
             Observaciones = @observaciones,
@@ -2512,6 +2915,13 @@ router.put(
           encargados: encargadosNormalizados
         });
       }
+
+      await syncStudentMovement({
+        transaction,
+        institucionId: req.auth.institucionId,
+        estudianteId: id,
+        movimiento: req.body?.movimiento
+      });
 
       await ensureParentPortalUser({
         transaction,
