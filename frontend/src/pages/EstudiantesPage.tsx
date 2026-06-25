@@ -1892,36 +1892,6 @@ export default function EstudiantesPage() {
       </section>
 
       <section className="card">
-        <h3>Busqueda de estudiantes</h3>
-
-        <div style={{ display: "grid", gap: "12px", marginBottom: "14px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px" }}>
-            {[
-              { label: "Activos", value: dashboard?.totalActivos ?? 0 },
-              { label: "Inactivos", value: dashboard?.totalInactivos ?? 0 },
-              { label: "Total general", value: dashboard?.totalGeneral ?? 0 },
-              { label: "Matriculados", value: dashboard?.totalMatriculados ?? 0 }
-            ].map((item) => (
-              <div key={item.label} style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", padding: "12px", background: "rgba(255,255,255,0.04)" }}>
-                <div style={{ color: "#cbd5e1", fontSize: "12px", fontWeight: 800 }}>{item.label}</div>
-                <div style={{ fontSize: "26px", fontWeight: 900, color: "#ffffff" }}>
-                  {loadingDashboard ? "..." : item.value}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px" }}>
-            <DashboardSummaryList title="Por grupo" data={dashboard?.porGrupo} />
-            <DashboardSummaryList title="Por seccion" data={dashboard?.porSeccion} />
-            <DashboardSummaryList title="Por genero" data={dashboard?.porGenero} />
-            <DashboardSummaryList title="Por especialidad" data={dashboard?.porEspecialidad} />
-            <DashboardSummaryList title="Por nacionalidad" data={dashboard?.porNacionalidad} />
-            <DashboardSummaryList title="Por tipo" data={dashboard?.porTipo} />
-            <DashboardSummaryList title="Otros" data={dashboard?.otros} />
-          </div>
-        </div>
-
         {canImportStudents && (
         <div
           style={{

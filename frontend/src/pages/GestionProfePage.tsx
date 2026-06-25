@@ -115,6 +115,27 @@ function isValidApoyoAdecuacion(value?: string | null) {
   return !!normalized && !["regular", "sin adecuacion", "seleccione", "no"].includes(normalized);
 }
 
+const MIS_GRUPOS_TODOS_KEY = "__TODOS__";
+
+function getMisGruposPeriodoLabel(periodoNombre: string, periodoId?: number | string | null) {
+  const texto = String(periodoNombre || "").trim();
+  const porNumero = texto.match(/(\d+)/);
+  if (porNumero) return `Periodo ${porNumero[1]}`;
+
+  const romanos = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+  const porRomano = texto.toUpperCase().match(/\b(X|IX|VIII|VII|VI|V|IV|III|II|I)\b/);
+  if (porRomano) {
+    const indice = romanos.indexOf(porRomano[1]);
+    if (indice !== -1) return `Periodo ${indice + 1}`;
+  }
+
+  if (periodoId !== undefined && periodoId !== null && String(periodoId).trim()) {
+    return `Periodo ${periodoId}`;
+  }
+
+  return texto || "Periodo";
+}
+
 export default function GestionProfePage() {
   const { user } = useAuth();
   const [grupos, setGrupos] = useState<GrupoProfesor[]>([]);
@@ -122,6 +143,7 @@ export default function GestionProfePage() {
   const [detalle, setDetalle] = useState<DetalleGrupo | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<NoteDrafts>({});
   const [q, setQ] = useState("");
+  const [misGruposPeriodosSeleccionados, setMisGruposPeriodosSeleccionados] = useState<string[]>([MIS_GRUPOS_TODOS_KEY]);
   const [adminInstitucionesFiltro, setAdminInstitucionesFiltro] = useState<any[]>([]);
   const [adminGradosFiltro, setAdminGradosFiltro] = useState<any[]>([]);
   const [adminProfesoresFiltro, setAdminProfesoresFiltro] = useState<any[]>([]);
@@ -377,11 +399,54 @@ export default function GestionProfePage() {
     return [...grupos].sort(compararGruposProfesor);
   }, [grupos]);
 
+  const periodosDisponiblesMisGrupos = useMemo(() => {
+    const periodosMap = new Map<string, { id: string; label: string; nombre: string; orden: number }>();
+    gruposOrdenados.forEach((item, index) => {
+      const id = String(item?.PeriodoId ?? "").trim();
+      if (!id || periodosMap.has(id)) return;
+      periodosMap.set(id, {
+        id,
+        nombre: String(item?.PeriodoNombre || "").trim(),
+        label: getMisGruposPeriodoLabel(String(item?.PeriodoNombre || ""), item?.PeriodoId),
+        orden: Number(item?.PeriodoId || index + 1)
+      });
+    });
+    return Array.from(periodosMap.values()).sort((a, b) => {
+      if (a.orden !== b.orden) return a.orden - b.orden;
+      return a.label.localeCompare(b.label, "es");
+    });
+  }, [gruposOrdenados]);
+
+  const gruposFiltradosPorPeriodo = useMemo(() => {
+    if (misGruposPeriodosSeleccionados.includes(MIS_GRUPOS_TODOS_KEY)) {
+      return gruposOrdenados;
+    }
+    const periodosActivos = new Set(misGruposPeriodosSeleccionados);
+    return gruposOrdenados.filter((item) => periodosActivos.has(String(item?.PeriodoId ?? "").trim()));
+  }, [gruposOrdenados, misGruposPeriodosSeleccionados]);
+
   const apoyoEducativoEstudiantesValidos = useMemo(() => {
     return (apoyoEducativoEstudiantes || []).filter((item) => {
       return !!item && !!item.TieneAdecuacion && isValidApoyoAdecuacion(item.TipoAdecuacion);
     });
   }, [apoyoEducativoEstudiantes]);
+
+  useEffect(() => {
+    setMisGruposPeriodosSeleccionados((prev) => {
+      if (!periodosDisponiblesMisGrupos.length) {
+        return prev.length === 1 && prev[0] === MIS_GRUPOS_TODOS_KEY ? prev : [MIS_GRUPOS_TODOS_KEY];
+      }
+      if (prev.includes(MIS_GRUPOS_TODOS_KEY)) return prev;
+
+      const idsValidos = new Set(periodosDisponiblesMisGrupos.map((item) => item.id));
+      const siguientes = prev.filter((id) => idsValidos.has(id));
+      if (!siguientes.length || siguientes.length === periodosDisponiblesMisGrupos.length) {
+        return [MIS_GRUPOS_TODOS_KEY];
+      }
+      if (siguientes.length === prev.length) return prev;
+      return siguientes;
+    });
+  }, [periodosDisponiblesMisGrupos]);
 
   const apoyoEducativoResumenFiltrado = useMemo(() => {
     const filtro = apoyoEducativoResumenSearch.trim().toLowerCase();
@@ -911,8 +976,8 @@ export default function GestionProfePage() {
 
   function ordenarActividadesEvaluativas(items: any[]) {
     return [...(items || [])].sort((a, b) => {
-      const aa = String(a?.Nombre || "");
-      const bb = String(b?.Nombre || "");
+      const aa = getSeguimientoActividadLabel(a);
+      const bb = getSeguimientoActividadLabel(b);
       const ma = aa.match(/(\d+)/);
       const mb = bb.match(/(\d+)/);
       if (ma && mb) {
@@ -922,6 +987,15 @@ export default function GestionProfePage() {
       }
       return aa.localeCompare(bb, undefined, { numeric: true, sensitivity: "base" });
     });
+  }
+
+  function getSeguimientoActividadLabel(actividad: any) {
+    return String(
+      actividad?.Nombre
+      || actividad?.Descripcion
+      || actividad?.ActividadNombre
+      || `Actividad ${actividad?.ActividadId || ""}`
+    ).trim();
   }
 
   const dedupeSeguimientosActividadIndicador = (items: any[]) => {
@@ -6423,6 +6497,26 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     loadGrupos(q);
   }
 
+  function toggleMisGruposPeriodo(periodoId: string) {
+    setMisGruposPeriodosSeleccionados((prev) => {
+      if (periodoId === MIS_GRUPOS_TODOS_KEY) {
+        return [MIS_GRUPOS_TODOS_KEY];
+      }
+
+      const base = prev.includes(MIS_GRUPOS_TODOS_KEY) ? [] : [...prev];
+      const yaSeleccionado = base.includes(periodoId);
+      const siguientes = yaSeleccionado
+        ? base.filter((id) => id !== periodoId)
+        : [...base, periodoId];
+
+      if (!siguientes.length || siguientes.length >= periodosDisponiblesMisGrupos.length) {
+        return [MIS_GRUPOS_TODOS_KEY];
+      }
+
+      return siguientes;
+    });
+  }
+
   useEffect(() => {
     if (initialLoadStartedRef.current) return;
     initialLoadStartedRef.current = true;
@@ -7015,6 +7109,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             style={secondaryButtonStyle}
             onClick={() => {
               setQ("");
+              setMisGruposPeriodosSeleccionados([MIS_GRUPOS_TODOS_KEY]);
               if (isGestionAdminRole) {
                 setAdminModoCarga("GRADO");
                 const institucionInicial = !isSuperAdminRole && user?.institucionId ? String(user.institucionId) : "";
@@ -7034,13 +7129,82 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           </button>
         </form>
 
+        {periodosDisponiblesMisGrupos.length ? (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "10px",
+              marginBottom: "16px",
+              alignItems: "center"
+            }}
+          >
+            <span style={{ color: "#cbd5e1", fontWeight: 800, fontSize: "0.92rem" }}>Períodos activos:</span>
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "8px 12px",
+                borderRadius: "999px",
+                border: "1px solid rgba(148, 163, 184, 0.35)",
+                background: misGruposPeriodosSeleccionados.includes(MIS_GRUPOS_TODOS_KEY)
+                  ? "linear-gradient(135deg, rgba(45, 212, 191, 0.20), rgba(250, 204, 21, 0.18))"
+                  : "rgba(15, 23, 42, 0.28)",
+                color: "#f8fafc",
+                fontWeight: 800,
+                cursor: "pointer"
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={misGruposPeriodosSeleccionados.includes(MIS_GRUPOS_TODOS_KEY)}
+                onChange={() => toggleMisGruposPeriodo(MIS_GRUPOS_TODOS_KEY)}
+              />
+              Todos
+            </label>
+            {periodosDisponiblesMisGrupos.map((periodo) => {
+              const checked = misGruposPeriodosSeleccionados.includes(MIS_GRUPOS_TODOS_KEY)
+                || misGruposPeriodosSeleccionados.includes(periodo.id);
+              return (
+                <label
+                  key={periodo.id}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "8px 12px",
+                    borderRadius: "999px",
+                    border: "1px solid rgba(148, 163, 184, 0.35)",
+                    background: checked
+                      ? "rgba(59, 130, 246, 0.18)"
+                      : "rgba(15, 23, 42, 0.28)",
+                    color: "#f8fafc",
+                    fontWeight: 700,
+                    cursor: "pointer"
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleMisGruposPeriodo(periodo.id)}
+                  />
+                  {periodo.label}
+                </label>
+              );
+            })}
+          </div>
+        ) : null}
+
         {loadingGrupos ? (
           <p>Cargando grupos...</p>
         ) : grupos.length === 0 ? (
           <p>No hay grupos asignados para mostrar.</p>
+        ) : gruposFiltradosPorPeriodo.length === 0 ? (
+          <p>No hay grupos para los períodos seleccionados.</p>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "12px" }}>
-            {gruposOrdenados.map((item) => {
+            {gruposFiltradosPorPeriodo.map((item) => {
               const isSelected = selected?.AsignacionDocenteId === item.AsignacionDocenteId;
               const tienePlantilla = !!item.EvaluacionPlantillaNombre;
               const tieneCalificaciones = Boolean(Number(item.TieneCalificacionesEvaluacion || 0));
@@ -8516,10 +8680,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             {seguimientoActividadesFiltradas.map((actividad) => {
                               const puntos = Math.round(Number(actividad.PuntosMaximos || 0));
                               const pe = Math.round(Number(actividad.PorcentajeDentroRubro || 0));
-                              const labelExamen = `${actividad.Nombre} - ${puntos}pts - ${pe}%`;
+                              const actividadLabel = getSeguimientoActividadLabel(actividad);
+                              const labelExamen = `${actividadLabel} - ${puntos}pts - ${pe}%`;
                               return (
                                 <option key={actividad.ActividadId} value={actividad.ActividadId}>
-                                  {isTipoExamenSeguimiento(seguimientoTipo) ? labelExamen : `${actividad.Nombre} - ${Number(actividad.PuntosMaximos || 0).toFixed(2)} pts`}
+                                  {isTipoExamenSeguimiento(seguimientoTipo) ? labelExamen : `${actividadLabel} - ${Number(actividad.PuntosMaximos || 0).toFixed(2)} pts`}
                                 </option>
                               );
                             })}
@@ -8536,7 +8701,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             <div style={{ display: "grid", gap: "8px" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px", padding: "12px", background: "white", border: invalido ? "2px solid #ef4444" : "1px solid #e2e8f0", borderRadius: "14px" }}>
                               <div>
-                                <strong>{seguimientoActividadSeleccionada.Nombre}</strong>
+                                <strong>{getSeguimientoActividadLabel(seguimientoActividadSeleccionada)}</strong>
                                 <div style={{ color: "#475569" }}>Actividad tomada desde parametrizaciones</div>
                               </div>
                               <label style={{ display: "grid", gap: "6px" }}>
@@ -8563,7 +8728,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   </small>
                                 ) : null}
                                 <small style={{ color: "#475569", fontWeight: 700 }}>
-                                  Validando examen: {seguimientoActividadSeleccionada.Nombre} (mínimo: {minimo.toFixed(2)})
+                                  Validando examen: {getSeguimientoActividadLabel(seguimientoActividadSeleccionada)} (mínimo: {minimo.toFixed(2)})
                                 </small>
                               </label>
                             </div>
@@ -8720,7 +8885,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               {seguimientoActividadesFiltradas.length === 0 ? <option value="">No hay actividades configuradas para este componente</option> : null}
                               {seguimientoActividadesFiltradas.map((actividad) => (
                                 <option key={actividad.ActividadId} value={actividad.ActividadId}>
-                                  {actividad.Nombre} - {Number(actividad.PorcentajeDentroRubro || 0).toFixed(2)}%
+                                  {getSeguimientoActividadLabel(actividad)} - {Number(actividad.PorcentajeDentroRubro || 0).toFixed(2)}%
                                 </option>
                               ))}
                             </select>
@@ -8754,7 +8919,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 <tr style={{ background: "#e2e8f0" }}>
                                   <th style={{ padding: "8px", textAlign: "left", minWidth: "280px" }}>Indicador</th>
                                   {seguimientoActividadesPlaneamiento.map((actividad) => (
-                                    <th key={`head-act-${actividad.ActividadId}`} style={{ padding: "8px", textAlign: "center", minWidth: "110px" }}>{actividad.Nombre}</th>
+                                  <th key={`head-act-${actividad.ActividadId}`} style={{ padding: "8px", textAlign: "center", minWidth: "110px" }}>{getSeguimientoActividadLabel(actividad)}</th>
                                   ))}
                                   <th style={{ padding: "8px", textAlign: "left", minWidth: "120px" }}>Estado</th>
                                 </tr>

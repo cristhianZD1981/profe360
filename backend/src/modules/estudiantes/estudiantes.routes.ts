@@ -1683,15 +1683,19 @@ router.get("/dashboard", async (req, res) => {
         FROM dbo.Estudiante e
         WHERE e.InstitucionId = @institucionId;
 
-        SELECT TOP 12 Grupo AS Label, COUNT(DISTINCT EstudianteId) AS Total
+        SELECT Grupo AS Label, COUNT(DISTINCT EstudianteId) AS Total
         FROM @matriculasBase
+        WHERE NULLIF(LTRIM(RTRIM(Grupo)), '') IS NOT NULL
+          AND LTRIM(RTRIM(Grupo)) <> N'Sin grupo'
         GROUP BY Grupo
-        ORDER BY Total DESC, Label;
+        ORDER BY Label;
 
-        SELECT TOP 18 Seccion AS Label, COUNT(DISTINCT EstudianteId) AS Total
+        SELECT Seccion AS Label, COUNT(DISTINCT EstudianteId) AS Total
         FROM @matriculasBase
+        WHERE NULLIF(LTRIM(RTRIM(Seccion)), '') IS NOT NULL
+          AND LTRIM(RTRIM(Seccion)) <> N'Sin seccion'
         GROUP BY Seccion
-        ORDER BY Total DESC, Label;
+        ORDER BY Label;
 
         SELECT
           COALESCE(NULLIF(LTRIM(RTRIM(e.Sexo)), ''), N'Sin especificar') AS Label,
@@ -1704,6 +1708,7 @@ router.get("/dashboard", async (req, res) => {
 
         SELECT TOP 12 Especialidad AS Label, COUNT(DISTINCT EstudianteId) AS Total
         FROM @matriculasBase
+        WHERE NULLIF(LTRIM(RTRIM(Especialidad)), '') IS NOT NULL
         GROUP BY Especialidad
         ORDER BY Total DESC, Label;
 

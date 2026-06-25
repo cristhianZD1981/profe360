@@ -165,6 +165,16 @@ function normalizeNullableText(value: any) {
   return text.length ? text : null;
 }
 
+function limitNullableText(value: any, maxLength: number) {
+  const text = normalizeNullableText(value);
+  if (!text) return null;
+  return text.slice(0, maxLength);
+}
+
+function limitRequiredText(value: any, maxLength: number) {
+  return normalizeText(value).slice(0, maxLength);
+}
+
 function normalizeForCompare(value: any) {
   return String(value ?? "")
     .normalize("NFD")
@@ -1804,89 +1814,98 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
       const row = rows[index];
       const fila = index + 2;
 
-      const materiaNombre = normalizeText(row.Materia);
-      const tipoColegio = normalizeText(row.Colegio);
-      const ciclo = normalizeNullableText(row.Ciclo);
-      const grado = normalizeText(row.Grado);
-      const mes = normalizeText(row.mes || row.Mes);
-      const area = normalizeNullableText(row.Area);
-      const numeroHabilidad = normalizeNullableText(row["Numero de Habilidad"] || row.NumeroHabilidad);
-      const descripcionHabilidad = normalizeText(row["Descripcion de la Habilidad"] || row.DescripcionHabilidad);
-      const documentoReferencia = normalizeNullableText(row["Documento de referencia"] || row.DocumentoReferencia);
+      try {
+        const materiaNombre = limitRequiredText(row.Materia, 200);
+        const tipoColegio = limitRequiredText(row.Colegio, 100);
+        const ciclo = limitNullableText(row.Ciclo, 100);
+        const grado = limitRequiredText(row.Grado, 100);
+        const mes = limitRequiredText(row.mes || row.Mes, 100);
+        const area = limitNullableText(row.Area, 150);
+        const numeroHabilidad = limitNullableText(row["Numero de Habilidad"] || row.NumeroHabilidad, 50);
+        const descripcionHabilidad = limitRequiredText(row["Descripcion de la Habilidad"] || row.DescripcionHabilidad, 4000);
+        const documentoReferencia = limitNullableText(row["Documento de referencia"] || row.DocumentoReferencia, 300);
 
-      if (!materiaNombre || !tipoColegio || !grado || !mes || !descripcionHabilidad) {
+        if (!materiaNombre || !tipoColegio || !grado || !mes || !descripcionHabilidad) {
+          omitidos += 1;
+          resultados.push({
+            fila,
+            estado: "Omitido",
+            motivo: "Faltan campos obligatorios"
+          });
+          continue;
+        }
+
+        const materiaId = await findMateriaId(pool, institucionId, materiaNombre);
+
+        const duplicateResult = await pool.request()
+          .input("institucionId", sql.Int, institucionId)
+          .input("materiaId", sql.Int, materiaId)
+          .input("materiaNombre", sql.NVarChar(200), materiaNombre)
+          .input("tipoColegio", sql.NVarChar(100), tipoColegio)
+          .input("grado", sql.NVarChar(100), grado)
+          .input("mes", sql.NVarChar(100), mes)
+          .input("area", sql.NVarChar(150), area)
+          .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
+          .input("descripcionHabilidad", sql.NVarChar(4000), descripcionHabilidad)
+          .query(`
+            SELECT TOP 1 PlaneamientoHabilidadId
+            FROM dbo.PlaneamientoHabilidad
+            WHERE InstitucionId = @institucionId
+              AND ISNULL(MateriaId, 0) = ISNULL(@materiaId, 0)
+              AND UPPER(ISNULL(MateriaNombre, N'')) = UPPER(ISNULL(@materiaNombre, N''))
+              AND UPPER(ISNULL(TipoColegio, N'')) = UPPER(ISNULL(@tipoColegio, N''))
+              AND UPPER(ISNULL(Grado, N'')) = UPPER(ISNULL(@grado, N''))
+              AND UPPER(ISNULL(Mes, N'')) = UPPER(ISNULL(@mes, N''))
+              AND UPPER(ISNULL(Area, N'')) = UPPER(ISNULL(@area, N''))
+              AND UPPER(ISNULL(NumeroHabilidad, N'')) = UPPER(ISNULL(@numeroHabilidad, N''))
+              AND UPPER(LTRIM(RTRIM(DescripcionHabilidad))) = UPPER(LTRIM(RTRIM(@descripcionHabilidad)))
+          `);
+
+        if (duplicateResult.recordset.length) {
+          duplicados += 1;
+          resultados.push({
+            fila,
+            estado: "Duplicado",
+            motivo: "Ya existe una habilidad igual"
+          });
+          continue;
+        }
+
+        const insertResult = await pool.request()
+          .input("institucionId", sql.Int, institucionId)
+          .input("usuarioId", sql.Int, usuarioId || null)
+          .input("materiaId", sql.Int, materiaId)
+          .input("materiaNombre", sql.NVarChar(200), materiaNombre)
+          .input("tipoColegio", sql.NVarChar(100), tipoColegio)
+          .input("ciclo", sql.NVarChar(100), ciclo)
+          .input("grado", sql.NVarChar(100), grado)
+          .input("mes", sql.NVarChar(100), mes)
+          .input("area", sql.NVarChar(150), area)
+          .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
+          .input("descripcionHabilidad", sql.NVarChar(4000), descripcionHabilidad)
+          .input("documentoReferencia", sql.NVarChar(300), documentoReferencia)
+          .query(`
+            INSERT INTO dbo.PlaneamientoHabilidad
+              (InstitucionId, UsuarioCreadorId, MateriaId, MateriaNombre, TipoColegio, Ciclo, Grado, Mes, Area, NumeroHabilidad, DescripcionHabilidad, DocumentoReferencia, Activo, CreatedAt)
+            OUTPUT INSERTED.PlaneamientoHabilidadId
+            VALUES
+              (@institucionId, @usuarioId, @materiaId, @materiaNombre, @tipoColegio, @ciclo, @grado, @mes, @area, @numeroHabilidad, @descripcionHabilidad, @documentoReferencia, 1, SYSDATETIME())
+          `);
+
+        insertados += 1;
+        resultados.push({
+          fila,
+          estado: "Insertado",
+          habilidadId: insertResult.recordset[0]?.PlaneamientoHabilidadId || null
+        });
+      } catch (rowError: any) {
         omitidos += 1;
         resultados.push({
           fila,
-          estado: "Omitido",
-          motivo: "Faltan campos obligatorios"
+          estado: "Error",
+          motivo: rowError?.message || "No se pudo procesar la fila"
         });
-        continue;
       }
-
-      const materiaId = await findMateriaId(pool, institucionId, materiaNombre);
-
-      const duplicateResult = await pool.request()
-        .input("institucionId", sql.Int, institucionId)
-        .input("materiaId", sql.Int, materiaId)
-        .input("materiaNombre", sql.NVarChar(200), materiaNombre)
-        .input("tipoColegio", sql.NVarChar(100), tipoColegio)
-        .input("grado", sql.NVarChar(100), grado)
-        .input("mes", sql.NVarChar(100), mes)
-        .input("area", sql.NVarChar(150), area)
-        .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
-        .input("descripcionHabilidad", sql.NVarChar(sql.MAX), descripcionHabilidad)
-        .query(`
-          SELECT TOP 1 PlaneamientoHabilidadId
-          FROM dbo.PlaneamientoHabilidad
-          WHERE InstitucionId = @institucionId
-            AND ISNULL(MateriaId, 0) = ISNULL(@materiaId, 0)
-            AND UPPER(ISNULL(MateriaNombre, N'')) = UPPER(ISNULL(@materiaNombre, N''))
-            AND UPPER(ISNULL(TipoColegio, N'')) = UPPER(ISNULL(@tipoColegio, N''))
-            AND UPPER(ISNULL(Grado, N'')) = UPPER(ISNULL(@grado, N''))
-            AND UPPER(ISNULL(Mes, N'')) = UPPER(ISNULL(@mes, N''))
-            AND UPPER(ISNULL(Area, N'')) = UPPER(ISNULL(@area, N''))
-            AND UPPER(ISNULL(NumeroHabilidad, N'')) = UPPER(ISNULL(@numeroHabilidad, N''))
-            AND UPPER(LTRIM(RTRIM(DescripcionHabilidad))) = UPPER(LTRIM(RTRIM(@descripcionHabilidad)))
-        `);
-
-      if (duplicateResult.recordset.length) {
-        duplicados += 1;
-        resultados.push({
-          fila,
-          estado: "Duplicado",
-          motivo: "Ya existe una habilidad igual"
-        });
-        continue;
-      }
-
-      const insertResult = await pool.request()
-        .input("institucionId", sql.Int, institucionId)
-        .input("usuarioId", sql.Int, usuarioId || null)
-        .input("materiaId", sql.Int, materiaId)
-        .input("materiaNombre", sql.NVarChar(200), materiaNombre)
-        .input("tipoColegio", sql.NVarChar(100), tipoColegio)
-        .input("ciclo", sql.NVarChar(100), ciclo)
-        .input("grado", sql.NVarChar(100), grado)
-        .input("mes", sql.NVarChar(100), mes)
-        .input("area", sql.NVarChar(150), area)
-        .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
-        .input("descripcionHabilidad", sql.NVarChar(sql.MAX), descripcionHabilidad)
-        .input("documentoReferencia", sql.NVarChar(300), documentoReferencia)
-        .query(`
-          INSERT INTO dbo.PlaneamientoHabilidad
-            (InstitucionId, UsuarioCreadorId, MateriaId, MateriaNombre, TipoColegio, Ciclo, Grado, Mes, Area, NumeroHabilidad, DescripcionHabilidad, DocumentoReferencia, Activo, CreatedAt)
-          OUTPUT INSERTED.PlaneamientoHabilidadId
-          VALUES
-            (@institucionId, @usuarioId, @materiaId, @materiaNombre, @tipoColegio, @ciclo, @grado, @mes, @area, @numeroHabilidad, @descripcionHabilidad, @documentoReferencia, 1, SYSDATETIME())
-        `);
-
-      insertados += 1;
-      resultados.push({
-        fila,
-        estado: "Insertado",
-        habilidadId: insertResult.recordset[0]?.PlaneamientoHabilidadId || null
-      });
     }
 
     ok(
