@@ -75,6 +75,8 @@ export type ApoyoEducativoResumenItem = {
   Edad?: number | null;
   GrupoId: number;
   Seccion: string;
+  PeriodoId?: number | null;
+  PeriodoNombre?: string | null;
   TieneAdecuacion?: boolean | null;
   TipoAdecuacion?: string | null;
   NivelFuncionamiento?: string | null;
@@ -86,6 +88,8 @@ export type ApoyoEducativoInformeItem = {
   ApoyoEducativoEstudianteId: number;
   EstudianteId: number;
   GrupoId: number;
+  PeriodoId?: number | null;
+  PeriodoNombre?: string | null;
   InformeNombre?: string | null;
   InformeGeneradoAt?: string | null;
   PlantillaNombre?: string | null;

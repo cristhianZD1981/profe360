@@ -115,6 +115,10 @@ function isValidApoyoAdecuacion(value?: string | null) {
   return !!normalized && !["regular", "sin adecuacion", "seleccione", "no"].includes(normalized);
 }
 
+function isApoyoAdecuacionSignificativa(value?: string | null) {
+  return normalizeAdecuacionText(value) === "significativa";
+}
+
 const MIS_GRUPOS_TODOS_KEY = "__TODOS__";
 
 function getMisGruposPeriodoLabel(periodoNombre: string, periodoId?: number | string | null) {
@@ -359,6 +363,9 @@ export default function GestionProfePage() {
   const [apoyoEducativoPlantilla, setApoyoEducativoPlantilla] = useState<File | null>(null);
   const [apoyoEducativoResumenSearch, setApoyoEducativoResumenSearch] = useState("");
   const [apoyoEducativoResumenGrupoId, setApoyoEducativoResumenGrupoId] = useState("");
+  const [apoyoEducativoPeriodoId, setApoyoEducativoPeriodoId] = useState("");
+  const [apoyoEducativoResumenTipoAdecuacion, setApoyoEducativoResumenTipoAdecuacion] = useState("");
+  const [apoyoEducativoGeneradorTipoAdecuacion, setApoyoEducativoGeneradorTipoAdecuacion] = useState("");
   const [apoyoEducativoGrupoIdsSeleccionados, setApoyoEducativoGrupoIdsSeleccionados] = useState<string[]>([]);
   const [apoyoEducativoAlumnosDisponibles, setApoyoEducativoAlumnosDisponibles] = useState<ApoyoEducativoResumenItem[]>([]);
   const [apoyoEducativoEstudianteIdsSeleccionados, setApoyoEducativoEstudianteIdsSeleccionados] = useState<string[]>([]);
@@ -367,7 +374,9 @@ export default function GestionProfePage() {
   const [apoyoEducativoCatalogoResultados, setApoyoEducativoCatalogoResultados] = useState<ApoyoEducativoCatalogoItem[]>([]);
   const [apoyoEducativoCatalogoIdsSeleccionados, setApoyoEducativoCatalogoIdsSeleccionados] = useState<string[]>([]);
   const [apoyoEducativoPasoAlumnosConfirmado, setApoyoEducativoPasoAlumnosConfirmado] = useState(false);
+  const [apoyoEducativoListaAlumnosMinimizada, setApoyoEducativoListaAlumnosMinimizada] = useState(true);
   const initialLoadStartedRef = useRef(false);
+  const apoyoEducativoListaRef = useRef<HTMLDivElement | null>(null);
   const tablaMatrizRef = useRef<HTMLDivElement | null>(null);
   const userRoles = useMemo(() => (Array.isArray(user?.roles) ? user.roles : []), [user?.roles]);
   const isSuperAdminRole = useMemo(() => userRoles.includes("SUPER_ADMIN"), [userRoles]);
@@ -427,9 +436,87 @@ export default function GestionProfePage() {
 
   const apoyoEducativoEstudiantesValidos = useMemo(() => {
     return (apoyoEducativoEstudiantes || []).filter((item) => {
-      return !!item && !!item.TieneAdecuacion && isValidApoyoAdecuacion(item.TipoAdecuacion);
+      return !!item && !!item.TieneAdecuacion && isApoyoAdecuacionSignificativa(item.TipoAdecuacion);
     });
   }, [apoyoEducativoEstudiantes]);
+
+  const apoyoEducativoPeriodos = useMemo(() => {
+    const map = new Map<string, { PeriodoId: number; PeriodoNombre: string }>();
+    for (const item of apoyoEducativoSecciones || []) {
+      const id = Number(item?.PeriodoId || 0);
+      const nombre = String(item?.PeriodoNombre || "").trim();
+      if (!id || !nombre || map.has(String(id))) continue;
+      map.set(String(id), { PeriodoId: id, PeriodoNombre: nombre });
+    }
+    return Array.from(map.values()).sort((a, b) => a.PeriodoNombre.localeCompare(b.PeriodoNombre, "es"));
+  }, [apoyoEducativoSecciones]);
+
+  const apoyoEducativoSeccionesUnicasTotal = useMemo(() => {
+    return new Set(
+      (apoyoEducativoSecciones || []).map((item) => [
+        String(item?.GrupoNombre || "").trim(),
+        String(item?.AnioNombre || "").trim(),
+        String(item?.PeriodoId || "").trim(),
+        String(item?.PeriodoNombre || "").trim()
+      ].join("|"))
+    ).size;
+  }, [apoyoEducativoSecciones]);
+
+  const apoyoEducativoSeccionesFiltradas = useMemo(() => {
+    if (!apoyoEducativoPeriodoId) return apoyoEducativoSecciones;
+    return (apoyoEducativoSecciones || []).filter((item) => String(item.PeriodoId || "") === String(apoyoEducativoPeriodoId));
+  }, [apoyoEducativoPeriodoId, apoyoEducativoSecciones]);
+
+  const apoyoEducativoSeccionesAgrupadas = useMemo(() => {
+    const map = new Map<string, {
+      key: string;
+      GrupoNombre: string;
+      AnioNombre?: string | null;
+      PeriodoId?: number | null;
+      PeriodoNombre?: string | null;
+      grupoIds: string[];
+    }>();
+
+    for (const item of apoyoEducativoSeccionesFiltradas || []) {
+      const key = [
+        String(item?.GrupoNombre || "").trim(),
+        String(item?.AnioNombre || "").trim(),
+        String(item?.PeriodoId || "").trim(),
+        String(item?.PeriodoNombre || "").trim()
+      ].join("|");
+      const grupoId = String(item?.GrupoId || "").trim();
+      if (!grupoId) continue;
+      const actual = map.get(key);
+      if (actual) {
+        if (!actual.grupoIds.includes(grupoId)) actual.grupoIds.push(grupoId);
+      } else {
+        map.set(key, {
+          key,
+          GrupoNombre: item.GrupoNombre,
+          AnioNombre: item.AnioNombre,
+          PeriodoId: item.PeriodoId,
+          PeriodoNombre: item.PeriodoNombre,
+          grupoIds: [grupoId]
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const seccion = String(a.GrupoNombre || "").localeCompare(String(b.GrupoNombre || ""), "es", { numeric: true, sensitivity: "base" });
+      if (seccion !== 0) return seccion;
+      return String(a.PeriodoNombre || "").localeCompare(String(b.PeriodoNombre || ""), "es", { sensitivity: "base" });
+    });
+  }, [apoyoEducativoSeccionesFiltradas]);
+
+  const apoyoEducativoEstudiantesFiltradosPorContexto = useMemo(() => {
+    const gruposPermitidos = new Set((apoyoEducativoSeccionesFiltradas || []).map((item) => String(item.GrupoId)));
+    return apoyoEducativoEstudiantesValidos.filter((item) => {
+      if (!item) return false;
+      if (gruposPermitidos.size && !gruposPermitidos.has(String(item.GrupoId))) return false;
+      if (apoyoEducativoPeriodoId && String(item.PeriodoId || "") !== String(apoyoEducativoPeriodoId)) return false;
+      return true;
+    });
+  }, [apoyoEducativoEstudiantesValidos, apoyoEducativoSeccionesFiltradas, apoyoEducativoPeriodoId]);
 
   useEffect(() => {
     setMisGruposPeriodosSeleccionados((prev) => {
@@ -449,26 +536,53 @@ export default function GestionProfePage() {
   }, [periodosDisponiblesMisGrupos]);
 
   const apoyoEducativoResumenFiltrado = useMemo(() => {
-    const filtro = apoyoEducativoResumenSearch.trim().toLowerCase();
-    return apoyoEducativoEstudiantesValidos.filter((item) => {
-      if (!item) return false;
-      const pasaSeccion = !apoyoEducativoResumenGrupoId || String(item.GrupoId) === String(apoyoEducativoResumenGrupoId);
-      if (!pasaSeccion) return false;
-      if (!filtro) return true;
-      const texto = [
-        item.Identificacion,
-        item.NombreCompleto,
-        item.Seccion,
-        item.TipoAdecuacion,
-        item.NivelFuncionamiento
-      ].map((value) => String(value || "").toLowerCase()).join(" ");
-      return texto.includes(filtro);
+    return [...apoyoEducativoEstudiantesValidos].sort((a, b) => {
+      const seccion = String(a.Seccion || "").localeCompare(String(b.Seccion || ""), "es", { numeric: true, sensitivity: "base" });
+      if (seccion !== 0) return seccion;
+      return String(a.NombreCompleto || "").localeCompare(String(b.NombreCompleto || ""), "es", { sensitivity: "base" });
     });
-  }, [apoyoEducativoEstudiantesValidos, apoyoEducativoResumenGrupoId, apoyoEducativoResumenSearch]);
+  }, [apoyoEducativoEstudiantesValidos]);
+
+  const apoyoEducativoTiposAdecuacionEstudiantes = useMemo(() => {
+    return Array.from(
+      new Set(
+        apoyoEducativoEstudiantesFiltradosPorContexto
+          .map((item) => String(item.TipoAdecuacion || "").trim())
+          .filter(isApoyoAdecuacionSignificativa)
+      )
+    ).sort((a, b) => a.localeCompare(b, "es"));
+  }, [apoyoEducativoEstudiantesFiltradosPorContexto]);
+
+  useEffect(() => {
+    if (
+      apoyoEducativoResumenTipoAdecuacion
+      && !apoyoEducativoTiposAdecuacionEstudiantes.some(
+        (item) => normalizeAdecuacionText(item) === normalizeAdecuacionText(apoyoEducativoResumenTipoAdecuacion)
+      )
+    ) {
+      setApoyoEducativoResumenTipoAdecuacion("");
+    }
+  }, [apoyoEducativoResumenTipoAdecuacion, apoyoEducativoTiposAdecuacionEstudiantes]);
 
   const apoyoEducativoOpcionesAdecuacion = useMemo(() => {
-    return Array.from(new Set((apoyoEducativoCatalogo || []).map((item) => String(item.Adecuacion || "").trim()).filter(isValidApoyoAdecuacion))).sort((a, b) => a.localeCompare(b));
-  }, [apoyoEducativoCatalogo]);
+    const estudiantesSeleccionados = apoyoEducativoAlumnosDisponibles.filter((item) => apoyoEducativoEstudianteIdsSeleccionados.includes(String(item.EstudianteId)));
+    const tiposPermitidos = new Set(
+      (estudiantesSeleccionados.length ? estudiantesSeleccionados : apoyoEducativoAlumnosDisponibles)
+        .map((item) => normalizeAdecuacionText(item.TipoAdecuacion))
+        .filter(Boolean)
+    );
+    return Array.from(
+      new Set(
+        (apoyoEducativoCatalogo || [])
+          .map((item) => String(item.Adecuacion || "").trim())
+          .filter((item) => {
+            if (!isApoyoAdecuacionSignificativa(item)) return false;
+            if (!tiposPermitidos.size) return true;
+            return tiposPermitidos.has(normalizeAdecuacionText(item));
+          })
+      )
+    ).sort((a, b) => a.localeCompare(b, "es"));
+  }, [apoyoEducativoCatalogo, apoyoEducativoAlumnosDisponibles, apoyoEducativoEstudianteIdsSeleccionados]);
 
   const apoyoEducativoOpcionesTipo = useMemo(() => {
     return Array.from(new Set((apoyoEducativoCatalogo || []).map((item) => String(item.Tipo || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
@@ -477,7 +591,7 @@ export default function GestionProfePage() {
   const apoyoEducativoInformesPorEstudiante = useMemo(() => {
     const map = new Map<string, ApoyoEducativoInformeItem[]>();
     for (const informe of apoyoEducativoInformes || []) {
-      const key = `${informe.EstudianteId}|${informe.GrupoId}`;
+      const key = `${informe.EstudianteId}|${informe.GrupoId}|${informe.PeriodoId || ""}`;
       const current = map.get(key) || [];
       current.push(informe);
       map.set(key, current);
@@ -3681,6 +3795,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setApoyoEducativoGrupoIdsSeleccionados([]);
     setApoyoEducativoAlumnosDisponibles([]);
     setApoyoEducativoEstudianteIdsSeleccionados([]);
+    setApoyoEducativoListaAlumnosMinimizada(true);
+    setApoyoEducativoGeneradorTipoAdecuacion("");
     setApoyoEducativoFiltroAdecuacion("");
     setApoyoEducativoFiltroTipo("");
     setApoyoEducativoCatalogoResultados([]);
@@ -3726,12 +3842,20 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
     setErrorMessage("");
     const permitidos = new Set(apoyoEducativoGrupoIdsSeleccionados.map((item) => String(item)));
-    const resultados = apoyoEducativoEstudiantesValidos.filter((item) => !!item && permitidos.has(String(item.GrupoId)));
+    const resultados = apoyoEducativoEstudiantesFiltradosPorContexto.filter((item) =>
+      !!item
+      && permitidos.has(String(item.GrupoId))
+    );
     setApoyoEducativoAlumnosDisponibles(resultados);
     setApoyoEducativoEstudianteIdsSeleccionados([]);
+    setApoyoEducativoListaAlumnosMinimizada(false);
     setApoyoEducativoPasoAlumnosConfirmado(false);
+    setApoyoEducativoFiltroAdecuacion("");
     setApoyoEducativoCatalogoResultados([]);
     setApoyoEducativoCatalogoIdsSeleccionados([]);
+    setTimeout(() => {
+      apoyoEducativoListaRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 140);
   }
 
   function handleConfirmarAlumnosApoyoEducativo() {
@@ -3749,10 +3873,20 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
     setErrorMessage("");
+    const estudiantesSeleccionados = apoyoEducativoAlumnosDisponibles.filter((item) =>
+      apoyoEducativoEstudianteIdsSeleccionados.includes(String(item.EstudianteId))
+    );
+    const adecuacionesPermitidas = new Set(
+      (estudiantesSeleccionados.length ? estudiantesSeleccionados : apoyoEducativoAlumnosDisponibles)
+        .map((item) => normalizeAdecuacionText(item.TipoAdecuacion))
+        .filter(Boolean)
+    );
     const resultados = (apoyoEducativoCatalogo || []).filter((item) => {
       if (!item) return false;
       if (!isValidApoyoAdecuacion(item.Adecuacion)) return false;
-      const coincideAdecuacion = !apoyoEducativoFiltroAdecuacion || String(item.Adecuacion) === String(apoyoEducativoFiltroAdecuacion);
+      if (adecuacionesPermitidas.size && !adecuacionesPermitidas.has(normalizeAdecuacionText(item.Adecuacion))) return false;
+      const coincideAdecuacion = !apoyoEducativoFiltroAdecuacion
+        || normalizeAdecuacionText(item.Adecuacion) === normalizeAdecuacionText(apoyoEducativoFiltroAdecuacion);
       const coincideTipo = !apoyoEducativoFiltroTipo || String(item.Tipo) === String(apoyoEducativoFiltroTipo);
       return coincideAdecuacion && coincideTipo;
     });
@@ -3789,6 +3923,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       formData.append("grupoIds", JSON.stringify(apoyoEducativoGrupoIdsSeleccionados.map(Number)));
       formData.append("estudianteIds", JSON.stringify(apoyoEducativoEstudianteIdsSeleccionados.map(Number)));
       formData.append("adecuacionIds", JSON.stringify(apoyoEducativoCatalogoIdsSeleccionados.map(Number)));
+      formData.append("periodoId", apoyoEducativoPeriodoId || "");
       formData.append("plantilla", apoyoEducativoPlantilla);
       const response = await api.post("/gestion-profe/apoyos-educativos/generar", formData);
       const data = response.data?.data || response.data || {};
@@ -3825,7 +3960,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 2000);
     } catch (error: any) {
       console.error("Error descargando informe educativo:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo abrir el informe educativo");
@@ -7331,16 +7466,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button
                 type="button"
-                style={secondaryButtonStyle}
-                onClick={() => {
-                  resetApoyoEducativoGenerator();
-                  setApoyoEducativoVisible(false);
-                }}
-              >
-                Cerrar
-              </button>
-              <button
-                type="button"
                 className="primary-btn"
                 onClick={() => {
                   resetApoyoEducativoGenerator();
@@ -7351,6 +7476,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 }}
               >
                 Generar Apoyo Educativo
+              </button>
+              <button
+                type="button"
+                style={secondaryButtonStyle}
+                onClick={() => {
+                  resetApoyoEducativoGenerator();
+                  setApoyoEducativoVisible(false);
+                }}
+              >
+                Minimizar
               </button>
               <button type="button" style={secondaryButtonStyle} onClick={() => { void loadApoyoEducativoData(); }}>
                 {loadingApoyoEducativo ? "Actualizando..." : "Actualizar"}
@@ -7366,7 +7501,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             <div style={{ marginTop: "16px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
               <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
                 <strong style={{ display: "block", color: "#5eead4" }}>Secciones cargadas</strong>
-                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoSecciones.length}</span>
+                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoSeccionesUnicasTotal}</span>
               </div>
               <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
                 <strong style={{ display: "block", color: "#5eead4" }}>Estudiantes cargados</strong>
@@ -7392,28 +7527,52 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                     <input
                       type="checkbox"
-                      checked={apoyoEducativoSecciones.length > 0 && apoyoEducativoGrupoIdsSeleccionados.length === apoyoEducativoSecciones.length}
+                      checked={
+                        apoyoEducativoSeccionesAgrupadas.length > 0
+                        && apoyoEducativoSeccionesAgrupadas.every((item) => item.grupoIds.every((grupoId) => apoyoEducativoGrupoIdsSeleccionados.includes(grupoId)))
+                      }
                       onChange={(event) => {
+                        const todosLosGrupos = Array.from(new Set(apoyoEducativoSeccionesAgrupadas.flatMap((item) => item.grupoIds)));
                         setApoyoEducativoGrupoIdsSeleccionados(
-                          event.target.checked ? apoyoEducativoSecciones.map((item) => String(item.GrupoId)) : []
+                          event.target.checked ? todosLosGrupos : []
                         );
                       }}
                     />
                     Marcar todas
                   </label>
                 </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+                  <label>
+                    Período
+                    <select value={apoyoEducativoPeriodoId} onChange={(event) => {
+                      setApoyoEducativoPeriodoId(event.target.value);
+                      setApoyoEducativoGrupoIdsSeleccionados([]);
+                      setApoyoEducativoAlumnosDisponibles([]);
+                      setApoyoEducativoEstudianteIdsSeleccionados([]);
+                      setApoyoEducativoPasoAlumnosConfirmado(false);
+                      setApoyoEducativoCatalogoResultados([]);
+                      setApoyoEducativoCatalogoIdsSeleccionados([]);
+                      setApoyoEducativoListaAlumnosMinimizada(true);
+                    }}>
+                      <option value="">Todos los períodos</option>
+                      {apoyoEducativoPeriodos.map((item) => (
+                        <option key={`apoyo-periodo-${item.PeriodoId}`} value={item.PeriodoId}>{item.PeriodoNombre}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
-                  {apoyoEducativoSecciones.map((item) => {
-                    const checked = apoyoEducativoGrupoIdsSeleccionados.includes(String(item.GrupoId));
+                  {apoyoEducativoSeccionesAgrupadas.map((item) => {
+                    const checked = item.grupoIds.every((grupoId) => apoyoEducativoGrupoIdsSeleccionados.includes(grupoId));
                     return (
-                      <label key={`apoyo-seccion-${item.GrupoId}`} style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "10px 12px", borderRadius: "12px", border: checked ? "1px solid #2dd4bf" : "1px solid rgba(148, 163, 184, 0.28)", background: checked ? "rgba(45, 212, 191, 0.16)" : "rgba(255,255,255,0.06)", color: "#e5eefb", cursor: "pointer" }}>
+                      <label key={`apoyo-seccion-${item.key}`} style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "10px 12px", borderRadius: "12px", border: checked ? "1px solid #2dd4bf" : "1px solid rgba(148, 163, 184, 0.28)", background: checked ? "rgba(45, 212, 191, 0.16)" : "rgba(255,255,255,0.06)", color: "#e5eefb", cursor: "pointer" }}>
                         <input
                           type="checkbox"
                           checked={checked}
                           onChange={(event) => {
                             setApoyoEducativoGrupoIdsSeleccionados((prev) => event.target.checked
-                              ? Array.from(new Set([...prev, String(item.GrupoId)]))
-                              : prev.filter((value) => value !== String(item.GrupoId)));
+                              ? Array.from(new Set([...prev, ...item.grupoIds]))
+                              : prev.filter((value) => !item.grupoIds.includes(value)));
                           }}
                         />
                         <span>
@@ -7435,22 +7594,32 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               </div>
 
               {apoyoEducativoAlumnosDisponibles.length > 0 && (
-                <div style={{ display: "grid", gap: "8px" }}>
+                <div ref={apoyoEducativoListaRef} style={{ display: "grid", gap: "8px", scrollMarginTop: "90px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
                     <strong style={{ color: "#0f766e" }}>2. Seleccioná los estudiantes</strong>
-                    <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={apoyoEducativoAlumnosDisponibles.length > 0 && apoyoEducativoEstudianteIdsSeleccionados.length === apoyoEducativoAlumnosDisponibles.length}
-                        onChange={(event) => {
-                          setApoyoEducativoEstudianteIdsSeleccionados(
-                            event.target.checked ? apoyoEducativoAlumnosDisponibles.map((item) => String(item.EstudianteId)) : []
-                          );
-                        }}
-                      />
-                      Seleccionar todos
-                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => setApoyoEducativoListaAlumnosMinimizada((prev) => !prev)}>
+                        {apoyoEducativoListaAlumnosMinimizada ? "Mostrar lista" : "Minimizar lista"}
+                      </button>
+                      <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={apoyoEducativoAlumnosDisponibles.length > 0 && apoyoEducativoEstudianteIdsSeleccionados.length === apoyoEducativoAlumnosDisponibles.length}
+                          onChange={(event) => {
+                            setApoyoEducativoEstudianteIdsSeleccionados(
+                              event.target.checked ? apoyoEducativoAlumnosDisponibles.map((item) => String(item.EstudianteId)) : []
+                            );
+                          }}
+                        />
+                        Seleccionar todos
+                      </label>
+                    </div>
                   </div>
+                  {apoyoEducativoListaAlumnosMinimizada ? (
+                    <div style={{ padding: "12px 14px", borderRadius: "12px", border: "1px dashed rgba(148, 163, 184, 0.45)", background: "rgba(255,255,255,0.04)", color: "#cbd5e1" }}>
+                      Lista minimizada. Hay {apoyoEducativoAlumnosDisponibles.length} estudiante(s) disponibles.
+                    </div>
+                  ) : (
                   <div className="table-wrap">
                     <table>
                       <thead>
@@ -7489,6 +7658,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       </tbody>
                     </table>
                   </div>
+                  )}
                   <div>
                     <button type="button" className="primary-btn" onClick={handleConfirmarAlumnosApoyoEducativo}>
                       Aceptar estudiantes
@@ -7612,30 +7782,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
           {!apoyoEducativoGeneratorOpen && (
             <>
-              <form style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "16px", marginBottom: "14px" }} onSubmit={(event) => event.preventDefault()}>
-                <input
-                  value={apoyoEducativoResumenSearch}
-                  onChange={(event) => setApoyoEducativoResumenSearch(event.target.value)}
-                  placeholder="Buscar por cédula, nombre, sección o adecuación"
-                  style={{ flex: 1, minWidth: "260px" }}
-                />
-                <select value={apoyoEducativoResumenGrupoId} onChange={(event) => setApoyoEducativoResumenGrupoId(event.target.value)} style={{ minWidth: "220px" }}>
-                  <option value="">Todas las secciones</option>
-                  {apoyoEducativoSecciones.map((item) => (
-                    <option key={`filtro-apoyo-${item.GrupoId}`} value={item.GrupoId}>
-                      {item.GrupoNombre}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" style={secondaryButtonStyle} onClick={() => { setApoyoEducativoResumenSearch(""); setApoyoEducativoResumenGrupoId(""); }}>
-                  Limpiar
-                </button>
-              </form>
-
               {loadingApoyoEducativo ? (
-                <p>Cargando apoyos educativos...</p>
+                <p style={{ marginTop: "16px" }}>Cargando apoyos educativos...</p>
               ) : (
-                <div className="table-wrap">
+                <div className="table-wrap" style={{ marginTop: "16px" }}>
                   <table>
                     <thead>
                       <tr>
@@ -7649,7 +7799,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </thead>
                     <tbody>
                       {apoyoEducativoResumenFiltrado.map((item) => {
-                        const informes = apoyoEducativoInformesPorEstudiante.get(`${item.EstudianteId}|${item.GrupoId}`) || [];
+                        const informes = apoyoEducativoInformesPorEstudiante.get(`${item.EstudianteId}|${item.GrupoId}|${item.PeriodoId || ""}`) || [];
                         return (
                           <React.Fragment key={`resumen-apoyo-${item.EstudianteId}-${item.GrupoId}`}>
                             <tr>

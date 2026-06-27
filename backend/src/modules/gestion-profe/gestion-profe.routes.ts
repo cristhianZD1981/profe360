@@ -450,6 +450,17 @@ async function buildApoyoEducativoDocx(data: any) {
   const materialMetodo = data.items.filter((x: any) => x.seccion === "material");
   const organizativoMetodo = data.items.filter((x: any) => x.seccion === "organizativo");
   const evaluativasGenerales = data.items.filter((x: any) => x.modo === "evaluativa");
+  const seguimientoRows = Array.from({ length: 5 }, (_, index) =>
+    new TableRow({
+      children: [
+        docCell([docP("")]),
+        docCell([docP("")]),
+        docCell([docP("")]),
+        docCell([docP("")]),
+        docCell([docP(index === 0 ? data.responsable : "")])
+      ]
+    })
+  );
 
   const children: any[] = [
     docP("Plantilla para Registro de Apoyos Educativos", { bold: true, size: 28, align: AlignmentType.CENTER }),
@@ -493,22 +504,43 @@ async function buildApoyoEducativoDocx(data: any) {
     docP("VI. Apoyos Educativos Organizativos", { bold: true, heading: HeadingLevel.HEADING_2 }),
     ...supportTable("Estrategias Metodológicas", organizativoMetodo, "metodologica", data.responsable),
     ...supportTable("Estrategias Evaluativas", evaluativasGenerales, "evaluativa", data.responsable),
-    docP("Actor / Firmas", { bold: true }),
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({ children: ["Actor", "Nombre Completo", "Firma", "Puesto / Parentesco"].map((h) => docCell([docP(h, { bold: true })], { fill: "F2F2F2" })) }),
-        new TableRow({ children: [docCell([docP("Persona que elabora el informe")]), docCell([docP(data.docente)]), docCell([docP("")]), docCell([docP(data.responsable)])] }),
-        new TableRow({ children: [docCell([docP("Persona directora del Centro Educativo")]), docCell([docP("")]), docCell([docP("")]), docCell([docP("Dirección del Centro Educativo")])] }),
-        new TableRow({ children: [docCell([docP("Padre/Madre/Encargado legal")]), docCell([docP(data.encargado)]), docCell([docP("")]), docCell([docP("Encargado legal")])] })
-      ]
-    }),
     docP("VII. Seguimiento y Valoración de los Apoyos", { bold: true, heading: HeadingLevel.HEADING_2 }),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
         new TableRow({ children: ["Fecha", "Apoyo implementado", "Resultados observados", "Ajustes requeridos", "Responsable"].map((h) => docCell([docP(h, { bold: true })], { fill: "F2F2F2" })) }),
-        new TableRow({ children: [docCell([docP("")]), docCell([docP("")]), docCell([docP("")]), docCell([docP("")]), docCell([docP(data.responsable)])] })
+        ...seguimientoRows
+      ]
+    }),
+    docP(""),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({ children: ["Actor", "Nombre Completo", "Firma", "Puesto / Parentesco"].map((h) => docCell([docP(h, { bold: true })], { fill: "B7B7B7" })) }),
+        new TableRow({
+          children: [
+            docCell([docP("Persona que elabora el informe", { bold: true })]),
+            docCell([docP(data.docente)]),
+            docCell([docP("")]),
+            docCell([docP(data.puestoDocente || "Docente")])
+          ]
+        }),
+        new TableRow({
+          children: [
+            docCell([docP("Persona directora del Centro Educativo", { bold: true })]),
+            docCell([docP(data.directoraNombre || "")]),
+            docCell([docP("")]),
+            docCell([docP(data.directoraPuesto || "Directora del Centro Educativo")])
+          ]
+        }),
+        new TableRow({
+          children: [
+            docCell([docP("Padre/Madre/Encargado legal", { bold: true })]),
+            docCell([docP(data.encargado)]),
+            docCell([docP("")]),
+            docCell([docP(data.encargadoParentesco || "Encargado legal")])
+          ]
+        })
       ]
     }),
     docP("Cc. Expediente único del proceso educativo de la persona estudiante.", { size: 18 })
@@ -1060,9 +1092,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
       filtroInstitucion = "AND ad.InstitucionId = @institucionId";
     }
 
-    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
-      ? "AND ad.UsuarioId = @usuarioId"
-      : "";
+    const filtroProfesor = !isSuperAdmin(req) ? "AND ad.UsuarioId = @usuarioId" : "";
 
     const baseCte = `
       ;WITH GruposBase AS (
@@ -1128,6 +1158,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
     const observacionesSelect = columnasEstudiante.hasObservaciones
       ? "NULLIF(LTRIM(RTRIM(e.Observaciones)), '')"
       : "CAST(NULL AS NVARCHAR(MAX))";
+    const apoyoEducativoWhereStrict = `${apoyoEducativoWhere} AND UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) = N'SIGNIFICATIVA'`;
 
     const estudiantesResult = await timedQuery("gestion.apoyos.bootstrap.estudiantes", () => request.query(`
       ${baseCte}
@@ -1145,6 +1176,8 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
         END AS Edad,
         gf.GrupoId,
         gf.GrupoNombre AS Seccion,
+        gf.PeriodoId,
+        gf.PeriodoNombre,
         ${tieneAdecuacionSelect} AS TieneAdecuacion,
         ${tipoAdecuacionSelect} AS TipoAdecuacion,
         ${nivelFuncionamientoSelect} AS NivelFuncionamiento,
@@ -1157,7 +1190,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
       INNER JOIN dbo.Estudiante e
         ON e.EstudianteId = ma.EstudianteId
        AND e.Activo = 1
-      WHERE ${apoyoEducativoWhere}
+      WHERE ${apoyoEducativoWhereStrict}
       ORDER BY gf.GrupoNombre, NombreCompleto
     `));
 
@@ -1175,6 +1208,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             ON ta.TipoAdecuacionId = a.TipoAdecuacionId
           WHERE a.Activo = 1
             AND ta.Activo = 1
+            AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) = N'SIGNIFICATIVA'
             AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
             ${!isSuperAdmin(req) ? "AND a.InstitucionId = @institucionId" : ""}
           ORDER BY ta.Descripcion, a.Tipo, a.Descripcion
@@ -1189,6 +1223,8 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             aee.ApoyoEducativoEstudianteId,
             aee.EstudianteId,
             aee.GrupoId,
+            gf.PeriodoId,
+            gf.PeriodoNombre,
             aee.InformeNombre,
             aee.InformeGeneradoAt,
             aee.PlantillaNombre
@@ -1200,6 +1236,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             ON gf.GrupoId = aee.GrupoId
           WHERE aee.InformeGeneradoAt IS NOT NULL
             AND aee.InformeNombre IS NOT NULL
+            AND ae.UsuarioId = @usuarioId
           ORDER BY aee.InformeGeneradoAt DESC, aee.ApoyoEducativoEstudianteId DESC
         `))
       : { recordset: [] as any[] };
@@ -1241,6 +1278,7 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
 
     const grupoIds = parseMaybeJsonArray(req.body?.grupoIds)
       .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
+    const periodoId = toOptionalNumber(req.body?.periodoId);
     const estudianteIds = parseMaybeJsonArray(req.body?.estudianteIds)
       .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
     const adecuacionIds = parseMaybeJsonArray(req.body?.adecuacionIds)
@@ -1260,13 +1298,12 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
     const request = pool.request()
       .input("usuarioId", sql.Int, userId)
       .input("institucionId", sql.Int, institucionId)
+      .input("periodoId", sql.Int, periodoId)
       .input("grupoIds", sql.NVarChar(sql.MAX), grupoIds.join(","))
       .input("estudianteIds", sql.NVarChar(sql.MAX), estudianteIds.join(","))
       .input("adecuacionIds", sql.NVarChar(sql.MAX), adecuacionIds.join(","));
 
-    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
-      ? "AND ad.UsuarioId = @usuarioId"
-      : "";
+    const filtroProfesor = !isSuperAdmin(req) ? "AND ad.UsuarioId = @usuarioId" : "";
 
     const gruposPermitidosResult = await request.query(`
       ;WITH GruposPermitidos AS (
@@ -1275,6 +1312,7 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
         WHERE ad.Activo = 1
           AND ad.MateriaId IS NOT NULL
           AND ad.InstitucionId = @institucionId
+          AND (@periodoId IS NULL OR ad.PeriodoId = @periodoId)
           ${filtroProfesor}
       )
       SELECT GrupoId
@@ -1297,6 +1335,7 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
         ma.GrupoId,
         g.Nombre AS Seccion,
         al.Nombre AS AnioNombre,
+        adPeriodo.PeriodoId,
         p.Nombre AS PeriodoNombre,
         e.Identificacion,
         e.Nombre,
@@ -1306,25 +1345,36 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
         e.Adecuacion AS TipoAdecuacion,
         e.NivelFuncionamiento,
         e.Observaciones,
-        enc.NombreCompleto AS EncargadoNombre
+        enc.NombreCompleto AS EncargadoNombre,
+        enc.Parentesco AS EncargadoParentesco
       FROM dbo.Matricula ma
       INNER JOIN dbo.Estudiante e
         ON e.EstudianteId = ma.EstudianteId
        AND e.Activo = 1
       INNER JOIN dbo.Grupo g ON g.GrupoId = ma.GrupoId
       INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ma.AnioLectivoId
-      LEFT JOIN dbo.Periodo p ON p.PeriodoId = (
+      OUTER APPLY (
         SELECT TOP 1 ad2.PeriodoId
         FROM dbo.AsignacionDocente ad2
         WHERE ad2.GrupoId = ma.GrupoId
           AND ad2.AnioLectivoId = ma.AnioLectivoId
           AND ad2.InstitucionId = @institucionId
           AND ad2.Activo = 1
+          AND (@periodoId IS NULL OR ad2.PeriodoId = @periodoId)
         ORDER BY ad2.PeriodoId DESC
-      )
+      ) adPeriodo
+      LEFT JOIN dbo.Periodo p ON p.PeriodoId = adPeriodo.PeriodoId
       OUTER APPLY (
         SELECT TOP 1
-          LTRIM(RTRIM(CONCAT(ISNULL(en.Nombre, ''), ' ', ISNULL(en.PrimerApellido, ''), ' ', ISNULL(en.SegundoApellido, '')))) AS NombreCompleto
+          LTRIM(RTRIM(CONCAT(ISNULL(en.Nombre, ''), ' ', ISNULL(en.PrimerApellido, ''), ' ', ISNULL(en.SegundoApellido, '')))) AS NombreCompleto,
+          COALESCE(
+            NULLIF(LTRIM(RTRIM(ee.Parentesco)), ''),
+            CASE
+              WHEN UPPER(ISNULL(en.TipoEncargado, '')) = 'MADRE' THEN N'Madre de familia'
+              WHEN UPPER(ISNULL(en.TipoEncargado, '')) = 'PADRE' THEN N'Padre de familia'
+              ELSE N'Encargado legal'
+            END
+          ) AS Parentesco
         FROM dbo.EstudianteEncargado ee
         INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
         WHERE ee.EstudianteId = e.EstudianteId
@@ -1382,7 +1432,36 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
       `);
     const docenteResult = await pool.request()
       .input("usuarioId", sql.Int, userId)
-      .query(`SELECT TOP 1 Nombre, PrimerApellido, SegundoApellido FROM dbo.Usuario WHERE UsuarioId = @usuarioId`);
+      .query(`SELECT TOP 1 Titulo, Nombre, PrimerApellido, SegundoApellido FROM dbo.Usuario WHERE UsuarioId = @usuarioId`);
+    const directoraResult = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TOP 1
+          u.Titulo,
+          u.Nombre,
+          u.PrimerApellido,
+          u.SegundoApellido,
+          u.Cargo
+        FROM dbo.Usuario u
+        LEFT JOIN dbo.UsuarioRol ur
+          ON ur.UsuarioId = u.UsuarioId
+         AND ur.Activo = 1
+        LEFT JOIN dbo.Rol r
+          ON r.RolId = ur.RolId
+        WHERE u.InstitucionId = @institucionId
+          AND u.Activo = 1
+          AND (
+            UPPER(ISNULL(u.Cargo, '')) LIKE '%DIRECTOR%'
+            OR UPPER(ISNULL(r.Nombre, '')) LIKE '%DIRECTOR%'
+          )
+        ORDER BY
+          CASE
+            WHEN UPPER(ISNULL(u.Cargo, '')) LIKE '%DIRECTOR%' THEN 0
+            WHEN UPPER(ISNULL(r.Nombre, '')) LIKE '%DIRECTOR%' THEN 1
+            ELSE 2
+          END,
+          u.UsuarioId
+      `);
     const materiasResult = await request.query(`
       SELECT DISTINCT m.Nombre
       FROM dbo.AsignacionDocente ad
@@ -1400,9 +1479,13 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
 
     const institucion = institucionResult.recordset[0] || {};
     const docente = docenteResult.recordset[0] || {};
-    const docenteNombre = joinNameParts([docente.Nombre, docente.PrimerApellido, docente.SegundoApellido]);
+    const directora = directoraResult.recordset[0] || {};
+    const docenteNombre = joinNameParts([docente.Titulo, docente.Nombre, docente.PrimerApellido, docente.SegundoApellido]);
+    const directoraNombre = joinNameParts([directora.Titulo, directora.Nombre, directora.PrimerApellido, directora.SegundoApellido]);
     const materiasTexto = (materiasResult.recordset || []).map((item: any) => normalizeText(item.Nombre)).filter(Boolean).join(", ");
     const responsable = `${docenteNombre}${materiasTexto ? ` - ${materiasTexto}` : ""}`;
+    const puestoDocente = materiasTexto ? `Docente de ${materiasTexto}` : "Docente";
+    const directoraPuesto = normalizeText(directora.Cargo || "") || "Directora del Centro Educativo";
     const catalogos = adecuacionesPermitidasResult.recordset || [];
     const informesPreparados: any[] = [];
 
@@ -1446,7 +1529,11 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
         nivelFuncionamiento: estudiante.NivelFuncionamiento || "",
         observaciones: estudiante.Observaciones || "",
         encargado: estudiante.EncargadoNombre || "",
+        encargadoParentesco: estudiante.EncargadoParentesco || "Encargado legal",
         tipoAdecuacion: estudiante.TipoAdecuacion || "",
+        directoraNombre,
+        directoraPuesto,
+        puestoDocente,
         items
       };
       const baseBuffer = await buildApoyoEducativoDocx(dataInforme);
@@ -1592,10 +1679,6 @@ router.get("/apoyos-educativos/informes/:id/word", async (req, res) => {
       filtroInstitucion = "AND ae.InstitucionId = @institucionId";
     }
 
-    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
-      ? "AND ae.UsuarioId = @usuarioId"
-      : "";
-
     const result = await request.query(`
       SELECT TOP 1
         aee.InformeNombre,
@@ -1607,14 +1690,17 @@ router.get("/apoyos-educativos/informes/:id/word", async (req, res) => {
        AND ae.Activo = 1
       WHERE aee.ApoyoEducativoEstudianteId = @id
         AND aee.InformeDocx IS NOT NULL
+        AND ae.UsuarioId = @usuarioId
         ${filtroInstitucion}
-        ${filtroProfesor}
     `);
 
     const row = result.recordset[0];
     if (!row?.InformeDocx) return res.status(404).json({ ok: false, message: "No se encontró el informe educativo" });
 
     const fileName = String(row.InformeNombre || `informe-apoyo-${id}.docx`).replace(/["\r\n]/g, "");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.setHeader("Content-Type", row.InformeMimeType || "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     return res.send(Buffer.from(row.InformeDocx));
@@ -1644,10 +1730,6 @@ router.delete("/apoyos-educativos/informes/:id", async (req, res) => {
       filtroInstitucion = "AND ae.InstitucionId = @institucionId";
     }
 
-    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
-      ? "AND ae.UsuarioId = @usuarioId"
-      : "";
-
     const result = await request.query(`
       UPDATE aee
       SET InformeNombre = NULL,
@@ -1662,8 +1744,8 @@ router.delete("/apoyos-educativos/informes/:id", async (req, res) => {
         ON ae.ApoyoEducativoId = aee.ApoyoEducativoId
        AND ae.Activo = 1
       WHERE aee.ApoyoEducativoEstudianteId = @id
+        AND ae.UsuarioId = @usuarioId
         ${filtroInstitucion}
-        ${filtroProfesor}
     `);
 
     if (!result.recordset.length) return res.status(404).json({ ok: false, message: "No se encontró el registro del informe educativo" });
