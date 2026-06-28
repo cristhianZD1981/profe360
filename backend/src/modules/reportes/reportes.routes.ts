@@ -688,7 +688,91 @@ async function ensureUsuarioSexoColumn(pool: any) {
   await pool.request().query(`
     IF COL_LENGTH('dbo.Usuario', 'Sexo') IS NULL
       ALTER TABLE dbo.Usuario ADD Sexo NVARCHAR(20) NULL;
+
+    IF COL_LENGTH('dbo.Usuario', 'Titulo') IS NULL
+      ALTER TABLE dbo.Usuario ADD Titulo NVARCHAR(100) NULL;
   `);
+}
+
+async function ensureInstitucionPlColumns(pool: any) {
+  await pool.request().query(`
+    IF COL_LENGTH('dbo.Institucion', 'CodigoPresupuestarioPL') IS NULL
+      ALTER TABLE dbo.Institucion ADD CodigoPresupuestarioPL NVARCHAR(100) NULL;
+
+    IF COL_LENGTH('dbo.Institucion', 'DescripcionCodigoPresupuestarioPL') IS NULL
+      ALTER TABLE dbo.Institucion ADD DescripcionCodigoPresupuestarioPL NVARCHAR(255) NULL;
+  `);
+}
+
+function joinNonEmpty(parts: any[], separator = " ") {
+  return parts
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join(separator)
+    .trim();
+}
+
+function normalizeEducationLabel(value: any) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "GENERAL BASICA") return "General Básica";
+  if (normalized === "DIVERSIFICADA") return "Diversificada";
+  if (normalized === "ESPECIAL") return "Especial";
+  return String(value || "").trim();
+}
+
+function normalizeWhitespace(value: any) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function buildNombreConTitulo(titulo: any, nombreCompleto: any) {
+  const tituloNormalizado = normalizeWhitespace(titulo);
+  const nombreNormalizado = normalizeWhitespace(nombreCompleto);
+  return joinNonEmpty([tituloNormalizado, nombreNormalizado]);
+}
+
+function isPlanNacionalStudent(tipoEstudiante: any) {
+  const normalized = normalizeWhitespace(tipoEstudiante)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+  return normalized.includes("PLAN NACIONAL");
+}
+
+function getNivelAcademicoLiteral(value: any) {
+  const nivel = Number(value || 0);
+  const labels: Record<number, string> = {
+    1: "primer",
+    2: "segundo",
+    3: "tercer",
+    4: "cuarto",
+    5: "quinto",
+    6: "sexto",
+    7: "sétimo",
+    8: "octavo",
+    9: "noveno",
+    10: "décimo",
+    11: "undécimo",
+    12: "duodécimo"
+  };
+  return labels[nivel] ? `${labels[nivel]} nivel` : "";
+}
+
+function getMotivoConstanciaLabel(motivoTramite: string, otroColegioDestino?: string) {
+  const motivo = String(motivoTramite || "").trim().toUpperCase();
+  if (motivo === "TRASLADO") {
+    const destino = normalizeWhitespace(otroColegioDestino);
+    return destino ? `para Trámite de Traslado al ${destino}` : "para Trámite de Traslado";
+  }
+  if (motivo === "CCSS") return "para trámite ante la CCSS";
+  if (motivo === "PODER_JUDICIAL") return "para trámite ante el Poder Judicial";
+  if (motivo === "PERSONAL") return "para trámite personal";
+  return "para trámite ante el IMAS";
+}
+
+function stripPrefixedLabel(value: any, prefixPattern: RegExp) {
+  const raw = normalizeWhitespace(value);
+  if (!raw) return "";
+  return raw.replace(prefixPattern, "").trim();
 }
 
 function buildConstanciaHtml(params: {
@@ -717,7 +801,13 @@ function buildConstanciaHtml(params: {
   const ciudad = String(p.lugarEmision || "").trim() || "Costa Rica";
   const textoMotivo = p.motivoTramite === "TRASLADO"
     ? `Tramite de Traslado${p.otroColegioDestino ? ` al ${p.otroColegioDestino}` : " al otro colegio"}`
-    : (p.motivoTramite === "OTROS" ? "otros tramites" : "tramites ante el IMAS");
+    : p.motivoTramite === "CCSS"
+      ? "tramites ante la CCSS"
+      : p.motivoTramite === "PODER_JUDICIAL"
+        ? "tramites ante el Poder Judicial"
+        : p.motivoTramite === "PERSONAL"
+          ? "tramites de uso personal"
+          : (p.motivoTramite === "OTROS" ? "otros tramites" : "tramites ante el IMAS");
 
   return `
 <!doctype html>
@@ -728,11 +818,15 @@ function buildConstanciaHtml(params: {
   <style>
     *{box-sizing:border-box}
     body{font-family:Arial,Helvetica,sans-serif;font-size:12pt;line-height:1.4;color:#1f2937;background:#f3f4f6;margin:0;padding:0}
-    .page{width:210mm;min-height:297mm;margin:0 auto;background:#fff;padding:10mm 12mm 8mm;border:1px solid #d1d5db;display:flex;flex-direction:column}
-    .top-header{display:grid;grid-template-columns:430px 1fr 84px;align-items:center;border-bottom:1px solid #4b5563;padding-bottom:6px;min-height:84px}
-    .top-left img{width:100%;max-height:74px;object-fit:contain}
-    .top-center{padding:0 8px;font-size:12px;line-height:1.2;font-weight:400}
-    .top-right img{width:70px;height:70px;object-fit:contain}
+    .page{width:210mm;min-height:297mm;margin:0 auto;background:#fff;padding:10mm 12mm 8mm;border:0;display:flex;flex-direction:column}
+    .top-header{width:100%;border-bottom:1px solid #4b5563;padding-bottom:6px}
+    .top-header-table{width:100%;border-collapse:collapse;table-layout:fixed}
+    .top-header-table td{vertical-align:middle;padding:0}
+    .top-left{width:270px}
+    .top-left img{display:block;width:100%;max-width:270px;height:auto;max-height:54px;object-fit:contain}
+    .top-center{padding:0 14px;font-size:11px;line-height:1.15;font-weight:400;overflow-wrap:anywhere}
+    .top-right{width:78px;text-align:right}
+    .top-right img{display:inline-block;width:62px;height:auto;max-width:62px;max-height:62px;object-fit:contain}
     h1{text-align:center;margin:32px 0 6px;font-size:12pt;font-weight:700;letter-spacing:0}
     h2{text-align:center;margin:0 0 20px;font-size:12pt;font-weight:700;letter-spacing:0}
     .texto{font-size:12pt;line-height:1.5;text-align:justify;margin:0 0 16px}
@@ -761,8 +855,8 @@ function buildConstanciaHtml(params: {
     <p class="texto">
       ${escapeHtml(p.textoSuscrito)}, ${escapeHtml(p.suscrito)}, en calidad de ${escapeHtml(p.puesto)} del
       ${escapeHtml(nombreInstitucionCabecera)}, código presupuestario ${escapeHtml(p.codigoPresupuestario)},
-      hace constar que la persona estudiante ${escapeHtml(p.estudianteNombre)}, número de cédula
-      ${escapeHtml(p.identificacion)}, es estudiante regular de ${escapeHtml(p.grado)}
+      hace constar que la persona estudiante <strong>${escapeHtml(p.estudianteNombre)}</strong>, número de cédula
+      <strong>${escapeHtml(p.identificacion)}</strong>, es estudiante regular de ${escapeHtml(p.grado)}
       de la Educación ${escapeHtml(p.tipoEducacion)}.
       En el curso lectivo ${escapeHtml(p.cursoLectivo)}.
     </p>
@@ -782,6 +876,149 @@ function buildConstanciaHtml(params: {
     <div class="pie">
       ${escapeHtml(p.institucion?.DireccionExacta || p.institucion?.Direccion || "")}<br/>
       ${escapeHtml(p.institucion?.TelefonoPrincipal || "")} ${p.institucion?.CorreoPrincipal ? ` / ${escapeHtml(p.institucion.CorreoPrincipal)}` : ""}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function buildConstanciaHtmlV2(params: {
+  institucion: any;
+  codigoConstancia: string;
+  suscrito: string;
+  textoSuscrito: string;
+  puesto: string;
+  codigoPresupuestario: string;
+  estudianteNombre: string;
+  identificacion: string;
+  grado: string;
+  tipoEducacion: string;
+  motivoTramite: string;
+  cursoLectivo: string;
+  lugarEmision: string;
+  nombreEncargado: string;
+  esPlanNacional?: boolean;
+  programaPlanNacional?: string;
+  otroColegioDestino?: string;
+  fechaEmision: Date;
+}) {
+  const p = params;
+  const nombreInstitucionParrafo =
+    p.institucion?.NombreComercial ||
+    p.institucion?.Nombre ||
+    p.institucion?.NombreOficialBoleta ||
+    "";
+  const nombreInstitucionDocumento =
+    p.institucion?.Nombre ||
+    p.institucion?.NombreOficialBoleta ||
+    p.institucion?.NombreComercial ||
+    "";
+  const circuitoValor = stripPrefixedLabel(p.institucion?.CircuitoEducativo, /^circuito\s*/i);
+  const regionalValor = stripPrefixedLabel(
+    p.institucion?.RegionalEducativa,
+    /^direcci[oó]n\s+regional(\s+de)?\s*/i
+  );
+  const ciudad = String(p.lugarEmision || "").trim() || "Costa Rica";
+  const textoMotivo = getMotivoConstanciaLabel(p.motivoTramite, p.otroColegioDestino);
+  const tituloConstancia = String(p.motivoTramite || "").trim().toUpperCase() === "TRASLADO"
+    ? "Constancia de Traslado"
+    : "Constancia de estudiante";
+  const tipoEducacionLabel = p.esPlanNacional
+    ? "Especial"
+    : normalizeEducationLabel(p.tipoEducacion);
+  const detallePresupuestario = p.esPlanNacional
+    ? joinNonEmpty(
+        [
+          p.codigoPresupuestario ? `código presupuestario ${p.codigoPresupuestario}` : "",
+          normalizeWhitespace(
+            p.programaPlanNacional ||
+            "III Ciclo y IV Ciclo Diversificado Vocacional (Plan Nacional)"
+          ).replace(/^código presupuestario\s+/i, "")
+        ],
+        ", "
+      )
+    : (p.codigoPresupuestario ? `código presupuestario ${p.codigoPresupuestario}` : "");
+  const circuitoRegional = joinNonEmpty(
+    [
+      circuitoValor ? `del circuito ${circuitoValor}` : "",
+      regionalValor ? `de la Dirección Regional de ${regionalValor}` : ""
+    ],
+    " "
+  );
+  const detalleInstitucional = joinNonEmpty([detallePresupuestario, circuitoRegional], ", ");
+  const puestoParrafo = normalizeWhitespace(p.puesto).toLocaleLowerCase("es-CR");
+  const bloqueRegularidad = p.esPlanNacional
+    ? `es estudiante regular de ${escapeHtml(p.grado)}, de la Educación ${escapeHtml(tipoEducacionLabel)}, Programa de Plan Nacional, en el curso lectivo ${escapeHtml(p.cursoLectivo)}.`
+    : `es estudiante regular de la sección ${escapeHtml(p.grado)} de la Educación ${escapeHtml(tipoEducacionLabel)}, en el curso lectivo ${escapeHtml(p.cursoLectivo)}.`;
+
+  return `
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Constancia ${escapeHtml(p.codigoConstancia)}</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:'Century Gothic',CenturyGothic,AppleGothic,sans-serif;font-size:12pt;line-height:1.5;color:#111827;background:#f3f4f6;margin:0;padding:0}
+    .page{width:216mm;min-height:279mm;margin:0 auto;background:#fff;padding:16mm 19.05mm 25.4mm;border:0;display:flex;flex-direction:column}
+    .top-header{width:100%;border-bottom:1px solid #4b5563;padding-bottom:2px;margin-bottom:0}
+    .top-header-table{width:100%;border-collapse:collapse;table-layout:fixed;margin:0}
+    .top-header-table td{vertical-align:top;padding:0}
+    .top-left{width:270px}
+    .top-left img{display:block;width:100%;max-width:270px;height:auto;max-height:54px;object-fit:contain}
+    .top-center{padding:0 14px 0 6px;font-size:11px;line-height:1.08;font-weight:400;overflow-wrap:anywhere}
+    .top-center div{margin:0;padding:0}
+    .top-right{width:78px;text-align:right}
+    .top-right img{display:inline-block;width:62px;height:auto;max-width:62px;max-height:62px;object-fit:contain}
+    h1{text-align:center;margin:24px 0 6px;font-size:12pt;font-weight:700;letter-spacing:0}
+    h2{text-align:center;margin:0 0 20px;font-size:12pt;font-weight:700;letter-spacing:0}
+    .texto{font-size:12pt;line-height:1.5;text-align:justify;margin:0 0 16px}
+    .firma{margin-top:52px;font-size:12pt;line-height:1.8}
+    .footer-wrap{margin-top:auto;padding-top:80px}
+    .ultima{text-align:center;font-size:12pt;color:#111827}
+    .pie{margin-top:24px;text-align:center;font-size:12pt;color:#111827}
+    @page{size:Letter;margin:25.4mm 19.05mm}
+    @media print{body{background:#fff}.page{border:0;margin:0;width:auto;min-height:auto;padding:0;page-break-after:avoid}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="top-header">
+      <table class="top-header-table" role="presentation">
+        <tr>
+          <td class="top-left">${p.institucion?.MembreteUrl ? `<img src="${escapeHtml(p.institucion.MembreteUrl)}" alt="Membrete" width="270" height="54" style="display:block;width:270px;max-width:270px;height:auto;max-height:54px;object-fit:contain;" />` : ""}</td>
+          <td class="top-center">
+            <div>${escapeHtml(p.institucion?.RegionalEducativa || "")}</div>
+            <div>${p.institucion?.CircuitoEducativo ? `Supervisión de Centros Educativos, ${escapeHtml(p.institucion.CircuitoEducativo)}` : ""}</div>
+            <div>${escapeHtml(nombreInstitucionDocumento)}</div>
+          </td>
+          <td class="top-right">${p.institucion?.LogoUrl ? `<img src="${escapeHtml(p.institucion.LogoUrl)}" alt="Logo" width="62" height="62" style="display:inline-block;width:62px;max-width:62px;height:auto;max-height:62px;object-fit:contain;" />` : ""}</td>
+        </tr>
+      </table>
+    </div>
+
+    <h1>${escapeHtml(tituloConstancia)}</h1>
+    <h2>${escapeHtml(p.codigoConstancia)}</h2>
+
+    <p class="texto">${escapeHtml(p.textoSuscrito)}, ${escapeHtml(p.suscrito)}, en calidad de ${escapeHtml(puestoParrafo)} del ${escapeHtml(nombreInstitucionParrafo)}${detalleInstitucional ? `, ${escapeHtml(detalleInstitucional)}` : ""}, hace constar que ${p.esPlanNacional ? "el estudiante" : "la persona estudiante"} <strong>${escapeHtml(p.estudianteNombre)}</strong>, número de cédula <strong>${escapeHtml(p.identificacion)}</strong>, ${bloqueRegularidad}</p>
+
+    <p class="texto">
+      Dado en ${escapeHtml(ciudad)}, a los ${escapeHtml(fechaLargaCR(p.fechaEmision))},
+      a solicitud de la persona encargada ${escapeHtml(p.nombreEncargado || "")}, ${escapeHtml(textoMotivo)}.
+    </p>
+
+    <div class="firma">
+      <div>${escapeHtml(p.suscrito)}</div>
+      <div>${escapeHtml(p.puesto)}</div>
+      <div>${escapeHtml(nombreInstitucionDocumento)}</div>
+    </div>
+
+    <div class="footer-wrap">
+      <div class="ultima">************************Última línea************************<br/>***Cualquier anotación debajo de esta línea, anula este documento***</div>
+      <div class="pie">
+        ${escapeHtml(p.institucion?.DireccionExacta || p.institucion?.Direccion || "")}<br/>
+        ${escapeHtml(p.institucion?.TelefonoPrincipal || "")}${p.institucion?.CorreoPrincipal ? ` / ${escapeHtml(p.institucion.CorreoPrincipal)}` : ""}
+      </div>
     </div>
   </div>
 </body>
@@ -1299,7 +1536,7 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
   if (!["GENERAL BASICA", "DIVERSIFICADA", "ESPECIAL"].includes(tipoEducacion)) {
     return badRequest(res, "Tipo de educación inválido");
   }
-  if (!["IMAS", "TRASLADO", "OTROS"].includes(motivoTramite)) {
+  if (!["IMAS", "CCSS", "PODER_JUDICIAL", "PERSONAL", "TRASLADO"].includes(motivoTramite)) {
     return badRequest(res, "Motivo inválido");
   }
 
@@ -1309,6 +1546,7 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
 
   await ensureCertificacionEstudioTables(pool);
   await ensureUsuarioSexoColumn(pool);
+  await ensureInstitucionPlColumns(pool);
 
   const institucionResult = await pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -1316,7 +1554,8 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
       SELECT TOP 1
         InstitucionId, Nombre, NombreComercial, NombreOficialBoleta,
         CorreoPrincipal, TelefonoPrincipal, Direccion, DireccionExacta,
-        LogoUrl, MembreteUrl, RegionalEducativa, CircuitoEducativo, CodigoPresupuestario
+        LogoUrl, MembreteUrl, RegionalEducativa, CircuitoEducativo, CodigoPresupuestario,
+        CodigoPresupuestarioPL, DescripcionCodigoPresupuestarioPL
       FROM dbo.Institucion
       WHERE InstitucionId = @institucionId
     `);
@@ -1332,6 +1571,7 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
         u.PrimerApellido,
         u.SegundoApellido,
         u.Sexo,
+        u.Titulo,
         NULLIF(LTRIM(RTRIM(ISNULL(u.Cargo, ''))), '') AS Cargo,
         r.Nombre AS RolNombre
       FROM dbo.Usuario u
@@ -1340,7 +1580,8 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
       WHERE u.UsuarioId = @usuarioId
     `);
   const firmante = firmanteResult.recordset[0] || {};
-  const suscrito = [firmante.Nombre, firmante.PrimerApellido, firmante.SegundoApellido].filter(Boolean).join(" ").trim();
+  const nombreFirmante = [firmante.Nombre, firmante.PrimerApellido, firmante.SegundoApellido].filter(Boolean).join(" ").trim();
+  const suscrito = buildNombreConTitulo(firmante.Titulo, nombreFirmante);
   const sexoFirmante = String(firmante.Sexo || "").trim().toUpperCase();
   const textoSuscrito = sexoFirmante === "FEMENINO"
     ? "La suscrita"
@@ -1367,8 +1608,12 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
         e.Nombre,
         e.PrimerApellido,
         e.SegundoApellido,
+        te.Descripcion AS TipoEstudianteDescripcion,
+        enc.NombreEncargadoPrincipal,
         g.GrupoId,
         g.Nombre AS GrupoNombre,
+        g.Nivel AS GrupoNivel,
+        g.NivelAcademico,
         a.Nombre AS AnioLectivoNombre,
         COALESCE(
           NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(60), g.Nivel))), ''),
@@ -1379,6 +1624,22 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
       LEFT JOIN dbo.AnioLectivo a ON a.AnioLectivoId = m.AnioLectivoId
+      LEFT JOIN dbo.TipoEstudiante te ON te.TipoEstudianteId = e.TipoEstudianteId
+      OUTER APPLY (
+        SELECT TOP 1
+          LTRIM(RTRIM(CONCAT(
+            ISNULL(NULLIF(LTRIM(RTRIM(enc.Nombre)), ''), ''),
+            CASE WHEN NULLIF(LTRIM(RTRIM(enc.PrimerApellido)), '') IS NOT NULL THEN ' ' + LTRIM(RTRIM(enc.PrimerApellido)) ELSE '' END,
+            CASE WHEN NULLIF(LTRIM(RTRIM(enc.SegundoApellido)), '') IS NOT NULL THEN ' ' + LTRIM(RTRIM(enc.SegundoApellido)) ELSE '' END
+          ))) AS NombreEncargadoPrincipal
+        FROM dbo.EstudianteEncargado ee
+        INNER JOIN dbo.Encargado enc ON enc.EncargadoId = ee.EncargadoId
+        WHERE ee.EstudianteId = e.EstudianteId
+          AND ISNULL(ee.Activo, 1) = 1
+        ORDER BY
+          CASE WHEN ISNULL(ee.EsPrincipal, 0) = 1 THEN 0 ELSE 1 END,
+          ee.EstudianteEncargadoId DESC
+      ) enc
       WHERE e.InstitucionId = @institucionId
         AND e.EstudianteId = @estudianteId
         AND m.Estado = 'ACTIVA'
@@ -1391,6 +1652,21 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
   const estudianteNombre = [estudiante.Nombre, estudiante.PrimerApellido, estudiante.SegundoApellido].filter(Boolean).join(" ");
   const cursoLectivo = String(estudiante.AnioLectivoNombre || "").match(/\d{4}/)?.[0] || String(fechaEmision.getFullYear());
   const lugarEmision = String(institucion.Direccion || "").trim() || String(institucion.DireccionExacta || "").split(",")[0].trim() || "Costa Rica";
+  const esPlanNacional = isPlanNacionalStudent(estudiante.TipoEstudianteDescripcion);
+  const nombreEncargado = normalizeWhitespace(estudiante.NombreEncargadoPrincipal) || "sin nombre registrado";
+  const programaPlanNacional = joinNonEmpty([
+    normalizeWhitespace(
+      institucion.DescripcionCodigoPresupuestarioPL ||
+      "III Ciclo y IV Ciclo Diversificado Vocacional (Plan Nacional)"
+    ).replace(/^código presupuestario\s+/i, "")
+  ], ", ");
+  const gradoPlanNacional = getNivelAcademicoLiteral(estudiante.NivelAcademico)
+    || normalizeWhitespace(estudiante.GrupoNivel)
+    || normalizeWhitespace(estudiante.GradoNombre)
+    || normalizeWhitespace(estudiante.GrupoNombre);
+  const gradoConstancia = esPlanNacional
+    ? gradoPlanNacional
+    : String(estudiante.GrupoNombre || estudiante.GradoNombre || "");
 
   const transaction = new sql.Transaction(pool);
   await transaction.begin();
@@ -1415,20 +1691,25 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
     const prefijo = String(config.recordset[0]?.Prefijo || "CERTIFICACION").trim() || "CERTIFICACION";
     const anioLectivoConfig = String(config.recordset[0]?.AnioLectivo || cursoLectivo).trim() || cursoLectivo;
     const codigoConstancia = buildConsecutivoCodigo(prefijo, next, anioLectivoConfig);
-    const htmlFinal = buildConstanciaHtml({
+    const htmlFinal = buildConstanciaHtmlV2({
       institucion,
       codigoConstancia,
       suscrito,
       textoSuscrito,
       puesto,
-      codigoPresupuestario: String(institucion.CodigoPresupuestario || ""),
+      codigoPresupuestario: esPlanNacional
+        ? String(institucion.CodigoPresupuestarioPL || "")
+        : String(institucion.CodigoPresupuestario || ""),
       estudianteNombre,
       identificacion: String(estudiante.Identificacion || ""),
-      grado: String(estudiante.GrupoNombre || estudiante.GradoNombre || ""),
-      tipoEducacion,
+      grado: gradoConstancia,
+      tipoEducacion: normalizeEducationLabel(tipoEducacion),
       motivoTramite,
       cursoLectivo,
       lugarEmision,
+      nombreEncargado,
+      esPlanNacional,
+      programaPlanNacional,
       otroColegioDestino,
       fechaEmision
     });
@@ -1442,7 +1723,7 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
         WHERE InstitucionId = @institucionId;
       `);
 
-    await new sql.Request(transaction)
+    const insertResult = await new sql.Request(transaction)
       .input("institucionId", sql.Int, institucionId)
       .input("consecutivo", sql.Int, next)
       .input("codigoConstancia", sql.NVarChar(120), codigoConstancia)
@@ -1465,15 +1746,18 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
       .query(`
         INSERT INTO dbo.CertificacionEstudioRegistro
           (InstitucionId, Consecutivo, CodigoConstancia, EstudianteId, GrupoId, EstudianteNombre, Identificacion, GrupoNombre, Suscrito, Puesto, CodigoPresupuestario, TipoEducacion, MotivoTramite, CursoLectivo, OtroColegioDestino, LugarEmision, HtmlSnapshot, FechaEmision, CreatedByUsuarioId)
+        OUTPUT INSERTED.CertificacionEstudioId AS CertificacionEstudioId
         VALUES
           (@institucionId, @consecutivo, @codigoConstancia, @estudianteId, @grupoId, @estudianteNombre, @identificacion, @grupoNombre, @suscrito, @puesto, @codigoPresupuestario, @tipoEducacion, @motivoTramite, @cursoLectivo, @otroColegioDestino, @lugarEmision, @htmlSnapshot, @fechaEmision, @createdByUsuarioId);
       `);
+    const certificacionEstudioId = Number(insertResult.recordset?.[0]?.CertificacionEstudioId || 0);
 
     await transaction.commit();
 
     return ok(res, {
       codigoConstancia,
       consecutivo: next,
+      certificacionEstudioId,
       html: htmlFinal,
       suscrito,
       puesto,
@@ -1594,6 +1878,46 @@ router.get("/certificaciones/constancia-estudio/:certificacionId", async (req, r
     codigoConstancia: String(row.CodigoConstancia || ""),
     html
   });
+});
+
+router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (req, res) => {
+  const pool = await getPool();
+  const institucionId = Number(req.auth?.institucionId || 0);
+  const certificacionId = Number(req.params.certificacionId || 0);
+  if (!certificacionId) return badRequest(res, "Certificación inválida");
+
+  await ensureCertificacionEstudioTables(pool);
+
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("certificacionId", sql.Int, certificacionId)
+    .query(`
+      SELECT TOP 1
+        CodigoConstancia,
+        HtmlSnapshot
+      FROM dbo.CertificacionEstudioRegistro
+      WHERE InstitucionId = @institucionId
+        AND CertificacionEstudioId = @certificacionId
+    `);
+
+  const row = result.recordset[0];
+  if (!row) {
+    return res.status(404).json({ ok: false, message: "No se encontró la certificación seleccionada" });
+  }
+
+  const html = String(row.HtmlSnapshot || "").trim();
+  if (!html) {
+    return res.status(404).json({ ok: false, message: "La certificación no tiene un documento disponible para Word" });
+  }
+
+  const fileName = `${String(row.CodigoConstancia || `constancia-${certificacionId}`)
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || `constancia-${certificacionId}`}.doc`;
+
+  res.setHeader("Content-Type", "application/msword; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+  return res.send(`\uFEFF${html}`);
 });
 
 router.get("/admin/consecutivos/filtros", async (req, res) => {

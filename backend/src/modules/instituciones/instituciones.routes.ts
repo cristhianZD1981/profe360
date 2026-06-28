@@ -6,7 +6,23 @@ import { created, ok, badRequest } from "../../utils/http";
 const router = Router();
 router.use(requireAuth);
 
-router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (req, res) => {
+async function ensureInstitucionPlColumns(pool: Awaited<ReturnType<typeof getPool>>) {
+  await pool.request().query(`
+    IF COL_LENGTH('dbo.Institucion', 'CodigoPresupuestarioPL') IS NULL
+    BEGIN
+      ALTER TABLE dbo.Institucion
+      ADD CodigoPresupuestarioPL NVARCHAR(100) NULL;
+    END
+
+    IF COL_LENGTH('dbo.Institucion', 'DescripcionCodigoPresupuestarioPL') IS NULL
+    BEGIN
+      ALTER TABLE dbo.Institucion
+      ADD DescripcionCodigoPresupuestarioPL NVARCHAR(255) NULL;
+    END
+  `);
+}
+
+router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
     const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
@@ -18,6 +34,7 @@ router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (req, 
     }
 
     const pool = await getPool();
+    await ensureInstitucionPlColumns(pool);
 
     const result = await pool.request()
       .input("q", sql.NVarChar, `%${q}%`)
@@ -35,6 +52,8 @@ router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (req, 
           TelefonoPrincipal,
           Direccion,
           CodigoPresupuestario,
+          CodigoPresupuestarioPL,
+          DescripcionCodigoPresupuestarioPL,
           DireccionExacta,
           LogoUrl,
           MembreteUrl,
@@ -82,6 +101,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       telefonoPrincipal,
       direccion,
       codigoPresupuestario,
+      codigoPresupuestarioPL,
+      descripcionCodigoPresupuestarioPL,
       direccionExacta,
       logoUrl,
       membreteUrl,
@@ -95,6 +116,7 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
     }
 
     const pool = await getPool();
+    await ensureInstitucionPlColumns(pool);
 
     const duplicado = await pool.request()
       .input("nombre", sql.NVarChar, nombre)
@@ -121,6 +143,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       .input("telefonoPrincipal", sql.NVarChar, telefonoPrincipal || null)
        .input("direccion", sql.NVarChar, direccion || null)
       .input("codigoPresupuestario", sql.NVarChar, codigoPresupuestario || null)
+      .input("codigoPresupuestarioPL", sql.NVarChar, codigoPresupuestarioPL || null)
+      .input("descripcionCodigoPresupuestarioPL", sql.NVarChar, descripcionCodigoPresupuestarioPL || null)
       .input("direccionExacta", sql.NVarChar, direccionExacta || null)
       .input("logoUrl", sql.NVarChar, logoUrl || null)
       .input("membreteUrl", sql.NVarChar, membreteUrl || null)
@@ -138,6 +162,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
           TelefonoPrincipal,
           Direccion,
           CodigoPresupuestario,
+          CodigoPresupuestarioPL,
+          DescripcionCodigoPresupuestarioPL,
           DireccionExacta,
           LogoUrl,
           MembreteUrl,
@@ -158,6 +184,8 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
           @telefonoPrincipal,
           @direccion,
           @codigoPresupuestario,
+          @codigoPresupuestarioPL,
+          @descripcionCodigoPresupuestarioPL,
           @direccionExacta,
           @logoUrl,
           @membreteUrl,
@@ -188,7 +216,7 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
   }
 });
 
-router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (req, res) => {
+router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const {
@@ -200,6 +228,8 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
       telefonoPrincipal,
       direccion,
       codigoPresupuestario,
+      codigoPresupuestarioPL,
+      descripcionCodigoPresupuestarioPL,
       direccionExacta,
       logoUrl,
       membreteUrl,
@@ -224,6 +254,7 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
     }
 
     const pool = await getPool();
+    await ensureInstitucionPlColumns(pool);
 
     const duplicado = await pool.request()
       .input("nombre", sql.NVarChar, nombre)
@@ -255,6 +286,8 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
       .input("telefonoPrincipal", sql.NVarChar, telefonoPrincipal || null)
        .input("direccion", sql.NVarChar, direccion || null)
       .input("codigoPresupuestario", sql.NVarChar, codigoPresupuestario || null)
+      .input("codigoPresupuestarioPL", sql.NVarChar, codigoPresupuestarioPL || null)
+      .input("descripcionCodigoPresupuestarioPL", sql.NVarChar, descripcionCodigoPresupuestarioPL || null)
       .input("direccionExacta", sql.NVarChar, direccionExacta || null)
       .input("logoUrl", sql.NVarChar, logoUrl || null)
       .input("membreteUrl", sql.NVarChar, membreteUrl || null)
@@ -272,6 +305,8 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL"), async (re
           TelefonoPrincipal = @telefonoPrincipal,
           Direccion = @direccion,
           CodigoPresupuestario = @codigoPresupuestario,
+          CodigoPresupuestarioPL = @codigoPresupuestarioPL,
+          DescripcionCodigoPresupuestarioPL = @descripcionCodigoPresupuestarioPL,
           DireccionExacta = @direccionExacta,
           LogoUrl = @logoUrl,
           MembreteUrl = @membreteUrl,

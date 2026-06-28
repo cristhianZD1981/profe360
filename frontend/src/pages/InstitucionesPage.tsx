@@ -11,6 +11,8 @@ type Institution = {
   TelefonoPrincipal: string | null;
   Direccion: string | null;
   CodigoPresupuestario?: string | null;
+  CodigoPresupuestarioPL?: string | null;
+  DescripcionCodigoPresupuestarioPL?: string | null;
   DireccionExacta?: string | null;
   LogoUrl: string | null;
   MembreteUrl: string | null;
@@ -29,6 +31,8 @@ const initialForm = {
   telefonoPrincipal: "",
   direccion: "",
   codigoPresupuestario: "",
+  codigoPresupuestarioPL: "",
+  descripcionCodigoPresupuestarioPL: "",
   direccionExacta: "",
   logoUrl: "",
   membreteUrl: "",
@@ -165,6 +169,8 @@ export default function InstitucionesPage() {
         telefonoPrincipal: form.telefonoPrincipal || null,
         direccion: form.direccion || null,
         codigoPresupuestario: form.codigoPresupuestario || null,
+        codigoPresupuestarioPL: form.codigoPresupuestarioPL || null,
+        descripcionCodigoPresupuestarioPL: form.descripcionCodigoPresupuestarioPL || null,
         direccionExacta: form.direccionExacta || null,
         logoUrl: form.logoUrl || null,
         membreteUrl: form.membreteUrl || null,
@@ -212,6 +218,8 @@ export default function InstitucionesPage() {
       telefonoPrincipal: item.TelefonoPrincipal || "",
       direccion: item.Direccion || "",
       codigoPresupuestario: item.CodigoPresupuestario || "",
+      codigoPresupuestarioPL: item.CodigoPresupuestarioPL || "",
+      descripcionCodigoPresupuestarioPL: item.DescripcionCodigoPresupuestarioPL || "",
       direccionExacta: item.DireccionExacta || "",
       logoUrl: item.LogoUrl || "",
       membreteUrl: item.MembreteUrl || "",
@@ -460,6 +468,24 @@ export default function InstitucionesPage() {
             <input
               value={form.codigoPresupuestario}
               onChange={(e) => setForm({ ...form, codigoPresupuestario: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Código presupuestario PL
+            <input
+              value={form.codigoPresupuestarioPL}
+              onChange={(e) => setForm({ ...form, codigoPresupuestarioPL: e.target.value })}
+            />
+          </label>
+
+          <label>
+            Descripción código presupuestario PL
+            <input
+              value={form.descripcionCodigoPresupuestarioPL}
+              onChange={(e) =>
+                setForm({ ...form, descripcionCodigoPresupuestarioPL: e.target.value })
+              }
             />
           </label>
 

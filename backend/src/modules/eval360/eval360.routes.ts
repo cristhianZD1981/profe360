@@ -1089,20 +1089,30 @@ async function mapIndicadoresReplicaTabla(executor: any, params: {
 
 
   const targetMap = new Map<string, number>();
+  const targetFallbackMap = new Map<string, number[]>();
 
   for (const row of (targetResult.recordset || [])) {
 
+    const tipoUsoKey = normalizeReplicaKey(row.TipoUso);
+
+    const indicadorBaseKey = normalizeReplicaKey(row.IndicadorBase);
+
     const key = [
 
-      normalizeReplicaKey(row.TipoUso),
+      tipoUsoKey,
 
       normalizeReplicaKey(row.PlaneamientoNombre),
 
-      normalizeReplicaKey(row.IndicadorBase)
+      indicadorBaseKey
 
     ].join("|");
 
     if (!targetMap.has(key)) targetMap.set(key, Number(row.IndicadorGrupoId || 0));
+
+    const fallbackKey = [tipoUsoKey, indicadorBaseKey].join("|");
+    const fallbackList = targetFallbackMap.get(fallbackKey) || [];
+    fallbackList.push(Number(row.IndicadorGrupoId || 0));
+    targetFallbackMap.set(fallbackKey, fallbackList);
 
   }
 
@@ -1112,17 +1122,29 @@ async function mapIndicadoresReplicaTabla(executor: any, params: {
 
   for (const row of (sourceResult.recordset || [])) {
 
+    const tipoUsoKey = normalizeReplicaKey(row.TipoUso);
+
+    const indicadorBaseKey = normalizeReplicaKey(row.IndicadorBase);
+
     const key = [
 
-      normalizeReplicaKey(row.TipoUso),
+      tipoUsoKey,
 
       normalizeReplicaKey(row.PlaneamientoNombre),
 
-      normalizeReplicaKey(row.IndicadorBase)
+      indicadorBaseKey
 
     ].join("|");
 
-    const targetIndicadorId = targetMap.get(key);
+    let targetIndicadorId = targetMap.get(key);
+
+    if (!targetIndicadorId) {
+      const fallbackKey = [tipoUsoKey, indicadorBaseKey].join("|");
+      const fallbackMatches = (targetFallbackMap.get(fallbackKey) || []).filter((id) => id > 0);
+      if (fallbackMatches.length === 1) {
+        targetIndicadorId = Number(fallbackMatches[0] || 0);
+      }
+    }
 
     if (targetIndicadorId) result.set(Number(row.IndicadorGrupoId || 0), Number(targetIndicadorId));
 
@@ -15280,8 +15302,16 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
       });
 
       if (mappedIndicadores.size !== indicadorIds.length) {
-
-        throw new Error(`No se pudieron mapear todos los indicadores de la tabla en ${String(target.GrupoNombre || "otro grupo")}`);
+        replicasOmitidas += 1;
+        console.warn("Eval360 asignar indicadores: replica omitida por mapeo incompleto", {
+          sourceActividadId: actividadId,
+          sourceEstructuraGrupoId: estructuraGrupoId,
+          targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0),
+          targetGrupoNombre: String(target.GrupoNombre || "otro grupo"),
+          totalSolicitados: indicadorIds.length,
+          totalMapeados: mappedIndicadores.size
+        });
+        continue;
 
       }
 
@@ -15292,8 +15322,14 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
       const tieneCalificacionesTarget = await validateIndicadoresRemovidosConCalificacion(transaction, Number(actividadReplica.targetActividadId || 0), targetIndicadorIds);
 
       if (tieneCalificacionesTarget) {
-
-        throw new Error(`La replica no se pudo aplicar en ${String(target.GrupoNombre || "otro grupo")} porque ya tiene calificaciones en esa prueba`);
+        replicasOmitidas += 1;
+        console.warn("Eval360 asignar indicadores: replica omitida por calificaciones existentes", {
+          sourceActividadId: actividadId,
+          sourceEstructuraGrupoId: estructuraGrupoId,
+          targetEstructuraGrupoId: Number(target.EstructuraGrupoId || 0),
+          targetGrupoNombre: String(target.GrupoNombre || "otro grupo")
+        });
+        continue;
 
       }
 

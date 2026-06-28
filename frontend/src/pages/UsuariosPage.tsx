@@ -9,6 +9,7 @@ type User = {
   InstitucionNombreComercial?: string | null;
   Correo: string;
   NumeroCedula?: string | null;
+  Titulo?: string | null;
   Nombre: string;
   PrimerApellido: string | null;
   SegundoApellido?: string | null;
@@ -42,6 +43,7 @@ const initialForm = {
   institucionId: "",
   correo: "",
   numeroCedula: "",
+  titulo: "",
   nombre: "",
   primerApellido: "",
   segundoApellido: "",
@@ -259,6 +261,7 @@ export default function UsuariosPage() {
       const payload: any = {
         correo: form.correo.trim(),
         numeroCedula: form.numeroCedula.trim(),
+        titulo: form.titulo.trim() || null,
         nombre: form.nombre.trim(),
         primerApellido: form.primerApellido || null,
         segundoApellido: form.segundoApellido || null,
@@ -324,6 +327,7 @@ export default function UsuariosPage() {
       institucionId: item.InstitucionId ? String(item.InstitucionId) : "",
       correo: item.Correo || "",
       numeroCedula: item.NumeroCedula || "",
+      titulo: item.Titulo || "",
       nombre: item.Nombre || "",
       primerApellido: item.PrimerApellido || "",
       segundoApellido: item.SegundoApellido || "",
@@ -658,6 +662,15 @@ export default function UsuariosPage() {
                 </div>
 
                 <label>
+                  Título
+                  <input
+                    value={form.titulo}
+                    onChange={(e) => setForm({ ...form, titulo: e.target.value })}
+                    placeholder="Ejemplo: Ing., Lic., M.Sc."
+                  />
+                </label>
+
+                <label>
                   Nombre
                   <input
                     value={form.nombre}
@@ -947,7 +960,7 @@ export default function UsuariosPage() {
                     <td>{item.Correo}</td>
                     <td>{item.NumeroCedula || ""}</td>
                     <td>
-                      {[item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
+                      {[item.Titulo || "", item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre]
                         .join(" ")
                         .replace(/\s+/g, " ")
                         .trim()}

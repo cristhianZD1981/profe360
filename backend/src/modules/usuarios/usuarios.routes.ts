@@ -77,6 +77,12 @@ async function ensureUsuarioSexoColumn(pool: Awaited<ReturnType<typeof getPool>>
       ALTER TABLE dbo.Usuario
       ADD Sexo NVARCHAR(20) NULL;
     END
+
+    IF COL_LENGTH('dbo.Usuario', 'Titulo') IS NULL
+    BEGIN
+      ALTER TABLE dbo.Usuario
+      ADD Titulo NVARCHAR(100) NULL;
+    END
   `);
 }
 
@@ -198,6 +204,7 @@ router.get("/", async (req, res) => {
           i.NombreComercial AS InstitucionNombreComercial,
           u.Correo,
           u.NumeroCedula,
+          u.Titulo,
           u.Nombre,
           u.PrimerApellido,
           u.SegundoApellido,
@@ -219,6 +226,7 @@ router.get("/", async (req, res) => {
             @q = '%%'
             OR u.Correo LIKE @q
             OR u.NumeroCedula LIKE @q
+            OR u.Titulo LIKE @q
             OR u.Nombre LIKE @q
             OR u.PrimerApellido LIKE @q
             OR u.SegundoApellido LIKE @q
@@ -231,6 +239,7 @@ router.get("/", async (req, res) => {
           i.NombreComercial,
           u.Correo,
           u.NumeroCedula,
+          u.Titulo,
           u.Nombre,
           u.PrimerApellido,
           u.SegundoApellido,
@@ -406,6 +415,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
 
       const correo = normalizeCorreo(row.correo);
       const numeroCedula = normalizeCedula(row.numeroCedula);
+      const titulo = toNullableString(row.titulo);
       const nombre = String(row.nombre || "").trim();
       const primerApellido = toNullableString(row.primerApellido);
       const segundoApellido = toNullableString(row.segundoApellido);
@@ -501,6 +511,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
             .input("correo", sql.NVarChar, correo)
             .input("numeroCedula", sql.NVarChar, numeroCedula)
             .input("hashPassword", sql.NVarChar, hash)
+            .input("titulo", sql.NVarChar, titulo)
             .input("nombre", sql.NVarChar, nombre)
             .input("primerApellido", sql.NVarChar, primerApellido)
             .input("segundoApellido", sql.NVarChar, segundoApellido)
@@ -514,6 +525,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 Correo,
                 NumeroCedula,
                 HashPassword,
+                Titulo,
                 Nombre,
                 PrimerApellido,
                 SegundoApellido,
@@ -527,6 +539,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 INSERTED.UsuarioId,
                 INSERTED.Correo,
                 INSERTED.NumeroCedula,
+                INSERTED.Titulo,
                 INSERTED.Nombre,
                 INSERTED.PrimerApellido,
                 INSERTED.Sexo
@@ -536,6 +549,7 @@ router.post("/importar-excel", upload.single("archivo"), async (req, res) => {
                 @correo,
                 @numeroCedula,
                 @hashPassword,
+                @titulo,
                 @nombre,
                 @primerApellido,
                 @segundoApellido,
@@ -635,6 +649,7 @@ router.post("/", async (req, res) => {
     const {
       correo,
       numeroCedula,
+      titulo,
       nombre,
       primerApellido,
       segundoApellido,
@@ -648,6 +663,7 @@ router.post("/", async (req, res) => {
     const correoNormalizado = normalizeCorreo(correo);
     const numeroCedulaNormalizado = normalizeCedula(numeroCedula);
     const sexoNormalizado = normalizeSexo(sexo);
+    const tituloNormalizado = toNullableString(titulo);
 
     if (!correoNormalizado || !numeroCedulaNormalizado || !nombre) {
       return badRequest(res, "correo, numeroCedula y nombre son obligatorios");
@@ -716,6 +732,7 @@ router.post("/", async (req, res) => {
       .input("correo", sql.NVarChar, correoNormalizado)
       .input("numeroCedula", sql.NVarChar, numeroCedulaNormalizado)
       .input("hashPassword", sql.NVarChar, hash)
+      .input("titulo", sql.NVarChar, tituloNormalizado)
       .input("nombre", sql.NVarChar, nombre)
       .input("primerApellido", sql.NVarChar, primerApellido || null)
       .input("segundoApellido", sql.NVarChar, segundoApellido || null)
@@ -729,6 +746,7 @@ router.post("/", async (req, res) => {
           Correo,
           NumeroCedula,
           HashPassword,
+          Titulo,
           Nombre,
           PrimerApellido,
           SegundoApellido,
@@ -743,6 +761,7 @@ router.post("/", async (req, res) => {
           INSERTED.InstitucionId,
           INSERTED.Correo,
           INSERTED.NumeroCedula,
+          INSERTED.Titulo,
           INSERTED.Nombre,
           INSERTED.PrimerApellido,
           INSERTED.Cargo,
@@ -754,6 +773,7 @@ router.post("/", async (req, res) => {
           @correo,
           @numeroCedula,
           @hashPassword,
+          @titulo,
           @nombre,
           @primerApellido,
           @segundoApellido,
@@ -832,6 +852,7 @@ router.put("/:id", async (req, res) => {
     const {
       correo,
       numeroCedula,
+      titulo,
       nombre,
       primerApellido,
       segundoApellido,
@@ -845,6 +866,7 @@ router.put("/:id", async (req, res) => {
     const correoNormalizado = normalizeCorreo(correo);
     const numeroCedulaNormalizado = normalizeCedula(numeroCedula);
     const sexoNormalizado = normalizeSexo(sexo);
+    const tituloNormalizado = toNullableString(titulo);
 
     if (!id) {
       return badRequest(res, "Id inválido");
@@ -921,6 +943,7 @@ router.put("/:id", async (req, res) => {
       .input("institucionId", sql.Int, targetInstitucionId)
       .input("correo", sql.NVarChar, correoNormalizado)
       .input("numeroCedula", sql.NVarChar, numeroCedulaNormalizado)
+      .input("titulo", sql.NVarChar, tituloNormalizado)
       .input("nombre", sql.NVarChar, nombre)
       .input("primerApellido", sql.NVarChar, primerApellido || null)
       .input("segundoApellido", sql.NVarChar, segundoApellido || null)
@@ -933,6 +956,7 @@ router.put("/:id", async (req, res) => {
           InstitucionId = @institucionId,
           Correo = @correo,
           NumeroCedula = @numeroCedula,
+          Titulo = @titulo,
           Nombre = @nombre,
           PrimerApellido = @primerApellido,
           SegundoApellido = @segundoApellido,
@@ -945,6 +969,7 @@ router.put("/:id", async (req, res) => {
           INSERTED.InstitucionId,
           INSERTED.Correo,
           INSERTED.NumeroCedula,
+          INSERTED.Titulo,
           INSERTED.Nombre,
           INSERTED.PrimerApellido,
           INSERTED.Cargo,

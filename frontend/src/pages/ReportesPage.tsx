@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+﻿import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api from "../lib/http";
 import { getCostaRicaIsoDate } from "../utils/date";
@@ -324,12 +324,13 @@ export default function ReportesPage() {
       return;
     }
     if (motivoTramite === "TRASLADO" && !otroColegioDestino.trim()) {
-      window.alert("Indica el nombre del otro colegio para el tr?mite de traslado.");
+      window.alert("Indica el nombre del otro colegio para el trámite de traslado.");
       return;
     }
+
     const win = window.open("", "_blank");
     if (!win) {
-      window.alert("No se pudo abrir la vista de impresi?n. Revisa el bloqueador de ventanas.");
+      window.alert("No se pudo abrir la vista de impresión. Revisa el bloqueador de ventanas.");
       return;
     }
     win.document.open();
@@ -360,6 +361,7 @@ export default function ReportesPage() {
       await buscarCertificaciones();
       window.alert(`Constancia generada: ${codigo}`);
     } catch (error: any) {
+      try { win.close(); } catch {}
       window.alert(error?.response?.data?.message || "No se pudo generar la constancia");
     } finally {
       setLoading(false);
@@ -386,24 +388,24 @@ export default function ReportesPage() {
     }
   }
 
-  async function reimprimirCertificacion(certificacionId: number) {
-    const win = window.open("", "_blank");
-    if (!win) {
-      window.alert("No se pudo abrir la vista de impresi?n.");
-      return;
-    }
-    win.document.open();
-    win.document.write("<!doctype html><html><head><meta charset='utf-8'><title>Cargando certificacion...</title></head><body style='font-family:Arial,sans-serif;padding:20px'>Cargando certificacion...</body></html>");
-    win.document.close();
+  async function abrirCertificacionWord(certificacionId: number, codigoConstancia?: string) {
     try {
-      const response = await api.get(`/reportes/certificaciones/constancia-estudio/${certificacionId}`);
-      const html = String(response.data?.data?.html || "");
-      win.document.open();
-      win.document.write(html);
-      win.document.close();
+      const response = await api.get(`/reportes/certificaciones/constancia-estudio/${certificacionId}/word`, {
+        responseType: "blob"
+      });
+      const blob = new Blob([response.data], { type: "application/msword" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${String(codigoConstancia || `constancia-${certificacionId}`).trim() || `constancia-${certificacionId}`}.doc`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 2000);
     } catch (error: any) {
-      win.close();
-      window.alert(error?.response?.data?.message || "No se pudo abrir la certificacion.");
+      window.alert(error?.response?.data?.message || "No se pudo abrir la certificación en Word.");
     }
   }
 
@@ -431,7 +433,7 @@ export default function ReportesPage() {
     }
 
     if (tipo === "BOLETAS") {
-      const headers = ["N° de boleta", "Nombre", "C?dula", "Secci?n", "Fecha", "Envio correo", "Envio WhatsApp"];
+      const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
       const rows = boletasRows.map((item) => [
         item.numeroBoleta,
         item.nombre,
@@ -484,7 +486,7 @@ export default function ReportesPage() {
     }
 
     if (tipo === "BOLETAS") {
-      const headers = ["N° de boleta", "Nombre", "C?dula", "Secci?n", "Fecha", "Envio correo", "Envio WhatsApp"];
+      const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
       const rows = boletasRows.map((item) => [
         item.numeroBoleta,
         item.nombre,
@@ -566,7 +568,7 @@ export default function ReportesPage() {
               <p style={{ margin: 0, color: "#475569" }}>Esta pantalla queda dedicada únicamente a consultas y exportación de reportes.</p>
             </div>
             <button type="button" onClick={() => navigate("/reportes")} style={backButtonStyle}>
-              Cambiar opción
+               Cambiar opción
             </button>
           </div>
           <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 12 }}>
@@ -607,7 +609,7 @@ export default function ReportesPage() {
                   </select>
                 </label>
                 {vistaAsistencia !== "PROFESOR" ? (
-                  <label>Secci?n
+                  <label>Sección
                     <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setEstudianteId(""); }}>
                       <option value="">{vistaAsistencia === "ALUMNO" ? "Todas" : "Seleccione"}</option>
                       {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
@@ -620,7 +622,7 @@ export default function ReportesPage() {
                       type="text"
                       value={busquedaAlumno}
                       onChange={(e) => setBusquedaAlumno(e.target.value)}
-                      placeholder="Buscar por nombre o c?dula"
+                      placeholder="Buscar por nombre o cédula"
                       style={{ marginBottom: 6 }}
                     />
                     <select value={estudianteId} onChange={(e) => setEstudianteId(e.target.value)}>
@@ -648,7 +650,7 @@ export default function ReportesPage() {
               </>
             ) : (
               <>
-                <label>Secci?n
+                <label>Sección
                   <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setEstudianteId(""); }}>
                     <option value="">Todas</option>
                     {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
@@ -659,7 +661,7 @@ export default function ReportesPage() {
                     type="text"
                     value={busquedaAlumno}
                     onChange={(e) => setBusquedaAlumno(e.target.value)}
-                    placeholder="Buscar por nombre o c?dula"
+                    placeholder="Buscar por nombre o cédula"
                     style={{ marginBottom: 6 }}
                   />
                   <select value={estudianteId} onChange={(e) => setEstudianteId(e.target.value)}>
@@ -736,7 +738,7 @@ export default function ReportesPage() {
                                   <th style={{ textAlign: "left", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Materia</th>
                                   <th style={{ textAlign: "left", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Profesor</th>
                                   <th style={{ textAlign: "left", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Alerta Temprana</th>
-                                  <th style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Tardías</th>
+                                   <th style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Tardías</th>
                                   <th style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Ausencias Justificadas</th>
                                   <th style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Ausencias Injustificadas</th>
                                   <th style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #334155", background: "#132236", color: "#e2e8f0" }}>Presentes</th>
@@ -779,11 +781,11 @@ export default function ReportesPage() {
                   <tr>
                     <th>N° de boleta</th>
                     <th>Nombre</th>
-                    <th>C?dula</th>
-                    <th>Secci?n</th>
+                    <th>Cédula</th>
+                    <th>Sección</th>
                     <th>Fecha</th>
-                    <th>Envio correo</th>
-                    <th>Envio de WhatsApp</th>
+                    <th>Envío correo</th>
+                    <th>Envío de WhatsApp</th>
                     <th>Reimprimir</th>
                   </tr>
                 </thead>
@@ -845,7 +847,7 @@ export default function ReportesPage() {
               <p style={{ margin: 0, color: "#475569" }}>Esta pantalla queda dedicada únicamente a la generación de certificaciones.</p>
             </div>
             <button type="button" onClick={() => navigate("/reportes")} style={backButtonStyle}>
-              Cambiar opción
+               Cambiar opción
             </button>
           </div>
           <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 12 }}>
@@ -889,6 +891,9 @@ export default function ReportesPage() {
                 }}
               >
                 <option value="IMAS">{"Trámite ante el IMAS"}</option>
+                <option value="CCSS">{"Trámite ante la CCSS"}</option>
+                <option value="PODER_JUDICIAL">{"Trámite ante el Poder Judicial"}</option>
+                <option value="PERSONAL">Personal</option>
                 <option value="TRASLADO">Traslado a otro colegio</option>
               </select>
             </label>
@@ -907,7 +912,7 @@ export default function ReportesPage() {
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" className="primary-btn" onClick={generarConstancia} disabled={loading || !estudianteIdConstancia}>
-              {loading ? "Generando..." : "Generar constancia de estudio"}
+              {loading ? "Generando..." : "Generar Constancia"}
             </button>
           </div>
           {generandoConstancia ? (
@@ -941,14 +946,17 @@ export default function ReportesPage() {
             {!busquedaCertMinimizada ? (
               <>
             <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 12 }}>
-              <label>{"Tipo de certificación"}
+               <label>{"Tipo de certificación"}
                 <select value={motivoBusquedaCert} onChange={(e) => setMotivoBusquedaCert(e.target.value)}>
                   <option value="">Todas</option>
                   <option value="IMAS">{"Trámite ante el IMAS"}</option>
+                  <option value="CCSS">{"Trámite ante la CCSS"}</option>
+                  <option value="PODER_JUDICIAL">{"Trámite ante el Poder Judicial"}</option>
+                  <option value="PERSONAL">Personal</option>
                   <option value="TRASLADO">Traslado</option>
                 </select>
               </label>
-              <label>{"Sección"}
+               <label>{"Sección"}
                 <select value={grupoIdBusquedaCert} onChange={(e) => { setGrupoIdBusquedaCert(e.target.value); setEstudianteIdBusquedaCert(""); }}>
                   <option value="">Todas</option>
                   {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
@@ -1024,9 +1032,15 @@ export default function ReportesPage() {
                       <td>{row.CursoLectivo || "-"}</td>
                       <td>{row.OtroColegioDestino || "-"}</td>
                       <td>
-                        <button type="button" className="ghost-btn" onClick={() => reimprimirCertificacion(row.CertificacionEstudioId)}>
-                          Reimprimir
-                        </button>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={() => abrirCertificacionWord(row.CertificacionEstudioId, row.CodigoConstancia)}
+                          >
+                            Abrir Word
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
