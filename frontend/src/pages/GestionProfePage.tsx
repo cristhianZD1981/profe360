@@ -2383,7 +2383,7 @@ export default function GestionProfePage() {
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
-      const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(2, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
+      const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(3, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
       return exportarTablaGenericaExcel(`reporte-boletas-${base}`, "Reporte de Boletas", headers, rows);
     }
     if (tipoReporteGestion === "BITACORA") {
@@ -2416,7 +2416,7 @@ export default function GestionProfePage() {
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
-      const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(2, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
+      const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(3, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
       return exportarTablaGenericaPdf("Reporte de Boletas", headers, rows);
     }
     if (tipoReporteGestion === "BITACORA") {
@@ -12270,7 +12270,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             </tr>
                           ) : boletasConductaFiltradas.map((item) => (
                             <tr key={item.BoletaConductaId}>
-                              <td>{String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(2, "0")}</td>
+                              <td>{String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0")}</td>
                               <td>{String(item.Fecha || "").slice(0, 10)}</td>
                               <td>{[item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre || ""].join(" ").replace(/\s+/g, " ").trim()}</td>
                               <td>{item.Seccion || ""}</td>

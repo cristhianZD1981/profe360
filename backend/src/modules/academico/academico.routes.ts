@@ -853,6 +853,13 @@ function buildConsecutivoCodigo(prefijo: string, siguienteNumero: number, anioLe
   return [prefijoSeguro, numero, anioSeguro].filter(Boolean).join("-");
 }
 
+function buildConsecutivoBoletaCodigo(prefijo: string, siguienteNumero: number, anioLectivo: string) {
+  const prefijoSeguro = String(prefijo || "").trim();
+  const anioSeguro = String(anioLectivo || "").trim();
+  const numero = String(Number(siguienteNumero || 0)).padStart(3, "0");
+  return [prefijoSeguro, numero, anioSeguro].filter(Boolean).join("-");
+}
+
 function normalizeTipoUsoMensaje(value: any) {
   const raw = String(value ?? "").trim().toUpperCase();
   if (["COTIDIANO", "TAREA", "ASISTENCIA", "EXAMEN"].includes(raw)) return raw;
@@ -1774,7 +1781,7 @@ router.get("/consecutivos-config", async (req, res) => {
         prefijo: String(boletas.Prefijo || "BOLETA"),
         siguienteNumero: Number(boletas.SiguienteNumero || 1),
         anioLectivo: String(boletas.AnioLectivo || anioLectivoVigente),
-        ejemploCodigo: buildConsecutivoCodigo(String(boletas.Prefijo || "BOLETA"), Number(boletas.SiguienteNumero || 1), String(boletas.AnioLectivo || anioLectivoVigente))
+        ejemploCodigo: buildConsecutivoBoletaCodigo(String(boletas.Prefijo || "BOLETA"), Number(boletas.SiguienteNumero || 1), String(boletas.AnioLectivo || anioLectivoVigente))
       },
       certificaciones: {
         prefijo: String(certificaciones.Prefijo || "CERTIFICACION"),
@@ -1860,7 +1867,9 @@ router.put("/consecutivos-config", async (req, res) => {
       prefijo,
       siguienteNumero,
       anioLectivo,
-      ejemploCodigo: buildConsecutivoCodigo(prefijo, siguienteNumero, anioLectivo)
+      ejemploCodigo: tipo === "BOLETA"
+        ? buildConsecutivoBoletaCodigo(prefijo, siguienteNumero, anioLectivo)
+        : buildConsecutivoCodigo(prefijo, siguienteNumero, anioLectivo)
     }, "Consecutivo actualizado correctamente");
   } catch (error) {
     console.error("Error actualizando configuración de consecutivos:", error);

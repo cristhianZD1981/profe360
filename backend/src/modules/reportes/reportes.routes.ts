@@ -1349,7 +1349,7 @@ router.get("/gestion-profe", async (req, res) => {
 
     const rows = result.recordset.map((item: any) => ({
       boletaConductaId: Number(item.BoletaConductaId || 0),
-      numeroBoleta: String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(2, "0"),
+      numeroBoleta: String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
       nombre: [item.PrimerApellido, item.SegundoApellido, item.Nombre].filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
       cedula: String(item.Identificacion || ""),
       seccion: String(item.Seccion || item.GrupoNombre || ""),
@@ -1971,7 +1971,7 @@ router.get("/admin/consecutivos", async (req, res) => {
           Alumno = LTRIM(RTRIM(CONCAT(ISNULL(e.PrimerApellido, N''), N' ', ISNULL(e.SegundoApellido, N''), N' ', ISNULL(e.Nombre, N'')))),
           Cedula = ISNULL(e.Identificacion, N''),
           Seccion = ISNULL(NULLIF(b.Seccion, N''), ISNULL(g.Nombre, N'')),
-          Codigo = ISNULL(NULLIF(b.CodigoBoleta, N''), RIGHT(N'00' + CONVERT(varchar(20), ISNULL(b.Consecutivo, 0)), 2)),
+          Codigo = ISNULL(NULLIF(b.CodigoBoleta, N''), RIGHT(N'000' + CONVERT(varchar(20), ISNULL(b.Consecutivo, 0)), 3)),
           Detalle = ISNULL(b.DetalleHechos, N''),
           CorreoEnviado = CASE
             WHEN ISNULL(envio.CorreoEnviado, 0) = 1 THEN N'Sí'

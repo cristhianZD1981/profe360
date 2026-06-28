@@ -25,6 +25,13 @@ type ConsecutivoRow = {
   WhatsAppEnviado: string;
 };
 
+function formatConsecutivo(row: ConsecutivoRow) {
+  const codigo = String(row.Codigo || "").trim();
+  if (codigo) return codigo;
+  const width = String(row.Tipo || "").toUpperCase().includes("BOLETA") ? 3 : 4;
+  return String(Number(row.Consecutivo || 0)).padStart(width, "0");
+}
+
 const cardStyle: React.CSSProperties = {
   background: "linear-gradient(180deg, #10273a 0%, #0f2132 100%)",
   border: "1px solid rgba(96, 165, 250, 0.22)",
@@ -349,7 +356,7 @@ export default function SuperAdminConsecutivosPage() {
                       onChange={() => toggleRowSelection(row.RegistroId)}
                     />
                   </td>
-                  <td>{row.Codigo || String(Number(row.Consecutivo || 0)).padStart(4, "0")}</td>
+                  <td>{formatConsecutivo(row)}</td>
                   <td>{row.FechaTexto || "-"}</td>
                   <td>{row.Alumno || "-"}</td>
                   <td>{row.Cedula || "-"}</td>

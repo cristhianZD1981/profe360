@@ -43,6 +43,7 @@ type AsistenciaResumen = {
 type BoletaReporteRow = {
   boletaConductaId: number;
   numeroBoleta: string;
+  Consecutivo?: number;
   nombre: string;
   cedula: string;
   seccion: string;
@@ -435,7 +436,7 @@ export default function ReportesPage() {
     if (tipo === "BOLETAS") {
       const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
       const rows = boletasRows.map((item) => [
-        item.numeroBoleta,
+        String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
         item.nombre,
         item.cedula,
         item.seccion,
@@ -488,7 +489,7 @@ export default function ReportesPage() {
     if (tipo === "BOLETAS") {
       const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
       const rows = boletasRows.map((item) => [
-        item.numeroBoleta,
+        String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
         item.nombre,
         item.cedula,
         item.seccion,

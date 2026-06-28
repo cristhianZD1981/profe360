@@ -42,7 +42,7 @@ function formatDate(value?: any) {
 function buildConsecutivoCodigo(prefijo?: string | null, siguienteNumero?: number | null, anioLectivo?: string | null) {
   const prefijoSeguro = String(prefijo || "").trim();
   const anioSeguro = String(anioLectivo || "").trim();
-  const numero = String(Number(siguienteNumero || 0)).padStart(2, "0");
+  const numero = String(Number(siguienteNumero || 0)).padStart(3, "0");
   return [prefijoSeguro, numero, anioSeguro].filter(Boolean).join("-");
 }
 
@@ -337,7 +337,7 @@ function buildBoletaConductaHtml(params: {
     institucion?.NombreComercial ||
     institucion?.Nombre ||
     "";
-  const consecutivo = String(boleta?.CodigoBoleta || "").trim() || String(Number(boleta?.Consecutivo || 0)).padStart(2, "0");
+  const consecutivo = String(boleta?.CodigoBoleta || "").trim() || String(Number(boleta?.Consecutivo || 0)).padStart(3, "0");
   const fechaTexto = formatDateCR(boleta?.Fecha || new Date());
   const lugarCompleto = [String(boleta?.LugarAcontecimiento || "").trim(), String(nombreInstitucionCabecera || "").trim()].filter(Boolean).join(" - ");
 
@@ -1510,7 +1510,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
     const estudianteNombre = fullName(row);
     const fechaIso = String(row.Fecha || "").slice(0, 10);
     const fechaCR = formatDateCR(row.Fecha);
-    const consecutivo = String(row.CodigoBoleta || "").trim() || String(Number(row.Consecutivo || 0)).padStart(2, "0");
+    const consecutivo = String(row.CodigoBoleta || "").trim() || String(Number(row.Consecutivo || 0)).padStart(3, "0");
     const nombreColegio = String(row.NombreOficialBoleta || row.InstitucionNombreComercial || row.InstitucionNombre || "");
     const mensajeWhatsApp = buildBoletaConductaWhatsAppText({
       consecutivo,
