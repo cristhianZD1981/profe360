@@ -27,7 +27,7 @@ function isSuperAdmin(req: any) {
 function buildConsecutivoCodigo(prefijo?: string | null, siguienteNumero?: number | null, anioLectivo?: string | null) {
   const prefijoSeguro = String(prefijo || "").trim();
   const anioSeguro = String(anioLectivo || "").trim();
-  const numero = String(Number(siguienteNumero || 0)).padStart(2, "0");
+  const numero = String(Number(siguienteNumero || 0)).padStart(3, "0");
   return [prefijoSeguro, numero, anioSeguro].filter(Boolean).join("-");
 }
 
@@ -2018,7 +2018,7 @@ router.get("/admin/consecutivos", async (req, res) => {
         Alumno = ISNULL(cer.EstudianteNombre, N''),
         Cedula = ISNULL(cer.Identificacion, N''),
         Seccion = ISNULL(cer.GrupoNombre, N''),
-        Codigo = ISNULL(NULLIF(cer.CodigoConstancia, N''), N'CONST-' + RIGHT(N'0000' + CONVERT(varchar(20), ISNULL(cer.Consecutivo, 0)), 4)),
+          Codigo = ISNULL(NULLIF(cer.CodigoConstancia, N''), N'CONST-' + RIGHT(N'000' + CONVERT(varchar(20), ISNULL(cer.Consecutivo, 0)), 3)),
         Detalle = ISNULL(cer.MotivoTramite, N''),
         CorreoEnviado = N'-',
         WhatsAppEnviado = N'-'

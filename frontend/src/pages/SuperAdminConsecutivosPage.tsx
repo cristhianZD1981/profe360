@@ -28,8 +28,7 @@ type ConsecutivoRow = {
 function formatConsecutivo(row: ConsecutivoRow) {
   const codigo = String(row.Codigo || "").trim();
   if (codigo) return codigo;
-  const width = String(row.Tipo || "").toUpperCase().includes("BOLETA") ? 3 : 4;
-  return String(Number(row.Consecutivo || 0)).padStart(width, "0");
+  return String(Number(row.Consecutivo || 0)).padStart(3, "0");
 }
 
 const cardStyle: React.CSSProperties = {
