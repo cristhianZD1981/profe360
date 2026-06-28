@@ -31,13 +31,7 @@ const REPORTE_CERTIFICACIONES_ROLES = [
   "PROFESOR_GUIA"
 ];
 
-const PARAMETRIZACIONES_ROLES = [
-  "SUPER_ADMIN",
-  "ADMIN_INSTITUCIONAL",
-  "ADMINISTRATIVO",
-  "PROFESOR",
-  "PROFESOR_GUIA"
-];
+const PARAMETRIZACIONES_ROLES = ["SUPER_ADMIN"];
 
 const items: MenuItem[] = [
   { label: "Dashboard", path: "/" },
@@ -63,16 +57,20 @@ const items: MenuItem[] = [
     allowedRoles: ADMINISTRATIVO_ROLES
   },
   {
+    label: "Gestión del Profe",
+    path: "/gestion-profe",
+    allowedRoles: GESTION_PROFE_ROLES
+  },
+  {
     label: "Parametrizaciones",
     path: "/parametrizaciones",
     allowedRoles: PARAMETRIZACIONES_ROLES
   },
   {
-    label: "Gestión del Profe",
-    path: "/gestion-profe",
-    allowedRoles: GESTION_PROFE_ROLES
-  },
-  { label: "Reporte y Certificaciones", path: "/reportes", allowedRoles: REPORTE_CERTIFICACIONES_ROLES }
+    label: "Reporte y Certificaciones",
+    path: "/reportes",
+    allowedRoles: REPORTE_CERTIFICACIONES_ROLES
+  }
 ];
 
 function normalizeRole(role: string) {
@@ -142,25 +140,16 @@ export default function Layout() {
 
   function renderMenuItem(item: MenuItem) {
     const allowed = hasAccess(item, roles);
+    if (!allowed) return null;
 
     const linkClassName = ({ isActive }: { isActive: boolean }) =>
       `menu-link ${isActive ? "active" : ""}`;
 
     return (
       <div key={item.path} className="menu-item-block">
-        {allowed ? (
-          <NavLink to={item.path} className={linkClassName} end={item.path === "/"}>
-            {item.label}
-          </NavLink>
-        ) : (
-          <span
-            className="menu-link inactive"
-            title="No tenés acceso con el rol actual"
-            aria-disabled="true"
-          >
-            {item.label}
-          </span>
-        )}
+        <NavLink to={item.path} className={linkClassName} end={item.path === "/"}>
+          {item.label}
+        </NavLink>
       </div>
     );
   }
@@ -364,17 +353,7 @@ export default function Layout() {
                     >
                       Gestión del Profe
                     </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      style={adminMenuItemStyle}
-                      onClick={() => {
-                        setShowAdminMenu(false);
-                        navigate("/seguimiento-notas");
-                      }}
-                    >
-                      Seguimiento de notas
-                    </button>
+
                     <button
                       type="button"
                       role="menuitem"
@@ -384,7 +363,7 @@ export default function Layout() {
                         navigate("/parametrizaciones/evaluaciones");
                       }}
                     >
-                      Plantillas y evaluaciones
+                      Parametrizaciones
                     </button>
                     <button
                       type="button"
@@ -565,3 +544,5 @@ export default function Layout() {
     </div>
   );
 }
+
+

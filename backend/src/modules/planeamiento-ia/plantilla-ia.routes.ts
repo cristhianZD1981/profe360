@@ -12,6 +12,7 @@ router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", 
 type AuthUser = {
   userId?: number;
   usuarioId?: number;
+  institucionId?: number | null;
   roles?: string[];
 };
 
@@ -28,6 +29,10 @@ function isAdminRole(req: any) {
   return hasAnyRole(req, ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"]);
 }
 
+function isSuperAdminRole(req: any) {
+  return hasAnyRole(req, ["SUPER_ADMIN"]);
+}
+
 function isProfesorRole(req: any) {
   return hasAnyRole(req, ["PROFESOR", "PROFESOR_GUIA"]);
 }
@@ -35,6 +40,11 @@ function isProfesorRole(req: any) {
 function getUserId(req: any) {
   const auth = getAuth(req);
   return Number(auth.userId || auth.usuarioId || 0);
+}
+
+function getUserInstitutionId(req: any) {
+  const auth = getAuth(req);
+  return Number(auth.institucionId || 0);
 }
 
 function normalizeText(value: any) {
@@ -71,6 +81,12 @@ async function ensurePlantillaPromptIAVisibilityColumns(pool: any) {
       ADD UsuarioCreadorId INT NULL;
     END;
 
+    IF COL_LENGTH('dbo.PlantillaPromptIA', 'InstitucionId') IS NULL
+    BEGIN
+      ALTER TABLE dbo.PlantillaPromptIA
+      ADD InstitucionId INT NULL;
+    END;
+
     IF COL_LENGTH('dbo.PlantillaPromptIA', 'EsPublica') IS NULL
     BEGIN
       ALTER TABLE dbo.PlantillaPromptIA
@@ -93,6 +109,11 @@ function denyIfCannotMaintainTipos(req: any, res: any) {
 
 function canReadPlantilla(req: any, plantilla: any) {
   if (!plantilla) return false;
+  if (isSuperAdminRole(req)) return true;
+
+  const institucionId = getUserInstitutionId(req);
+  if (!institucionId || Number(plantilla.InstitucionId || 0) !== institucionId) return false;
+
   if (isAdminRole(req)) return true;
   if (!isProfesorRole(req)) return false;
 
@@ -103,6 +124,11 @@ function canReadPlantilla(req: any, plantilla: any) {
 
 function canWritePlantilla(req: any, plantilla: any) {
   if (!plantilla) return false;
+  if (isSuperAdminRole(req)) return true;
+
+  const institucionId = getUserInstitutionId(req);
+  if (!institucionId || Number(plantilla.InstitucionId || 0) !== institucionId) return false;
+
   if (isAdminRole(req)) return true;
   if (!isProfesorRole(req)) return false;
 
@@ -118,6 +144,8 @@ async function getPlantillaById(pool: any, id: number) {
         p.Id,
         p.TipoGeneracionIAId,
         t.Nombre AS TipoGeneracionIANombre,
+        p.InstitucionId,
+        i.Nombre AS InstitucionNombre,
         p.NombrePlantilla,
         p.IndicacionesSistema,
         p.ContextoBase,
@@ -130,6 +158,7 @@ async function getPlantillaById(pool: any, id: number) {
         p.FechaCreacion
       FROM dbo.PlantillaPromptIA p
       INNER JOIN dbo.TipoGeneracionIA t ON t.Id = p.TipoGeneracionIAId
+      LEFT JOIN dbo.Institucion i ON i.InstitucionId = p.InstitucionId
       WHERE p.Id = @id
     `);
 
@@ -138,17 +167,20 @@ async function getPlantillaById(pool: any, id: number) {
 
 async function assertNombreDisponible(pool: any, input: {
   tipoGeneracionIAId: number;
+  institucionId: number | null;
   nombrePlantilla: string;
   excluirId?: number | null;
 }) {
   const result = await pool.request()
     .input("tipoGeneracionIAId", sql.Int, input.tipoGeneracionIAId)
+    .input("institucionId", sql.Int, input.institucionId)
     .input("nombrePlantilla", sql.NVarChar(150), input.nombrePlantilla)
     .input("excluirId", sql.Int, input.excluirId || null)
     .query(`
       SELECT TOP 1 Id
       FROM dbo.PlantillaPromptIA
       WHERE TipoGeneracionIAId = @tipoGeneracionIAId
+        AND ISNULL(InstitucionId, 0) = ISNULL(@institucionId, 0)
         AND UPPER(LTRIM(RTRIM(NombrePlantilla))) = UPPER(LTRIM(RTRIM(@nombrePlantilla)))
         AND Activo = 1
         AND (@excluirId IS NULL OR Id <> @excluirId)
@@ -266,24 +298,37 @@ router.get("/plantillas", async (req, res) => {
   try {
     const tipoGeneracionIAId = toOptionalInt(req.query.tipoGeneracionIAId);
     const incluirInactivas = String(req.query.incluirInactivas || "").toLowerCase() === "true";
+    const institucionIdFiltro = isSuperAdminRole(req)
+      ? toOptionalInt(req.query.institucionId)
+      : getUserInstitutionId(req);
 
     const pool = await getPool();
     await ensurePlantillaPromptIAVisibilityColumns(pool);
 
+    if (!isAdminRole(req) && !institucionIdFiltro) {
+      return badRequest(res, "El usuario no tiene una institucion asignada");
+    }
+
     const request = pool.request()
       .input("tipoGeneracionIAId", sql.Int, tipoGeneracionIAId)
-      .input("usuarioId", sql.Int, getUserId(req) || null);
+      .input("usuarioId", sql.Int, getUserId(req) || null)
+      .input("institucionId", sql.Int, institucionIdFiltro || null);
 
     const filtroEstado = incluirInactivas ? "1 = 1" : "p.Activo = 1";
     const filtroVisibilidad = isProfesorRole(req) && !isAdminRole(req)
       ? "AND (ISNULL(p.EsPublica, 1) = 1 OR p.UsuarioCreadorId = @usuarioId)"
       : "";
+    const filtroInstitucion = isSuperAdminRole(req)
+      ? "AND (@institucionId IS NULL OR p.InstitucionId = @institucionId)"
+      : "AND p.InstitucionId = @institucionId";
 
     const result = await request.query(`
       SELECT
         p.Id,
         p.TipoGeneracionIAId,
         t.Nombre AS TipoGeneracionIANombre,
+        p.InstitucionId,
+        i.Nombre AS InstitucionNombre,
         p.NombrePlantilla,
         p.IndicacionesSistema,
         p.ContextoBase,
@@ -296,7 +341,9 @@ router.get("/plantillas", async (req, res) => {
         p.FechaCreacion
       FROM dbo.PlantillaPromptIA p
       INNER JOIN dbo.TipoGeneracionIA t ON t.Id = p.TipoGeneracionIAId
+      LEFT JOIN dbo.Institucion i ON i.InstitucionId = p.InstitucionId
       WHERE (@tipoGeneracionIAId IS NULL OR p.TipoGeneracionIAId = @tipoGeneracionIAId)
+        ${filtroInstitucion}
         AND (${filtroEstado})
         ${filtroVisibilidad}
       ORDER BY p.FechaCreacion DESC, p.Id DESC
@@ -346,7 +393,7 @@ router.get("/plantillas/:id/exportar-word", async (req, res) => {
           children: [
             new Paragraph({ children: [new TextRun({ text: `Plantilla IA: ${String(plantilla.NombrePlantilla || "")}`, bold: true, size: 32 })] }),
             new Paragraph({ text: `Tipo: ${String(plantilla.TipoGeneracionIANombre || plantilla.TipoGeneracionIAId || "")}` }),
-            new Paragraph({ text: `Visibilidad: ${plantilla.EsPublica ? "Pública" : "Privada"}` }),
+            new Paragraph({ text: `Visibilidad: ${plantilla.EsPublica ? "PÃºblica" : "Privada"}` }),
             new Paragraph({ text: `Estado: ${plantilla.Activo ? "Activa" : "Inactiva"}` }),
             new Paragraph({ text: "" }),
             new Paragraph({ children: [new TextRun({ text: "Indicaciones del sistema", bold: true })] }),
@@ -355,7 +402,7 @@ router.get("/plantillas/:id/exportar-word", async (req, res) => {
             new Paragraph({ children: [new TextRun({ text: "Contexto base", bold: true })] }),
             new Paragraph({ text: String(plantilla.ContextoBase || "") }),
             new Paragraph({ text: "" }),
-            new Paragraph({ children: [new TextRun({ text: "Reglas de construcción", bold: true })] }),
+            new Paragraph({ children: [new TextRun({ text: "Reglas de construcciÃ³n", bold: true })] }),
             new Paragraph({ text: String(plantilla.ReglasConstruccion || "") }),
             new Paragraph({ text: "" }),
             new Paragraph({ children: [new TextRun({ text: "Estructura de salida", bold: true })] }),
@@ -384,6 +431,11 @@ router.post("/plantillas", async (req, res) => {
   try {
     const tipoGeneracionIAId = toRequiredInt(req.body.tipoGeneracionIAId, "tipoGeneracionIAId", res);
     if (tipoGeneracionIAId === null) return;
+
+    const institucionId = isSuperAdminRole(req)
+      ? toRequiredInt(req.body.institucionId, "institucionId", res)
+      : getUserInstitutionId(req);
+    if (institucionId === null) return;
 
     const nombrePlantilla = normalizeText(req.body.nombrePlantilla);
     const indicacionesSistema = normalizeText(req.body.indicacionesSistema);
@@ -415,6 +467,7 @@ router.post("/plantillas", async (req, res) => {
 
     const disponible = await assertNombreDisponible(pool, {
       tipoGeneracionIAId,
+      institucionId,
       nombrePlantilla
     });
 
@@ -424,6 +477,7 @@ router.post("/plantillas", async (req, res) => {
 
     const result = await pool.request()
       .input("tipoGeneracionIAId", sql.Int, tipoGeneracionIAId)
+      .input("institucionId", sql.Int, institucionId)
       .input("nombrePlantilla", sql.NVarChar(150), nombrePlantilla)
       .input("indicacionesSistema", sql.NVarChar(sql.MAX), indicacionesSistema)
       .input("contextoBase", sql.NVarChar(sql.MAX), contextoBase || null)
@@ -434,10 +488,10 @@ router.post("/plantillas", async (req, res) => {
       .input("esPublica", sql.Bit, esPublica)
       .query(`
         INSERT INTO dbo.PlantillaPromptIA
-          (TipoGeneracionIAId, NombrePlantilla, IndicacionesSistema, ContextoBase, ReglasConstruccion, EstructuraSalida, FormatoRespuesta, UsuarioCreadorId, EsPublica, Activo, FechaCreacion)
+          (TipoGeneracionIAId, InstitucionId, NombrePlantilla, IndicacionesSistema, ContextoBase, ReglasConstruccion, EstructuraSalida, FormatoRespuesta, UsuarioCreadorId, EsPublica, Activo, FechaCreacion)
         OUTPUT INSERTED.Id
         VALUES
-          (@tipoGeneracionIAId, @nombrePlantilla, @indicacionesSistema, @contextoBase, @reglasConstruccion, @estructuraSalida, @formatoRespuesta, @usuarioCreadorId, @esPublica, 1, GETDATE())
+          (@tipoGeneracionIAId, @institucionId, @nombrePlantilla, @indicacionesSistema, @contextoBase, @reglasConstruccion, @estructuraSalida, @formatoRespuesta, @usuarioCreadorId, @esPublica, 1, GETDATE())
       `);
 
     created(res, { id: result.recordset[0]?.Id }, "Plantilla IA creada correctamente");
@@ -469,10 +523,16 @@ router.put("/plantillas/:id", async (req, res) => {
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
     if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenes permisos para modificar esta plantilla");
 
+    const institucionId = isSuperAdminRole(req)
+      ? toRequiredInt(req.body.institucionId, "institucionId", res)
+      : Number(plantilla.InstitucionId || getUserInstitutionId(req) || 0);
+    if (!institucionId) return badRequest(res, "La institucion es obligatoria");
+
     const esPublica = req.body.esPublica === undefined ? !!plantilla.EsPublica : !!req.body.esPublica;
 
     const disponible = await assertNombreDisponible(pool, {
       tipoGeneracionIAId: Number(plantilla.TipoGeneracionIAId),
+      institucionId,
       nombrePlantilla,
       excluirId: id
     });
@@ -483,6 +543,7 @@ router.put("/plantillas/:id", async (req, res) => {
 
     const result = await pool.request()
       .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
       .input("nombrePlantilla", sql.NVarChar(150), nombrePlantilla)
       .input("indicacionesSistema", sql.NVarChar(sql.MAX), indicacionesSistema)
       .input("contextoBase", sql.NVarChar(sql.MAX), contextoBase || null)
@@ -493,6 +554,7 @@ router.put("/plantillas/:id", async (req, res) => {
       .query(`
         UPDATE dbo.PlantillaPromptIA
         SET
+          InstitucionId = @institucionId,
           NombrePlantilla = @nombrePlantilla,
           IndicacionesSistema = @indicacionesSistema,
           ContextoBase = @contextoBase,
@@ -587,12 +649,18 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
     const nombrePlantilla = normalizeText(req.body.nombrePlantilla || `${origen.NombrePlantilla} - copia`);
     if (!nombrePlantilla) return badRequest(res, "El nombre de la plantilla copiada es obligatorio");
 
+    const institucionId = isSuperAdminRole(req)
+      ? toRequiredInt(req.body.institucionId, "institucionId", res)
+      : Number(origen.InstitucionId || getUserInstitutionId(req) || 0);
+    if (!institucionId) return badRequest(res, "La institucion es obligatoria");
+
     const esPublica = req.body.esPublica === undefined
       ? (isProfesorRole(req) && !isAdminRole(req) ? false : !!origen.EsPublica)
       : !!req.body.esPublica;
 
     const disponible = await assertNombreDisponible(pool, {
       tipoGeneracionIAId: Number(origen.TipoGeneracionIAId),
+      institucionId,
       nombrePlantilla
     });
 
@@ -602,6 +670,7 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
 
     const result = await pool.request()
       .input("tipoGeneracionIAId", sql.Int, Number(origen.TipoGeneracionIAId))
+      .input("institucionId", sql.Int, institucionId)
       .input("nombrePlantilla", sql.NVarChar(150), nombrePlantilla)
       .input("indicacionesSistema", sql.NVarChar(sql.MAX), origen.IndicacionesSistema)
       .input("contextoBase", sql.NVarChar(sql.MAX), origen.ContextoBase || null)
@@ -612,10 +681,10 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
       .input("esPublica", sql.Bit, esPublica)
       .query(`
         INSERT INTO dbo.PlantillaPromptIA
-          (TipoGeneracionIAId, NombrePlantilla, IndicacionesSistema, ContextoBase, ReglasConstruccion, EstructuraSalida, FormatoRespuesta, UsuarioCreadorId, EsPublica, Activo, FechaCreacion)
+          (TipoGeneracionIAId, InstitucionId, NombrePlantilla, IndicacionesSistema, ContextoBase, ReglasConstruccion, EstructuraSalida, FormatoRespuesta, UsuarioCreadorId, EsPublica, Activo, FechaCreacion)
         OUTPUT INSERTED.Id
         VALUES
-          (@tipoGeneracionIAId, @nombrePlantilla, @indicacionesSistema, @contextoBase, @reglasConstruccion, @estructuraSalida, @formatoRespuesta, @usuarioCreadorId, @esPublica, 1, GETDATE())
+          (@tipoGeneracionIAId, @institucionId, @nombrePlantilla, @indicacionesSistema, @contextoBase, @reglasConstruccion, @estructuraSalida, @formatoRespuesta, @usuarioCreadorId, @esPublica, 1, GETDATE())
       `);
 
     created(res, { id: result.recordset[0]?.Id }, "Plantilla IA copiada correctamente");

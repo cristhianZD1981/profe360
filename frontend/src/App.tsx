@@ -32,13 +32,7 @@ const ADMINISTRATIVO_ROLES = [
   "ADMINISTRATIVO"
 ];
 
-const PARAMETRIZACIONES_ROLES = [
-  "SUPER_ADMIN",
-  "ADMIN_INSTITUCIONAL",
-  "ADMINISTRATIVO",
-  "PROFESOR",
-  "PROFESOR_GUIA"
-];
+const PARAMETRIZACIONES_ROLES = ["SUPER_ADMIN"];
 
 const GESTION_PROFE_ROLES = [
   "SUPER_ADMIN",
@@ -208,13 +202,7 @@ export default function App() {
             path="seguimiento-notas"
             element={
               <ProtectedRoute
-                allowedRoles={[
-                  "SUPER_ADMIN",
-                  "ADMIN_INSTITUCIONAL",
-                  "ADMINISTRATIVO",
-                  "PROFESOR",
-                  "PROFESOR_GUIA"
-                ]}
+                allowedRoles={["SUPER_ADMIN"]}
               >
                 <SeguimientoNotasPage />
               </ProtectedRoute>

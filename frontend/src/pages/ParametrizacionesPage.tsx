@@ -8,11 +8,7 @@ type OpcionParametrizacion = {
 };
 
 const PARAMETRIZACIONES_ROLES = [
-  "SUPER_ADMIN",
-  "ADMIN_INSTITUCIONAL",
-  "ADMINISTRATIVO",
-  "PROFESOR",
-  "PROFESOR_GUIA"
+  "SUPER_ADMIN"
 ];
 
 const opciones: OpcionParametrizacion[] = [

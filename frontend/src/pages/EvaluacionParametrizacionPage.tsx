@@ -12,6 +12,12 @@ type CatalogoItem = {
   AnioNombre?: string | null;
 };
 
+type InstitucionOption = {
+  InstitucionId: number;
+  Nombre: string;
+  NombreComercial?: string | null;
+};
+
 type NivelDesempeno = {
   NivelDesempenoId: number;
   Descripcion: string;
@@ -165,6 +171,8 @@ export default function EvaluacionParametrizacionPage() {
 
   const [view, setView] = useState<"plantillas" | "niveles">("plantillas");
 
+  const [instituciones, setInstituciones] = useState<InstitucionOption[]>([]);
+  const [selectedInstitucionId, setSelectedInstitucionId] = useState("");
   const [aniosLectivos, setAniosLectivos] = useState<CatalogoItem[]>([]);
   const [periodos, setPeriodos] = useState<CatalogoItem[]>([]);
   const [materias, setMaterias] = useState<CatalogoItem[]>([]);
@@ -203,6 +211,11 @@ export default function EvaluacionParametrizacionPage() {
   const copyProgressTimerRef = useRef<number | null>(null);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+
+  const institutionQueryValue = useMemo(() => {
+    if (isSuperAdminRole) return selectedInstitucionId;
+    return String(user?.institucionId || "");
+  }, [isSuperAdminRole, selectedInstitucionId, user?.institucionId]);
 
   const periodosFiltrados = useMemo(() => {
     if (!plantillaForm.anioLectivoId) return periodos;
@@ -260,7 +273,11 @@ export default function EvaluacionParametrizacionPage() {
   }
 
   async function loadCatalogos() {
-    const response = await api.get("/evaluacion/catalogos");
+    const response = await api.get("/evaluacion/catalogos", {
+      params: isSuperAdminRole && selectedInstitucionId
+        ? { institucionId: selectedInstitucionId }
+        : undefined
+    });
     const data = response.data?.data || {};
     setAniosLectivos(data.aniosLectivos || []);
     setPeriodos(data.periodos || []);
@@ -273,6 +290,7 @@ export default function EvaluacionParametrizacionPage() {
       params: {
         q: search,
         incluirInactivas,
+        institucionId: isSuperAdminRole ? selectedInstitucionId || undefined : undefined,
         anioLectivoId: filtroAnio || undefined,
         periodoId: filtroPeriodo || undefined,
         materiaId: filtroMateria || undefined
@@ -285,7 +303,8 @@ export default function EvaluacionParametrizacionPage() {
     const response = await api.get("/evaluacion/niveles-desempeno", {
       params: {
         q: nivelSearch,
-        incluirInactivos: incluirNivelesInactivos
+        incluirInactivos: incluirNivelesInactivos,
+        institucionId: isSuperAdminRole ? selectedInstitucionId || undefined : undefined
       }
     });
     setNiveles(response.data?.data || []);
@@ -314,6 +333,14 @@ export default function EvaluacionParametrizacionPage() {
   }
 
   async function refreshAll() {
+    if (isSuperAdminRole && !selectedInstitucionId) {
+      setAniosLectivos([]);
+      setPeriodos([]);
+      setMaterias([]);
+      setNiveles([]);
+      setPlantillas([]);
+      return;
+    }
     setLoading(true);
     clearMessages();
     try {
@@ -326,8 +353,34 @@ export default function EvaluacionParametrizacionPage() {
   }
 
   useEffect(() => {
+    if (isSuperAdminRole) {
+      void loadInstituciones();
+      return;
+    }
     refreshAll();
   }, []);
+
+  useEffect(() => {
+    if (!isSuperAdminRole) return;
+    if (!selectedInstitucionId) return;
+    refreshAll();
+  }, [selectedInstitucionId]);
+
+  async function loadInstituciones() {
+    try {
+      const response = await api.get("/instituciones");
+      const data = response.data?.data || [];
+      setInstituciones(Array.isArray(data) ? data : []);
+      if (!selectedInstitucionId) {
+        const first = Array.isArray(data) ? data[0] : null;
+        if (first?.InstitucionId) {
+          setSelectedInstitucionId(String(first.InstitucionId));
+        }
+      }
+    } catch (error: any) {
+      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los colegios"));
+    }
+  }
 
   async function handleBuscarPlantillas(e?: FormEvent) {
     e?.preventDefault();
@@ -440,8 +493,15 @@ export default function EvaluacionParametrizacionPage() {
     setLoading(true);
     clearMessages();
 
+    if (isSuperAdminRole && !selectedInstitucionId) {
+      setErrorMessage("Seleccioná un colegio antes de guardar la plantilla");
+      setLoading(false);
+      return;
+    }
+
     try {
       const payload = {
+        institucionId: isSuperAdminRole ? Number(selectedInstitucionId) : undefined,
         nombre: plantillaForm.nombre,
         anioLectivoId: Number(plantillaForm.anioLectivoId),
         periodoId: Number(plantillaForm.periodoId),
@@ -588,6 +648,7 @@ export default function EvaluacionParametrizacionPage() {
     clearMessages();
     try {
       const response = await api.post(`/evaluacion/plantillas/${selectedPlantilla.EvaluacionPlantillaId}/copiar`, {
+        institucionId: isSuperAdminRole ? Number(selectedInstitucionId || selectedPlantilla.InstitucionId) : undefined,
         nombre: copiaForm.nombre,
         anioLectivoId: Number(copiaForm.anioLectivoId),
         periodoId: Number(copiaForm.periodoId),
@@ -982,6 +1043,34 @@ export default function EvaluacionParametrizacionPage() {
           {errorMessage}
         </div>
       )}
+
+      {isSuperAdminRole ? (
+        <section className="card" style={{ marginBottom: 0 }}>
+          <h3 style={{ marginTop: 0 }}>Colegio</h3>
+          <div className="form">
+            <label>
+              Seleccioná el colegio para cargar sus plantillas y catálogos
+              <select
+                value={selectedInstitucionId}
+                onChange={(e) => setSelectedInstitucionId(e.target.value)}
+                required
+              >
+                <option value="">Seleccione</option>
+                {instituciones.map((item) => (
+                  <option key={item.InstitucionId} value={item.InstitucionId}>
+                    {item.NombreComercial || item.Nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!selectedInstitucionId && (
+              <div style={{ padding: "10px 12px", borderRadius: "10px", background: "#f8fafc", color: "#475569", border: "1px solid #e2e8f0" }}>
+                Elegí un colegio para ver año lectivo, período y materias disponibles.
+              </div>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       {loading && <div style={{ opacity: 0.8 }}>Procesando...</div>}
 

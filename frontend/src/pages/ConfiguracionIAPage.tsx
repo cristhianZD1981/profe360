@@ -10,10 +10,18 @@ type TipoGeneracionIA = {
   FechaCreacion?: string;
 };
 
+type InstitucionOption = {
+  InstitucionId: number;
+  Nombre: string;
+  NombreComercial?: string | null;
+};
+
 type PlantillaPromptIA = {
   Id: number;
   TipoGeneracionIAId: number;
   TipoGeneracionIANombre?: string;
+  InstitucionId?: number | null;
+  InstitucionNombre?: string | null;
   NombrePlantilla: string;
   IndicacionesSistema: string;
   ContextoBase?: string | null;
@@ -29,6 +37,7 @@ type PlantillaPromptIA = {
 type FormState = {
   id: number | null;
   tipoGeneracionIAId: string;
+  institucionId: string;
   nombrePlantilla: string;
   indicacionesSistema: string;
   contextoBase: string;
@@ -45,6 +54,7 @@ type TipoFormState = {
 
 type CopyFormState = {
   idOrigen: number | null;
+  institucionId: string;
   nombrePlantilla: string;
   esPublica: boolean;
 };
@@ -52,6 +62,7 @@ type CopyFormState = {
 const emptyForm: FormState = {
   id: null,
   tipoGeneracionIAId: "",
+  institucionId: "",
   nombrePlantilla: "",
   indicacionesSistema: "",
   contextoBase: "",
@@ -68,6 +79,7 @@ const emptyTipoForm: TipoFormState = {
 
 const emptyCopyForm: CopyFormState = {
   idOrigen: null,
+  institucionId: "",
   nombrePlantilla: "",
   esPublica: false
 };
@@ -89,6 +101,11 @@ function formatDate(value?: string) {
   });
 }
 
+function getInstitutionLabel(item?: { InstitucionNombre?: string | null; InstitucionId?: number | null }) {
+  if (!item) return "";
+  return item.InstitucionNombre || (item.InstitucionId ? `Colegio ${item.InstitucionId}` : "");
+}
+
 function getErrorMessage(error: any, fallback: string) {
   return error?.response?.data?.message || fallback;
 }
@@ -97,13 +114,16 @@ export default function ConfiguracionIAPage() {
   const { user } = useAuth();
   const roles = user?.roles || [];
   const currentUserId = Number(user?.userId || 0);
+  const isSuperAdminRole = roles.includes("SUPER_ADMIN");
   const isAdminRole = roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role));
   const isProfesorRole = roles.some((role) => ["PROFESOR", "PROFESOR_GUIA"].includes(role));
   const canCreatePlantillas = isAdminRole || isProfesorRole;
   const canCreateTipos = isAdminRole;
 
+  const [instituciones, setInstituciones] = useState<InstitucionOption[]>([]);
   const [tipos, setTipos] = useState<TipoGeneracionIA[]>([]);
   const [plantillas, setPlantillas] = useState<PlantillaPromptIA[]>([]);
+  const [selectedInstitucionId, setSelectedInstitucionId] = useState<string>("");
   const [selectedTipoId, setSelectedTipoId] = useState<string>("");
   const [incluirInactivas, setIncluirInactivas] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -139,12 +159,25 @@ export default function ConfiguracionIAPage() {
   }
 
   useEffect(() => {
+    loadInstituciones();
     loadTipos();
   }, []);
 
   useEffect(() => {
     loadPlantillas();
-  }, [selectedTipoId, incluirInactivas]);
+  }, [selectedInstitucionId, selectedTipoId, incluirInactivas]);
+
+  async function loadInstituciones() {
+    if (!isSuperAdminRole) return;
+
+    try {
+      const response = await api.get("/instituciones");
+      const data = unwrapData<InstitucionOption[]>(response) || [];
+      setInstituciones(data);
+    } catch (error: any) {
+      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los colegios"));
+    }
+  }
 
   async function loadTipos() {
     try {
@@ -164,6 +197,10 @@ export default function ConfiguracionIAPage() {
       const params: any = {
         incluirInactivas
       };
+
+      if (selectedInstitucionId) {
+        params.institucionId = selectedInstitucionId;
+      }
 
       if (selectedTipoId) {
         params.tipoGeneracionIAId = selectedTipoId;
@@ -187,6 +224,7 @@ export default function ConfiguracionIAPage() {
 
     setForm({
       ...emptyForm,
+      institucionId: selectedInstitucionId || (user?.institucionId ? String(user.institucionId) : ""),
       tipoGeneracionIAId: selectedTipoId || "",
       esPublica: isAdminRole
     });
@@ -220,6 +258,7 @@ export default function ConfiguracionIAPage() {
     setForm({
       id: plantilla.Id,
       tipoGeneracionIAId: String(plantilla.TipoGeneracionIAId),
+      institucionId: String(plantilla.InstitucionId || ""),
       nombrePlantilla: plantilla.NombrePlantilla || "",
       indicacionesSistema: plantilla.IndicacionesSistema || "",
       contextoBase: plantilla.ContextoBase || "",
@@ -246,6 +285,7 @@ export default function ConfiguracionIAPage() {
   function startCopy(plantilla: PlantillaPromptIA) {
     setCopyForm({
       idOrigen: plantilla.Id,
+      institucionId: String(plantilla.InstitucionId || selectedInstitucionId || user?.institucionId || ""),
       nombrePlantilla: `${plantilla.NombrePlantilla} - copia`,
       esPublica: isAdminRole ? !!plantilla.EsPublica : false
     });
@@ -316,6 +356,11 @@ export default function ConfiguracionIAPage() {
       return;
     }
 
+    if (isSuperAdminRole && !form.institucionId) {
+      setErrorMessage("Selecciona el colegio de la plantilla");
+      return;
+    }
+
     if (!form.nombrePlantilla.trim()) {
       setErrorMessage("Indica el nombre de la plantilla");
       return;
@@ -328,6 +373,7 @@ export default function ConfiguracionIAPage() {
 
     const payload = {
       tipoGeneracionIAId: Number(form.tipoGeneracionIAId),
+      institucionId: form.institucionId ? Number(form.institucionId) : user?.institucionId || null,
       nombrePlantilla: form.nombrePlantilla.trim(),
       indicacionesSistema: form.indicacionesSistema.trim(),
       contextoBase: form.contextoBase.trim(),
@@ -372,11 +418,17 @@ export default function ConfiguracionIAPage() {
       return;
     }
 
+    if (isSuperAdminRole && !copyForm.institucionId) {
+      setErrorMessage("Selecciona el colegio destino");
+      return;
+    }
+
     setCopying(true);
 
     try {
       const response = await api.post(`/ia/plantillas/${copyForm.idOrigen}/copiar`, {
         nombrePlantilla: copyForm.nombrePlantilla.trim(),
+        institucionId: copyForm.institucionId ? Number(copyForm.institucionId) : user?.institucionId || null,
         esPublica: copyForm.esPublica
       });
 
@@ -560,7 +612,19 @@ export default function ConfiguracionIAPage() {
       ) : null}
 
       <div style={{ ...cardStyle, display: "grid", gap: "14px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "12px", alignItems: "end" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "12px", alignItems: "end" }}>
+          <label style={labelStyle}>
+            Colegio
+            <select value={selectedInstitucionId} onChange={(e) => setSelectedInstitucionId(e.target.value)} style={inputStyle}>
+              <option value="">Todos los colegios</option>
+              {instituciones.map((institucion) => (
+                <option key={institucion.InstitucionId} value={institucion.InstitucionId}>
+                  {institucion.NombreComercial || institucion.Nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <label style={labelStyle}>
             Filtrar por tipo
             <select value={selectedTipoId} onChange={(e) => setSelectedTipoId(e.target.value)} style={inputStyle}>
@@ -660,6 +724,20 @@ export default function ConfiguracionIAPage() {
               Nombre de la plantilla
               <input value={form.nombrePlantilla} onChange={(e) => setForm((prev) => ({ ...prev, nombrePlantilla: e.target.value }))} style={inputStyle} />
             </label>
+
+            {isSuperAdminRole ? (
+              <label style={labelStyle}>
+                Colegio
+                <select value={form.institucionId} onChange={(e) => setForm((prev) => ({ ...prev, institucionId: e.target.value }))} style={inputStyle}>
+                  <option value="">Seleccione</option>
+                  {instituciones.map((institucion) => (
+                    <option key={institucion.InstitucionId} value={institucion.InstitucionId}>
+                      {institucion.NombreComercial || institucion.Nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
 
           <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#111827", fontWeight: 700 }}>
@@ -725,6 +803,24 @@ export default function ConfiguracionIAPage() {
             />
           </label>
 
+          {isSuperAdminRole ? (
+            <label style={labelStyle}>
+              Colegio destino
+              <select
+                value={copyForm.institucionId}
+                onChange={(e) => setCopyForm((prev) => ({ ...prev, institucionId: e.target.value }))}
+                style={inputStyle}
+              >
+                <option value="">Seleccione</option>
+                {instituciones.map((institucion) => (
+                  <option key={institucion.InstitucionId} value={institucion.InstitucionId}>
+                    {institucion.NombreComercial || institucion.Nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#111827", fontWeight: 700 }}>
             <input
               type="checkbox"
@@ -755,7 +851,7 @@ export default function ConfiguracionIAPage() {
           </div>
 
           <div style={{ color: "#334155", fontSize: "14px" }}>
-            <strong>{viewingPlantilla.NombrePlantilla}</strong> | {viewingPlantilla.EsPublica ? "Publica" : "Privada"}
+            <strong>{viewingPlantilla.NombrePlantilla}</strong> | {viewingPlantilla.EsPublica ? "Publica" : "Privada"} | {getInstitutionLabel(viewingPlantilla)}
           </div>
 
           <label style={labelStyle}>
@@ -790,9 +886,10 @@ export default function ConfiguracionIAPage() {
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1080px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1220px" }}>
             <thead>
               <tr style={{ background: "#e2e8f0", color: "#0f172a", textAlign: "left" }}>
+                <th style={{ padding: "12px", borderBottom: "2px solid #cbd5e1", fontWeight: 800 }}>Colegio</th>
                 <th style={{ padding: "12px", borderBottom: "2px solid #cbd5e1", fontWeight: 800 }}>Tipo</th>
                 <th style={{ padding: "12px", borderBottom: "2px solid #cbd5e1", fontWeight: 800 }}>Plantilla</th>
                 <th style={{ padding: "12px", borderBottom: "2px solid #cbd5e1", fontWeight: 800 }}>Visibilidad</th>
@@ -806,6 +903,9 @@ export default function ConfiguracionIAPage() {
                 const canEdit = canEditPlantilla(plantilla);
                 return (
                   <tr key={plantilla.Id}>
+                    <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: "#0f172a" }}>
+                      {getInstitutionLabel(plantilla)}
+                    </td>
                     <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: "#0f172a", fontWeight: 500 }}>
                       {plantilla.TipoGeneracionIANombre || plantilla.TipoGeneracionIAId}
                     </td>
@@ -872,9 +972,9 @@ export default function ConfiguracionIAPage() {
                 );
               })}
 
-              {!loading && plantillas.length === 0 ? (
+                  {!loading && plantillas.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: "18px", color: "#475569", textAlign: "center" }}>
+                  <td colSpan={7} style={{ padding: "18px", color: "#475569", textAlign: "center" }}>
                     No hay plantillas registradas con los filtros seleccionados
                   </td>
                 </tr>
