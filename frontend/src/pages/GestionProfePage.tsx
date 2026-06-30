@@ -4480,13 +4480,32 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   function updateSeguimientoExamenDraft(actividadId: number, estudianteId: number, patch: Partial<SeguimientoExamenDraft>) {
     const key = getSeguimientoActividadKey(actividadId, estudianteId);
+    const currentDraft = getSeguimientoExamenDraft(actividadId, estudianteId);
+    const nextDraft = {
+      ...currentDraft,
+      ...patch
+    };
     setSeguimientoExamenDrafts((prev) => ({
       ...prev,
       [key]: {
-        ...getSeguimientoExamenDraft(actividadId, estudianteId),
-        ...patch
+        ...nextDraft
       }
     }));
+    const aviso = seguimientoActividadInformarDrafts[key];
+    if (aviso?.informar && !aviso.mensajeEditado) {
+      const actividad = (seguimientoContexto?.actividades || []).find((item) => Number(item.ActividadId) === Number(actividadId)) || seguimientoActividadSeleccionada;
+      const estudiante = (seguimientoContexto?.estudiantes || []).find((item) => Number(item.EstudianteId) === Number(estudianteId));
+      if (actividad && estudiante) {
+        setSeguimientoActividadInformarDrafts((prev) => ({
+          ...prev,
+          [key]: {
+            ...(prev[key] || aviso),
+            observacion: buildMensajeSeguimientoExamenEncargado({ actividad, estudiante, draft: nextDraft }),
+            mensajeEditado: false
+          }
+        }));
+      }
+    }
   }
 
   function getSeguimientoActividadPuntosMaximos(actividad?: SeguimientoActividad | null) {
@@ -4510,6 +4529,60 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     const maximos = Number(puntosMaximos || 0);
     if (!Number.isFinite(obtenidos) || !Number.isFinite(maximos) || maximos <= 0) return 0;
     return Number(((obtenidos / maximos) * 100).toFixed(2));
+  }
+
+  function formatNotaMensajeExamen(nota: number) {
+    const value = Number(nota || 0);
+    if (!Number.isFinite(value)) return "0";
+    const rounded = Math.round(value * 100) / 100;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
+  }
+
+  function getNombreEstudianteMensaje(estudiante: any) {
+    return [estudiante?.Nombre || "", estudiante?.PrimerApellido || "", estudiante?.SegundoApellido || ""]
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      || getFullName(estudiante);
+  }
+
+  function getProfesorLogueadoMensaje() {
+    return String(user?.nombre || "").trim() || "Profesor";
+  }
+
+  function getAnioLectivoMensaje() {
+    return String(selected?.AnioNombre || selected?.AnioLectivoId || "").trim();
+  }
+
+  function getFraseActividadNotificacion(actividad?: SeguimientoActividad | null) {
+    const raw = getSeguimientoActividadLabel(actividad || {});
+    const sinArticulo = raw.replace(/^(el|la)\s+/i, "").trim() || raw || "Examen";
+    const key = normalizarSeguimientoKey(sinArticulo);
+    const articulo = key.includes("PRUEBA") ? "la" : "el";
+    const nombre = key.includes("PRUEBA")
+      ? sinArticulo.replace(/^prueba\b/i, "Prueba")
+      : sinArticulo;
+    return `${articulo} ${nombre}`;
+  }
+
+  function buildMensajeSeguimientoExamenEncargado(params: {
+    actividad?: SeguimientoActividad | null;
+    estudiante: any;
+    draft?: SeguimientoExamenDraft;
+    puntosMaximos?: number;
+  }) {
+    const puntosMaximosActividad = Number.isFinite(Number(params.puntosMaximos))
+      ? Number(params.puntosMaximos)
+      : Number(String(getSeguimientoActividadPuntosMaximos(params.actividad || null)).replace(",", "."));
+    const draft = params.draft || getSeguimientoExamenDraft(Number(params.actividad?.ActividadId || 0), Number(params.estudiante?.EstudianteId || 0));
+    const nota = calcularNotaExamen(draft.puntosObtenidos, puntosMaximosActividad);
+    const estudianteNombre = getNombreEstudianteMensaje(params.estudiante);
+    const materia = String(selected?.MateriaNombre || "").trim() || "la materia";
+    const periodo = String(selected?.PeriodoNombre || "").trim() || "el período";
+    const periodoAnio = [periodo, getAnioLectivoMensaje()].filter(Boolean).join("-");
+    const profesor = getProfesorLogueadoMensaje();
+
+    return `Estimado(a) encargado(a) legal:\n\nPor este medio se informa que el estudiante *${estudianteNombre}* obtuvo una nota de *${formatNotaMensajeExamen(nota)}* en la asignatura de *${materia}* en ${getFraseActividadNotificacion(params.actividad)} del *${periodoAnio || periodo}*\n\nAtentamente,\nProf. *${profesor}*\nDocente de *${materia}*`;
   }
 
   function calcularPorcentajeGanadoExamen(nota: number, actividad?: SeguimientoActividad | null, detalleItem?: SeguimientoEvaluacionDetalle | null) {
@@ -4680,8 +4753,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return {
         estudianteId: estudiante.EstudianteId,
         puntosObtenidos: puntosTexto === "" ? null : Number(puntosTexto),
-        observacion: aviso.informar ? (aviso.observacion || draft.observacion || "") : (draft.observacion || ""),
-        informarEncargado: aviso.informar
+        observacion: draft.observacion || "",
+        informarEncargado: aviso.informar,
+        mensajeEncargado: aviso.informar && aviso.mensajeEditado ? String(aviso.observacion || "").trim() : undefined
       };
     });
 
@@ -5706,19 +5780,41 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   function getSeguimientoActividadInformarDraft(actividadId: number, estudianteId: number): SeguimientoActividadInformarDraft {
     const key = getSeguimientoActividadKey(actividadId, estudianteId);
     if (seguimientoActividadInformarDrafts[key]) return seguimientoActividadInformarDrafts[key];
-    const existing = getSeguimientoExamenDraft(actividadId, estudianteId);
-    return { informar: false, observacion: existing.observacion || "" };
+    return { informar: false, observacion: "", mensajeEditado: false };
   }
 
   function updateSeguimientoActividadInformarDraft(actividadId: number, estudianteId: number, patch: Partial<SeguimientoActividadInformarDraft>) {
     const key = getSeguimientoActividadKey(actividadId, estudianteId);
-    setSeguimientoActividadInformarDrafts((prev) => ({
-      ...prev,
-      [key]: {
-        ...getSeguimientoActividadInformarDraft(actividadId, estudianteId),
-        ...patch
-      }
-    }));
+    const actividad = (seguimientoContexto?.actividades || []).find((item) => Number(item.ActividadId) === Number(actividadId)) || seguimientoActividadSeleccionada;
+    const estudiante = (seguimientoContexto?.estudiantes || []).find((item) => Number(item.EstudianteId) === Number(estudianteId));
+    const mensajeSugerido = actividad && estudiante
+      ? buildMensajeSeguimientoExamenEncargado({
+          actividad,
+          estudiante,
+          draft: getSeguimientoExamenDraft(actividadId, estudianteId)
+        })
+      : "";
+
+    setSeguimientoActividadInformarDrafts((prev) => {
+      const current = prev[key] || getSeguimientoActividadInformarDraft(actividadId, estudianteId);
+      const editandoTexto = patch.observacion !== undefined;
+      const nextInformar = patch.informar !== undefined ? Boolean(patch.informar) : current.informar;
+      const nextMensajeEditado = editandoTexto ? true : Boolean(current.mensajeEditado);
+      const nextObservacion = editandoTexto
+        ? String(patch.observacion || "")
+        : (patch.informar === true && !current.mensajeEditado ? mensajeSugerido : current.observacion);
+
+      return {
+        ...prev,
+        [key]: {
+          ...current,
+          ...patch,
+          informar: nextInformar,
+          observacion: nextObservacion,
+          mensajeEditado: nextMensajeEditado
+        }
+      };
+    });
   }
 
   function updatePlaneamientoIaField(field: keyof Omit<PlaneamientoIaForm, "habilidadesIds">, value: string) {
@@ -8975,7 +9071,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                           </label>
                                           {aviso.informar ? (
                                             <div style={{ display: "grid", gap: "6px", marginTop: "8px" }}>
-                                              <textarea value={aviso.observacion} onChange={(event) => updateSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { observacion: event.target.value })} placeholder="Mensaje para el encargado" rows={2} style={{ width: "100%", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: "#ffffff" }} />
+                                              <span style={{ color: "#475569", fontSize: "12px", fontWeight: 700 }}>Mensaje que se enviará</span>
+                                              <textarea value={aviso.observacion} onChange={(event) => updateSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { observacion: event.target.value, mensajeEditado: true })} placeholder="Mensaje para el encargado" rows={5} style={{ width: "100%", minWidth: "320px", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: "#ffffff", lineHeight: 1.4 }} />
                                             </div>
                                           ) : null}
                                         </td>

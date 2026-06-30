@@ -3,6 +3,23 @@ import { requireAuth } from "../../middlewares/auth.middleware";
 import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, ok } from "../../utils/http";
 import { getCostaRicaIsoDate, parseDateInputAsLocalDate } from "../../utils/date.utils";
+import {
+  AlignmentType,
+  BorderStyle,
+  Document,
+  Footer,
+  Header,
+  ImageRun,
+  Packer,
+  Paragraph,
+  Table,
+  TableCell,
+  TableLayoutType,
+  TableRow,
+  TextRun,
+  VerticalAlignTable,
+  WidthType
+} from "docx";
 
 const router = Router();
 router.use(requireAuth);
@@ -908,11 +925,7 @@ function buildConstanciaHtmlV2(params: {
     p.institucion?.Nombre ||
     p.institucion?.NombreOficialBoleta ||
     "";
-  const nombreInstitucionDocumento =
-    p.institucion?.Nombre ||
-    p.institucion?.NombreOficialBoleta ||
-    p.institucion?.NombreComercial ||
-    "";
+  const nombreInstitucionFirma = normalizeWhitespace(p.institucion?.Nombre || "");
   const circuitoValor = stripPrefixedLabel(p.institucion?.CircuitoEducativo, /^circuito\s*/i);
   const regionalValor = stripPrefixedLabel(
     p.institucion?.RegionalEducativa,
@@ -946,6 +959,13 @@ function buildConstanciaHtmlV2(params: {
     " "
   );
   const detalleInstitucional = joinNonEmpty([detallePresupuestario, circuitoRegional], ", ");
+  const direccionFooter = normalizeWhitespace(p.institucion?.DireccionExacta || p.institucion?.Direccion || "");
+  const telefonoFooter = normalizeWhitespace(p.institucion?.TelefonoPrincipal || "");
+  const correoFooter = normalizeWhitespace(p.institucion?.CorreoPrincipal || "");
+  const contactoFooter = joinNonEmpty(
+    [telefonoFooter ? `Teléfono ${telefonoFooter}` : "", correoFooter],
+    ", "
+  );
   const puestoParrafo = normalizeWhitespace(p.puesto).toLocaleLowerCase("es-CR");
   const bloqueRegularidad = p.esPlanNacional
     ? `es estudiante regular de ${escapeHtml(p.grado)}, de la Educación ${escapeHtml(tipoEducacionLabel)}, Programa de Plan Nacional, en el curso lectivo ${escapeHtml(p.cursoLectivo)}.`
@@ -959,26 +979,26 @@ function buildConstanciaHtmlV2(params: {
   <title>Constancia ${escapeHtml(p.codigoConstancia)}</title>
   <style>
     *{box-sizing:border-box}
-    body{font-family:'Century Gothic',CenturyGothic,AppleGothic,sans-serif;font-size:12pt;line-height:1.5;color:#111827;background:#f3f4f6;margin:0;padding:0}
-    .page{width:216mm;min-height:279mm;margin:0 auto;background:#fff;padding:16mm 19.05mm 25.4mm;border:0;display:flex;flex-direction:column}
-    .top-header{width:100%;border-bottom:1px solid #4b5563;padding-bottom:2px;margin-bottom:0}
+    body{font-family:Arial,Helvetica,sans-serif;font-size:12pt;line-height:1.4;color:#111827;background:#f3f4f6;margin:0;padding:0}
+    .page{width:216mm;min-height:279mm;margin:0 auto;background:#fff;padding:16mm 19.05mm 8mm;border:0;display:flex;flex-direction:column}
+    .top-header{width:100%;border-bottom:1px solid #26355f;padding-bottom:6px;margin-bottom:0;overflow:hidden}
     .top-header-table{width:100%;border-collapse:collapse;table-layout:fixed;margin:0}
-    .top-header-table td{vertical-align:top;padding:0}
-    .top-left{width:270px}
-    .top-left img{display:block;width:100%;max-width:270px;height:auto;max-height:54px;object-fit:contain}
-    .top-center{padding:0 14px 0 6px;font-size:11px;line-height:1.08;font-weight:400;overflow-wrap:anywhere}
-    .top-center div{margin:0;padding:0}
-    .top-right{width:78px;text-align:right}
-    .top-right img{display:inline-block;width:62px;height:auto;max-width:62px;max-height:62px;object-fit:contain}
-    h1{text-align:center;margin:24px 0 6px;font-size:12pt;font-weight:700;letter-spacing:0}
+    .top-header-table td{vertical-align:middle;padding:0}
+    .top-left{width:134mm}
+    .top-left img{display:block;width:134mm;max-width:134mm;height:18mm;max-height:18mm;object-fit:contain;object-position:left center}
+    .top-right{width:38mm;text-align:right}
+    .top-right img{display:inline-block;width:38mm;max-width:38mm;height:18mm;max-height:18mm;object-fit:contain;object-position:right center}
+    h1{text-align:center;margin:28px 0 6px;font-size:12pt;font-weight:700;letter-spacing:0}
     h2{text-align:center;margin:0 0 20px;font-size:12pt;font-weight:700;letter-spacing:0}
-    .texto{font-size:12pt;line-height:1.5;text-align:justify;margin:0 0 16px}
-    .firma{margin-top:52px;font-size:12pt;line-height:1.8}
-    .footer-wrap{margin-top:auto;padding-top:80px}
-    .ultima{text-align:center;font-size:12pt;color:#111827}
-    .pie{margin-top:24px;text-align:center;font-size:12pt;color:#111827}
+    .texto{font-size:12pt;line-height:1.45;text-align:justify;text-indent:0;margin:0 0 14px}
+    .firma{margin-top:2.9em;font-size:12pt;line-height:1.35;text-align:left}
+    .colegio-firma{font-weight:700;margin-bottom:2.9em}
+    .firmante-firma{margin-bottom:1.45em}
+    .ultima{text-align:center;font-size:12pt;color:#111827;line-height:1.35;margin:0}
+    .footer-wrap{margin-top:auto;padding-top:8mm}
+    .footer-blue{background:#242f63;color:#fff;text-align:center;font-size:12pt;font-weight:700;line-height:1.15;padding:3mm 4mm;margin:0}
     @page{size:Letter;margin:25.4mm 19.05mm}
-    @media print{body{background:#fff}.page{border:0;margin:0;width:auto;min-height:auto;padding:0;page-break-after:avoid}}
+    @media print{body{background:#fff}.page{border:0;margin:0;page-break-after:avoid}}
   </style>
 </head>
 <body>
@@ -986,13 +1006,8 @@ function buildConstanciaHtmlV2(params: {
     <div class="top-header">
       <table class="top-header-table" role="presentation">
         <tr>
-          <td class="top-left">${p.institucion?.MembreteUrl ? `<img src="${escapeHtml(p.institucion.MembreteUrl)}" alt="Membrete" width="270" height="54" style="display:block;width:270px;max-width:270px;height:auto;max-height:54px;object-fit:contain;" />` : ""}</td>
-          <td class="top-center">
-            <div>${escapeHtml(p.institucion?.RegionalEducativa || "")}</div>
-            <div>${p.institucion?.CircuitoEducativo ? `Supervisión de Centros Educativos, ${escapeHtml(p.institucion.CircuitoEducativo)}` : ""}</div>
-            <div>${escapeHtml(nombreInstitucionDocumento)}</div>
-          </td>
-          <td class="top-right">${p.institucion?.LogoUrl ? `<img src="${escapeHtml(p.institucion.LogoUrl)}" alt="Logo" width="62" height="62" style="display:inline-block;width:62px;max-width:62px;height:auto;max-height:62px;object-fit:contain;" />` : ""}</td>
+          <td class="top-left">${p.institucion?.MembreteUrl ? `<img src="${escapeHtml(p.institucion.MembreteUrl)}" alt="Membrete" width="506" height="68" style="display:block;width:134mm;max-width:134mm;height:18mm;max-height:18mm;object-fit:contain;object-position:left center;" />` : ""}</td>
+          <td class="top-right">${p.institucion?.LogoUrl ? `<img src="${escapeHtml(p.institucion.LogoUrl)}" alt="Logo institucional" width="144" height="68" style="display:inline-block;width:38mm;max-width:38mm;height:18mm;max-height:18mm;object-fit:contain;object-position:right center;" />` : ""}</td>
         </tr>
       </table>
     </div>
@@ -1008,21 +1023,325 @@ function buildConstanciaHtmlV2(params: {
     </p>
 
     <div class="firma">
-      <div>${escapeHtml(p.suscrito)}</div>
-      <div>${escapeHtml(p.puesto)}</div>
-      <div>${escapeHtml(nombreInstitucionDocumento)}</div>
+      <div class="colegio-firma">${escapeHtml(nombreInstitucionFirma)}</div>
+      <div class="firmante-firma">
+        <div>${escapeHtml(p.suscrito)}</div>
+        <div>${escapeHtml(p.puesto)}</div>
+      </div>
+      <div class="ultima">************************Última línea************************<br/><br/>***Cualquier anotación debajo de esta línea, anula este documento***</div>
     </div>
 
     <div class="footer-wrap">
-      <div class="ultima">************************Última línea************************<br/>***Cualquier anotación debajo de esta línea, anula este documento***</div>
-      <div class="pie">
-        ${escapeHtml(p.institucion?.DireccionExacta || p.institucion?.Direccion || "")}<br/>
-        ${escapeHtml(p.institucion?.TelefonoPrincipal || "")}${p.institucion?.CorreoPrincipal ? ` / ${escapeHtml(p.institucion.CorreoPrincipal)}` : ""}
+      <div class="footer-blue">
+        <div>${escapeHtml(direccionFooter)}</div>
+        ${contactoFooter ? `<div>${escapeHtml(contactoFooter)}</div>` : ""}
       </div>
     </div>
   </div>
 </body>
 </html>`;
+}
+
+const DOCX_FONT = "Arial";
+const DOCX_NO_BORDER = { style: BorderStyle.NIL, size: 0, color: "FFFFFF" };
+const DOCX_CELL_BORDERS = {
+  top: DOCX_NO_BORDER,
+  bottom: DOCX_NO_BORDER,
+  left: DOCX_NO_BORDER,
+  right: DOCX_NO_BORDER
+};
+
+function docxRun(text: any, options: { bold?: boolean; color?: string; size?: number } = {}) {
+  return new TextRun({
+    text: String(text ?? ""),
+    font: DOCX_FONT,
+    size: options.size || 24,
+    bold: !!options.bold,
+    color: options.color
+  });
+}
+
+function docxParagraph(
+  children: TextRun[] | string,
+  options: {
+    alignment?: (typeof AlignmentType)[keyof typeof AlignmentType];
+    bold?: boolean;
+    spacingAfter?: number;
+    spacingBefore?: number;
+  } = {}
+) {
+  const runs = Array.isArray(children) ? children : [docxRun(children, { bold: options.bold })];
+  return new Paragraph({
+    children: runs,
+    alignment: options.alignment,
+    spacing: {
+      before: options.spacingBefore || 0,
+      after: options.spacingAfter || 0,
+      line: 276
+    }
+  });
+}
+
+function docxCell(children: Paragraph[], options: any = {}) {
+  return new TableCell({
+    children,
+    borders: DOCX_CELL_BORDERS,
+    verticalAlign: VerticalAlignTable.CENTER,
+    ...options
+  });
+}
+
+function getImageTypeFromUrl(url: string, contentType = ""): "jpg" | "png" | "gif" | "bmp" {
+  const source = `${contentType} ${url}`.toLowerCase();
+  if (source.includes("image/png") || /\.png(\?|#|$)/i.test(url)) return "png";
+  if (source.includes("image/gif") || /\.gif(\?|#|$)/i.test(url)) return "gif";
+  if (source.includes("image/bmp") || /\.bmp(\?|#|$)/i.test(url)) return "bmp";
+  return "jpg";
+}
+
+async function fetchDocxImage(url: any, width: number, height: number, altText: string) {
+  const rawUrl = String(url || "").trim();
+  if (!rawUrl) return null;
+
+  try {
+    if (/^data:image\//i.test(rawUrl)) {
+      const match = rawUrl.match(/^data:(image\/[^;]+);base64,(.+)$/i);
+      if (!match) return null;
+      if (/image\/(webp|svg\+xml)/i.test(match[1])) return null;
+      const buffer = Buffer.from(match[2], "base64");
+      return new ImageRun({
+        type: getImageTypeFromUrl(rawUrl, match[1]),
+        data: buffer,
+        transformation: { width, height },
+        altText: { title: altText, description: altText, name: altText }
+      });
+    }
+
+    if (!/^https?:\/\//i.test(rawUrl)) return null;
+    const response = await fetch(rawUrl);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "";
+    if (/image\/(webp|svg\+xml)/i.test(contentType) || /\.(webp|svg)(\?|#|$)/i.test(rawUrl)) return null;
+    return new ImageRun({
+      type: getImageTypeFromUrl(rawUrl, contentType),
+      data: Buffer.from(arrayBuffer),
+      transformation: { width, height },
+      altText: { title: altText, description: altText, name: altText }
+    });
+  } catch {
+    return null;
+  }
+}
+
+function htmlToPlainText(value: any) {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#039;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractConstanciaSnapshotInfo(htmlSnapshot: any) {
+  const plain = htmlToPlainText(htmlSnapshot);
+  const textoSuscrito = plain.match(/\b(La suscrita|El suscrito|La persona suscrita)\b/i)?.[1] || "";
+  const encargado = plain.match(/a solicitud de la persona encargada\s+(.+?),\s+(?:para|por|seg[uú]n|a solicitud|tr[aá]mites?)/i)?.[1] || "";
+  return {
+    textoSuscrito,
+    nombreEncargado: normalizeWhitespace(encargado)
+  };
+}
+
+async function buildConstanciaDocx(params: {
+  institucion: any;
+  codigoConstancia: string;
+  suscrito: string;
+  textoSuscrito: string;
+  puesto: string;
+  codigoPresupuestario: string;
+  estudianteNombre: string;
+  identificacion: string;
+  grado: string;
+  tipoEducacion: string;
+  motivoTramite: string;
+  cursoLectivo: string;
+  lugarEmision: string;
+  nombreEncargado: string;
+  esPlanNacional?: boolean;
+  programaPlanNacional?: string;
+  otroColegioDestino?: string;
+  fechaEmision: Date;
+}) {
+  const p = params;
+  const nombreInstitucionParrafo =
+    p.institucion?.NombreComercial ||
+    p.institucion?.Nombre ||
+    p.institucion?.NombreOficialBoleta ||
+    "";
+  const nombreInstitucionFirma = normalizeWhitespace(p.institucion?.Nombre || "");
+  const circuitoValor = stripPrefixedLabel(p.institucion?.CircuitoEducativo, /^circuito\s*/i);
+  const regionalValor = stripPrefixedLabel(
+    p.institucion?.RegionalEducativa,
+    /^direcci[oó]n\s+regional(\s+de)?\s*/i
+  );
+  const ciudad = String(p.lugarEmision || "").trim() || "Costa Rica";
+  const textoMotivo = getMotivoConstanciaLabel(p.motivoTramite, p.otroColegioDestino);
+  const tituloConstancia = String(p.motivoTramite || "").trim().toUpperCase() === "TRASLADO"
+    ? "Constancia de Traslado"
+    : "Constancia de estudiante";
+  const tipoEducacionLabel = p.esPlanNacional
+    ? "Especial"
+    : normalizeEducationLabel(p.tipoEducacion);
+  const detallePresupuestario = p.esPlanNacional
+    ? joinNonEmpty(
+        [
+          p.codigoPresupuestario ? `código presupuestario ${p.codigoPresupuestario}` : "",
+          normalizeWhitespace(
+            p.programaPlanNacional ||
+            "III Ciclo y IV Ciclo Diversificado Vocacional (Plan Nacional)"
+          ).replace(/^código presupuestario\s+/i, "")
+        ],
+        ", "
+      )
+    : (p.codigoPresupuestario ? `código presupuestario ${p.codigoPresupuestario}` : "");
+  const circuitoRegional = joinNonEmpty(
+    [
+      circuitoValor ? `del circuito ${circuitoValor}` : "",
+      regionalValor ? `de la Dirección Regional de ${regionalValor}` : ""
+    ],
+    " "
+  );
+  const detalleInstitucional = joinNonEmpty([detallePresupuestario, circuitoRegional], ", ");
+  const direccionFooter = normalizeWhitespace(p.institucion?.DireccionExacta || p.institucion?.Direccion || "");
+  const telefonoFooter = normalizeWhitespace(p.institucion?.TelefonoPrincipal || "");
+  const correoFooter = normalizeWhitespace(p.institucion?.CorreoPrincipal || "");
+  const contactoFooter = joinNonEmpty(
+    [telefonoFooter ? `Teléfono ${telefonoFooter}` : "", correoFooter],
+    ", "
+  );
+  const puestoParrafo = normalizeWhitespace(p.puesto).toLocaleLowerCase("es-CR");
+  const textoRegularidad = p.esPlanNacional
+    ? `, número de cédula ${p.identificacion}, es estudiante regular de ${p.grado}, de la Educación ${tipoEducacionLabel}, Programa de Plan Nacional, en el curso lectivo ${p.cursoLectivo}.`
+    : `, número de cédula ${p.identificacion}, es estudiante regular de la sección ${p.grado} de la Educación ${tipoEducacionLabel}, en el curso lectivo ${p.cursoLectivo}.`;
+
+  const membrete = await fetchDocxImage(p.institucion?.MembreteUrl, 506, 68, "Membrete institucional");
+  const logo = await fetchDocxImage(p.institucion?.LogoUrl, 144, 68, "Logo institucional");
+  const headerTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.FIXED,
+    borders: {
+      top: DOCX_NO_BORDER,
+      left: DOCX_NO_BORDER,
+      right: DOCX_NO_BORDER,
+      bottom: { style: BorderStyle.SINGLE, size: 6, color: "26355F" },
+      insideHorizontal: DOCX_NO_BORDER,
+      insideVertical: DOCX_NO_BORDER
+    },
+    rows: [
+      new TableRow({
+        children: [
+          docxCell([
+            new Paragraph({
+              children: membrete ? [membrete] : [],
+              spacing: { before: 0, after: 80 }
+            })
+          ], { width: { size: 7800, type: WidthType.DXA } }),
+          docxCell([
+            new Paragraph({
+              children: logo ? [logo] : [],
+              alignment: AlignmentType.RIGHT,
+              spacing: { before: 0, after: 80 }
+            })
+          ], { width: { size: 2280, type: WidthType.DXA } })
+        ]
+      })
+    ]
+  });
+
+  const footerTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: DOCX_NO_BORDER,
+      bottom: DOCX_NO_BORDER,
+      left: DOCX_NO_BORDER,
+      right: DOCX_NO_BORDER,
+      insideHorizontal: DOCX_NO_BORDER,
+      insideVertical: DOCX_NO_BORDER
+    },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            borders: DOCX_CELL_BORDERS,
+            shading: { fill: "242F63" },
+            margins: { top: 120, bottom: 120, left: 120, right: 120 },
+            children: [
+              docxParagraph(direccionFooter, {
+                alignment: AlignmentType.CENTER,
+                bold: true,
+                spacingAfter: 0
+              }),
+              docxParagraph(contactoFooter, {
+                alignment: AlignmentType.CENTER,
+                bold: true,
+                spacingAfter: 0
+              })
+            ]
+          })
+        ]
+      })
+    ]
+  });
+
+  const firstParagraphRuns = [
+    docxRun(`${p.textoSuscrito}, ${p.suscrito}, en calidad de ${puestoParrafo} del ${nombreInstitucionParrafo}${detalleInstitucional ? `, ${detalleInstitucional}` : ""}, hace constar que ${p.esPlanNacional ? "el estudiante" : "la persona estudiante"} `),
+    docxRun(p.estudianteNombre, { bold: true }),
+    docxRun(", número de cédula "),
+    docxRun(p.identificacion, { bold: true }),
+    docxRun(textoRegularidad.replace(`, número de cédula ${p.identificacion}`, ""))
+  ];
+
+  const doc = new Document({
+    sections: [
+      {
+        properties: {
+          page: {
+            size: { width: 12240, height: 15840 },
+            margin: { top: 900, right: 1080, bottom: 1440, left: 1080, header: 360, footer: 360 }
+          }
+        },
+        headers: {
+          default: new Header({ children: [headerTable] })
+        },
+        footers: {
+          default: new Footer({ children: [footerTable] })
+        },
+        children: [
+          docxParagraph(tituloConstancia, { alignment: AlignmentType.CENTER, bold: true, spacingBefore: 420, spacingAfter: 120 }),
+          docxParagraph(p.codigoConstancia, { alignment: AlignmentType.CENTER, bold: true, spacingAfter: 360 }),
+          docxParagraph(firstParagraphRuns, { alignment: AlignmentType.JUSTIFIED, spacingAfter: 240 }),
+          docxParagraph(
+            `Dado en ${ciudad}, a los ${fechaLargaCR(p.fechaEmision)}, a solicitud de la persona encargada ${p.nombreEncargado || "sin nombre registrado"}, ${textoMotivo}.`,
+            { alignment: AlignmentType.JUSTIFIED, spacingAfter: 520 }
+          ),
+          docxParagraph(nombreInstitucionFirma, { bold: true, spacingAfter: 520 }),
+          docxParagraph(p.suscrito, { spacingAfter: 0 }),
+          docxParagraph(p.puesto, { spacingAfter: 240 }),
+          docxParagraph("************************Última línea************************", { alignment: AlignmentType.CENTER, spacingAfter: 240 }),
+          docxParagraph("***Cualquier anotación debajo de esta línea, anula este documento***", { alignment: AlignmentType.CENTER })
+        ]
+      }
+    ]
+  });
+
+  return Packer.toBuffer(doc);
 }
 
 router.get("/academico", async (req, res) => {
@@ -1893,11 +2212,25 @@ router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (r
     .input("certificacionId", sql.Int, certificacionId)
     .query(`
       SELECT TOP 1
-        CodigoConstancia,
-        HtmlSnapshot
-      FROM dbo.CertificacionEstudioRegistro
-      WHERE InstitucionId = @institucionId
-        AND CertificacionEstudioId = @certificacionId
+        cer.*,
+        i.Nombre,
+        i.NombreComercial,
+        i.NombreOficialBoleta,
+        i.CorreoPrincipal,
+        i.TelefonoPrincipal,
+        i.Direccion,
+        i.DireccionExacta,
+        i.LogoUrl,
+        i.MembreteUrl,
+        i.RegionalEducativa,
+        i.CircuitoEducativo,
+        i.CodigoPresupuestario AS CodigoPresupuestarioInstitucion,
+        i.CodigoPresupuestarioPL,
+        i.DescripcionCodigoPresupuestarioPL
+      FROM dbo.CertificacionEstudioRegistro cer
+      INNER JOIN dbo.Institucion i ON i.InstitucionId = cer.InstitucionId
+      WHERE cer.InstitucionId = @institucionId
+        AND cer.CertificacionEstudioId = @certificacionId
     `);
 
   const row = result.recordset[0];
@@ -1905,7 +2238,33 @@ router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (r
     return res.status(404).json({ ok: false, message: "No se encontró la certificación seleccionada" });
   }
 
-  const html = String(row.HtmlSnapshot || "").trim();
+  const html = "docx";
+  const htmlSnapshot = String(row.HtmlSnapshot || "");
+  const snapshotInfo = extractConstanciaSnapshotInfo(htmlSnapshot);
+  const esPlanNacional = /plan nacional/i.test(htmlSnapshot);
+  const codigoPresupuestarioDocx = esPlanNacional
+    ? String(row.CodigoPresupuestarioPL || row.CodigoPresupuestario || "")
+    : String(row.CodigoPresupuestario || row.CodigoPresupuestarioInstitucion || "");
+  const buffer = await buildConstanciaDocx({
+    institucion: row,
+    codigoConstancia: String(row.CodigoConstancia || ""),
+    suscrito: String(row.Suscrito || ""),
+    textoSuscrito: snapshotInfo.textoSuscrito || "La persona suscrita",
+    puesto: String(row.Puesto || ""),
+    codigoPresupuestario: codigoPresupuestarioDocx,
+    estudianteNombre: String(row.EstudianteNombre || ""),
+    identificacion: String(row.Identificacion || ""),
+    grado: String(row.GrupoNombre || ""),
+    tipoEducacion: String(row.TipoEducacion || ""),
+    motivoTramite: String(row.MotivoTramite || ""),
+    cursoLectivo: String(row.CursoLectivo || ""),
+    lugarEmision: String(row.LugarEmision || row.Direccion || ""),
+    nombreEncargado: snapshotInfo.nombreEncargado || "sin nombre registrado",
+    esPlanNacional,
+    programaPlanNacional: String(row.DescripcionCodigoPresupuestarioPL || ""),
+    otroColegioDestino: String(row.OtroColegioDestino || ""),
+    fechaEmision: parseDateInputAsLocalDate(row.FechaEmision, new Date())
+  });
   if (!html) {
     return res.status(404).json({ ok: false, message: "La certificación no tiene un documento disponible para Word" });
   }
@@ -1913,11 +2272,11 @@ router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (r
   const fileName = `${String(row.CodigoConstancia || `constancia-${certificacionId}`)
     .replace(/[^\w.-]+/g, "-")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || `constancia-${certificacionId}`}.doc`;
+    .replace(/^-|-$/g, "") || `constancia-${certificacionId}`}.docx`;
 
-  res.setHeader("Content-Type", "application/msword; charset=utf-8");
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-  return res.send(`\uFEFF${html}`);
+  return res.send(buffer);
 });
 
 router.get("/admin/consecutivos/filtros", async (req, res) => {

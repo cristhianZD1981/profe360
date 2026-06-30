@@ -12755,6 +12755,18 @@ function toHtmlWithLineBreaks(value: any) {
 
 
 
+function toHtmlWithLineBreaksAndBoldMarkers(value: any) {
+
+  return escapeHtml(value)
+
+    .replace(/\*([^*\r\n]+)\*/g, "<strong>$1</strong>")
+
+    .replace(/\r?\n/g, "<br/>");
+
+}
+
+
+
 const MAIL_FROM_NOTIFICACIONES = "info@profe360cr.com";
 
 
@@ -13078,6 +13090,110 @@ function buildSeguimientoMensaje(params: {
   const correo = buildSeguimientoCorreo(params);
 
   return { text: correo.text, html: correo.html };
+
+}
+
+
+
+function formatSeguimientoExamenNota(puntosObtenidos: any, puntosMaximos: any) {
+
+  const obtenidos = Number(puntosObtenidos ?? 0);
+
+  const maximos = Number(puntosMaximos ?? 0);
+
+  const nota = Number.isFinite(obtenidos) && Number.isFinite(maximos) && maximos > 0
+
+    ? (obtenidos / maximos) * 100
+
+    : obtenidos;
+
+  if (!Number.isFinite(nota)) return "0";
+
+  const rounded = Math.round(nota * 100) / 100;
+
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
+
+}
+
+
+
+function buildSeguimientoExamenMensaje(params: {
+
+  estudianteNombre: string;
+
+  tipoExamen?: string | null;
+
+  materiaNombre?: string | null;
+
+  periodoNombre?: string | null;
+
+  anioNombre?: string | null;
+
+  profesorNombre?: string | null;
+
+  puntosObtenidos?: number | null;
+
+  puntosMaximos?: number | null;
+
+  observacion?: string | null;
+
+  mensajePersonalizado?: string | null;
+
+}) {
+
+  const estudiante = normalizeText(params.estudianteNombre) || "la persona estudiante";
+
+  const rawTipoExamen = normalizeText(params.tipoExamen) || "Examen";
+
+  const tipoExamen = rawTipoExamen.replace(/^(el|la)\s+/i, "").trim() || rawTipoExamen;
+
+  const tipoExamenKey = normalizeKey(tipoExamen);
+
+  const articuloExamen = tipoExamenKey.includes("PRUEBA") ? "la" : "el";
+
+  const tipoExamenDisplay = tipoExamenKey.includes("PRUEBA")
+
+    ? tipoExamen.replace(/^prueba\b/i, "Prueba")
+
+    : tipoExamen;
+
+  const fraseExamen = `${articuloExamen} ${tipoExamenDisplay}`;
+
+  const materia = normalizeText(params.materiaNombre) || "la materia";
+
+  const periodo = normalizeText(params.periodoNombre) || "el per\u00edodo";
+
+  const anio = normalizeText(params.anioNombre);
+
+  const periodoAnio = [periodo, anio].filter(Boolean).join("-");
+
+  const profesor = normalizeText(params.profesorNombre) || "persona docente";
+
+  const nota = formatSeguimientoExamenNota(params.puntosObtenidos, params.puntosMaximos);
+
+  const mensajePersonalizado = normalizeText(params.mensajePersonalizado);
+
+  if (mensajePersonalizado) {
+
+    return {
+
+      text: mensajePersonalizado,
+
+      whatsappText: mensajePersonalizado,
+
+      htmlBody: toHtmlWithLineBreaksAndBoldMarkers(mensajePersonalizado)
+
+    };
+
+  }
+
+  const text = `Estimado(a) encargado(a) legal:\n\nPor este medio se informa que el estudiante ${estudiante} obtuvo una nota de ${nota} en la asignatura de ${materia} en ${fraseExamen} del ${periodoAnio || periodo}\n\nAtentamente,\nProf. ${profesor}\nDocente de ${materia}`;
+
+  const whatsappText = `Estimado(a) encargado(a) legal:\n\nPor este medio se informa que el estudiante *${estudiante}* obtuvo una nota de *${nota}* en la asignatura de *${materia}* en ${fraseExamen} del *${periodoAnio || periodo}*\n\nAtentamente,\nProf. *${profesor}*\nDocente de *${materia}*`;
+
+  const htmlBody = `Estimado(a) encargado(a) legal:<br/><br/>Por este medio se informa que el estudiante <strong>${escapeHtml(estudiante)}</strong> obtuvo una nota de <strong>${escapeHtml(nota)}</strong> en la asignatura de <strong>${escapeHtml(materia)}</strong> en ${escapeHtml(articuloExamen)} <strong>${escapeHtml(tipoExamenDisplay)}</strong> del <strong>${escapeHtml(periodoAnio || periodo)}</strong><br/><br/>Atentamente,<br/>Prof. <strong>${escapeHtml(profesor)}</strong><br/>Docente de <strong>${escapeHtml(materia)}</strong>`;
+
+  return { text, whatsappText, htmlBody };
 
 }
 
@@ -16739,6 +16855,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
       observacion?: string | null;
 
+      mensajeEncargado?: string | null;
+
       puntosObtenidos?: number | null;
 
       puntosMaximos: number;
@@ -16854,6 +16972,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
       const observacion = normalizeText(registro.observacion || "") || null;
 
       const informarEncargado = !!registro.informarEncargado;
+
+      const mensajeEncargado = normalizeText(registro.mensajeEncargado || "") || null;
 
 
 
@@ -17055,6 +17175,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
             observacion,
 
+            mensajeEncargado,
+
             puntosObtenidos,
 
             puntosMaximos
@@ -17093,9 +17215,13 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
           m.Nombre AS MateriaNombre,
 
+          p.Nombre AS PeriodoNombre,
+
           al.Nombre AS AnioNombre,
 
-          profesor.Correo AS ProfesorCorreo
+          profesor.Correo AS ProfesorCorreo,
+
+          profesor.NombreCompleto AS ProfesorNombreCompleto
 
         FROM dbo.Eval360_EstructuraGrupo eg
 
@@ -17103,11 +17229,17 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
         INNER JOIN dbo.Materia m ON m.MateriaId = eg.MateriaId
 
+        LEFT JOIN dbo.Periodo p ON p.PeriodoId = eg.PeriodoId
+
         INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = eg.AnioLectivoId
 
         OUTER APPLY (
 
-          SELECT TOP 1 u.Correo
+          SELECT TOP 1
+
+            u.Correo,
+
+            LTRIM(RTRIM(CONCAT(ISNULL(u.Nombre, ''), ' ', ISNULL(u.PrimerApellido, ''), ' ', ISNULL(u.SegundoApellido, '')))) AS NombreCompleto
 
           FROM dbo.AsignacionDocente ad
 
@@ -17135,6 +17267,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
     const contextoCorreo = contextoCorreoResult.recordset[0] || {};
 
+    const profesorLogueadoNombre = await getSessionTeacherDisplayName(pool, req);
+
     const correoProfesorCopia = resolveNotificationCc(req, contextoCorreo.ProfesorCorreo);
 
     const resultadosNotificacion: any[] = [];
@@ -17145,13 +17279,43 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
       const plantillaMensaje = await resolverMensajeSeguimiento(pool, Number(contextoCorreo.InstitucionId || 0), "EXAMEN", null);
 
-      const defecto = `Se registra evaluaciï¿½n de ${aviso.estudianteNombre}. Resultado: ${Number(aviso.puntosObtenidos || 0).toFixed(2)} de ${Number(aviso.puntosMaximos || 0).toFixed(2)}.${aviso.observacion ? " Observaciï¿½n: " + aviso.observacion : ""}`;
+      const mensajeDefecto = buildSeguimientoExamenMensaje({
 
-      const textoFinal = normalizeText(plantillaMensaje?.Cuerpo) || defecto;
+        estudianteNombre: aviso.estudianteNombre,
 
-      const tituloFinal = normalizeText(plantillaMensaje?.Titulo) || "Seguimiento de evaluaciï¿½n";
+        tipoExamen: actividad.Nombre || actividad.Descripcion || "Examen",
 
-      const htmlFinal = `<div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;"><h2 style="margin: 0 0 12px; color: #1e3a8a;">${escapeHtml(tituloFinal)}</h2><p>${toHtmlWithLineBreaks(textoFinal)}</p></div>`;
+        materiaNombre: contextoCorreo.MateriaNombre,
+
+        periodoNombre: contextoCorreo.PeriodoNombre,
+
+        anioNombre: contextoCorreo.AnioNombre,
+
+        profesorNombre: profesorLogueadoNombre || contextoCorreo.ProfesorNombreCompleto || contextoCorreo.ProfesorCorreo,
+
+        puntosObtenidos: aviso.puntosObtenidos,
+
+        puntosMaximos: aviso.puntosMaximos,
+
+        observacion: aviso.observacion,
+
+        mensajePersonalizado: aviso.mensajeEncargado
+
+      });
+
+      const cuerpoPersonalizado = normalizeText(aviso.mensajeEncargado);
+
+      const cuerpoPlantilla = normalizeText(plantillaMensaje?.Cuerpo);
+
+      const textoFinal = cuerpoPersonalizado || cuerpoPlantilla || mensajeDefecto.text;
+
+      const tituloFinal = normalizeText(plantillaMensaje?.Titulo) || "Seguimiento de evaluaci\u00f3n";
+
+      const htmlBodyFinal = (cuerpoPersonalizado || cuerpoPlantilla) ? toHtmlWithLineBreaksAndBoldMarkers(textoFinal) : mensajeDefecto.htmlBody;
+
+      const whatsappFinal = cuerpoPersonalizado || cuerpoPlantilla || mensajeDefecto.whatsappText;
+
+      const htmlFinal = `<div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;"><h2 style="margin: 0 0 12px; color: #1e3a8a;">${escapeHtml(tituloFinal)}</h2><p>${htmlBodyFinal}</p></div>`;
 
 
 
@@ -17205,7 +17369,7 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
         for (const telefono of telefonos) {
 
-          const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: textoFinal });
+          const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: whatsappFinal });
 
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
 
