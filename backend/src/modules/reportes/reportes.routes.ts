@@ -2274,6 +2274,7 @@ router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (r
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "") || `constancia-${certificacionId}`}.docx`;
 
+  res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Type, Content-Length");
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
   return res.send(buffer);

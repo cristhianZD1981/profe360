@@ -79,6 +79,20 @@ function descargarBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
+function getAttachmentFileName(contentDisposition: unknown, fallback: string) {
+  const value = String(contentDisposition || "");
+  const utf8Match = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]).trim();
+    } catch {
+      return utf8Match[1].trim();
+    }
+  }
+  const basicMatch = value.match(/filename\s*=\s*"([^"]+)"/i) || value.match(/filename\s*=\s*([^;]+)/i);
+  return String(basicMatch?.[1] || fallback).trim();
+}
+
 function escapeHtml(value: any) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -394,11 +408,16 @@ export default function ReportesPage() {
       const response = await api.get(`/reportes/certificaciones/constancia-estudio/${certificacionId}/word`, {
         responseType: "blob"
       });
-      const blob = new Blob([response.data], { type: "application/msword" });
+      const contentType = String(response.headers?.["content-type"] || response.data?.type || "application/octet-stream");
+      const fileName = getAttachmentFileName(
+        response.headers?.["content-disposition"],
+        `${String(codigoConstancia || `constancia-${certificacionId}`).trim() || `constancia-${certificacionId}`}.docx`
+      );
+      const blob = new Blob([response.data], { type: contentType });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${String(codigoConstancia || `constancia-${certificacionId}`).trim() || `constancia-${certificacionId}`}.doc`;
+      link.download = fileName;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       document.body.appendChild(link);
