@@ -115,8 +115,33 @@ function isValidApoyoAdecuacion(value?: string | null) {
   return !!normalized && !["regular", "sin adecuacion", "seleccione", "no"].includes(normalized);
 }
 
-function isApoyoAdecuacionSignificativa(value?: string | null) {
-  return normalizeAdecuacionText(value) === "significativa";
+function isApoyoAdecuacionIncluida(value?: string | null) {
+  return ["significativa", "no significativa"].includes(normalizeAdecuacionText(value));
+}
+
+function getApoyoEducativoEstudianteKey(item: ApoyoEducativoResumenItem) {
+  return [
+    String(item?.EstudianteId || "").trim(),
+    String(item?.GrupoId || "").trim(),
+    String(item?.Identificacion || "").trim(),
+    String(item?.NombreCompleto || "").trim(),
+    String(item?.Edad ?? "").trim(),
+    String(item?.Seccion || "").trim(),
+    normalizeAdecuacionText(item?.TipoAdecuacion),
+    String(item?.NivelFuncionamiento || "").trim()
+  ].join("|");
+}
+
+function dedupeApoyoEducativoEstudiantes(items: ApoyoEducativoResumenItem[]) {
+  const map = new Map<string, ApoyoEducativoResumenItem>();
+  for (const item of items || []) {
+    if (!item) continue;
+    const key = getApoyoEducativoEstudianteKey(item);
+    if (!map.has(key)) {
+      map.set(key, item);
+    }
+  }
+  return Array.from(map.values());
 }
 
 const MIS_GRUPOS_TODOS_KEY = "__TODOS__";
@@ -436,9 +461,13 @@ export default function GestionProfePage() {
 
   const apoyoEducativoEstudiantesValidos = useMemo(() => {
     return (apoyoEducativoEstudiantes || []).filter((item) => {
-      return !!item && !!item.TieneAdecuacion && isApoyoAdecuacionSignificativa(item.TipoAdecuacion);
+      return !!item && !!item.TieneAdecuacion && isApoyoAdecuacionIncluida(item.TipoAdecuacion);
     });
   }, [apoyoEducativoEstudiantes]);
+
+  const apoyoEducativoEstudiantesUnicos = useMemo(() => {
+    return dedupeApoyoEducativoEstudiantes(apoyoEducativoEstudiantesValidos);
+  }, [apoyoEducativoEstudiantesValidos]);
 
   const apoyoEducativoPeriodos = useMemo(() => {
     const map = new Map<string, { PeriodoId: number; PeriodoNombre: string }>();
@@ -510,12 +539,13 @@ export default function GestionProfePage() {
 
   const apoyoEducativoEstudiantesFiltradosPorContexto = useMemo(() => {
     const gruposPermitidos = new Set((apoyoEducativoSeccionesFiltradas || []).map((item) => String(item.GrupoId)));
-    return apoyoEducativoEstudiantesValidos.filter((item) => {
+    const filtrados = apoyoEducativoEstudiantesValidos.filter((item) => {
       if (!item) return false;
       if (gruposPermitidos.size && !gruposPermitidos.has(String(item.GrupoId))) return false;
       if (apoyoEducativoPeriodoId && String(item.PeriodoId || "") !== String(apoyoEducativoPeriodoId)) return false;
       return true;
     });
+    return dedupeApoyoEducativoEstudiantes(filtrados);
   }, [apoyoEducativoEstudiantesValidos, apoyoEducativoSeccionesFiltradas, apoyoEducativoPeriodoId]);
 
   useEffect(() => {
@@ -536,19 +566,19 @@ export default function GestionProfePage() {
   }, [periodosDisponiblesMisGrupos]);
 
   const apoyoEducativoResumenFiltrado = useMemo(() => {
-    return [...apoyoEducativoEstudiantesValidos].sort((a, b) => {
+    return [...apoyoEducativoEstudiantesUnicos].sort((a, b) => {
       const seccion = String(a.Seccion || "").localeCompare(String(b.Seccion || ""), "es", { numeric: true, sensitivity: "base" });
       if (seccion !== 0) return seccion;
       return String(a.NombreCompleto || "").localeCompare(String(b.NombreCompleto || ""), "es", { sensitivity: "base" });
     });
-  }, [apoyoEducativoEstudiantesValidos]);
+  }, [apoyoEducativoEstudiantesUnicos]);
 
   const apoyoEducativoTiposAdecuacionEstudiantes = useMemo(() => {
     return Array.from(
       new Set(
         apoyoEducativoEstudiantesFiltradosPorContexto
           .map((item) => String(item.TipoAdecuacion || "").trim())
-          .filter(isApoyoAdecuacionSignificativa)
+          .filter(isApoyoAdecuacionIncluida)
       )
     ).sort((a, b) => a.localeCompare(b, "es"));
   }, [apoyoEducativoEstudiantesFiltradosPorContexto]);
@@ -576,7 +606,7 @@ export default function GestionProfePage() {
         (apoyoEducativoCatalogo || [])
           .map((item) => String(item.Adecuacion || "").trim())
           .filter((item) => {
-            if (!isApoyoAdecuacionSignificativa(item)) return false;
+            if (!isApoyoAdecuacionIncluida(item)) return false;
             if (!tiposPermitidos.size) return true;
             return tiposPermitidos.has(normalizeAdecuacionText(item));
           })
@@ -590,8 +620,12 @@ export default function GestionProfePage() {
 
   const apoyoEducativoInformesPorEstudiante = useMemo(() => {
     const map = new Map<string, ApoyoEducativoInformeItem[]>();
+    const vistos = new Set<string>();
     for (const informe of apoyoEducativoInformes || []) {
-      const key = `${informe.EstudianteId}|${informe.GrupoId}|${informe.PeriodoId || ""}`;
+      const informeKey = String(informe.ApoyoEducativoEstudianteId || "").trim();
+      if (informeKey && vistos.has(informeKey)) continue;
+      if (informeKey) vistos.add(informeKey);
+      const key = `${informe.EstudianteId}|${informe.GrupoId}`;
       const current = map.get(key) || [];
       current.push(informe);
       map.set(key, current);
@@ -7601,13 +7635,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               </div>
               <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
                 <strong style={{ display: "block", color: "#5eead4" }}>Estudiantes cargados</strong>
-                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoEstudiantesValidos.length}</span>
+                <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoEstudiantesUnicos.length}</span>
               </div>
               <div style={{ padding: "12px", borderRadius: "14px", border: "1px solid rgba(148, 163, 184, 0.24)", background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
                 <strong style={{ display: "block", color: "#5eead4" }}>Apoyos cargados</strong>
                 <span style={{ fontSize: "22px", fontWeight: 900 }}>{apoyoEducativoCatalogo.length}</span>
               </div>
-              {!apoyoEducativoSecciones.length && !apoyoEducativoEstudiantesValidos.length ? (
+              {!apoyoEducativoSecciones.length && !apoyoEducativoEstudiantesUnicos.length ? (
                 <div style={{ gridColumn: "1 / -1", padding: "12px", borderRadius: "14px", border: "1px solid #fdba74", background: "#fff7ed", color: "#9a3412", fontWeight: 800 }}>
                   No llegaron datos de apoyo educativo para este docente.
                 </div>
@@ -7895,7 +7929,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </thead>
                     <tbody>
                       {apoyoEducativoResumenFiltrado.map((item) => {
-                        const informes = apoyoEducativoInformesPorEstudiante.get(`${item.EstudianteId}|${item.GrupoId}|${item.PeriodoId || ""}`) || [];
+                        const informes = apoyoEducativoInformesPorEstudiante.get(`${item.EstudianteId}|${item.GrupoId}`) || [];
                         return (
                           <React.Fragment key={`resumen-apoyo-${item.EstudianteId}-${item.GrupoId}`}>
                             <tr>

@@ -6,7 +6,7 @@ import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-tr
 import * as XLSX from "xlsx";
 import multer from "multer";
 import JSZip from "jszip";
-import { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
+import { Document, Header, ImageRun, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
 import { sendEmail } from "../../services/email.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
@@ -407,6 +407,103 @@ function docCell(children: any[], opts: { width?: number; fill?: string; span?: 
   });
 }
 
+const DOCX_NO_BORDER = { style: BorderStyle.NIL, size: 0, color: "FFFFFF" };
+const DOCX_HEADER_CELL_BORDERS = {
+  top: DOCX_NO_BORDER,
+  bottom: DOCX_NO_BORDER,
+  left: DOCX_NO_BORDER,
+  right: DOCX_NO_BORDER
+};
+
+function getImageTypeFromUrl(url: string, contentType = ""): "jpg" | "png" | "gif" | "bmp" {
+  const source = `${contentType} ${url}`.toLowerCase();
+  if (source.includes("image/png") || /\.png(\?|#|$)/i.test(url)) return "png";
+  if (source.includes("image/gif") || /\.gif(\?|#|$)/i.test(url)) return "gif";
+  if (source.includes("image/bmp") || /\.bmp(\?|#|$)/i.test(url)) return "bmp";
+  return "jpg";
+}
+
+async function fetchDocxImage(url: any, width: number, height: number, altText: string) {
+  const rawUrl = String(url || "").trim();
+  if (!rawUrl) return null;
+
+  try {
+    if (/^data:image\//i.test(rawUrl)) {
+      const match = rawUrl.match(/^data:(image\/[^;]+);base64,(.+)$/i);
+      if (!match || /image\/(webp|svg\+xml)/i.test(match[1])) return null;
+      return new ImageRun({
+        type: getImageTypeFromUrl(rawUrl, match[1]),
+        data: Buffer.from(match[2], "base64"),
+        transformation: { width, height },
+        altText: { title: altText, description: altText, name: altText }
+      });
+    }
+
+    if (!/^https?:\/\//i.test(rawUrl)) return null;
+    const response = await fetch(rawUrl);
+    if (!response.ok) return null;
+    const contentType = response.headers.get("content-type") || "";
+    if (/image\/(webp|svg\+xml)/i.test(contentType) || /\.(webp|svg)(\?|#|$)/i.test(rawUrl)) return null;
+    return new ImageRun({
+      type: getImageTypeFromUrl(rawUrl, contentType),
+      data: Buffer.from(await response.arrayBuffer()),
+      transformation: { width, height },
+      altText: { title: altText, description: altText, name: altText }
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function buildApoyoEducativoHeader(data: any) {
+  const membrete = await fetchDocxImage(data.membreteUrl, 506, 68, "Membrete institucional");
+  const logo = await fetchDocxImage(data.logoUrl, 144, 68, "Logo institucional");
+
+  return new Header({
+    children: [
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        layout: TableLayoutType.FIXED,
+        borders: {
+          top: DOCX_NO_BORDER,
+          left: DOCX_NO_BORDER,
+          right: DOCX_NO_BORDER,
+          bottom: { style: BorderStyle.SINGLE, size: 6, color: "26355F" },
+          insideHorizontal: DOCX_NO_BORDER,
+          insideVertical: DOCX_NO_BORDER
+        },
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({
+                width: { size: 7800, type: WidthType.DXA },
+                borders: DOCX_HEADER_CELL_BORDERS,
+                children: [
+                  new Paragraph({
+                    children: membrete ? [membrete] : [],
+                    spacing: { before: 0, after: 80 }
+                  })
+                ]
+              }),
+              new TableCell({
+                width: { size: 2280, type: WidthType.DXA },
+                borders: DOCX_HEADER_CELL_BORDERS,
+                children: [
+                  new Paragraph({
+                    children: logo ? [logo] : [],
+                    alignment: AlignmentType.RIGHT,
+                    spacing: { before: 0, after: 80 }
+                  })
+                ]
+              })
+            ]
+          })
+        ]
+      })
+    ]
+  });
+}
+
 function rowKV(label: string, value: any) {
   return new TableRow({ children: [docCell([docP(label, { bold: true })], { width: 3600, fill: "F2F2F2" }), docCell([docP(value || "")], { width: 5760 })] });
 }
@@ -445,6 +542,7 @@ function supportTable(title: string, rows: any[], mode: "metodologica" | "evalua
 }
 
 async function buildApoyoEducativoDocx(data: any) {
+  const header = await buildApoyoEducativoHeader(data);
   const curricularMetodo = data.items.filter((x: any) => x.seccion === "curricular" && x.modo === "metodologica");
   const curricularEval = data.items.filter((x: any) => x.modo === "evaluativa" && x.seccion === "curricular");
   const materialMetodo = data.items.filter((x: any) => x.seccion === "material");
@@ -515,30 +613,38 @@ async function buildApoyoEducativoDocx(data: any) {
     docP(""),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.FIXED,
       rows: [
-        new TableRow({ children: ["Actor", "Nombre Completo", "Firma", "Puesto / Parentesco"].map((h) => docCell([docP(h, { bold: true })], { fill: "B7B7B7" })) }),
         new TableRow({
           children: [
-            docCell([docP("Persona que elabora el informe", { bold: true })]),
-            docCell([docP(data.docente)]),
-            docCell([docP("")]),
-            docCell([docP(data.puestoDocente || "Docente")])
+            docCell([docP("Actor", { bold: true })], { width: 3000, fill: "B7B7B7" }),
+            docCell([docP("Nombre Completo", { bold: true })], { width: 2600, fill: "B7B7B7" }),
+            docCell([docP("Firma", { bold: true })], { width: 3300, fill: "B7B7B7" }),
+            docCell([docP("Puesto / Parentesco", { bold: true })], { width: 1700, fill: "B7B7B7" })
           ]
         }),
         new TableRow({
           children: [
-            docCell([docP("Persona directora del Centro Educativo", { bold: true })]),
-            docCell([docP(data.directoraNombre || "")]),
-            docCell([docP("")]),
-            docCell([docP(data.directoraPuesto || "Directora del Centro Educativo")])
+            docCell([docP("Persona que elabora el informe", { bold: true })], { width: 3000 }),
+            docCell([docP(data.docente)], { width: 2600 }),
+            docCell([docP("")], { width: 3300 }),
+            docCell([docP(data.puestoDocente || "Docente")], { width: 1700 })
           ]
         }),
         new TableRow({
           children: [
-            docCell([docP("Padre/Madre/Encargado legal", { bold: true })]),
-            docCell([docP(data.encargado)]),
-            docCell([docP("")]),
-            docCell([docP(data.encargadoParentesco || "Encargado legal")])
+            docCell([docP("Persona directora del Centro Educativo", { bold: true })], { width: 3000 }),
+            docCell([docP(data.directoraNombre || "")], { width: 2600 }),
+            docCell([docP("")], { width: 3300 }),
+            docCell([docP(data.directoraPuesto || "Directora del Centro Educativo")], { width: 1700 })
+          ]
+        }),
+        new TableRow({
+          children: [
+            docCell([docP("Padre/Madre/Encargado legal", { bold: true })], { width: 3000 }),
+            docCell([docP(data.encargado)], { width: 2600 }),
+            docCell([docP("")], { width: 3300 }),
+            docCell([docP(data.encargadoParentesco || "Encargado legal")], { width: 1700 })
           ]
         })
       ]
@@ -546,7 +652,21 @@ async function buildApoyoEducativoDocx(data: any) {
     docP("Cc. Expediente único del proceso educativo de la persona estudiante.", { size: 18 })
   ];
 
-  const doc = new Document({ sections: [{ properties: {}, children }] });
+  const doc = new Document({
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: { top: 900, right: 1080, bottom: 900, left: 1080, header: 360, footer: 360 }
+          }
+        },
+        headers: {
+          default: header
+        },
+        children
+      }
+    ]
+  });
   return Packer.toBuffer(doc);
 }
 
@@ -601,7 +721,7 @@ async function applyTemplateHeaderFooter(generatedBuffer: Buffer, templateBuffer
 
     const refs: Array<{ tag: string; oldId: string; target: string; newId: string }> = [];
     let index = 1;
-    for (const match of sectPrMatch[0].matchAll(/<w:(headerReference|footerReference)\b[^>]*r:id="([^"]+)"[^>]*\/>/g)) {
+    for (const match of sectPrMatch[0].matchAll(/<w:(footerReference)\b[^>]*r:id="([^"]+)"[^>]*\/>/g)) {
       const tag = match[0];
       const oldId = match[2];
       const target = relMap.get(oldId);
@@ -619,9 +739,7 @@ async function applyTemplateHeaderFooter(generatedBuffer: Buffer, templateBuffer
       const relsContent = await templateZip.file(relsPath)?.async("uint8array");
       if (relsContent) generatedZip.file(relsPath, relsContent);
       const partName = `/word/${ref.target}`;
-      const contentType = ref.target.startsWith("header")
-        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"
-        : "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml";
+      const contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml";
       contentTypesXml = upsertContentTypeOverride(contentTypesXml, partName, contentType);
     }
 
@@ -641,12 +759,12 @@ async function applyTemplateHeaderFooter(generatedBuffer: Buffer, templateBuffer
     for (const ref of refs) {
       generatedRelsXml = generatedRelsXml.replace(
         "</Relationships>",
-        `<Relationship Id="${ref.newId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${ref.target.startsWith("header") ? "header" : "footer"}" Target="${ref.target}"/></Relationships>`
+        `<Relationship Id="${ref.newId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="${ref.target}"/></Relationships>`
       );
     }
 
     const refsXml = refs.map((ref) => ref.tag.replace(`r:id="${ref.oldId}"`, `r:id="${ref.newId}"`)).join("");
-    const cleanedSectPr = generatedSectPrMatch[0].replace(/<w:(headerReference|footerReference)\b[^>]*\/>/g, "");
+    const cleanedSectPr = generatedSectPrMatch[0].replace(/<w:footerReference\b[^>]*\/>/g, "");
     const nextSectPr = cleanedSectPr.replace(/(<w:pgSz\b|<w:pgMar\b|<\/w:sectPr>)/, `${refsXml}$1`);
     generatedZip.file("word/document.xml", generatedDocumentXml.replace(generatedSectPrMatch[0], nextSectPr));
     generatedZip.file("word/_rels/document.xml.rels", generatedRelsXml);
@@ -1124,6 +1242,14 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             WHERE TRY_CAST(value AS INT) IS NOT NULL
           )
         )
+      ),
+      GruposFiltradosUnicos AS (
+        SELECT
+          GrupoId,
+          MIN(PeriodoId) AS PeriodoId,
+          MIN(PeriodoNombre) AS PeriodoNombre
+        FROM GruposFiltrados
+        GROUP BY GrupoId
       )
     `;
 
@@ -1158,7 +1284,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
     const observacionesSelect = columnasEstudiante.hasObservaciones
       ? "NULLIF(LTRIM(RTRIM(e.Observaciones)), '')"
       : "CAST(NULL AS NVARCHAR(MAX))";
-    const apoyoEducativoWhereStrict = `${apoyoEducativoWhere} AND UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) = N'SIGNIFICATIVA'`;
+    const apoyoEducativoWhereStrict = `${apoyoEducativoWhere} AND UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA')`;
 
     const estudiantesResult = await timedQuery("gestion.apoyos.bootstrap.estudiantes", () => request.query(`
       ${baseCte}
@@ -1208,7 +1334,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             ON ta.TipoAdecuacionId = a.TipoAdecuacionId
           WHERE a.Activo = 1
             AND ta.Activo = 1
-            AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) = N'SIGNIFICATIVA'
+            AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA')
             AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
             ${!isSuperAdmin(req) ? "AND a.InstitucionId = @institucionId" : ""}
           ORDER BY ta.Descripcion, a.Tipo, a.Descripcion
@@ -1232,7 +1358,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
           INNER JOIN dbo.ApoyoEducativo ae
             ON ae.ApoyoEducativoId = aee.ApoyoEducativoId
            AND ae.Activo = 1
-          INNER JOIN GruposFiltrados gf
+          INNER JOIN GruposFiltradosUnicos gf
             ON gf.GrupoId = aee.GrupoId
           WHERE aee.InformeGeneradoAt IS NOT NULL
             AND aee.InformeNombre IS NOT NULL
@@ -1426,7 +1552,7 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
     const institucionResult = await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .query(`
-        SELECT TOP 1 Nombre, NombreComercial, NombreOficialBoleta, RegionalEducativa, CircuitoEducativo, CodigoPresupuestario
+        SELECT TOP 1 Nombre, NombreComercial, NombreOficialBoleta, RegionalEducativa, CircuitoEducativo, CodigoPresupuestario, LogoUrl, MembreteUrl
         FROM dbo.Institucion
         WHERE InstitucionId = @institucionId
       `);
@@ -1517,6 +1643,8 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
         circuito: institucion.CircuitoEducativo || "",
         institucion: institucion.NombreOficialBoleta || institucion.NombreComercial || institucion.Nombre || "",
         codigoPresupuestario: institucion.CodigoPresupuestario || "",
+        membreteUrl: institucion.MembreteUrl || "",
+        logoUrl: institucion.LogoUrl || "",
         docente: docenteNombre,
         asignaturas: materiasTexto,
         responsable,
