@@ -61,14 +61,14 @@ function buildAsistenciaAlert(totalLecciones: number, tardias: number, ausencias
 
 const SQL_ORDER_BY_SECCION = `
   ORDER BY
-    TRY_CONVERT(int, LEFT(g.Nombre, CHARINDEX('-', g.Nombre + '-') - 1)),
+    TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)),
     TRY_CONVERT(int, SUBSTRING(g.Nombre, CHARINDEX('-', g.Nombre + '-') + 1, 20)),
     g.Nombre
 `;
 
 const SQL_ORDER_BY_SECCION_Y_ESTUDIANTE = `
   ORDER BY
-    TRY_CONVERT(int, LEFT(g.Nombre, CHARINDEX('-', g.Nombre + '-') - 1)),
+    TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)),
     TRY_CONVERT(int, SUBSTRING(g.Nombre, CHARINDEX('-', g.Nombre + '-') + 1, 20)),
     g.Nombre,
     e.PrimerApellido,
@@ -925,7 +925,12 @@ function buildConstanciaHtmlV2(params: {
     p.institucion?.Nombre ||
     p.institucion?.NombreOficialBoleta ||
     "";
-  const nombreInstitucionFirma = normalizeWhitespace(p.institucion?.Nombre || "");
+  const nombreInstitucionFirma = normalizeWhitespace(
+    p.institucion?.NombreComercial ||
+    p.institucion?.Nombre ||
+    p.institucion?.NombreOficialBoleta ||
+    ""
+  ).toLocaleUpperCase("es-CR");
   const circuitoValor = stripPrefixedLabel(p.institucion?.CircuitoEducativo, /^circuito\s*/i);
   const regionalValor = stripPrefixedLabel(
     p.institucion?.RegionalEducativa,
@@ -1185,7 +1190,12 @@ async function buildConstanciaDocx(params: {
     p.institucion?.Nombre ||
     p.institucion?.NombreOficialBoleta ||
     "";
-  const nombreInstitucionFirma = normalizeWhitespace(p.institucion?.Nombre || "");
+  const nombreInstitucionFirma = normalizeWhitespace(
+    p.institucion?.NombreComercial ||
+    p.institucion?.Nombre ||
+    p.institucion?.NombreOficialBoleta ||
+    ""
+  ).toLocaleUpperCase("es-CR");
   const circuitoValor = stripPrefixedLabel(p.institucion?.CircuitoEducativo, /^circuito\s*/i);
   const regionalValor = stripPrefixedLabel(
     p.institucion?.RegionalEducativa,
@@ -1467,10 +1477,51 @@ router.get("/gestion-filtros", async (req, res) => {
         ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre
       `));
 
+    const tiposEstudianteResult = await timedQuery("reportes.gestion-filtros.tipos-estudiante", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        WITH TiposNormalizados AS (
+          SELECT DISTINCT
+            Valor = CASE
+              WHEN UPPER(LTRIM(RTRIM(ISNULL(Descripcion, N'')))) = N'PLAN NACIONAL' THEN N'PLAN NACIONAL'
+              WHEN UPPER(LTRIM(RTRIM(ISNULL(Descripcion, N'')))) = N'REGULAR' THEN N'REGULAR'
+              WHEN UPPER(LTRIM(RTRIM(ISNULL(Descripcion, N'')))) IN (N'TRASLADO', N'TRASLADOS') THEN N'TRASLADOS'
+              ELSE NULL
+            END
+          FROM dbo.TipoEstudiante
+          WHERE InstitucionId = @institucionId
+            AND Activo = 1
+        )
+        SELECT
+          Valor,
+          Descripcion = CASE Valor
+            WHEN N'PLAN NACIONAL' THEN N'Plan Nacional'
+            WHEN N'REGULAR' THEN N'Regular'
+            WHEN N'TRASLADOS' THEN N'Traslados'
+            ELSE Valor
+          END
+        FROM TiposNormalizados
+        WHERE Valor IS NOT NULL
+        ORDER BY Descripcion
+      `));
+
+    const tiposAdecuacionResult = await timedQuery("reportes.gestion-filtros.tipos-adecuacion", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT TipoAdecuacionId, Descripcion
+        FROM dbo.TipoAdecuacion
+        WHERE InstitucionId = @institucionId
+          AND Activo = 1
+          AND UPPER(LTRIM(RTRIM(ISNULL(Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
+        ORDER BY Descripcion
+      `));
+
     return ok(res, {
       secciones: seccionesResult.recordset,
       alumnos: alumnosResult.recordset,
-      profesores: profesoresResult.recordset
+      profesores: profesoresResult.recordset,
+      tiposEstudiante: tiposEstudianteResult.recordset,
+      tiposAdecuacion: tiposAdecuacionResult.recordset
     });
   } catch (error) {
     console.error("Error cargando filtros de reportes:", error);
@@ -1485,6 +1536,11 @@ router.get("/gestion-profe", async (req, res) => {
   const grupoId = req.query.grupoId ? Number(req.query.grupoId) : null;
   const estudianteId = req.query.estudianteId ? Number(req.query.estudianteId) : null;
   const profesorId = req.query.profesorId ? Number(req.query.profesorId) : null;
+  const q = String(req.query.q || "").trim();
+  const gradoRaw = req.query.grado ? Number(req.query.grado) : null;
+  const grado = Number.isFinite(gradoRaw) ? gradoRaw : null;
+  const tipoEstudiante = String(req.query.tipoEstudiante || "").trim().toUpperCase() || null;
+  const adecuacion = String(req.query.adecuacion || "").trim() || null;
   const desde = String(req.query.desde || "").trim() || null;
   const hasta = String(req.query.hasta || "").trim() || null;
   const vistaPor = String(req.query.vistaPor || "SECCION").trim().toUpperCase();
@@ -1494,6 +1550,10 @@ router.get("/gestion-profe", async (req, res) => {
     .input("grupoId", sql.Int, grupoId)
     .input("estudianteId", sql.Int, estudianteId)
     .input("profesorId", sql.Int, profesorId)
+    .input("q", sql.NVarChar(200), q ? `%${q}%` : null)
+    .input("grado", sql.Int, grado)
+    .input("tipoEstudiante", sql.NVarChar(50), tipoEstudiante)
+    .input("adecuacion", sql.NVarChar(200), adecuacion)
     .input("desde", sql.Date, desde)
     .input("hasta", sql.Date, hasta);
 
@@ -1517,6 +1577,222 @@ router.get("/gestion-profe", async (req, res) => {
       ORDER BY g.Nombre, e.PrimerApellido, e.SegundoApellido, e.Nombre
     `);
     return ok(res, result.recordset);
+  }
+
+  if (tipo === "ESTUDIANTES") {
+    try {
+      const result = await timedQuery("reportes.gestion-profe.estudiantes", () => request.query(`
+        WITH TipoEstudianteFiltro AS (
+          SELECT te.TipoEstudianteId
+          FROM dbo.TipoEstudiante te
+          WHERE te.InstitucionId = @institucionId
+            AND te.Activo = 1
+            AND (
+              (@tipoEstudiante = N'PLAN NACIONAL' AND UPPER(LTRIM(RTRIM(ISNULL(te.Descripcion, N'')))) = N'PLAN NACIONAL')
+              OR (@tipoEstudiante = N'REGULAR' AND UPPER(LTRIM(RTRIM(ISNULL(te.Descripcion, N'')))) = N'REGULAR')
+              OR (@tipoEstudiante = N'TRASLADOS' AND UPPER(LTRIM(RTRIM(ISNULL(te.Descripcion, N'')))) IN (N'TRASLADO', N'TRASLADOS'))
+            )
+        ),
+        BaseEstudiantes AS (
+          SELECT
+            m.MatriculaId,
+            m.Estado AS EstadoMatricula,
+            m.AnioLectivoId,
+            e.EstudianteId,
+            e.Identificacion,
+            e.TipoIdentificacion,
+            e.PrimerApellido,
+            e.SegundoApellido,
+            e.Nombre,
+            e.FechaNacimiento,
+            e.Sexo,
+            e.Correo,
+            e.Telefono,
+            e.Nacionalidad,
+            e.CodigoCarnet,
+            e.TipoEstudianteId,
+            e.RutaTransporteId,
+            e.RutaTransporteHabitual,
+            e.Repitente,
+            e.Refugiado,
+            e.AutorizaWhatsAppEncargado,
+            e.TieneAdecuacion,
+            e.Adecuacion,
+            e.NivelFuncionamiento,
+            e.Discapacidad,
+            e.TipoDiscapacidad,
+            e.Enfermedad,
+            e.ObservacionMedica,
+            e.Observaciones,
+            g.GrupoId,
+            g.Nombre AS GrupoNombre,
+            TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)) AS GradoNumero
+          FROM dbo.Matricula m
+          INNER JOIN dbo.Estudiante e
+            ON e.EstudianteId = m.EstudianteId
+          INNER JOIN dbo.Grupo g
+            ON g.GrupoId = m.GrupoId
+          WHERE e.InstitucionId = @institucionId
+            AND e.Activo = 1
+            AND ISNULL(m.Estado, N'') <> N'Inactiva'
+            AND TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)) BETWEEN 7 AND 12
+            AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
+            AND (@estudianteId IS NULL OR e.EstudianteId = @estudianteId)
+            AND (@grado IS NULL OR TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)) = @grado)
+            AND (
+              @tipoEstudiante IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM TipoEstudianteFiltro tf
+                WHERE tf.TipoEstudianteId = e.TipoEstudianteId
+              )
+            )
+            AND (
+              @adecuacion IS NULL
+              OR UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) = UPPER(LTRIM(RTRIM(@adecuacion)))
+            )
+            AND (
+              @q IS NULL
+              OR e.Identificacion LIKE @q
+              OR e.Nombre LIKE @q
+              OR e.PrimerApellido LIKE @q
+              OR e.SegundoApellido LIKE @q
+              OR LTRIM(RTRIM(CONCAT(
+                ISNULL(e.PrimerApellido, N''),
+                CASE WHEN NULLIF(LTRIM(RTRIM(e.SegundoApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(e.SegundoApellido)) ELSE N'' END,
+                CASE WHEN NULLIF(LTRIM(RTRIM(e.Nombre)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(e.Nombre)) ELSE N'' END
+              ))) LIKE @q
+            )
+        ),
+        EncargadosRanked AS (
+          SELECT
+            ee.EstudianteId,
+            ROW_NUMBER() OVER (
+              PARTITION BY ee.EstudianteId
+              ORDER BY
+                CASE WHEN ISNULL(ee.EsPrincipal, 0) = 1 THEN 0 ELSE 1 END,
+                CASE enc.TipoEncargado WHEN 'MADRE' THEN 1 WHEN 'PADRE' THEN 2 ELSE 3 END,
+                ee.EstudianteEncargadoId DESC
+            ) AS rn,
+            ee.Parentesco,
+            enc.Identificacion,
+            enc.Correo,
+            enc.Telefono,
+            enc.TelefonoSecundario,
+            enc.DireccionExacta,
+            LTRIM(RTRIM(CONCAT(
+              ISNULL(enc.Nombre, N''),
+              CASE WHEN NULLIF(LTRIM(RTRIM(enc.PrimerApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(enc.PrimerApellido)) ELSE N'' END,
+              CASE WHEN NULLIF(LTRIM(RTRIM(enc.SegundoApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(enc.SegundoApellido)) ELSE N'' END
+            ))) AS NombreCompleto
+          FROM dbo.EstudianteEncargado ee
+          INNER JOIN dbo.Encargado enc
+            ON enc.EncargadoId = ee.EncargadoId
+          INNER JOIN (SELECT DISTINCT EstudianteId FROM BaseEstudiantes) be
+            ON be.EstudianteId = ee.EstudianteId
+          WHERE ee.Activo = 1
+        ),
+        EncargadosPivot AS (
+          SELECT
+            EstudianteId,
+            MAX(CASE WHEN rn = 1 THEN NombreCompleto END) AS Encargado1Nombre,
+            MAX(CASE WHEN rn = 1 THEN Identificacion END) AS Encargado1Identificacion,
+            MAX(CASE WHEN rn = 1 THEN Parentesco END) AS Encargado1Parentesco,
+            MAX(CASE WHEN rn = 1 THEN Correo END) AS Encargado1Correo,
+            MAX(CASE WHEN rn = 1 THEN Telefono END) AS Encargado1Telefono,
+            MAX(CASE WHEN rn = 1 THEN TelefonoSecundario END) AS Encargado1TelefonoSecundario,
+            MAX(CASE WHEN rn = 1 THEN DireccionExacta END) AS Encargado1Direccion,
+            MAX(CASE WHEN rn = 2 THEN NombreCompleto END) AS Encargado2Nombre,
+            MAX(CASE WHEN rn = 2 THEN Identificacion END) AS Encargado2Identificacion,
+            MAX(CASE WHEN rn = 2 THEN Parentesco END) AS Encargado2Parentesco,
+            MAX(CASE WHEN rn = 2 THEN Correo END) AS Encargado2Correo,
+            MAX(CASE WHEN rn = 2 THEN Telefono END) AS Encargado2Telefono,
+            MAX(CASE WHEN rn = 2 THEN TelefonoSecundario END) AS Encargado2TelefonoSecundario,
+            MAX(CASE WHEN rn = 2 THEN DireccionExacta END) AS Encargado2Direccion
+          FROM EncargadosRanked
+          WHERE rn IN (1, 2)
+          GROUP BY EstudianteId
+        )
+        SELECT
+          b.Identificacion AS [Cédula],
+          b.TipoIdentificacion AS [Tipo Identificación],
+          b.PrimerApellido AS [Primer Apellido],
+          b.SegundoApellido AS [Segundo Apellido],
+          b.Nombre AS [Nombre],
+          LTRIM(RTRIM(CONCAT(
+            ISNULL(b.PrimerApellido, N''),
+            CASE WHEN NULLIF(LTRIM(RTRIM(b.SegundoApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(b.SegundoApellido)) ELSE N'' END,
+            CASE WHEN NULLIF(LTRIM(RTRIM(b.Nombre)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(b.Nombre)) ELSE N'' END
+          ))) AS [Nombre Completo],
+          CONVERT(varchar(10), b.FechaNacimiento, 103) AS [Fecha Nacimiento],
+          b.Sexo AS [Sexo],
+          b.Correo AS [Correo],
+          b.Telefono AS [Teléfono],
+          b.Nacionalidad AS [Nacionalidad],
+          b.CodigoCarnet AS [Código Carnet],
+          ISNULL(te.Descripcion, N'') AS [Tipo Estudiante],
+          ISNULL(rt.Descripcion, N'') AS [Ruta Transporte],
+          COALESCE(NULLIF(LTRIM(RTRIM(rt.Descripcion)), N''), NULLIF(LTRIM(RTRIM(b.RutaTransporteHabitual)), N''), N'') AS [Ruta Transporte Habitual],
+          b.GradoNumero AS [Grado],
+          b.GrupoNombre AS [Sección],
+          CASE WHEN ISNULL(b.Repitente, 0) = 1 THEN N'Sí' ELSE N'No' END AS [Repitente],
+          CASE WHEN ISNULL(b.Refugiado, 0) = 1 THEN N'Sí' ELSE N'No' END AS [Refugiado],
+          CASE WHEN ISNULL(b.AutorizaWhatsAppEncargado, 0) = 1 THEN N'Sí' ELSE N'No' END AS [Autoriza WhatsApp Encargado],
+          CASE WHEN ISNULL(b.TieneAdecuacion, 0) = 1 THEN N'Sí' ELSE N'No' END AS [Tiene Adecuación],
+          b.Adecuacion AS [Tipo de Adecuación],
+          b.NivelFuncionamiento AS [Nivel de Funcionamiento],
+          b.Discapacidad AS [Discapacidad],
+          b.TipoDiscapacidad AS [Tipo Discapacidad],
+          b.Enfermedad AS [Enfermedad],
+          b.ObservacionMedica AS [Observación Médica],
+          b.Observaciones AS [Observaciones],
+          b.EstadoMatricula AS [Estado Matrícula],
+          ISNULL(a.Nombre, N'') AS [Curso Lectivo],
+          ep.Encargado1Nombre AS [Encargado 1],
+          ep.Encargado1Identificacion AS [Cédula Encargado 1],
+          ep.Encargado1Parentesco AS [Parentesco 1],
+          ep.Encargado1Correo AS [Correo Encargado 1],
+          ep.Encargado1Telefono AS [Teléfono Encargado 1],
+          ep.Encargado1TelefonoSecundario AS [Teléfono Secundario Encargado 1],
+          ep.Encargado1Direccion AS [Dirección Encargado 1],
+          ep.Encargado2Nombre AS [Encargado 2],
+          ep.Encargado2Identificacion AS [Cédula Encargado 2],
+          ep.Encargado2Parentesco AS [Parentesco 2],
+          ep.Encargado2Correo AS [Correo Encargado 2],
+          ep.Encargado2Telefono AS [Teléfono Encargado 2],
+          ep.Encargado2TelefonoSecundario AS [Teléfono Secundario Encargado 2],
+          ep.Encargado2Direccion AS [Dirección Encargado 2],
+          b.MatriculaId AS [Matrícula ID],
+          b.EstudianteId AS [Estudiante ID]
+        FROM BaseEstudiantes b
+        LEFT JOIN dbo.TipoEstudiante te
+          ON te.TipoEstudianteId = b.TipoEstudianteId
+        LEFT JOIN dbo.RutaTransporte rt
+          ON rt.RutaTransporteId = b.RutaTransporteId
+        LEFT JOIN dbo.AnioLectivo a
+          ON a.AnioLectivoId = b.AnioLectivoId
+        LEFT JOIN EncargadosPivot ep
+          ON ep.EstudianteId = b.EstudianteId
+        ORDER BY
+          b.GradoNumero,
+          TRY_CONVERT(int, SUBSTRING(b.GrupoNombre, CHARINDEX('-', b.GrupoNombre + '-') + 1, 20)),
+          b.GrupoNombre,
+          b.PrimerApellido,
+          b.SegundoApellido,
+          b.Nombre
+        OPTION (RECOMPILE)
+      `));
+      return ok(res, result.recordset);
+    } catch (error: any) {
+      console.error("Error generando reporte de estudiantes:", error);
+      const isTimeout = String(error?.code || error?.number || "").toUpperCase() === "ETIMEOUT";
+      return res.status(isTimeout ? 504 : 500).json({
+        ok: false,
+        message: isTimeout
+          ? "La consulta del reporte de estudiantes tardó demasiado. Probá con un filtro más específico o intentá de nuevo."
+          : "No se pudo generar el reporte de estudiantes"
+      });
+    }
   }
 
   const filtrosBase = `

@@ -1284,7 +1284,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
     const observacionesSelect = columnasEstudiante.hasObservaciones
       ? "NULLIF(LTRIM(RTRIM(e.Observaciones)), '')"
       : "CAST(NULL AS NVARCHAR(MAX))";
-    const apoyoEducativoWhereStrict = `${apoyoEducativoWhere} AND UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA')`;
+    const apoyoEducativoWhereStrict = `${apoyoEducativoWhere} AND UPPER(LTRIM(RTRIM(ISNULL(e.Adecuacion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA', N'TODAS')`;
 
     const estudiantesResult = await timedQuery("gestion.apoyos.bootstrap.estudiantes", () => request.query(`
       ${baseCte}
@@ -1334,7 +1334,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
             ON ta.TipoAdecuacionId = a.TipoAdecuacionId
           WHERE a.Activo = 1
             AND ta.Activo = 1
-            AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA')
+            AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA', N'TODAS')
             AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
             ${!isSuperAdmin(req) ? "AND a.InstitucionId = @institucionId" : ""}
           ORDER BY ta.Descripcion, a.Tipo, a.Descripcion

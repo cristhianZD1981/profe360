@@ -116,7 +116,30 @@ function isValidApoyoAdecuacion(value?: string | null) {
 }
 
 function isApoyoAdecuacionIncluida(value?: string | null) {
-  return ["significativa", "no significativa"].includes(normalizeAdecuacionText(value));
+  return ["significativa", "no significativa", "todas"].includes(normalizeAdecuacionText(value));
+}
+
+function getApoyoAdecuacionLabel(value?: string | null) {
+  const normalized = normalizeAdecuacionText(value);
+  if (normalized === "significativa") return "Significativa";
+  if (normalized === "no significativa") return "No Significativa";
+  if (normalized === "todas") return "Todas";
+  return String(value || "").trim();
+}
+
+function apoyoCatalogoCoincideConTiposPermitidos(
+  adecuacionCatalogo: string | null | undefined,
+  tiposPermitidos: Set<string>
+) {
+  const adecuacionNormalizada = normalizeAdecuacionText(adecuacionCatalogo);
+  if (!adecuacionNormalizada) return false;
+  if (!tiposPermitidos.size) return true;
+  if (adecuacionNormalizada === "todas") {
+    return Array.from(tiposPermitidos).some((item) =>
+      ["significativa", "no significativa", "todas"].includes(item)
+    );
+  }
+  return tiposPermitidos.has(adecuacionNormalizada) || tiposPermitidos.has("todas");
 }
 
 function getApoyoEducativoEstudianteKey(item: ApoyoEducativoResumenItem) {
@@ -574,14 +597,33 @@ export default function GestionProfePage() {
   }, [apoyoEducativoEstudiantesUnicos]);
 
   const apoyoEducativoTiposAdecuacionEstudiantes = useMemo(() => {
-    return Array.from(
-      new Set(
-        apoyoEducativoEstudiantesFiltradosPorContexto
-          .map((item) => String(item.TipoAdecuacion || "").trim())
-          .filter(isApoyoAdecuacionIncluida)
-      )
-    ).sort((a, b) => a.localeCompare(b, "es"));
+    const tiposMap = new Map<string, string>();
+    apoyoEducativoEstudiantesFiltradosPorContexto.forEach((item) => {
+      if (!isApoyoAdecuacionIncluida(item.TipoAdecuacion)) return;
+      const normalized = normalizeAdecuacionText(item.TipoAdecuacion);
+      if (!normalized || tiposMap.has(normalized)) return;
+      tiposMap.set(normalized, getApoyoAdecuacionLabel(item.TipoAdecuacion));
+    });
+    return Array.from(tiposMap.values()).sort((a, b) => a.localeCompare(b, "es"));
   }, [apoyoEducativoEstudiantesFiltradosPorContexto]);
+
+  useEffect(() => {
+    if (
+      apoyoEducativoGeneradorTipoAdecuacion
+      && !apoyoEducativoTiposAdecuacionEstudiantes.some(
+        (item) => normalizeAdecuacionText(item) === normalizeAdecuacionText(apoyoEducativoGeneradorTipoAdecuacion)
+      )
+    ) {
+      setApoyoEducativoGeneradorTipoAdecuacion("");
+    }
+  }, [apoyoEducativoGeneradorTipoAdecuacion, apoyoEducativoTiposAdecuacionEstudiantes]);
+
+  const apoyoEducativoAlumnosDisponiblesFiltrados = useMemo(() => {
+    if (!apoyoEducativoGeneradorTipoAdecuacion) return apoyoEducativoAlumnosDisponibles;
+    return apoyoEducativoAlumnosDisponibles.filter(
+      (item) => normalizeAdecuacionText(item.TipoAdecuacion) === normalizeAdecuacionText(apoyoEducativoGeneradorTipoAdecuacion)
+    );
+  }, [apoyoEducativoAlumnosDisponibles, apoyoEducativoGeneradorTipoAdecuacion]);
 
   useEffect(() => {
     if (
@@ -607,8 +649,7 @@ export default function GestionProfePage() {
           .map((item) => String(item.Adecuacion || "").trim())
           .filter((item) => {
             if (!isApoyoAdecuacionIncluida(item)) return false;
-            if (!tiposPermitidos.size) return true;
-            return tiposPermitidos.has(normalizeAdecuacionText(item));
+            return apoyoCatalogoCoincideConTiposPermitidos(item, tiposPermitidos);
           })
       )
     ).sort((a, b) => a.localeCompare(b, "es"));
@@ -617,6 +658,16 @@ export default function GestionProfePage() {
   const apoyoEducativoOpcionesTipo = useMemo(() => {
     return Array.from(new Set((apoyoEducativoCatalogo || []).map((item) => String(item.Tipo || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   }, [apoyoEducativoCatalogo]);
+
+  const tienePlantillaSeguimientoAsignada = Boolean(
+    seguimientoContexto?.estructura?.PlantillaBaseId
+    || detalle?.plantilla?.EvaluacionPlantillaId
+    || selected?.EvaluacionPlantillaId
+  );
+
+  const debeMostrarSelectorPlantillaSeguimiento = !loadingSeguimiento && (
+    mostrarSelectorCambioPlantilla || !tienePlantillaSeguimientoAsignada
+  );
 
   const apoyoEducativoInformesPorEstudiante = useMemo(() => {
     const map = new Map<string, ApoyoEducativoInformeItem[]>();
@@ -3918,7 +3969,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     const resultados = (apoyoEducativoCatalogo || []).filter((item) => {
       if (!item) return false;
       if (!isValidApoyoAdecuacion(item.Adecuacion)) return false;
-      if (adecuacionesPermitidas.size && !adecuacionesPermitidas.has(normalizeAdecuacionText(item.Adecuacion))) return false;
+      if (!apoyoCatalogoCoincideConTiposPermitidos(item.Adecuacion, adecuacionesPermitidas)) return false;
       const coincideAdecuacion = !apoyoEducativoFiltroAdecuacion
         || normalizeAdecuacionText(item.Adecuacion) === normalizeAdecuacionText(apoyoEducativoFiltroAdecuacion);
       const coincideTipo = !apoyoEducativoFiltroTipo || String(item.Tipo) === String(apoyoEducativoFiltroTipo);
@@ -7732,13 +7783,33 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         {apoyoEducativoListaAlumnosMinimizada ? "Mostrar lista" : "Minimizar lista"}
                       </button>
                       <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span>Tipo de adecuación</span>
+                        <select
+                          value={apoyoEducativoGeneradorTipoAdecuacion}
+                          onChange={(event) => setApoyoEducativoGeneradorTipoAdecuacion(event.target.value)}
+                        >
+                          <option value="">Todas</option>
+                          {apoyoEducativoTiposAdecuacionEstudiantes.map((item) => (
+                            <option key={`apoyo-generador-adecuacion-${item}`} value={item}>{item}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                         <input
                           type="checkbox"
-                          checked={apoyoEducativoAlumnosDisponibles.length > 0 && apoyoEducativoEstudianteIdsSeleccionados.length === apoyoEducativoAlumnosDisponibles.length}
+                          checked={
+                            apoyoEducativoAlumnosDisponiblesFiltrados.length > 0
+                            && apoyoEducativoAlumnosDisponiblesFiltrados.every((item) =>
+                              apoyoEducativoEstudianteIdsSeleccionados.includes(String(item.EstudianteId))
+                            )
+                          }
                           onChange={(event) => {
-                            setApoyoEducativoEstudianteIdsSeleccionados(
-                              event.target.checked ? apoyoEducativoAlumnosDisponibles.map((item) => String(item.EstudianteId)) : []
-                            );
+                            const idsVisibles = apoyoEducativoAlumnosDisponiblesFiltrados.map((item) => String(item.EstudianteId));
+                            setApoyoEducativoEstudianteIdsSeleccionados((prev) => (
+                              event.target.checked
+                                ? Array.from(new Set([...prev, ...idsVisibles]))
+                                : prev.filter((value) => !idsVisibles.includes(value))
+                            ));
                           }}
                         />
                         Seleccionar todos
@@ -7747,7 +7818,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </div>
                   {apoyoEducativoListaAlumnosMinimizada ? (
                     <div style={{ padding: "12px 14px", borderRadius: "12px", border: "1px dashed rgba(148, 163, 184, 0.45)", background: "rgba(255,255,255,0.04)", color: "#cbd5e1" }}>
-                      Lista minimizada. Hay {apoyoEducativoAlumnosDisponibles.length} estudiante(s) disponibles.
+                      Lista minimizada. Hay {apoyoEducativoAlumnosDisponiblesFiltrados.length} estudiante(s) disponibles.
                     </div>
                   ) : (
                   <div className="table-wrap">
@@ -7764,7 +7835,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         </tr>
                       </thead>
                       <tbody>
-                        {apoyoEducativoAlumnosDisponibles.map((item) => (
+                        {apoyoEducativoAlumnosDisponiblesFiltrados.map((item) => (
                           <tr key={`apoyo-estudiante-${item.EstudianteId}-${item.GrupoId}`}>
                             <td>
                               <input
@@ -7785,6 +7856,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                             <td>{item.NivelFuncionamiento || "-"}</td>
                           </tr>
                         ))}
+                        {!apoyoEducativoAlumnosDisponiblesFiltrados.length && (
+                          <tr>
+                            <td colSpan={7} style={{ textAlign: "center", padding: "16px" }}>No hay estudiantes para el tipo de adecuación seleccionado.</td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -8667,7 +8743,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </button>
                 </div>
 
-                {(!seguimientoContexto?.estructura || !seguimientoContexto?.estructura?.PlantillaBaseId || mostrarSelectorCambioPlantilla) ? (
+                {loadingSeguimiento ? (
+                  <div style={{ padding: "14px", borderRadius: "14px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", fontWeight: 800 }}>
+                    Cargando seguimiento diario...
+                  </div>
+                ) : debeMostrarSelectorPlantillaSeguimiento ? (
                   <div style={{ display: "grid", gap: "12px", padding: "14px", background: "white", border: "1px solid #e2e8f0", borderRadius: "14px" }}>
                     <strong>{mostrarSelectorCambioPlantilla ? "Cambiar plantilla de evaluacion" : "Primera vez en este grupo"}</strong>
                     <span style={{ color: "#475569" }}>
@@ -8853,7 +8933,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                       <th key={estado} style={{ padding: "10px", textAlign: "center" }}>{estadoAsistenciaLabel(estado)}</th>
                                     ))}
                                     <th style={{ minWidth: "120px", padding: "10px" }} title="Minutos de tardía (solo cuando corresponde)">Minutos tarde</th>
-                                    <th style={{ minWidth: "220px", padding: "10px" }}>Observación</th>
                                     <th style={{ minWidth: "120px", padding: "10px" }} title="Marcar para notificar al encargado del estudiante">Informar al encargado</th>
                                     <th style={{ minWidth: "160px", padding: "10px" }}>Estado envío</th>
                                   </tr>
@@ -8899,9 +8978,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                             ))}
                                           <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
                                             <input type="number" min="0" title="Minutos de tardía" aria-label="Minutos de tardía" value={draft.minutosTardia} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "minutosTardia", e.target.value)} style={{ width: "110px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }} />
-                                          </td>
-                                          <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
-                                            <input value={draft.observacion} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "observacion", e.target.value)} placeholder="Observación" style={{ minWidth: "220px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }} />
                                           </td>
                                           <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
                                             <input type="checkbox" title="Informar al encargado" aria-label="Informar al encargado" checked={Boolean(draft.notificarEncargado)} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "notificarEncargado", e.target.checked)} style={{ accentColor: "#2563eb", width: "18px", height: "18px" }} />
@@ -9715,7 +9791,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           <th>Identificación</th>
                           <th>Estado</th>
                           <th>Minutos tarde</th>
-                          <th>Observación</th>
                           <th>Ausencias equiv.</th>
                           <th>% ausencias</th>
                           <th>% Art. 37</th>
@@ -9757,14 +9832,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "minutosTardia", e.target.value)}
                                   placeholder="0"
                                   style={{ width: "110px" }}
-                                />
-                              </td>
-                              <td>
-                                <input
-                                  value={draft.observacion}
-                                  onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "observacion", e.target.value)}
-                                  placeholder="Observación"
-                                  style={{ minWidth: "220px" }}
                                 />
                               </td>
                               <td>{Number(resumen?.AusenciasInjustificadasEquivalentes || 0).toFixed(2)}</td>

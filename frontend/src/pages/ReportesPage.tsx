@@ -5,7 +5,8 @@ import { getCostaRicaIsoDate } from "../utils/date";
 
 type TipoReporte =
   | "ASISTENCIA"
-  | "BOLETAS";
+  | "BOLETAS"
+  | "ESTUDIANTES";
 
 type VistaAsistencia = "ALUMNO" | "SECCION" | "PROFESOR";
 
@@ -109,6 +110,11 @@ function getVistaActual(pathname: string): "menu" | "consultas" | "certificacion
   return "menu";
 }
 
+function getGradoFromGrupoNombre(value: any) {
+  const match = String(value || "").trim().match(/^(\d+)/);
+  return match ? Number(match[1]) : NaN;
+}
+
 const chooserButtonBase: React.CSSProperties = {
   textAlign: "left",
   borderRadius: 20,
@@ -144,12 +150,18 @@ export default function ReportesPage() {
   const [secciones, setSecciones] = useState<any[]>([]);
   const [alumnos, setAlumnos] = useState<any[]>([]);
   const [profesores, setProfesores] = useState<any[]>([]);
+  const [tiposEstudiante, setTiposEstudiante] = useState<any[]>([]);
+  const [tiposAdecuacion, setTiposAdecuacion] = useState<any[]>([]);
 
   const [vistaAsistencia, setVistaAsistencia] = useState<VistaAsistencia>("SECCION");
   const [grupoId, setGrupoId] = useState<string>("");
   const [estudianteId, setEstudianteId] = useState<string>("");
   const [profesorIdReporte, setProfesorIdReporte] = useState<string>("");
   const [busquedaAlumno, setBusquedaAlumno] = useState<string>("");
+  const [busquedaEstudianteReporte, setBusquedaEstudianteReporte] = useState<string>("");
+  const [gradoReporte, setGradoReporte] = useState<string>("");
+  const [tipoEstudianteReporte, setTipoEstudianteReporte] = useState<string>("");
+  const [adecuacionReporte, setAdecuacionReporte] = useState<string>("");
   const [desde, setDesde] = useState<string>("");
   const [hasta, setHasta] = useState<string>("");
   const [filas, setFilas] = useState<any[]>([]);
@@ -172,6 +184,7 @@ export default function ReportesPage() {
   const [busquedaCertMinimizada, setBusquedaCertMinimizada] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const [progressPct, setProgressPct] = useState(0);
   const [generandoConstancia, setGenerandoConstancia] = useState(false);
 
   const vistaActual = useMemo(() => getVistaActual(location.pathname), [location.pathname]);
@@ -182,6 +195,8 @@ export default function ReportesPage() {
       setSecciones(Array.isArray(data.secciones) ? data.secciones : []);
       setAlumnos(Array.isArray(data.alumnos) ? data.alumnos : []);
       setProfesores(Array.isArray(data.profesores) ? data.profesores : []);
+      setTiposEstudiante(Array.isArray(data.tiposEstudiante) ? data.tiposEstudiante : []);
+      setTiposAdecuacion(Array.isArray(data.tiposAdecuacion) ? data.tiposAdecuacion : []);
     });
   }, []);
 
@@ -196,6 +211,20 @@ export default function ReportesPage() {
       return nombre.includes(q) || cedula.includes(q);
     });
   }, [alumnos, grupoId, busquedaAlumno]);
+
+  const gradosDisponibles = useMemo(() => {
+    const values = new Set<number>();
+    secciones.forEach((item) => {
+      const grado = getGradoFromGrupoNombre(item.GrupoNombre);
+      if (Number.isFinite(grado) && grado >= 7 && grado <= 12) values.add(grado);
+    });
+    return Array.from(values).sort((a, b) => a - b);
+  }, [secciones]);
+
+  const seccionesReporteFiltradas = useMemo(() => {
+    if (!gradoReporte) return secciones;
+    return secciones.filter((item) => String(getGradoFromGrupoNombre(item.GrupoNombre)) === gradoReporte);
+  }, [secciones, gradoReporte]);
 
   const alumnosConstanciaFiltrados = useMemo(() => {
     let base = alumnos;
@@ -227,6 +256,24 @@ export default function ReportesPage() {
       nombreCompleto: [item.PrimerApellido, item.SegundoApellido, item.Nombre].filter(Boolean).join(" ").replace(/\s+/g, " ").trim()
     }));
   }, [profesores]);
+
+  function limpiarConsulta() {
+    setFilas([]);
+    setAsistenciaRows([]);
+    setBoletasRows([]);
+    setExpandedRows({});
+    setGrupoId("");
+    setEstudianteId("");
+    setProfesorIdReporte("");
+    setBusquedaAlumno("");
+    setBusquedaEstudianteReporte("");
+    setGradoReporte("");
+    setTipoEstudianteReporte("");
+    setAdecuacionReporte("");
+    setDesde("");
+    setHasta("");
+    setProgressPct(0);
+  }
 
   async function consultar() {
     if (tipo === "ASISTENCIA" && vistaAsistencia === "ALUMNO") {
@@ -269,6 +316,13 @@ export default function ReportesPage() {
     }
 
     setLoading(true);
+    setProgressPct(8);
+    const progressTimer = window.setInterval(() => {
+      setProgressPct((prev) => {
+        if (prev >= 92) return prev;
+        return prev + (prev < 40 ? 12 : (prev < 70 ? 7 : 3));
+      });
+    }, 250);
     try {
       if (tipo === "ASISTENCIA") {
         const response = await api.get("/reportes/gestion-profe", {
@@ -310,6 +364,24 @@ export default function ReportesPage() {
         return;
       }
 
+      if (tipo === "ESTUDIANTES") {
+        const response = await api.get("/reportes/gestion-profe", {
+          params: {
+            tipo,
+            q: busquedaEstudianteReporte.trim() || undefined,
+            grado: gradoReporte || undefined,
+            grupoId: grupoId || undefined,
+            tipoEstudiante: tipoEstudianteReporte || undefined,
+            adecuacion: adecuacionReporte || undefined
+          }
+        });
+        setFilas(Array.isArray(response.data?.data) ? response.data.data : []);
+        setAsistenciaRows([]);
+        setBoletasRows([]);
+        setExpandedRows({});
+        return;
+      }
+
       const response = await api.get("/reportes/gestion-profe", {
         params: {
           tipo,
@@ -325,7 +397,10 @@ export default function ReportesPage() {
     } catch (error: any) {
       window.alert(error?.response?.data?.message || "No se pudo consultar el reporte.");
     } finally {
+      window.clearInterval(progressTimer);
+      setProgressPct(100);
       setLoading(false);
+      window.setTimeout(() => setProgressPct(0), 500);
     }
   }
 
@@ -430,6 +505,17 @@ export default function ReportesPage() {
   }
 
   function exportarExcel() {
+    if (tipo === "ESTUDIANTES") {
+      const headers = ["Línea", ...Object.keys(filas[0] || {})];
+      const rows = filas.map((f, idx) => [idx + 1, ...headers.slice(1).map((h) => f[h])]);
+      const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
+      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte de estudiantes</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
+      const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+      descargarBlob(blob, "reporte-estudiantes.xls");
+      return;
+    }
+
     if (tipo === "ASISTENCIA") {
       const headers = ["Alumno", "Identificación", "Sección", "Alerta Temprana", "Tardías", "Ausencias Justificadas", "Ausencias Injustificadas", "Presentes", "Cantidad de correos enviados", "Cantidad de WhatsApp enviados"];
       const rows = asistenciaRows.map((item) => [
@@ -475,9 +561,11 @@ export default function ReportesPage() {
     const rows = filas.map((f) => headers.map((h) => f[h]));
     const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
     const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte ${escapeHtml(tipo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
+    const titulo = tipo === "ESTUDIANTES" ? "Reporte de estudiantes" : `Reporte ${tipo}`;
+    const archivo = tipo === "ESTUDIANTES" ? "reporte-estudiantes.xls" : `reporte-${tipo}.xls`;
+    const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtml(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
     const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
-    descargarBlob(blob, `reporte-${tipo}.xls`);
+    descargarBlob(blob, archivo);
   }
 
   function exportarPdf() {
@@ -530,7 +618,8 @@ export default function ReportesPage() {
     const rows = filas.map((f) => headers.map((h) => f[h]));
     const thead = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
     const tbody = rows.map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8" /><title>Reporte ${escapeHtml(tipo)}</title><style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style></head><body><h2>Reporte ${escapeHtml(tipo)}</h2><table>${thead}${tbody}</table><script>window.onload=function(){window.print();}</script></body></html>`;
+    const titulo = tipo === "ESTUDIANTES" ? "Reporte de estudiantes" : `Reporte ${tipo}`;
+    const html = `<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(titulo)}</title><style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style></head><body><h2>${escapeHtml(titulo)}</h2><table>${thead}${tbody}</table><script>window.onload=function(){window.print();}</script></body></html>`;
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank", "noopener,noreferrer");
@@ -602,10 +691,19 @@ export default function ReportesPage() {
                   setAsistenciaRows([]);
                   setBoletasRows([]);
                   setExpandedRows({});
+                  setGrupoId("");
+                  setEstudianteId("");
+                  setProfesorIdReporte("");
+                  setBusquedaAlumno("");
+                  setBusquedaEstudianteReporte("");
+                  setGradoReporte("");
+                  setTipoEstudianteReporte("");
+                  setAdecuacionReporte("");
                 }}
               >
                 <option value="ASISTENCIA">Reporte de Asistencia</option>
                 <option value="BOLETAS">Reporte de Boletas</option>
+                <option value="ESTUDIANTES">Estudiante</option>
               </select>
             </label>
             {tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
@@ -668,6 +766,47 @@ export default function ReportesPage() {
                   </label>
                 ) : null}
               </>
+            ) : tipo === "ESTUDIANTES" ? (
+              <>
+                <label>Buscar estudiante
+                  <input
+                    type="text"
+                    value={busquedaEstudianteReporte}
+                    onChange={(e) => setBusquedaEstudianteReporte(e.target.value)}
+                    placeholder="Nombre, apellidos o cédula"
+                  />
+                </label>
+                <label>Grado
+                  <select
+                    value={gradoReporte}
+                    onChange={(e) => {
+                      setGradoReporte(e.target.value);
+                      setGrupoId("");
+                    }}
+                  >
+                    <option value="">Todos los grados</option>
+                    {gradosDisponibles.map((grado) => <option key={grado} value={grado}>{grado}</option>)}
+                  </select>
+                </label>
+                <label>Sección
+                  <select value={grupoId} onChange={(e) => setGrupoId(e.target.value)}>
+                    <option value="">Todas</option>
+                    {seccionesReporteFiltradas.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
+                  </select>
+                </label>
+                <label>Tipo estudiante
+                  <select value={tipoEstudianteReporte} onChange={(e) => setTipoEstudianteReporte(e.target.value)}>
+                    <option value="">Todos</option>
+                    {tiposEstudiante.map((item) => <option key={item.Valor} value={item.Valor}>{item.Descripcion}</option>)}
+                  </select>
+                </label>
+                <label>Adecuación
+                  <select value={adecuacionReporte} onChange={(e) => setAdecuacionReporte(e.target.value)}>
+                    <option value="">Todas</option>
+                    {tiposAdecuacion.map((item) => <option key={item.TipoAdecuacionId} value={item.Descripcion}>{item.Descripcion}</option>)}
+                  </select>
+                </label>
+              </>
             ) : (
               <>
                 <label>Sección
@@ -695,14 +834,45 @@ export default function ReportesPage() {
                 </label>
               </>
             )}
-            <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
-            <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+            {tipo !== "ESTUDIANTES" ? (
+              <>
+                <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
+                <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+              </>
+            ) : null}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <button type="button" className="primary-btn" onClick={consultar} disabled={loading}>{loading ? "Consultando..." : "Consultar"}</button>
+            <button type="button" className="ghost-btn" onClick={limpiarConsulta} disabled={loading}>Limpiar</button>
             <button type="button" className="primary-btn" onClick={exportarExcel} disabled={tipo === "ASISTENCIA" ? !asistenciaRows.length : (tipo === "BOLETAS" ? !boletasRows.length : !filas.length)}>Exportar Excel</button>
-            <button type="button" className="primary-btn" onClick={exportarPdf} disabled={tipo === "ASISTENCIA" ? !asistenciaRows.length : (tipo === "BOLETAS" ? !boletasRows.length : !filas.length)}>Exportar PDF</button>
+            {tipo !== "ESTUDIANTES" ? (
+              <button type="button" className="primary-btn" onClick={exportarPdf} disabled={tipo === "ASISTENCIA" ? !asistenciaRows.length : (tipo === "BOLETAS" ? !boletasRows.length : !filas.length)}>Exportar PDF</button>
+            ) : null}
           </div>
+          {loading ? (
+            <div style={{ marginBottom: 14, padding: 14, borderRadius: 14, background: "#102738", border: "1px solid #24465d" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 12, flexWrap: "wrap" }}>
+                <strong style={{ color: "#f8fafc", fontSize: 16 }}>
+                  {tipo === "ESTUDIANTES" ? "Consultando estudiantes" : "Consultando reporte"}
+                </strong>
+                <span style={{ color: "#67e8f9", fontSize: 22, fontWeight: 800, minWidth: 72, textAlign: "right" }}>
+                  {progressPct}%
+                </span>
+              </div>
+              <div style={{ height: 10, borderRadius: 999, background: "#dbeafe", overflow: "hidden", border: "1px solid #93c5fd" }}>
+                <div
+                  style={{
+                    width: `${progressPct}%`,
+                    height: "100%",
+                    background: "repeating-linear-gradient(135deg, #06b6d4, #06b6d4 12px, #22c55e 12px, #22c55e 24px)"
+                  }}
+                />
+              </div>
+              <p style={{ margin: "8px 0 0", color: "#dbe7f5", fontWeight: 600 }}>
+                {tipo === "ESTUDIANTES" ? "Preparando y cargando resultados del reporte." : "Procesando la consulta y preparando resultados."}
+              </p>
+            </div>
+          ) : null}
           {tipo === "ASISTENCIA" ? (
             <div className="table-wrap">
               <table>
@@ -831,6 +1001,27 @@ export default function ReportesPage() {
                           Reimprimir
                         </button>
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : tipo === "ESTUDIANTES" ? (
+            <div className="table-wrap">
+              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+                <thead>
+                  <tr>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Línea</th>
+                    {Object.keys(filas[0] || { Resultado: "" }).map((h) => <th key={h} style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {!filas.length ? (
+                    <tr><td colSpan={50} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegi filtros y presiona Consultar.</td></tr>
+                  ) : filas.map((fila, idx) => (
+                    <tr key={idx} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
+                      <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{idx + 1}</td>
+                      {Object.keys(filas[0] || {}).map((h) => <td key={h} style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila[h] ?? "")}</td>)}
                     </tr>
                   ))}
                 </tbody>
