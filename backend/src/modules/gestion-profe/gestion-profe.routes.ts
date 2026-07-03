@@ -1609,7 +1609,7 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
     const docenteNombre = joinNameParts([docente.Titulo, docente.Nombre, docente.PrimerApellido, docente.SegundoApellido]);
     const directoraNombre = joinNameParts([directora.Titulo, directora.Nombre, directora.PrimerApellido, directora.SegundoApellido]);
     const materiasTexto = (materiasResult.recordset || []).map((item: any) => normalizeText(item.Nombre)).filter(Boolean).join(", ");
-    const responsable = `${docenteNombre}${materiasTexto ? ` - ${materiasTexto}` : ""}`;
+    const responsable = docenteNombre;
     const puestoDocente = materiasTexto ? `Docente de ${materiasTexto}` : "Docente";
     const directoraPuesto = normalizeText(directora.Cargo || "") || "Directora del Centro Educativo";
     const catalogos = adecuacionesPermitidasResult.recordset || [];
