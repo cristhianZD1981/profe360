@@ -185,7 +185,7 @@ export default function ConfiguracionIAPage() {
       const data = unwrapData<TipoGeneracionIA[]>(response) || [];
       setTipos(data);
     } catch (error: any) {
-      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los tipos de generacion IA"));
+      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los tipos de generación IA"));
     }
   }
 
@@ -210,7 +210,7 @@ export default function ConfiguracionIAPage() {
       const data = unwrapData<PlantillaPromptIA[]>(response) || [];
       setPlantillas(data);
     } catch (error: any) {
-      setErrorMessage(getErrorMessage(error, "No se pudieron cargar las plantillas de Promt IA"));
+      setErrorMessage(getErrorMessage(error, "No se pudieron cargar las plantillas de Prompt IA"));
     } finally {
       setLoading(false);
     }
@@ -218,7 +218,7 @@ export default function ConfiguracionIAPage() {
 
   function startCreate() {
     if (!canCreatePlantillas) {
-      setErrorMessage("No tenes permisos para crear plantillas");
+      setErrorMessage("No tenés permisos para crear plantillas");
       return;
     }
 
@@ -251,7 +251,7 @@ export default function ConfiguracionIAPage() {
 
   function startEdit(plantilla: PlantillaPromptIA) {
     if (!canEditPlantilla(plantilla)) {
-      setErrorMessage("Solo podes editar plantillas creadas por vos");
+      setErrorMessage("Solo podés editar plantillas creadas por vos");
       return;
     }
 
@@ -352,12 +352,12 @@ export default function ConfiguracionIAPage() {
     clearMessages();
 
     if (!form.tipoGeneracionIAId) {
-      setErrorMessage("Selecciona el tipo de generacion IA");
+      setErrorMessage("Seleccioná el tipo de generación IA");
       return;
     }
 
     if (isSuperAdminRole && !form.institucionId) {
-      setErrorMessage("Selecciona el colegio de la plantilla");
+      setErrorMessage("Seleccioná el colegio de la plantilla");
       return;
     }
 
@@ -409,7 +409,7 @@ export default function ConfiguracionIAPage() {
     clearMessages();
 
     if (!copyForm.idOrigen) {
-      setErrorMessage("Selecciona la plantilla que deseas copiar");
+      setErrorMessage("Seleccioná la plantilla que deseás copiar");
       return;
     }
 
@@ -419,7 +419,7 @@ export default function ConfiguracionIAPage() {
     }
 
     if (isSuperAdminRole && !copyForm.institucionId) {
-      setErrorMessage("Selecciona el colegio destino");
+      setErrorMessage("Seleccioná el colegio destino");
       return;
     }
 
@@ -445,7 +445,7 @@ export default function ConfiguracionIAPage() {
 
   async function toggleEstado(plantilla: PlantillaPromptIA) {
     if (!canEditPlantilla(plantilla)) {
-      setErrorMessage("Solo podes cambiar el estado de plantillas creadas por vos");
+      setErrorMessage("Solo podés cambiar el estado de plantillas creadas por vos");
       return;
     }
 
@@ -464,7 +464,7 @@ export default function ConfiguracionIAPage() {
 
   async function eliminarPlantilla(plantilla: PlantillaPromptIA) {
     if (!canEditPlantilla(plantilla)) {
-      setErrorMessage("Solo podes eliminar plantillas creadas por vos");
+      setErrorMessage("Solo podés eliminar plantillas creadas por vos");
       return;
     }
 
@@ -573,7 +573,7 @@ export default function ConfiguracionIAPage() {
     <section style={{ display: "grid", gap: "18px" }}>
       <div style={{ ...cardStyle, display: "flex", justifyContent: "space-between", gap: "14px", flexWrap: "wrap", alignItems: "center" }}>
         <div>
-          <h2 style={{ margin: 0, color: "#0f172a" }}>Promt IA</h2>
+          <h2 style={{ margin: 0, color: "#0f172a" }}>Prompt IA</h2>
           <p style={{ margin: "6px 0 0", color: "#475569" }}>
             Administra plantillas para planeamientos, evaluaciones e indicadores. Si una plantilla es privada, solo su creador puede usarla.
           </p>
@@ -590,7 +590,7 @@ export default function ConfiguracionIAPage() {
       </div>
 
       <div style={{ ...cardStyle, background: "#ecfeff", border: "1px solid #67e8f9", color: "#0f172a" }}>
-        <strong>Paso a paso (Promt IA)</strong>
+        <strong>Paso a paso (Prompt IA)</strong>
         <ol style={{ margin: "8px 0 0 18px", padding: 0 }}>
           <li>Creá el tipo de plantilla (si aún no existe).</li>
           <li>Creá la plantilla con título y contenido del prompt.</li>
@@ -670,12 +670,12 @@ export default function ConfiguracionIAPage() {
                 value={tipoForm.nombre}
                 onChange={(e) => setTipoForm((prev) => ({ ...prev, nombre: e.target.value }))}
                 style={inputStyle}
-                placeholder="Ejemplo: Diagnostico, Proyecto"
+                placeholder="Ejemplo: Diagnóstico, Proyecto"
               />
             </label>
 
             <label style={labelStyle}>
-              Descripcion
+              Descripción
               <input
                 value={tipoForm.descripcion}
                 onChange={(e) => setTipoForm((prev) => ({ ...prev, descripcion: e.target.value }))}
@@ -700,7 +700,7 @@ export default function ConfiguracionIAPage() {
         <form onSubmit={handleSubmit} style={{ ...cardStyle, display: "grid", gap: "14px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
             <h3 style={{ margin: 0, color: "#0f172a" }}>
-              {form.id ? "Editar plantilla de Promt IA" : "Nueva plantilla de Promt IA"}
+              {form.id ? "Editar plantilla de Prompt IA" : "Nueva plantilla de Prompt IA"}
             </h3>
             <button type="button" onClick={cancelForm} style={secondaryButtonStyle}>
               Cancelar
@@ -709,7 +709,7 @@ export default function ConfiguracionIAPage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "12px" }}>
             <label style={labelStyle}>
-              Tipo de generacion
+              Tipo de generación
               <select value={form.tipoGeneracionIAId} onChange={(e) => setForm((prev) => ({ ...prev, tipoGeneracionIAId: e.target.value }))} style={inputStyle}>
                 <option value="">Seleccione</option>
                 {tipos.map((tipo) => (
@@ -788,7 +788,7 @@ export default function ConfiguracionIAPage() {
       {showCopyForm ? (
         <form onSubmit={handleCopySubmit} style={{ ...cardStyle, display: "grid", gap: "14px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
-            <h3 style={{ margin: 0, color: "#0f172a" }}>Copiar plantilla de Promt IA</h3>
+            <h3 style={{ margin: 0, color: "#0f172a" }}>Copiar plantilla de Prompt IA</h3>
             <button type="button" onClick={cancelCopyForm} style={secondaryButtonStyle}>
               Cancelar
             </button>
@@ -944,7 +944,7 @@ export default function ConfiguracionIAPage() {
                           onClick={() => startEdit(plantilla)}
                           style={canEdit ? secondaryButtonStyle : disabledButtonStyle}
                           disabled={!canEdit}
-                          title={!canEdit ? "Solo podes editar plantillas creadas por vos" : undefined}
+                          title={!canEdit ? "Solo podés editar plantillas creadas por vos" : undefined}
                         >
                           Editar
                         </button>
@@ -953,7 +953,7 @@ export default function ConfiguracionIAPage() {
                           onClick={() => toggleEstado(plantilla)}
                           style={canEdit ? secondaryButtonStyle : disabledButtonStyle}
                           disabled={!canEdit}
-                          title={!canEdit ? "Solo podes activar o desactivar plantillas creadas por vos" : undefined}
+                          title={!canEdit ? "Solo podés activar o desactivar plantillas creadas por vos" : undefined}
                         >
                           {plantilla.Activo ? "Desactivar" : "Activar"}
                         </button>
@@ -962,7 +962,7 @@ export default function ConfiguracionIAPage() {
                           onClick={() => eliminarPlantilla(plantilla)}
                           style={canEdit ? dangerButtonStyle : { ...dangerButtonStyle, opacity: 0.45, cursor: "not-allowed" }}
                           disabled={!canEdit}
-                          title={!canEdit ? "Solo podes eliminar plantillas creadas por vos" : undefined}
+                          title={!canEdit ? "Solo podés eliminar plantillas creadas por vos" : undefined}
                         >
                           Eliminar
                         </button>

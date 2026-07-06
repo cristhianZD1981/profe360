@@ -1787,7 +1787,7 @@ router.get("/habilidades/plantilla", async (_req, res) => {
 });
 
 router.post("/habilidades/importar-excel", upload.single("archivo"), async (req, res) => {
-  if (!canMaintainHabilidades(req)) return forbidden(res, "No tenes permisos para importar habilidades");
+  if (!canMaintainHabilidades(req)) return forbidden(res, "No tenés permisos para importar habilidades");
 
   try {
     const institucionId = getInstitutionId(req, res);

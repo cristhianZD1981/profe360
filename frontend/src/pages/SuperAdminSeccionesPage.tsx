@@ -193,7 +193,7 @@ export default function SuperAdminSeccionesPage() {
       });
       setEstructura(getData(response));
     } catch (err: any) {
-      setError(err?.response?.data?.message || "No se pudo cargar la estructura de la seccion");
+      setError(err?.response?.data?.message || "No se pudo cargar la estructura de la sección");
       setEstructura(null);
     } finally {
       setLoadingEstructura(false);
@@ -214,17 +214,17 @@ export default function SuperAdminSeccionesPage() {
     setEstructura(null);
 
     if (!institucionId) {
-      setError("Selecciona un colegio antes de buscar.");
+      setError("Seleccioná un colegio antes de buscar.");
       return;
     }
 
     if (modoFiltro === "SECCION" && !grupoIdFiltro) {
-      setError("Selecciona el grado y la seccion a consultar.");
+      setError("Seleccioná el grado y la sección a consultar.");
       return;
     }
 
     if (modoFiltro === "PROFESOR" && !profesorIdFiltro) {
-      setError("Selecciona el profesor a consultar.");
+      setError("Seleccioná el profesor a consultar.");
       return;
     }
 
@@ -233,14 +233,14 @@ export default function SuperAdminSeccionesPage() {
 
   async function runAction(kind: "calificaciones" | "plantilla") {
     if (!estructura?.estructura?.EstructuraGrupoId) {
-      setError("Primero selecciona una seccion con estructura");
+      setError("Primero seleccioná una sección con estructura");
       return;
     }
 
     const confirmMessage =
       kind === "calificaciones"
-        ? "Esta accion eliminara calificaciones, asistencias, seguimientos y ajustes manuales de esta seccion. Deseas continuar?"
-        : "Esta accion quitara la plantilla asignada de esta seccion. Deseas continuar?";
+        ? "Esta acción eliminará calificaciones, asistencias, seguimientos y ajustes manuales de esta sección. ¿Deseás continuar?"
+        : "Esta acción quitará la plantilla asignada de esta sección. ¿Deseás continuar?";
 
     if (!window.confirm(confirmMessage)) return;
 
@@ -273,7 +273,7 @@ export default function SuperAdminSeccionesPage() {
       <div>
         <h2 style={{ margin: 0, color: "#0f172a" }}>Mantenimiento de secciones</h2>
         <p style={{ margin: "6px 0 0", color: "#475569" }}>
-          Elige primero el colegio y luego filtra por grado y seccion o por profesor para cargar solo lo necesario.
+          Elegí primero el colegio y luego filtrá por grado y sección o por profesor para cargar solo lo necesario.
         </p>
       </div>
 
@@ -308,7 +308,7 @@ export default function SuperAdminSeccionesPage() {
                 void loadFiltros(value, "");
               }}
             >
-              <option value="">{loadingFiltros ? "Cargando..." : "Selecciona un colegio"}</option>
+              <option value="">{loadingFiltros ? "Cargando..." : "Seleccioná un colegio"}</option>
               {instituciones.map((item) => (
                 <option key={item.InstitucionId} value={item.InstitucionId}>{item.InstitucionNombre}</option>
               ))}
@@ -330,7 +330,7 @@ export default function SuperAdminSeccionesPage() {
                 setEstructura(null);
               }}
             >
-              <option value="SECCION">Colegio + grado + seccion</option>
+              <option value="SECCION">Colegio + grado + sección</option>
               <option value="PROFESOR">Colegio + profesor</option>
             </select>
           </label>
@@ -354,7 +354,7 @@ export default function SuperAdminSeccionesPage() {
                   void loadFiltros(institucionId, value);
                 }}
               >
-                <option value="">{loadingFiltros ? "Cargando..." : "Selecciona un grado"}</option>
+                <option value="">{loadingFiltros ? "Cargando..." : "Seleccioná un grado"}</option>
                 {grados.map((item) => (
                   <option key={item.Grado} value={item.Grado}>{item.Grado}</option>
                 ))}
@@ -362,7 +362,7 @@ export default function SuperAdminSeccionesPage() {
             </label>
 
             <label style={{ display: "grid", gap: "8px", fontWeight: 700, color: "#0f172a" }}>
-              Seccion
+              Sección
               <select
                 style={fieldStyle}
                 value={grupoIdFiltro}
@@ -374,7 +374,7 @@ export default function SuperAdminSeccionesPage() {
                   setEstructura(null);
                 }}
               >
-                <option value="">{loadingFiltros ? "Cargando..." : "Selecciona una seccion"}</option>
+                <option value="">{loadingFiltros ? "Cargando..." : "Seleccioná una sección"}</option>
                 {secciones.map((item) => (
                   <option key={item.GrupoId} value={item.GrupoId}>{item.GrupoNombre}</option>
                 ))}
@@ -396,7 +396,7 @@ export default function SuperAdminSeccionesPage() {
                   setEstructura(null);
                 }}
               >
-                <option value="">{loadingFiltros ? "Cargando..." : "Selecciona un profesor"}</option>
+                <option value="">{loadingFiltros ? "Cargando..." : "Seleccioná un profesor"}</option>
                 {profesores.map((item) => (
                   <option key={item.ProfesorId} value={item.ProfesorId}>{item.ProfesorNombre}</option>
                 ))}
@@ -431,14 +431,14 @@ export default function SuperAdminSeccionesPage() {
         </div>
 
         <label style={{ display: "grid", gap: "8px", fontWeight: 700, color: "#0f172a" }}>
-          Seccion
+          Sección
           <select
             style={fieldStyle}
             value={selectedKey}
             onChange={(event) => setSelectedKey(event.target.value)}
             disabled={loading || !grupos.length}
           >
-            <option value="">{loading ? "Cargando..." : (grupos.length ? "Selecciona una seccion" : "Primero aplica los filtros")}</option>
+            <option value="">{loading ? "Cargando..." : (grupos.length ? "Seleccioná una sección" : "Primero aplicá los filtros")}</option>
             {grupos.map((item) => {
               const profesor = [item.ProfesorNombre, item.ProfesorPrimerApellido, item.ProfesorSegundoApellido]
                 .filter(Boolean)
@@ -458,20 +458,20 @@ export default function SuperAdminSeccionesPage() {
 
       <div style={{ display: "grid", gap: "14px", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
         <div style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>Datos de la seccion</h3>
+          <h3 style={{ marginTop: 0 }}>Datos de la sección</h3>
           {selected ? (
             <div style={{ display: "grid", gap: "8px", color: "#334155" }}>
               <div><strong>Grupo:</strong> {selected.GrupoNombre}</div>
-              <div><strong>Institucion:</strong> {selected.InstitucionNombre || "-"}</div>
+              <div><strong>Institución:</strong> {selected.InstitucionNombre || "-"}</div>
               <div><strong>Materia:</strong> {selected.MateriaNombre}</div>
-              <div><strong>Ano lectivo:</strong> {selected.AnioNombre}</div>
+              <div><strong>Año lectivo:</strong> {selected.AnioNombre}</div>
               <div><strong>Periodo:</strong> {selected.PeriodoNombre}</div>
               <div><strong>Profesor:</strong> {[selected.ProfesorNombre, selected.ProfesorPrimerApellido, selected.ProfesorSegundoApellido].filter(Boolean).join(" ").trim() || "-"}</div>
               <div><strong>Estructura:</strong> {loadingEstructura ? "Cargando..." : (estructura?.estructura?.EstructuraGrupoId ? `#${estructura.estructura.EstructuraGrupoId}` : "Sin estructura")}</div>
               <div><strong>Plantilla asignada:</strong> {estructura?.estructura?.PlantillaBaseNombre || "-"}</div>
             </div>
           ) : (
-            <p style={{ color: "#64748b" }}>Selecciona una seccion para ver su estado.</p>
+            <p style={{ color: "#64748b" }}>Seleccioná una sección para ver su estado.</p>
           )}
         </div>
 
@@ -498,8 +498,8 @@ export default function SuperAdminSeccionesPage() {
             </button>
 
             <p style={{ margin: 0, color: "#64748b", lineHeight: 1.5 }}>
-              La primera accion borra los registros de evaluacion de la estructura seleccionada.
-              La segunda accion solo quita la plantilla base de la seccion.
+              La primera acción borra los registros de evaluación de la estructura seleccionada.
+              La segunda acción solo quita la plantilla base de la sección.
             </p>
           </div>
         </div>

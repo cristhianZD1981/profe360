@@ -146,7 +146,7 @@ function extractLookupTerm(question: string) {
   const idMatch = text.match(/\b\d{5,20}\b/);
   if (idMatch) return idMatch[0];
 
-  const alumnoMatch = text.match(/(?:alumno|estudiante|seccion|sección|grupo|materia)\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\- ]{3,60})/i);
+  const alumnoMatch = text.match(/(?:alumno|estudiante|sección|sección|grupo|materia)\s+([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\- ]{3,60})/i);
   if (alumnoMatch?.[1]) return alumnoMatch[1].trim();
 
   const cleaned = text
@@ -244,10 +244,10 @@ function buildPlaneamientoGuideReply(greetingName: string, currentPath?: string)
     : "Hola.";
 
   if (String(currentPath || "").toLowerCase().includes("/gestion-profe")) {
-    return `${intro} Para hacer un planeamiento desde Gestion del Profe, seguí estos pasos:
+    return `${intro} Para hacer un planeamiento desde Gestión del Profe, seguí estos pasos:
 
 1. Entrá a tu grupo y materia.
-2. Abrí el boton "Planeamiento e Indicadores".
+2. Abrí el botón "Planeamiento e Indicadores".
 3. En "Secciones", elegí una o varias secciones.
 4. En "Plantilla IA", escogé una plantilla o dejá la institucional activa.
 5. Seleccioná el "Mes o meses".
@@ -273,18 +273,18 @@ Si querés, ahora te lo explico campo por campo dentro de esa misma pantalla.`;
 8. Revisá el borrador.
 9. Guardalo como planeamiento si el resultado te sirve.
 
-Si querés, te lo adapto exactamente al modulo donde estás parado.`;
+Si querés, te lo adapto exactamente al módulo donde estás parado.`;
 }
 
 function buildModuleFallback(currentPath?: string) {
   const path = normalizeText(currentPath).toLowerCase();
   if (path.includes("/gestion-profe")) {
-    return "Puedo guiarte con el uso de Gestion del Profe: planeamientos, indicadores, seguimiento diario, notas, asistencia y reportes. Decime que querés hacer y te lo explico paso a paso.";
+    return "Puedo guiarte con el uso de Gestión del Profe: planeamientos, indicadores, seguimiento diario, notas, asistencia y reportes. Decime qué querés hacer y te lo explico paso a paso.";
   }
   if (path.includes("/planeamiento-ia")) {
-    return "Puedo guiarte con el modulo de Planeamiento con IA: seleccion de plantilla, habilidades, generacion y guardado del planeamiento. Decime que paso necesitás hacer.";
+    return "Puedo guiarte con el módulo de Planeamiento con IA: selección de plantilla, habilidades, generación y guardado del planeamiento. Decime qué paso necesitás hacer.";
   }
-  return "Puedo ayudarte con el uso de los modulos de PROFE360 y tambien con consultas de estudiantes, grupos, horarios, notas, asistencia y reportes. Decime que necesitás hacer y te guio paso a paso.";
+  return "Puedo ayudarte con el uso de los módulos de PROFE360 y también con consultas de estudiantes, grupos, horarios, notas, asistencia y reportes. Decime qué necesitás hacer y te guío paso a paso.";
 }
 
 type ModuleGuide = {
@@ -410,12 +410,12 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     title: "Dashboard",
     path: "/",
     aliases: ["dashboard", "inicio", "panel principal"],
-    summary: "Te sirve para ubicarte rapido en la plataforma y entrar al modulo que necesitas.",
+    summary: "Te sirve para ubicarte rápido en la plataforma y entrar al módulo que necesitás.",
     steps: [
       "Entra al sistema con tu usuario y clave.",
       "Revisa los accesos visibles en el menu izquierdo.",
-      "Elige el modulo que quieres trabajar.",
-      "Si no ves un modulo, normalmente es por permisos del rol."
+      "Elegí el módulo que querés trabajar.",
+      "Si no ves un módulo, normalmente es por permisos del rol."
     ]
   },
   {
@@ -424,13 +424,13 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     path: "/instituciones",
     allowedRoles: ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"],
     aliases: ["instituciones", "institucion", "nueva institucion", "crear institucion"],
-    summary: "Permite crear, editar y mantener la informacion base de la institucion.",
+    summary: "Permite crear, editar y mantener la información base de la institución.",
     steps: [
       "Entra a Instituciones.",
-      "Presiona el boton para crear una nueva institucion o editar una existente.",
-      "Completa los datos generales de la institucion.",
+      "Presioná el botón para crear una nueva institución o editar una existente.",
+      "Completá los datos generales de la institución.",
       "Guarda los cambios.",
-      "Verifica que la institucion quede disponible para los procesos relacionados."
+      "Verificá que la institución quede disponible para los procesos relacionados."
     ]
   },
   {
@@ -439,14 +439,14 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     path: "/administrativo",
     allowedRoles: ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"],
     aliases: ["administrativo", "academico", "area administrativa"],
-    summary: "Es el modulo base para configurar anos, periodos, grupos, materias, asignaciones, bloques y horarios.",
+    summary: "Es el módulo base para configurar años, períodos, grupos, materias, asignaciones, bloques y horarios.",
     steps: [
-      "Configura primero Ano Lectivo y Periodos.",
-      "Luego crea los Grupos o secciones.",
-      "Despues registra Materias y Habilidades de planeamiento si aplica.",
+      "Configurá primero Año Lectivo y Períodos.",
+      "Luego creá los Grupos o secciones.",
+      "Después registrá Materias y Habilidades de planeamiento si aplica.",
       "Asigna docentes a grupo y materia.",
       "Crea Bloques Horarios y luego Horario de clases.",
-      "Usa Fechas de clase, Dias lectivos y Feriados para completar la operacion academica."
+      "Usá Fechas de clase, Días lectivos y Feriados para completar la operación académica."
     ]
   },
   {
@@ -459,7 +459,7 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     steps: [
       "Entra a Usuarios.",
       "Busca si la persona ya existe.",
-      "Si no existe, crea el usuario con correo y datos basicos.",
+      "Si no existe, creá el usuario con correo y datos básicos.",
       "Asignale el rol correcto.",
       "Guarda y confirma que la persona pueda ingresar."
     ]
@@ -469,28 +469,28 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     title: "Estudiantes",
     path: "/estudiantes",
     aliases: ["estudiantes", "alumnos", "estudiante", "alumno"],
-    summary: "Permite registrar, editar y consultar la informacion del estudiante.",
+    summary: "Permite registrar, editar y consultar la información del estudiante.",
     steps: [
       "Abri Estudiantes.",
-      "Busca por nombre, apellido o cedula.",
-      "Si necesitas crear uno nuevo, completa los datos personales.",
+      "Buscá por nombre, apellido o cédula.",
+      "Si necesitás crear uno nuevo, completá los datos personales.",
       "Guarda el registro.",
-      "Luego segui con Matricula si el estudiante debe quedar en una seccion."
+      "Luego seguí con Matrícula si el estudiante debe quedar en una sección."
     ]
   },
   {
     key: "matricula",
-    title: "Matricula",
+    title: "Matrícula",
     path: "/matricula",
     allowedRoles: ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"],
-    aliases: ["matricula", "matricular", "traslado de seccion", "cambio de seccion"],
-    summary: "Sirve para ingresar al estudiante en un grupo y manejar cambios de seccion.",
+    aliases: ["matricula", "matricular", "traslado de sección", "cambio de sección"],
+    summary: "Sirve para ingresar al estudiante en un grupo y manejar cambios de sección.",
     steps: [
-      "Entra a Matricula.",
+      "Entrá a Matrícula.",
       "Busca el estudiante o crealo primero si hace falta.",
-      "Elige ano lectivo, grupo y datos de matricula.",
-      "Guarda la matricula.",
-      "Si es traslado, verifica la seccion origen y destino antes de guardar.",
+      "Elegí año lectivo, grupo y datos de matrícula.",
+      "Guardá la matrícula.",
+      "Si es traslado, verificá la sección origen y destino antes de guardar.",
       "Luego revisa notas y reportes si el cambio afecta evaluaciones."
     ]
   },
@@ -500,13 +500,13 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     path: "/parametrizaciones",
     allowedRoles: ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"],
     aliases: ["parametrizaciones", "evaluaciones", "configuracion ia", "promt ia", "plantillas"],
-    summary: "Te permite configurar plantillas, niveles, rubros y opciones base de evaluacion e IA.",
+    summary: "Te permite configurar plantillas, niveles, rubros y opciones base de evaluación e IA.",
     steps: [
       "Entra a Parametrizaciones.",
-      "Elige si vas a trabajar Evaluaciones o Configuracion IA.",
+      "Elegí si vas a trabajar Evaluaciones o Configuración IA.",
       "En Evaluaciones, configura rubros, porcentajes y estructuras.",
-      "En Configuracion IA, ajusta plantillas o prompts visibles.",
-      "Guarda los cambios y luego pruebalo en el modulo que los usa."
+      "En Configuración IA, ajusta plantillas o prompts visibles.",
+      "Guardá los cambios y luego probalo en el módulo que los usa."
     ]
   },
   {
@@ -514,12 +514,12 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     title: "Horarios",
     path: "/horarios",
     aliases: ["horarios", "horario", "consulta de horarios"],
-    summary: "Se usa para consultar horarios por seccion, estudiante o profesor.",
+    summary: "Se usa para consultar horarios por sección, estudiante o profesor.",
     steps: [
-      "Entra al modulo Horarios.",
+      "Entrá al módulo Horarios.",
       "Elige el criterio de consulta disponible.",
-      "Busca por seccion, profesor o estudiante.",
-      "Revisa la informacion mostrada por dia y bloque."
+      "Buscá por sección, profesor o estudiante.",
+      "Revisá la información mostrada por día y bloque."
     ]
   },
   {
@@ -527,9 +527,9 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     title: "Asistencia",
     path: "/asistencia",
     aliases: ["asistencia", "ausencias", "tardias"],
-    summary: "Permite revisar o registrar asistencia segun el flujo habilitado para tu rol.",
+    summary: "Permite revisar o registrar asistencia según el flujo habilitado para tu rol.",
     steps: [
-      "Entra al modulo Asistencia.",
+      "Entrá al módulo Asistencia.",
       "Elige grupo, materia o filtro solicitado.",
       "Marca el estado del estudiante.",
       "Guarda la sesion o el registro.",
@@ -553,13 +553,13 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
   },
   {
     key: "gestion-profe",
-    title: "Gestion del Profe",
+    title: "Gestión del Profe",
     path: "/gestion-profe",
     allowedRoles: ["PROFESOR"],
     aliases: ["gestion del profe", "modulo del profe", "registro de notas", "seguimiento diario"],
-    summary: "Es el modulo principal del docente para trabajar grupos, asistencia, notas, planeamientos y reportes.",
+    summary: "Es el módulo principal del docente para trabajar grupos, asistencia, notas, planeamientos y reportes.",
     steps: [
-      "Entra a Gestion del Profe.",
+      "Entrá a Gestión del Profe.",
       "Elige el grupo y la materia.",
       "Abre el panel que necesitas: Asistencia, Registro de notas, Seguimiento diario, Planeamiento e Indicadores o Reportes.",
       "Realiza la accion del panel.",
@@ -575,7 +575,7 @@ const DEFAULT_MODULE_GUIDES: ModuleGuide[] = [
     summary: "Permite generar un borrador de planeamiento con apoyo de IA y luego guardarlo.",
     steps: [
       "Entra a Planeamiento con IA.",
-      "Elige plantilla, materia, grado o secciones segun la pantalla.",
+      "Elegí plantilla, materia, grado o secciones según la pantalla.",
       "Selecciona mes o meses.",
       "Define la periodicidad.",
       "Indica la competencia general.",
@@ -680,8 +680,8 @@ const DEFAULT_SCREEN_CONTEXTS: ScreenContext[] = [
   {
     routePrefix: "/parametrizaciones/promt-ia",
     moduleKey: "parametrizaciones",
-    title: "Parametrizaciones - Promt IA",
-    summary: "Aquí creás y ajustás plantillas de Promt IA para otros módulos.",
+    title: "Parametrizaciones - Prompt IA",
+    summary: "Aquí creás y ajustás plantillas de Prompt IA para otros módulos.",
     hints: [
       "Podés crear una nueva o copiar una base existente.",
       "Conviene validar luego el resultado en Planeamiento o Evaluaciones."
@@ -986,8 +986,8 @@ const DEFAULT_SUBFLOW_CONTEXTS: SubflowContext[] = [
     routePrefix: "/parametrizaciones/promt-ia",
     moduleKey: "parametrizaciones",
     subflowKey: "guardar-plantilla-ia",
-    title: "guardar plantilla de Promt IA",
-    summary: "Parece que estás creando o editando una plantilla de Promt IA.",
+    title: "guardar plantilla de Prompt IA",
+    summary: "Parece que estás creando o editando una plantilla de Prompt IA.",
     aliases: ["guardar plantilla", "nueva plantilla de promt ia", "editar plantilla de promt ia"],
     hints: ["Definí primero el tipo y el nombre.", "Luego afiná instrucciones, contexto y formato de salida."],
     exampleQuestions: ["qué lleno primero aquí", "qué campos son requeridos"]
@@ -996,8 +996,8 @@ const DEFAULT_SUBFLOW_CONTEXTS: SubflowContext[] = [
     routePrefix: "/parametrizaciones/promt-ia",
     moduleKey: "parametrizaciones",
     subflowKey: "copiar-plantilla-ia",
-    title: "copiar plantilla de Promt IA",
-    summary: "Parece que estás copiando una plantilla de Promt IA.",
+    title: "copiar plantilla de Prompt IA",
+    summary: "Parece que estás copiando una plantilla de Prompt IA.",
     aliases: ["copiar plantilla", "copiar plantilla ia"],
     hints: ["Elegí una base estable.", "Cambiá el nombre antes de guardar la copia."],
     exampleQuestions: ["qué hago después de copiar", "cómo valido la copia"]
@@ -1018,7 +1018,7 @@ const DEFAULT_SUBFLOW_CONTEXTS: SubflowContext[] = [
     subflowKey: "consulta-administrativa",
     title: "consulta administrativa de horarios",
     summary: "Parece que estás consultando horarios por sección, docente o estudiante.",
-    aliases: ["consulta administrativa", "horario de seccion", "horario del profesor", "horario del estudiante"],
+    aliases: ["consulta administrativa", "horario de sección", "horario del profesor", "horario del estudiante"],
     hints: ["Completá primero los filtros generales.", "Si buscás persona, elegí el resultado correcto antes de consultar."],
     exampleQuestions: ["qué sigue aquí", "cómo consulto el horario de un estudiante"]
   },
@@ -1868,13 +1868,13 @@ function buildSuggestedActions(question: string, context: any): AssistantSuggest
     const routeGuide = accessibleGuides.find((item) => item.key === currentScreenContext.moduleKey)
       || accessibleGuides.find((item) => currentPath.startsWith(item.path));
     if (routeGuide?.path) {
-      pushSuggestedAction(actions, { label: "Abrir modulo", type: "navigate", target: routeGuide.path });
+      pushSuggestedAction(actions, { label: "Abrir módulo", type: "navigate", target: routeGuide.path });
     }
     pushSuggestedAction(actions, { label: "Que hago aqui", type: "ask", target: "Que hago aqui" });
   }
 
   if (currentPath.startsWith("/gestion-profe")) {
-    pushSuggestedAction(actions, { label: "Ir a Gestion del Profe", type: "navigate", target: "/gestion-profe" });
+    pushSuggestedAction(actions, { label: "Ir a Gestión del Profe", type: "navigate", target: "/gestion-profe" });
     pushSuggestedAction(actions, { label: "Revisar esta pantalla", type: "ask", target: "Que hago aqui" });
   } else if (currentPath.startsWith("/administrativo") || currentPath.startsWith("/academico")) {
     pushSuggestedAction(actions, { label: "Ir a Administrativo", type: "navigate", target: "/administrativo" });
@@ -1882,13 +1882,13 @@ function buildSuggestedActions(question: string, context: any): AssistantSuggest
   } else if (currentPath.startsWith("/estudiantes")) {
     pushSuggestedAction(actions, { label: "Ir a Estudiantes", type: "navigate", target: "/estudiantes" });
   } else if (currentPath.startsWith("/matricula")) {
-    pushSuggestedAction(actions, { label: "Ir a Matricula", type: "navigate", target: "/matricula" });
+    pushSuggestedAction(actions, { label: "Ir a Matrícula", type: "navigate", target: "/matricula" });
   }
 
   if (!actions.length && accessibleGuides.length) {
     const firstGuide = accessibleGuides[0];
     pushSuggestedAction(actions, { label: `Ir a ${firstGuide.title}`, type: "navigate", target: firstGuide.path });
-    pushSuggestedAction(actions, { label: "Ver modulos disponibles", type: "ask", target: "Que modulos puedo usar" });
+    pushSuggestedAction(actions, { label: "Ver módulos disponibles", type: "ask", target: "Qué módulos puedo usar" });
   }
 
   return actions.slice(0, 4);
@@ -1921,8 +1921,8 @@ const DEFAULT_ACTION_PATTERNS: ActionPattern[] = [
   { guideKey: "instituciones", phrases: ["crear institucion", "nueva institucion", "ingresar una nueva institucion", "registrar institucion", "editar institucion"] },
   { guideKey: "usuarios", phrases: ["crear usuario", "nuevo usuario", "registrar usuario", "dar acceso", "asignar rol", "crear profesor", "crear admin"] },
   { guideKey: "estudiantes", phrases: ["crear estudiante", "nuevo estudiante", "registrar estudiante", "crear alumno", "nuevo alumno", "registrar alumno", "editar estudiante"] },
-  { guideKey: "matricula", phrases: ["matricular alumno", "matricular estudiante", "hacer matricula", "crear matricula", "cambiar de seccion", "trasladar alumno", "trasladar estudiante", "mover de seccion"] },
-  { guideKey: "administrativo", phrases: ["crear grupo", "crear seccion", "asignar docente", "crear horario", "hacer horario", "configurar bloques", "crear materia por grupo"] },
+  { guideKey: "matricula", phrases: ["matricular alumno", "matricular estudiante", "hacer matricula", "crear matricula", "cambiar de sección", "trasladar alumno", "trasladar estudiante", "mover de sección"] },
+  { guideKey: "administrativo", phrases: ["crear grupo", "crear sección", "asignar docente", "crear horario", "hacer horario", "configurar bloques", "crear materia por grupo"] },
   { guideKey: "parametrizaciones", phrases: ["configurar evaluacion", "parametrizar evaluacion", "crear rubro", "configurar ia", "editar plantilla ia", "crear plantilla ia"] },
   { guideKey: "horarios", phrases: ["ver horario", "consultar horario", "buscar horario del profe", "buscar horario de un grupo"] },
   { guideKey: "asistencia", phrases: ["pasar asistencia", "registrar asistencia", "tomar asistencia", "ver asistencia"] },
@@ -1942,13 +1942,13 @@ function inferGuideFromAction(question: string, guides: ModuleGuide[], actionPat
 function buildAccessibleModulesReply(greetingName: string, guides: ModuleGuide[]) {
   const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
   const items = guides.map((guide) => `- ${guide.title}: ${guide.summary}`).join("\n");
-  return `${intro} Segun tu rol, estos son los modulos sobre los que puedo orientarte:\n\n${items}\n\nDecime cual queres usar y te lo explico paso a paso.`;
+  return `${intro} Según tu rol, estos son los módulos sobre los que puedo orientarte:\n\n${items}\n\nDecime cuál querés usar y te lo explico paso a paso.`;
 }
 
 function buildModuleGuideReply(greetingName: string, guide: ModuleGuide) {
   const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
   const steps = guide.steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
-  return `${intro} Te guio con ${guide.title}.\n\n${guide.summary}\n\nPaso a paso:\n${steps}\n\nSi queres, despues te explico ese modulo campo por campo.`;
+  return `${intro} Te guío con ${guide.title}.\n\n${guide.summary}\n\nPaso a paso:\n${steps}\n\nSi querés, después te explico ese módulo campo por campo.`;
 }
 
 function buildDetailGuideReply(greetingName: string, guide: DetailGuide) {
@@ -1957,7 +1957,7 @@ function buildDetailGuideReply(greetingName: string, guide: DetailGuide) {
   const validations = guide.validations.length ? `\n\nValidaciones previas:\n${guide.validations.map((item) => `- ${item}`).join("\n")}` : "";
   const errors = guide.commonErrors.length ? `\n\nErrores comunes:\n${guide.commonErrors.map((item) => `- ${item}`).join("\n")}` : "";
   const actions = guide.correctiveActions.length ? `\n\nSi pasa esto, hace esto otro:\n${guide.correctiveActions.map((item) => `- ${item}`).join("\n")}` : "";
-  return `${intro} Te guio con ${guide.title}.\n\n${guide.summary}\n\nPaso a paso:\n${steps}${validations}${errors}${actions}`;
+  return `${intro} Te guío con ${guide.title}.\n\n${guide.summary}\n\nPaso a paso:\n${steps}${validations}${errors}${actions}`;
 }
 
 function buildWhatElseReply(greetingName: string, guides: ModuleGuide[]) {
@@ -2025,7 +2025,7 @@ function buildAdministrativeOverviewReply(greetingName: string, detailGuides: De
     .join("\n");
 
   if (!items) {
-    return `${intro} En Administrativo normalmente encontrás Año Lectivo, Periodos, Gestión de grupos, Materias, Materias por grupo, Asignación Docentes, Bloque Horario, Horario de clases, Fecha de clases, Días Lectivos, Feriados, Correo Institucional y Mensajes.\n\nSi querés, te explico cualquiera de esas pestañas paso a paso.`;
+    return `${intro} En Administrativo normalmente encontrás Año Lectivo, Períodos, Gestión de grupos, Materias, Materias por grupo, Asignación de docentes, Bloque Horario, Horario de clases, Fecha de clases, Días Lectivos, Feriados, Correo Institucional y Mensajes.\n\nSi querés, te explico cualquiera de esas pestañas paso a paso.`;
   }
 
   return `${intro} En Administrativo encontrás estas pestañas:\n\n${items}\n\nSi querés, decime cuál te explico paso a paso.`;
@@ -2100,14 +2100,14 @@ function buildLiveScreenSnapshotReply(greetingName: string, snapshot: AssistantS
   const visibleFocus = focus.filter(Boolean);
   if (!visibleFocus.length && !snapshot.routeLabel && !snapshot.documentTitle) return null;
   const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
-  const routeLine = snapshot.routeLabel ? `EstÃ¡s trabajando en ${snapshot.routeLabel}.` : "EstÃ¡s trabajando dentro de PROFE360.";
+  const routeLine = snapshot.routeLabel ? `Estás trabajando en ${snapshot.routeLabel}.` : "Estás trabajando dentro de PROFE360.";
   const focusLine = visibleFocus.length
     ? `\n\nAhorita veo estas referencias en tu pantalla:\n${visibleFocus.map((item) => `- ${item}`).join("\n")}`
     : "";
   const actionLine = snapshot.buttons?.length
     ? `\n\nTambien veo acciones disponibles como: ${snapshot.buttons.slice(0, 5).join(", ")}.`
     : "";
-  return `${intro} ${routeLine}${focusLine}${actionLine}\n\nDecime quÃ© parte querÃ©s resolver y te guÃ­o sobre esa vista exacta.`;
+  return `${intro} ${routeLine}${focusLine}${actionLine}\n\nDecime qué parte querés resolver y te guío sobre esa vista exacta.`;
 }
 
 function isFormGuidanceQuestion(question: string) {
@@ -2181,9 +2181,9 @@ function buildGestionProfeDetailedReply(greetingName: string, question: string) 
   const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
 
   if (includesAny(question, ["asistencia"])) {
-    return `${intro} Para usar el panel "Asistencia" en Gestion del Profe:
+    return `${intro} Para usar el panel "Asistencia" en Gestión del Profe:
 
-1. Entrá a "Gestion del Profe".
+1. Entrá a "Gestión del Profe".
 2. Elegí el grupo y la materia.
 3. Abrí el panel "Asistencia".
 4. Seleccioná la fecha.
@@ -2202,9 +2202,9 @@ Errores comunes:
   }
 
   if (includesAny(question, ["registro de notas", "notas", "calificar"])) {
-    return `${intro} Para usar "Registro de notas" en Gestion del Profe:
+    return `${intro} Para usar "Registro de notas" en Gestión del Profe:
 
-1. Entrá a "Gestion del Profe".
+1. Entrá a "Gestión del Profe".
 2. Elegí el grupo y la materia.
 3. Abrí el panel "Registro de notas".
 4. Revisá los rubros visibles: Asistencia, Cotidiano, Tareas, Exámenes y total.
@@ -2222,9 +2222,9 @@ Errores comunes:
   }
 
   if (includesAny(question, ["seguimiento diario", "cotidiano", "tareas", "indicadores"])) {
-    return `${intro} Para usar "Seguimiento diario" en Gestion del Profe:
+    return `${intro} Para usar "Seguimiento diario" en Gestión del Profe:
 
-1. Entrá a "Gestion del Profe".
+1. Entrá a "Gestión del Profe".
 2. Elegí grupo y materia.
 3. Abrí el panel de seguimiento del rubro.
 4. En "Rubro a calificar", elegí Cotidiano, Tareas o Exámenes.
@@ -2245,9 +2245,9 @@ Errores comunes:
   }
 
   if (includesAny(question, ["planeamiento", "planeamiento e indicadores"])) {
-    return `${intro} Para usar "Planeamiento e Indicadores" en Gestion del Profe:
+    return `${intro} Para usar "Planeamiento e Indicadores" en Gestión del Profe:
 
-1. Entrá a "Gestion del Profe".
+1. Entrá a "Gestión del Profe".
 2. Elegí grupo y materia.
 3. Abrí "Planeamiento e Indicadores".
 4. En "Secciones", elegí una o varias.
@@ -2270,9 +2270,9 @@ Errores comunes:
   }
 
   if (includesAny(question, ["reportes"])) {
-    return `${intro} Para usar "Reportes" en Gestion del Profe:
+    return `${intro} Para usar "Reportes" en Gestión del Profe:
 
-1. Entrá a "Gestion del Profe".
+1. Entrá a "Gestión del Profe".
 2. Elegí grupo y materia.
 3. Abrí el panel "Reportes".
 4. Elegí el tipo de reporte.
@@ -2289,9 +2289,9 @@ Errores comunes:
   }
 
   if (includesAny(question, ["horario"])) {
-    return `${intro} Para ver el horario desde Gestion del Profe:
+    return `${intro} Para ver el horario desde Gestión del Profe:
 
-1. Entrá a "Gestion del Profe".
+1. Entrá a "Gestión del Profe".
 2. Elegí grupo y materia.
 3. Abrí el panel de horario.
 4. Revisá los bloques por día.
@@ -2315,8 +2315,8 @@ function buildAdministrativoDetailedReply(greetingName: string, question: string
     },
     {
       aliases: ["periodos", "periodos academicos"],
-      title: "Periodos",
-      body: `1. Entrá a "Periodos".\n2. Creá los trimestres o periodos.\n3. Guardá.\n\nSi faltan periodos, luego no vas a poder ordenar bien cargas académicas y reportes.`
+      title: "Períodos",
+      body: `1. Entrá a "Períodos".\n2. Creá los trimestres o períodos.\n3. Guardá.\n\nSi faltan períodos, luego no vas a poder ordenar bien cargas académicas y reportes.`
     },
     {
       aliases: ["gestion de grupos", "grupos", "secciones"],
@@ -2377,7 +2377,7 @@ function buildAdministrativoDetailedReply(greetingName: string, question: string
 
   const match = guides.find((item) => item.aliases.some((alias) => includesAny(question, [alias])));
   if (!match) return null;
-  return `${intro} Te guio con ${match.title} en Administrativo:\n\n${match.body}`;
+  return `${intro} Te guío con ${match.title} en Administrativo:\n\n${match.body}`;
 }
 function buildDirectReply(question: string, userName: string, userDisplayName: string, context: any, history: any[] = []) {
   const greetingName = userDisplayName || userName;
@@ -2917,7 +2917,7 @@ async function buildContext(pool: any, req: any, question: string, currentPath?:
 router.get("/admin/instructions", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
-      return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+      return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     }
     const pool = await getPool();
     const instructions = await loadAssistantAdminInstructions(pool, req, true);
@@ -2931,7 +2931,7 @@ router.get("/admin/instructions", async (req, res) => {
 router.get("/admin/knowledge", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
-      return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+      return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     }
     const pool = await getPool();
     const knowledge = await loadAssistantKnowledge(pool);
@@ -2954,7 +2954,7 @@ router.get("/admin/knowledge", async (req, res) => {
 router.put("/admin/detail-guides/:moduleKey/:detailKey", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
-      return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+      return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     }
 
     const moduleKey = normalizeText(req.params.moduleKey);
@@ -2968,8 +2968,8 @@ router.put("/admin/detail-guides/:moduleKey/:detailKey", async (req, res) => {
     const commonErrors = normalizeTextArray(req.body?.commonErrors);
     const correctiveActions = normalizeTextArray(req.body?.correctiveActions);
 
-    if (!moduleKey || !detailKey) return badRequest(res, "El modulo y el detalle son obligatorios");
-    if (!title) return badRequest(res, "El titulo es obligatorio");
+    if (!moduleKey || !detailKey) return badRequest(res, "El módulo y el detalle son obligatorios");
+    if (!title) return badRequest(res, "El título es obligatorio");
     if (!routePrefix) return badRequest(res, "La ruta es obligatoria");
     if (!summary) return badRequest(res, "El resumen es obligatorio");
 
@@ -2991,7 +2991,7 @@ router.put("/admin/detail-guides/:moduleKey/:detailKey", async (req, res) => {
       const guideId = Number(guideResult.recordset?.[0]?.AsistenteDetalleGuiaId || 0);
       if (!guideId) {
         await transaction.rollback();
-        return res.status(404).json({ ok: false, message: "No se encontro el panel base a modificar" });
+        return res.status(404).json({ ok: false, message: "No se encontró el panel base a modificar" });
       }
 
       await new sql.Request(transaction)
@@ -3082,14 +3082,14 @@ router.put("/admin/detail-guides/:moduleKey/:detailKey", async (req, res) => {
 
 router.put("/admin/module-guides", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     const moduleKey = normalizeText(req.body?.key);
     const title = normalizeText(req.body?.title);
     const path = normalizeText(req.body?.path);
     const summary = normalizeText(req.body?.summary);
     const aliases = normalizeTextArray(req.body?.aliases);
     const steps = normalizeTextArray(req.body?.steps);
-    if (!moduleKey || !title || !path || !summary) return badRequest(res, "Faltan datos obligatorios del modulo");
+    if (!moduleKey || !title || !path || !summary) return badRequest(res, "Faltan datos obligatorios del módulo");
 
     const pool = await getPool();
     const transaction = new sql.Transaction(pool);
@@ -3101,7 +3101,7 @@ router.put("/admin/module-guides", async (req, res) => {
       const guideId = Number(guideResult.recordset?.[0]?.AsistenteModuloGuiaId || 0);
       if (!guideId) {
         await transaction.rollback();
-        return res.status(404).json({ ok: false, message: "No se encontro el modulo a modificar" });
+        return res.status(404).json({ ok: false, message: "No se encontró el módulo a modificar" });
       }
 
       await new sql.Request(transaction)
@@ -3147,17 +3147,17 @@ router.put("/admin/module-guides", async (req, res) => {
       throw innerError;
     }
   } catch (error) {
-    console.error("Error actualizando modulo base del asistente:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo actualizar el modulo base de Margarita" });
+    console.error("Error actualizando módulo base del asistente:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar el módulo base de Margarita" });
   }
 });
 
 router.put("/admin/conversation-patterns", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     const patternKey = normalizeText(req.body?.patternKey);
     const phrases = normalizeTextArray(req.body?.phrases);
-    if (!patternKey || !phrases.length) return badRequest(res, "Debes indicar el patron y al menos una frase");
+    if (!patternKey || !phrases.length) return badRequest(res, "Debés indicar el patrón y al menos una frase");
     const pool = await getPool();
     await pool.request()
       .input("patternKey", sql.NVarChar(80), patternKey)
@@ -3174,14 +3174,14 @@ router.put("/admin/conversation-patterns", async (req, res) => {
     assistantKnowledgeCache = null;
     return ok(res, { updated: true });
   } catch (error) {
-    console.error("Error actualizando patron conversacional:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo actualizar el patron conversacional de Margarita" });
+    console.error("Error actualizando patrón conversacional:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar el patrón conversacional de Margarita" });
   }
 });
 
 router.put("/admin/screen-contexts", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     const routePrefix = normalizeText(req.body?.routePrefix);
     const moduleKey = normalizeText(req.body?.moduleKey);
     const title = normalizeText(req.body?.title);
@@ -3225,7 +3225,7 @@ router.put("/admin/screen-contexts", async (req, res) => {
 
 router.put("/admin/form-guides", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     const routePrefix = normalizeText(req.body?.routePrefix);
     const moduleKey = normalizeText(req.body?.moduleKey);
     const formKey = normalizeText(req.body?.formKey);
@@ -3291,7 +3291,7 @@ router.put("/admin/form-guides", async (req, res) => {
 
 router.put("/admin/subflow-contexts", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     const routePrefix = normalizeText(req.body?.routePrefix);
     const moduleKey = normalizeText(req.body?.moduleKey);
     const subflowKey = normalizeText(req.body?.subflowKey);
@@ -3343,7 +3343,7 @@ router.put("/admin/subflow-contexts", async (req, res) => {
 
 router.put("/admin/faqs", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
 
     const faqKey = normalizeText(req.body?.faqKey);
     const moduleKey = normalizeText(req.body?.moduleKey);
@@ -3421,7 +3421,7 @@ router.put("/admin/faqs", async (req, res) => {
 
 router.delete("/admin/faqs/:faqKey", async (req, res) => {
   try {
-    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+    if (!canManageAssistant(req)) return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     const faqKey = normalizeText(req.params.faqKey);
     if (!faqKey) return badRequest(res, "La clave de la FAQ es obligatoria");
 
@@ -3436,7 +3436,7 @@ router.delete("/admin/faqs/:faqKey", async (req, res) => {
       `);
 
     if (!result.recordset?.length) {
-      return res.status(404).json({ ok: false, message: "No se encontro la FAQ a quitar" });
+      return res.status(404).json({ ok: false, message: "No se encontró la FAQ a quitar" });
     }
 
     assistantKnowledgeCache = null;
@@ -3450,7 +3450,7 @@ router.delete("/admin/faqs/:faqKey", async (req, res) => {
 router.post("/admin/instructions", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
-      return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+      return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     }
 
     const title = normalizeText(req.body?.title);
@@ -3460,7 +3460,7 @@ router.post("/admin/instructions", async (req, res) => {
     const active = req.body?.active === undefined ? true : Boolean(req.body?.active);
     const institucionId = isSuperAdmin(req) ? null : Number(getAuth(req).institucionId || 0);
 
-    if (!title) return badRequest(res, "El titulo es obligatorio");
+    if (!title) return badRequest(res, "El título es obligatorio");
     if (!instruction) return badRequest(res, "La indicacion es obligatoria");
 
     const pool = await getPool();
@@ -3513,7 +3513,7 @@ router.post("/admin/instructions", async (req, res) => {
 router.put("/admin/instructions/:id", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
-      return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+      return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     }
 
     const id = Number(req.params.id || 0);
@@ -3525,7 +3525,7 @@ router.put("/admin/instructions/:id", async (req, res) => {
     const institucionId = isSuperAdmin(req) ? null : Number(getAuth(req).institucionId || 0);
 
     if (!id) return badRequest(res, "El id es obligatorio");
-    if (!title) return badRequest(res, "El titulo es obligatorio");
+    if (!title) return badRequest(res, "El título es obligatorio");
     if (!instruction) return badRequest(res, "La indicacion es obligatoria");
 
     const pool = await getPool();
@@ -3562,7 +3562,7 @@ router.put("/admin/instructions/:id", async (req, res) => {
     `);
 
     if (!result.recordset?.length) {
-      return res.status(404).json({ ok: false, message: "No se encontro la indicacion a modificar" });
+      return res.status(404).json({ ok: false, message: "No se encontró la indicacion a modificar" });
     }
 
     return ok(res, { item: result.recordset[0] });
@@ -3575,7 +3575,7 @@ router.put("/admin/instructions/:id", async (req, res) => {
 router.delete("/admin/instructions/:id", async (req, res) => {
   try {
     if (!canManageAssistant(req)) {
-      return res.status(403).json({ ok: false, message: "No tenes permisos para administrar Margarita" });
+      return res.status(403).json({ ok: false, message: "No tenés permisos para administrar Margarita" });
     }
 
     const id = Number(req.params.id || 0);
@@ -3600,7 +3600,7 @@ router.delete("/admin/instructions/:id", async (req, res) => {
     `);
 
     if (!result.recordset?.length) {
-      return res.status(404).json({ ok: false, message: "No se encontro la indicacion a quitar" });
+      return res.status(404).json({ ok: false, message: "No se encontró la indicacion a quitar" });
     }
 
     return ok(res, { removed: true });
@@ -3647,16 +3647,16 @@ router.post("/chat", async (req, res) => {
         ? `La persona usuaria esta logueada como ${userDisplayName}${userRoleLabel ? ` y su rol visible es ${userRoleLabel}` : ""}. Si es natural, saludala de esa forma.`
         : userName
           ? `La persona se llama ${userName}. Si es natural, llamala por su nombre.`
-          : "Si todavia no sabes el nombre de la persona, pediselo amablemente en tu respuesta.",
-      "Tu trabajo principal es apoyar el uso correcto de los modulos de PROFE360, paso a paso.",
-      "Si la persona pregunta como hacer algo en la plataforma, prioriza una guia clara antes de pedir cedula, grupo o materia.",
+          : "Si todavía no sabes el nombre de la persona, pedíselo amablemente en tu respuesta.",
+      "Tu trabajo principal es apoyar el uso correcto de los módulos de PROFE360, paso a paso.",
+      "Si la persona pregunta cómo hacer algo en la plataforma, prioriza una guía clara antes de pedir cédula, grupo o materia.",
       "Usa primero el contexto real del sistema que te paso.",
       "Si la consulta es sobre notas de un alumno, prioriza el bloque notasAlumno.",
-      "Si la consulta es sobre horario de una seccion, prioriza el bloque horariosSeccion.",
+      "Si la consulta es sobre horario de una sección, prioriza el bloque horariosSeccion.",
       "Si el usuario pide algo que no aparece en el contexto, decilo y pedi un dato puntual solo cuando haga falta.",
       "No inventes datos ni afirmes consultas que no aparezcan en el contexto.",
-      "Guia solo sobre modulos a los que la persona tenga acceso segun el contexto.",
-      "Podes ayudar con estudiantes, grupos, horarios, notas, asistencia, reportes, planeamientos e indicadores.",
+      "Guía solo sobre módulos a los que la persona tenga acceso según el contexto.",
+      "Podés ayudar con estudiantes, grupos, horarios, notas, asistencia, reportes, planeamientos e indicadores.",
       ...(Array.isArray(context?.assistantAdminInstructions) && context.assistantAdminInstructions.length
         ? [
             "Indicaciones administrativas vigentes para Margarita:",
@@ -3688,7 +3688,7 @@ router.post("/chat", async (req, res) => {
     const fallback = isStudentInfoQuestion(question)
       ? `${userDisplayName || userName ? `Hola ${userDisplayName || userName}. ` : ""}Si querés información de un alumno, mandame la cédula o el nombre completo y te ayudo a ubicarlo.`
       : context.estudiantes.length || context.grupos.length || context.horarios.length || context.notas.length || context.asistencia.length
-      ? "Encontre datos relacionados en el sistema. Si queres, tambien puedo guiarte paso a paso dentro del modulo donde estas trabajando."
+      ? "Encontré datos relacionados en el sistema. Si querés, también puedo guiarte paso a paso dentro del módulo donde estás trabajando."
       : (context.accessibleModuleGuides?.length
           ? buildAccessibleModulesReply(userDisplayName || userName, context.accessibleModuleGuides)
           : buildModuleFallback(currentPath));

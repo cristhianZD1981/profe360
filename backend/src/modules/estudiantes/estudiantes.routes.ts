@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -528,7 +528,7 @@ async function createStudentWithTransaction(params: {
     const existente = existe.recordset[0];
     if (existente.Activo === false || existente.Activo === 0) {
       const error: any = new Error(
-        "Ya existe un estudiante inactivo con esa Identificacion. PodÃ©s reactivarlo."
+        "Ya existe un estudiante inactivo con esa identificación. Podés reactivarlo."
       );
       error.code = "ESTUDIANTE_INACTIVO";
       error.estudianteId = existente.EstudianteId;
@@ -536,7 +536,7 @@ async function createStudentWithTransaction(params: {
     }
 
     const error: any = new Error(
-      "Ya existe un estudiante con esa Identificacion en esta instituciÃ³n"
+      "Ya existe un estudiante con esa identificación en esta institución"
     );
     error.code = "ESTUDIANTE_DUPLICADO";
     throw error;
@@ -1156,7 +1156,7 @@ function serializeImportJob(job: ImportJob) {
 
 function parseImportRowsFromFile(file?: Express.Multer.File) {
   if (!file?.buffer) {
-    const error: any = new Error("DebÃ©s adjuntar un archivo Excel");
+    const error: any = new Error("Debés adjuntar un archivo Excel");
     error.status = 400;
     throw error;
   }
@@ -1532,7 +1532,7 @@ router.get("/", async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     if (!req.auth?.institucionId) {
-      return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+      return badRequest(res, "El usuario no tiene institución asignada");
     }
 
     const pool = await getPool();
@@ -1835,7 +1835,7 @@ router.get(
         "Adecuación curricular no significativa";
 
       const instrucciones = [
-        { Campo: "identificación_estudiante", Obligatorio: "Si", Descripcion: "Identificacion del estudiante" },
+        { Campo: "identificación_estudiante", Obligatorio: "Si", Descripcion: "Identificación del estudiante" },
         { Campo: "Tipo_ identificacion_estudiante", Obligatorio: "No", Descripcion: "Ejemplo: Cédula nacional, DIMEX o Pasaporte" },
         { Campo: "Apellido1", Obligatorio: "Si", Descripcion: "Primer apellido" },
         { Campo: "Apellido2", Obligatorio: "Si", Descripcion: "Segundo apellido" },
@@ -2139,7 +2139,7 @@ router.post(
   async (req, res) => {
     try {
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃƒÂ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       const rows = parseImportRowsFromFile(req.file);
@@ -2155,20 +2155,20 @@ router.post(
           institucionId: req.auth!.institucionId!,
           job
         }).catch((error) => {
-          console.error("Error procesando importaciÃƒÂ³n de estudiantes:", error);
+          console.error("Error procesando importación de estudiantes:", error);
           job.status = "ERROR";
           job.error = error?.message || "No se pudo procesar el archivo Excel";
           job.updatedAt = Date.now();
         });
       });
 
-      return ok(res, serializeImportJob(job), "ImportaciÃƒÂ³n iniciada");
+      return ok(res, serializeImportJob(job), "Importación iniciada");
     } catch (error: any) {
       if (error?.status === 400) return badRequest(res, error.message);
-      console.error("Error iniciando importaciÃƒÂ³n de estudiantes:", error);
+      console.error("Error iniciando importación de estudiantes:", error);
       return res.status(500).json({
         ok: false,
-        message: "No se pudo iniciar la importaciÃƒÂ³n"
+        message: "No se pudo iniciar la importación"
       });
     }
   }
@@ -2180,7 +2180,7 @@ router.get(
   async (req, res) => {
     try {
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃƒÂ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       cleanupImportJobs();
@@ -2189,16 +2189,16 @@ router.get(
       if (!job || job.institucionId !== req.auth.institucionId) {
         return res.status(404).json({
           ok: false,
-          message: "No se encontrÃƒÂ³ la importaciÃƒÂ³n solicitada"
+          message: "No se encontró la importación solicitada"
         });
       }
 
       return ok(res, serializeImportJob(job));
     } catch (error) {
-      console.error("Error consultando progreso de importaciÃƒÂ³n:", error);
+      console.error("Error consultando progreso de importación:", error);
       return res.status(500).json({
         ok: false,
-        message: "No se pudo consultar el progreso de la importaciÃƒÂ³n"
+        message: "No se pudo consultar el progreso de la importación"
       });
     }
   }
@@ -2210,7 +2210,7 @@ router.get(
   async (req, res) => {
     try {
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃƒÆ’Ã‚Â³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       cleanupImportJobs();
@@ -2219,7 +2219,7 @@ router.get(
       if (!job || job.institucionId !== req.auth.institucionId) {
         return res.status(404).json({
           ok: false,
-          message: "No se encontrÃƒÆ’Ã‚Â³ la importaciÃƒÆ’Ã‚Â³n solicitada"
+          message: "No se encontró la importación solicitada"
         });
       }
 
@@ -2249,10 +2249,10 @@ router.get(
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       return res.send(buffer);
     } catch (error) {
-      console.error("Error exportando resumen de importaciÃƒÆ’Ã‚Â³n:", error);
+      console.error("Error exportando resumen de importación:", error);
       return res.status(500).json({
         ok: false,
-        message: "No se pudo exportar el resumen de importaciÃƒÆ’Ã‚Â³n"
+        message: "No se pudo exportar el resumen de importación"
       });
     }
   }
@@ -2265,11 +2265,11 @@ router.post(
   async (req, res) => {
     try {
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       if (!req.file?.buffer) {
-        return badRequest(res, "DebÃ©s adjuntar un archivo Excel");
+        return badRequest(res, "Debés adjuntar un archivo Excel");
       }
 
       const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -2368,7 +2368,7 @@ router.post(
         totalActualizados,
         totalReactivados,
         resultados
-      }, "ImportaciÃ³n procesada");
+      }, "Importación procesada");
     } catch (error) {
       console.error("Error importando estudiantes desde Excel:", error);
       return res.status(500).json({
@@ -2384,11 +2384,11 @@ router.get("/:id/detalle", async (req, res) => {
     const id = Number(req.params.id);
 
     if (!id) {
-      return badRequest(res, "Id invÃ¡lido");
+      return badRequest(res, "Id inválido");
     }
 
     if (!req.auth?.institucionId) {
-      return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+      return badRequest(res, "El usuario no tiene institución asignada");
     }
 
     const pool = await getPool();
@@ -2504,11 +2504,11 @@ router.get("/:id/carnet", async (req, res) => {
     const id = Number(req.params.id);
 
     if (!id) {
-      return badRequest(res, "Id invÃ¡lido");
+      return badRequest(res, "Id inválido");
     }
 
     if (!req.auth?.institucionId) {
-      return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+      return badRequest(res, "El usuario no tiene institución asignada");
     }
 
     const pool = await getPool();
@@ -2636,7 +2636,7 @@ router.post(
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
       const tieneAdecuacionNormalizada = !!tieneAdecuacion && isValidAdecuacionValue(adecuacion);
       const adecuacionNormalizada = tieneAdecuacionNormalizada ? toNullableString(adecuacion) : null;
@@ -2708,7 +2708,7 @@ router.post(
           ok: false,
           code: "ESTUDIANTE_DUPLICADO",
           message:
-            "Ya existe un estudiante con esa Identificacion en esta instituciÃ³n"
+            "Ya existe un estudiante con esa identificación en esta institución"
         });
       }
 
@@ -2759,7 +2759,7 @@ router.put(
       } = req.body;
 
       if (!id) {
-        return badRequest(res, "Id invÃ¡lido");
+        return badRequest(res, "Id inválido");
       }
 
       if (!identificacion || !nombre || !primerApellido || !segundoApellido || !fechaNacimiento) {
@@ -2767,7 +2767,7 @@ router.put(
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       await transaction.begin();
@@ -2791,7 +2791,7 @@ router.put(
           ok: false,
           code: "ESTUDIANTE_DUPLICADO",
           message:
-            "Ya existe otro estudiante con esa Identificacion en esta instituciÃ³n"
+            "Ya existe otro estudiante con esa identificación en esta institución"
         });
       }
 
@@ -2955,7 +2955,7 @@ router.put(
           ok: false,
           code: "ESTUDIANTE_DUPLICADO",
           message:
-            "Ya existe otro estudiante con esa Identificacion en esta instituciÃ³n"
+            "Ya existe otro estudiante con esa identificación en esta institución"
         });
       }
 
@@ -2975,11 +2975,11 @@ router.delete(
       const id = Number(req.params.id);
 
       if (!id) {
-        return badRequest(res, "Id invÃ¡lido");
+        return badRequest(res, "Id inválido");
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       const pool = await getPool();
@@ -3026,11 +3026,11 @@ router.patch(
       const id = Number(req.params.id);
 
       if (!id) {
-        return badRequest(res, "Id invÃ¡lido");
+        return badRequest(res, "Id inválido");
       }
 
       if (!req.auth?.institucionId) {
-        return badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+        return badRequest(res, "El usuario no tiene institución asignada");
       }
 
       const pool = await getPool();
@@ -3071,5 +3071,4 @@ router.patch(
 );
 
 export default router;
-
 

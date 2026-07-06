@@ -285,11 +285,11 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
   async function handleDisable(id: number) {
     const item = habilidades.find((habilidad) => Number(habilidad.PlaneamientoHabilidadId) === Number(id));
     if (!item || !canEditHabilidad(item)) {
-      setErrorMessage("Solo podes inhabilitar habilidades creadas por vos");
+      setErrorMessage("Solo podés inhabilitar habilidades creadas por vos");
       return;
     }
 
-    if (!window.confirm("Deseas inhabilitar esta habilidad?")) return;
+    if (!window.confirm("¿Deseás inhabilitar esta habilidad?")) return;
     clearMessages();
     try {
       const response = await api.delete(`/planeamiento-ia/habilidades/${id}`);
@@ -303,7 +303,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
   async function handleReactivate(id: number) {
     const item = habilidades.find((habilidad) => Number(habilidad.PlaneamientoHabilidadId) === Number(id));
     if (!item || !canEditHabilidad(item)) {
-      setErrorMessage("Solo podes reactivar habilidades creadas por vos");
+      setErrorMessage("Solo podés reactivar habilidades creadas por vos");
       return;
     }
 

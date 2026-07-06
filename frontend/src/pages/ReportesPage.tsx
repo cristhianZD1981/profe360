@@ -6,6 +6,7 @@ import { getCostaRicaIsoDate } from "../utils/date";
 type TipoReporte =
   | "ASISTENCIA"
   | "BOLETAS"
+  | "SECCIONES"
   | "ESTUDIANTES";
 
 type VistaAsistencia = "ALUMNO" | "SECCION" | "PROFESOR";
@@ -167,6 +168,7 @@ export default function ReportesPage() {
   const [filas, setFilas] = useState<any[]>([]);
   const [asistenciaRows, setAsistenciaRows] = useState<AsistenciaResumen[]>([]);
   const [boletasRows, setBoletasRows] = useState<BoletaReporteRow[]>([]);
+  const [seccionReporteTitulo, setSeccionReporteTitulo] = useState<string>("");
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
 
   const [grupoIdConstancia, setGrupoIdConstancia] = useState<string>("");
@@ -261,6 +263,7 @@ export default function ReportesPage() {
     setFilas([]);
     setAsistenciaRows([]);
     setBoletasRows([]);
+    setSeccionReporteTitulo("");
     setExpandedRows({});
     setGrupoId("");
     setEstudianteId("");
@@ -283,16 +286,16 @@ export default function ReportesPage() {
         return;
       }
       if (!estudianteId) {
-        window.alert(textoBusqueda ? "Selecciona el alumno a buscar." : "Selecciona el alumno a buscar.");
+        window.alert(textoBusqueda ? "Seleccioná el alumno a buscar." : "Seleccioná el alumno a buscar.");
         return;
       }
     }
     if (tipo === "ASISTENCIA" && vistaAsistencia === "SECCION" && !grupoId) {
-      window.alert("Selecciona una sección para consultar el reporte.");
+      window.alert("Seleccioná una sección para consultar el reporte.");
       return;
     }
     if (tipo === "ASISTENCIA" && vistaAsistencia === "PROFESOR" && !profesorIdReporte) {
-      window.alert("Selecciona el profesor a consultar.");
+      window.alert("Seleccioná el profesor a consultar.");
       return;
     }
     if (tipo === "BOLETAS" && vistaAsistencia === "ALUMNO") {
@@ -302,16 +305,20 @@ export default function ReportesPage() {
         return;
       }
       if (!estudianteId) {
-        window.alert("Selecciona el alumno a buscar.");
+        window.alert("Seleccioná el alumno a buscar.");
         return;
       }
     }
     if (tipo === "BOLETAS" && vistaAsistencia === "SECCION" && !grupoId) {
-      window.alert("Selecciona una seccion para consultar el reporte.");
+      window.alert("Seleccioná una sección para consultar el reporte.");
       return;
     }
     if (tipo === "BOLETAS" && vistaAsistencia === "PROFESOR" && !profesorIdReporte) {
-      window.alert("Selecciona el profesor a consultar.");
+      window.alert("Seleccioná el profesor a consultar.");
+      return;
+    }
+    if (tipo === "SECCIONES" && !grupoId) {
+      window.alert("Seleccioná una sección para consultar el reporte.");
       return;
     }
 
@@ -364,6 +371,22 @@ export default function ReportesPage() {
         return;
       }
 
+      if (tipo === "SECCIONES") {
+        const response = await api.get("/reportes/gestion-profe", {
+          params: {
+            tipo,
+            grupoId: grupoId || undefined
+          }
+        });
+        const data = response.data?.data || {};
+        setFilas(Array.isArray(data.rows) ? data.rows : []);
+        setSeccionReporteTitulo(String(data.seccion || ""));
+        setAsistenciaRows([]);
+        setBoletasRows([]);
+        setExpandedRows({});
+        return;
+      }
+
       if (tipo === "ESTUDIANTES") {
         const response = await api.get("/reportes/gestion-profe", {
           params: {
@@ -376,6 +399,7 @@ export default function ReportesPage() {
           }
         });
         setFilas(Array.isArray(response.data?.data) ? response.data.data : []);
+        setSeccionReporteTitulo("");
         setAsistenciaRows([]);
         setBoletasRows([]);
         setExpandedRows({});
@@ -392,6 +416,7 @@ export default function ReportesPage() {
         }
       });
       setFilas(Array.isArray(response.data?.data) ? response.data.data : []);
+      setSeccionReporteTitulo("");
       setAsistenciaRows([]);
       setBoletasRows([]);
     } catch (error: any) {
@@ -410,7 +435,7 @@ export default function ReportesPage() {
 
   async function generarConstancia() {
     if (!estudianteIdConstancia) {
-      window.alert("Selecciona un alumno para generar la constancia.");
+      window.alert("Seleccioná un alumno para generar la constancia.");
       return;
     }
     if (motivoTramite === "TRASLADO" && !otroColegioDestino.trim()) {
@@ -504,7 +529,24 @@ export default function ReportesPage() {
     }
   }
 
-  function exportarExcel() {
+  async function exportarExcel() {
+    if (tipo === "SECCIONES") {
+      const seccion = String(seccionReporteTitulo || secciones.find((item) => String(item.GrupoId) === String(grupoId))?.GrupoNombre || "").trim();
+      try {
+        const response = await api.get("/reportes/gestion-profe/secciones/excel", {
+          params: { grupoId },
+          responseType: "blob"
+        });
+        const contentType = String(response.headers?.["content-type"] || response.data?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        const fileName = getAttachmentFileName(response.headers?.["content-disposition"], `seccion-${seccion || "seleccionada"}.xlsx`);
+        const blob = response.data instanceof Blob ? response.data : new Blob([response.data], { type: contentType });
+        descargarBlob(blob, fileName);
+      } catch (error: any) {
+        window.alert(error?.response?.data?.message || "No se pudo exportar el reporte de sección en Excel.");
+      }
+      return;
+    }
+
     if (tipo === "ESTUDIANTES") {
       const headers = ["Línea", ...Object.keys(filas[0] || {})];
       const rows = filas.map((f, idx) => [idx + 1, ...headers.slice(1).map((h) => f[h])]);
@@ -626,6 +668,12 @@ export default function ReportesPage() {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
+  const hayDatosReporte = tipo === "ASISTENCIA"
+    ? asistenciaRows.length > 0
+    : tipo === "BOLETAS"
+      ? boletasRows.length > 0
+      : filas.length > 0;
+
   return (
     <div className="stack">
       {vistaActual === "menu" ? (
@@ -690,6 +738,7 @@ export default function ReportesPage() {
                   setFilas([]);
                   setAsistenciaRows([]);
                   setBoletasRows([]);
+                  setSeccionReporteTitulo("");
                   setExpandedRows({});
                   setGrupoId("");
                   setEstudianteId("");
@@ -703,6 +752,7 @@ export default function ReportesPage() {
               >
                 <option value="ASISTENCIA">Reporte de Asistencia</option>
                 <option value="BOLETAS">Reporte de Boletas</option>
+                <option value="SECCIONES">Secciones</option>
                 <option value="ESTUDIANTES">Estudiante</option>
               </select>
             </label>
@@ -766,6 +816,13 @@ export default function ReportesPage() {
                   </label>
                 ) : null}
               </>
+            ) : tipo === "SECCIONES" ? (
+              <label>Sección
+                <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setSeccionReporteTitulo(""); }}>
+                  <option value="">Seleccione</option>
+                  {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
+                </select>
+              </label>
             ) : tipo === "ESTUDIANTES" ? (
               <>
                 <label>Buscar estudiante
@@ -834,7 +891,7 @@ export default function ReportesPage() {
                 </label>
               </>
             )}
-            {tipo !== "ESTUDIANTES" ? (
+            {tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
               <>
                 <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
                 <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
@@ -844,9 +901,9 @@ export default function ReportesPage() {
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <button type="button" className="primary-btn" onClick={consultar} disabled={loading}>{loading ? "Consultando..." : "Consultar"}</button>
             <button type="button" className="ghost-btn" onClick={limpiarConsulta} disabled={loading}>Limpiar</button>
-            <button type="button" className="primary-btn" onClick={exportarExcel} disabled={tipo === "ASISTENCIA" ? !asistenciaRows.length : (tipo === "BOLETAS" ? !boletasRows.length : !filas.length)}>Exportar Excel</button>
-            {tipo !== "ESTUDIANTES" ? (
-              <button type="button" className="primary-btn" onClick={exportarPdf} disabled={tipo === "ASISTENCIA" ? !asistenciaRows.length : (tipo === "BOLETAS" ? !boletasRows.length : !filas.length)}>Exportar PDF</button>
+            <button type="button" className="primary-btn" onClick={exportarExcel} disabled={!hayDatosReporte}>Exportar Excel</button>
+            {tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
+              <button type="button" className="primary-btn" onClick={exportarPdf} disabled={!hayDatosReporte}>Exportar PDF</button>
             ) : null}
           </div>
           {loading ? (
@@ -893,7 +950,7 @@ export default function ReportesPage() {
                 </thead>
                 <tbody>
                   {!asistenciaRows.length ? (
-                    <tr><td colSpan={(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? 11 : 10} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegi filtros y presiona Consultar.</td></tr>
+                    <tr><td colSpan={(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? 11 : 10} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : asistenciaRows.map((fila) => (
                     <Fragment key={`asis-wrap-${fila.estudianteId}`}>
                       <tr key={`asis-${fila.estudianteId}`}>
@@ -1006,6 +1063,36 @@ export default function ReportesPage() {
                 </tbody>
               </table>
             </div>
+          ) : tipo === "SECCIONES" ? (
+            <div className="table-wrap">
+              <div style={{ padding: "10px 12px", background: "#102738", borderBottom: "1px solid #24465d", color: "#f8fafc", fontWeight: 800 }}>
+                Sección {seccionReporteTitulo || secciones.find((item) => String(item.GrupoId) === String(grupoId))?.GrupoNombre || ""}
+              </div>
+              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 70, textAlign: "center", fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>#</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Cédula</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Apellido 1</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Apellido 2</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Nombre</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!filas.length ? (
+                    <tr><td colSpan={5} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Seleccioná una sección y presioná Consultar.</td></tr>
+                  ) : filas.map((fila, idx) => (
+                    <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
+                      <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{Number(fila.linea || idx + 1)}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.cedula ?? "")}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido1 ?? "")}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido2 ?? "")}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.nombre ?? "")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : tipo === "ESTUDIANTES" ? (
             <div className="table-wrap">
               <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
@@ -1017,7 +1104,7 @@ export default function ReportesPage() {
                 </thead>
                 <tbody>
                   {!filas.length ? (
-                    <tr><td colSpan={50} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegi filtros y presiona Consultar.</td></tr>
+                    <tr><td colSpan={50} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : filas.map((fila, idx) => (
                     <tr key={idx} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
                       <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{idx + 1}</td>
@@ -1037,7 +1124,7 @@ export default function ReportesPage() {
                 </thead>
                 <tbody>
                   {!filas.length ? (
-                    <tr><td colSpan={20} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegi filtros y presiona Consultar.</td></tr>
+                    <tr><td colSpan={20} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : filas.map((fila, idx) => (
                     <tr key={idx}>
                       {Object.keys(filas[0] || {}).map((h) => <td key={h}>{String(fila[h] ?? "")}</td>)}

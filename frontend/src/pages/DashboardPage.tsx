@@ -152,7 +152,7 @@ function BarBoard({
     const rows = (data || [])
       .map((item) => ({ label: getBucketLabel(item), total: getBucketTotal(item) }))
       .filter((item) => item.total > 0);
-    return title === "Por grupo" || title === "Por seccion"
+    return title === "Por grupo" || title === "Por sección"
       ? sortBucketsAcademic(rows.map((item) => ({ label: item.label, total: item.total })))
           .map((item) => ({ label: getBucketLabel(item), total: getBucketTotal(item) }))
       : rows.sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, "es"));
@@ -349,14 +349,14 @@ export default function DashboardPage() {
           <MetricCard title="Inactivos" value={loadingResumenEstudiantes ? "..." : formatNumber(studentDashboard?.totalInactivos)} accent="#ef4444" />
           <MetricCard title="Total general" value={loadingResumenEstudiantes ? "..." : formatNumber(studentDashboard?.totalGeneral)} accent="#38bdf8" />
           <MetricCard title="Con discapacidad" value={loadingResumenEstudiantes ? "..." : formatNumber(resumenEstudiantil.conDiscapacidad)} accent="#f59e0b" />
-          <MetricCard title="Condicion medica" value={loadingResumenEstudiantes ? "..." : formatNumber(resumenEstudiantil.conCondicionMedica)} accent="#a78bfa" />
+          <MetricCard title="Condición médica" value={loadingResumenEstudiantes ? "..." : formatNumber(resumenEstudiantil.conCondicionMedica)} accent="#a78bfa" />
           <MetricCard title="Con ruta de transporte" value={loadingResumenEstudiantes ? "..." : formatNumber(resumenEstudiantil.conRuta)} accent="#14b8a6" />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" }}>
           <BarBoard title="Por grupo" data={studentDashboard?.porGrupo} accent="#22c55e" />
-          <BarBoard title="Por seccion" data={studentDashboard?.porSeccion} accent="#38bdf8" scrollable />
-          <BarBoard title="Por genero" data={studentDashboard?.porGenero} accent="#f97316" />
+          <BarBoard title="Por sección" data={studentDashboard?.porSeccion} accent="#38bdf8" scrollable />
+          <BarBoard title="Por género" data={studentDashboard?.porGenero} accent="#f97316" />
           <BarBoard title="Por especialidad" data={studentDashboard?.porEspecialidad} accent="#a78bfa" />
           <BarBoard title="Por nacionalidad" data={studentDashboard?.porNacionalidad} accent="#14b8a6" />
           <BarBoard title="Por tipo" data={studentDashboard?.porTipo} accent="#eab308" />

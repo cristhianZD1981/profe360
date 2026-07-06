@@ -179,13 +179,13 @@ const EMPTY_FAQ_FORM = {
 
 const TABS = [
   { key: "indicaciones", label: "Indicaciones" },
-  { key: "modulos", label: "Modulos" },
+  { key: "modulos", label: "Módulos" },
   { key: "detalles", label: "Pantallas y paneles" },
-  { key: "conversacion", label: "Conversacion" },
+  { key: "conversacion", label: "Conversación" },
   { key: "pantallas", label: "Contextos" },
   { key: "formularios", label: "Formularios" },
   { key: "subflujos", label: "Subflujos" },
-  { key: "faqs", label: "FAQ y diagnostico" }
+  { key: "faqs", label: "FAQ y diagnóstico" }
 ] as const;
 
 const cardBorder = "1px solid #93c5fd";
@@ -276,7 +276,7 @@ export default function AssistantAdminPage() {
       ? data.items.map((item: any) => ({
           id: Number(item.id || item.AsistenteIndicacionAdminId || 0),
           institucionId: item.institucionId ?? item.InstitucionId ?? null,
-          title: String(item.title || item.Titulo || ""),
+          title: String(item.title || item.Título || ""),
           category: String(item.category || item.Categoria || "GENERAL"),
           instruction: String(item.instruction || item.Instruccion || ""),
           order: Number(item.order || item.OrdenVisual || 0),
@@ -510,32 +510,32 @@ export default function AssistantAdminPage() {
 
       if (form.id) {
         await api.put(`/assistant/admin/instructions/${form.id}`, payload);
-        setMessage("Indicacion actualizada correctamente.");
+        setMessage("Indicación actualizada correctamente.");
       } else {
         await api.post("/assistant/admin/instructions", payload);
-        setMessage("Indicacion agregada correctamente.");
+        setMessage("Indicación agregada correctamente.");
       }
 
       resetForm();
       setItems(await loadInstructions());
     } catch (err: any) {
-      setError(err?.response?.data?.message || "No se pudo guardar la indicacion.");
+      setError(err?.response?.data?.message || "No se pudo guardar la indicación.");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleRemove(item: InstructionItem) {
-    if (!window.confirm(`Vas a quitar la indicacion "${item.title}". Deseas continuar?`)) return;
+    if (!window.confirm(`Vas a quitar la indicación "${item.title}". ¿Deseás continuar?`)) return;
     setError("");
     setMessage("");
     try {
       await api.delete(`/assistant/admin/instructions/${item.id}`);
-      setMessage("Indicacion quitada correctamente.");
+      setMessage("Indicación quitada correctamente.");
       if (form.id === item.id) resetForm();
       setItems(await loadInstructions());
     } catch (err: any) {
-      setError(err?.response?.data?.message || "No se pudo quitar la indicacion.");
+      setError(err?.response?.data?.message || "No se pudo quitar la indicación.");
     }
   }
 
@@ -579,11 +579,11 @@ export default function AssistantAdminPage() {
         aliases: moduleForm.aliasesText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
         steps: moduleForm.stepsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       });
-      setMessage("Modulo base actualizado correctamente.");
+      setMessage("Módulo base actualizado correctamente.");
       resetModuleForm();
       setKnowledge(await loadKnowledge());
     } catch (err: any) {
-      setError(err?.response?.data?.message || "No se pudo actualizar el modulo base.");
+      setError(err?.response?.data?.message || "No se pudo actualizar el módulo base.");
     } finally {
       setSavingBase(false);
     }
@@ -598,11 +598,11 @@ export default function AssistantAdminPage() {
         patternKey: conversationForm.patternKey,
         phrases: conversationForm.phrasesText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       });
-      setMessage("Patron conversacional actualizado correctamente.");
+      setMessage("Patrón conversacional actualizado correctamente.");
       resetConversationForm();
       setKnowledge(await loadKnowledge());
     } catch (err: any) {
-      setError(err?.response?.data?.message || "No se pudo actualizar el patron conversacional.");
+      setError(err?.response?.data?.message || "No se pudo actualizar el patrón conversacional.");
     } finally {
       setSavingBase(false);
     }
@@ -711,7 +711,7 @@ export default function AssistantAdminPage() {
         questionPatterns: faqForm.questionPatternsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
         steps: faqForm.stepsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       });
-      setMessage("FAQ o diagnostico actualizado correctamente.");
+      setMessage("FAQ o diagnóstico actualizado correctamente.");
       resetFaqForm();
       setKnowledge(await loadKnowledge());
     } catch (err: any) {
@@ -722,7 +722,7 @@ export default function AssistantAdminPage() {
   }
 
   async function handleRemoveFaq(item: AssistantFaq) {
-    if (!window.confirm(`Vas a quitar la FAQ "${item.title}". Deseas continuar?`)) return;
+    if (!window.confirm(`Vas a quitar la FAQ "${item.title}". ¿Deseás continuar?`)) return;
     setError("");
     setMessage("");
     try {
@@ -785,27 +785,27 @@ export default function AssistantAdminPage() {
         <div style={{ display: "grid", gap: "12px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
           <div style={{ display: "grid", gap: "6px" }}>
             <strong style={{ fontSize: "18px", color: "#0f172a" }}>
-              {form.id ? "Editar indicacion" : "Nueva indicacion para Margarita"}
+              {form.id ? "Editar indicación" : "Nueva indicación para Margarita"}
             </strong>
             <span style={{ color: "#1e3a8a", fontWeight: 600 }}>
-              Aqui si podes agregar, modificar o quitar indicaciones. Tambien podes llegar aqui desde las otras pestañas usando los botones de refuerzo.
+              Aquí sí podés agregar, modificar o quitar indicaciones. También podés llegar aquí desde las otras pestañas usando los botones de refuerzo.
             </span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.5fr", gap: "12px" }}>
             <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-              Titulo
+              Título
               <input value={form.title} onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 12px", color: "#0f172a", background: "#ffffff" }} />
             </label>
             <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-              Categoria
+              Categoría
               <select value={form.category} onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 12px", color: "#0f172a", background: "#ffffff" }}>
                 <option value="GENERAL">General</option>
                 <option value="TONO">Tono</option>
-                <option value="GUIA">Guia</option>
+                <option value="GUIA">Guía</option>
                 <option value="ADMINISTRATIVO">Administrativo</option>
                 <option value="DOCENTE">Docente</option>
-                <option value="RESTRICCION">Restriccion</option>
+                <option value="RESTRICCION">Restricción</option>
                 <option value="PANTALLA">Pantalla</option>
                 <option value="FORMULARIO">Formulario</option>
               </select>
@@ -817,12 +817,12 @@ export default function AssistantAdminPage() {
           </div>
 
           <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-            Indicacion
+            Indicación
             <textarea
               rows={5}
               value={form.instruction}
               onChange={(e) => setForm((prev) => ({ ...prev, instruction: e.target.value }))}
-              placeholder="Ejemplo: Si la persona pregunta por Administrativo, primero explicale el orden correcto entre Ano Lectivo, Periodos, Gestion de grupos, Materias por grupo y Asignacion Docentes."
+              placeholder="Ejemplo: Si la persona pregunta por Administrativo, primero explícale el orden correcto entre Año Lectivo, Períodos, Gestión de grupos, Materias por grupo y Asignación de docentes."
               style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "12px", resize: "vertical", color: "#0f172a", background: "#ffffff" }}
             />
           </label>
@@ -834,7 +834,7 @@ export default function AssistantAdminPage() {
 
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
             <button className="primary-btn" type="button" onClick={handleSave} disabled={saving}>
-              {saving ? "Guardando..." : form.id ? "Actualizar indicacion" : "Agregar indicacion"}
+              {saving ? "Guardando..." : form.id ? "Actualizar indicación" : "Agregar indicación"}
             </button>
             <button type="button" onClick={resetForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#ffffff", color: "#0f172a", cursor: "pointer", fontWeight: 700 }}>
               Limpiar
@@ -846,7 +846,7 @@ export default function AssistantAdminPage() {
           <strong style={{ fontSize: "18px", color: "#0f172a" }}>Indicaciones actuales</strong>
           {!sortedItems.length ? (
             <div style={{ padding: "16px", borderRadius: "14px", background: "#eff6ff", color: "#1e3a8a", border: "1px solid #bfdbfe", fontWeight: 700 }}>
-              No hay indicaciones cargadas todavia.
+              No hay indicaciones cargadas todavía.
             </div>
           ) : (
             <div style={{ overflowX: "auto", border: cardBorder, borderRadius: "16px", background: "#ffffff" }}>
@@ -854,9 +854,9 @@ export default function AssistantAdminPage() {
                 <thead>
                   <tr style={{ background: "#dbeafe", color: "#0f172a" }}>
                     <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Orden</th>
-                    <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Titulo</th>
-                    <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Categoria</th>
-                    <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Indicacion</th>
+                    <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Título</th>
+                    <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Categoría</th>
+                    <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Indicación</th>
                     <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Estado</th>
                     <th style={{ textAlign: "left", padding: "12px", borderBottom: "1px solid #93c5fd" }}>Acciones</th>
                   </tr>
@@ -901,17 +901,17 @@ export default function AssistantAdminPage() {
   function renderModulesTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aqui ves la base de modulos de Margarita. Si queres ajustar algo, usa el boton de cada bloque para crear una indicacion de refuerzo.")}
+        {renderInfoBanner("Aquí ves la base de módulos de Margarita. Si querés ajustar algo, usá el botón de cada bloque para crear una indicación de refuerzo.")}
         {moduleForm.key ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
-            <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del modulo</strong>
-            <input value={moduleForm.title} onChange={(e) => setModuleForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Titulo" style={assistantFieldStyle} />
+            <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del módulo</strong>
+            <input value={moduleForm.title} onChange={(e) => setModuleForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Título" style={assistantFieldStyle} />
             <input value={moduleForm.path} onChange={(e) => setModuleForm((prev) => ({ ...prev, path: e.target.value }))} placeholder="Ruta" style={assistantFieldStyle} />
             <textarea rows={3} value={moduleForm.summary} onChange={(e) => setModuleForm((prev) => ({ ...prev, summary: e.target.value }))} placeholder="Resumen" style={assistantTextareaStyle} />
-            <textarea rows={4} value={moduleForm.aliasesText} onChange={(e) => setModuleForm((prev) => ({ ...prev, aliasesText: e.target.value }))} placeholder="Aliases, uno por linea" style={assistantTextareaStyle} />
-            <textarea rows={5} value={moduleForm.stepsText} onChange={(e) => setModuleForm((prev) => ({ ...prev, stepsText: e.target.value }))} placeholder="Pasos, uno por linea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={moduleForm.aliasesText} onChange={(e) => setModuleForm((prev) => ({ ...prev, aliasesText: e.target.value }))} placeholder="Alias, uno por línea" style={assistantTextareaStyle} />
+            <textarea rows={5} value={moduleForm.stepsText} onChange={(e) => setModuleForm((prev) => ({ ...prev, stepsText: e.target.value }))} placeholder="Pasos, uno por línea" style={assistantTextareaStyle} />
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button className="primary-btn" type="button" onClick={() => void handleSaveModule()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar base del modulo"}</button>
+              <button className="primary-btn" type="button" onClick={() => void handleSaveModule()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar base del módulo"}</button>
               <button type="button" onClick={resetModuleForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 700 }}>Cancelar</button>
             </div>
           </div>
@@ -923,7 +923,7 @@ export default function AssistantAdminPage() {
             [`Aliases: ${item.aliases.join(", ") || "Sin aliases"}`, ...item.steps.map((step, index) => `Paso ${index + 1}: ${step}`)],
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button type="button" onClick={() => startEditModule(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
-              <button type="button" onClick={() => prepareOverride("GUIA", `Refuerzo de modulo: ${item.title}`, `Cuando la persona este trabajando con el modulo ${item.title}, explicale primero este resumen y luego el paso a paso correcto: ${item.steps.join(" | ")}`, 40)} style={actionButtonStyle}>Crear indicacion sobre este modulo</button>
+              <button type="button" onClick={() => prepareOverride("GUIA", `Refuerzo de módulo: ${item.title}`, `Cuando la persona esté trabajando con el módulo ${item.title}, explícale primero este resumen y luego el paso a paso correcto: ${item.steps.join(" | ")}`, 40)} style={actionButtonStyle}>Crear indicación sobre este módulo</button>
             </div>
           )
         )}
@@ -934,19 +934,19 @@ export default function AssistantAdminPage() {
   function renderDetailsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aqui ves paneles y pestañas que ya conoce Margarita. Desde cada bloque podes crear un refuerzo directo.")}
+        {renderInfoBanner("Aquí ves paneles y pestañas que ya conoce Margarita. Desde cada bloque podés crear un refuerzo directo.")}
         {detailForm.detailKey ? (
           <div style={{ display: "grid", gap: "12px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <div style={{ display: "grid", gap: "6px" }}>
               <strong style={{ fontSize: "18px", color: "#0f172a" }}>Editar base del panel</strong>
               <span style={{ color: "#1e3a8a", fontWeight: 700 }}>
-                Aqui si estas cambiando la base real del panel. Lo que guardes se reflejara en Margarita sin pasar por refuerzo.
+                Aquí sí estás cambiando la base real del panel. Lo que guardes se reflejará en Margarita sin pasar por refuerzo.
               </span>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-                Titulo
+                Título
                 <input value={detailForm.title} onChange={(e) => setDetailForm((prev) => ({ ...prev, title: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 12px", background: "#fff", color: "#0f172a" }} />
               </label>
               <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
@@ -962,28 +962,28 @@ export default function AssistantAdminPage() {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-                Aliases (uno por linea)
+                Alias (uno por línea)
                 <textarea rows={4} value={detailForm.aliasesText} onChange={(e) => setDetailForm((prev) => ({ ...prev, aliasesText: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "12px", background: "#fff", color: "#0f172a", resize: "vertical" }} />
               </label>
               <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-                Pasos (uno por linea)
+                Pasos (uno por línea)
                 <textarea rows={4} value={detailForm.stepsText} onChange={(e) => setDetailForm((prev) => ({ ...prev, stepsText: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "12px", background: "#fff", color: "#0f172a", resize: "vertical" }} />
               </label>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
               <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-                Validaciones (una por linea)
+                Validaciones (una por línea)
                 <textarea rows={4} value={detailForm.validationsText} onChange={(e) => setDetailForm((prev) => ({ ...prev, validationsText: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "12px", background: "#fff", color: "#0f172a", resize: "vertical" }} />
               </label>
               <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-                Error común (uno por linea)
+                Error común (uno por línea)
                 <textarea rows={4} value={detailForm.commonErrorsText} onChange={(e) => setDetailForm((prev) => ({ ...prev, commonErrorsText: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "12px", background: "#fff", color: "#0f172a", resize: "vertical" }} />
               </label>
             </div>
 
             <label style={{ display: "grid", gap: "6px", color: "#0f172a", fontWeight: 700 }}>
-              Si pasa esto, hace esto otro (una por linea)
+              Si pasa esto, hace esto otro (una por línea)
               <textarea rows={4} value={detailForm.correctiveActionsText} onChange={(e) => setDetailForm((prev) => ({ ...prev, correctiveActionsText: e.target.value }))} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "12px", background: "#fff", color: "#0f172a", resize: "vertical" }} />
             </label>
 
@@ -1028,7 +1028,7 @@ export default function AssistantAdminPage() {
                 }
                 style={actionButtonStyle}
               >
-                Crear indicacion sobre este panel
+                Crear indicación sobre este panel
               </button>
             </div>
           )
@@ -1040,14 +1040,14 @@ export default function AssistantAdminPage() {
   function renderConversationTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aqui ves patrones conversacionales y ejemplos que ya disparan respuestas especiales de Margarita.")}
+        {renderInfoBanner("Aquí ves patrones conversacionales y ejemplos que ya disparan respuestas especiales de Margarita.")}
         {conversationForm.patternKey ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base conversacional</strong>
             <input value={conversationForm.patternKey} disabled style={{ ...assistantFieldStyle, background: "#e2e8f0" }} />
-            <textarea rows={6} value={conversationForm.phrasesText} onChange={(e) => setConversationForm((prev) => ({ ...prev, phrasesText: e.target.value }))} placeholder="Frases, una por linea" style={assistantTextareaStyle} />
+            <textarea rows={6} value={conversationForm.phrasesText} onChange={(e) => setConversationForm((prev) => ({ ...prev, phrasesText: e.target.value }))} placeholder="Frases, una por línea" style={assistantTextareaStyle} />
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button className="primary-btn" type="button" onClick={() => void handleSaveConversation()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar patron conversacional"}</button>
+              <button className="primary-btn" type="button" onClick={() => void handleSaveConversation()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar patrón conversacional"}</button>
               <button type="button" onClick={resetConversationForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 700 }}>Cancelar</button>
             </div>
           </div>
@@ -1055,18 +1055,18 @@ export default function AssistantAdminPage() {
         {knowledge.conversationPatterns.map((item) =>
           renderKnowledgeCard(
             item.patternKey,
-            "Este patron agrupa frases que Margarita reconoce como una misma intencion.",
+            "Este patrón agrupa frases que Margarita reconoce como una misma intención.",
             item.phrases,
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button type="button" onClick={() => startEditConversation(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
-              <button type="button" onClick={() => prepareOverride("TONO", `Refuerzo conversacional: ${item.patternKey}`, `Cuando Margarita detecte el patron ${item.patternKey}, reforza esta forma de respuesta segun estas frases: ${item.phrases.join(" | ")}`, 50)} style={actionButtonStyle}>Crear indicacion sobre este patron</button>
+              <button type="button" onClick={() => prepareOverride("TONO", `Refuerzo conversacional: ${item.patternKey}`, `Cuando Margarita detecte el patrón ${item.patternKey}, reforzá esta forma de respuesta según estas frases: ${item.phrases.join(" | ")}`, 50)} style={actionButtonStyle}>Crear indicación sobre este patrón</button>
             </div>
           )
         )}
         {knowledge.exampleQuestions.map((item) =>
           renderKnowledgeCard(
             `Ejemplos ${item.moduleKey}${item.detailKey ? ` / ${item.detailKey}` : ""}`,
-            "Preguntas de ejemplo usadas para el modulo o detalle.",
+            "Preguntas de ejemplo usadas para el módulo o detalle.",
             item.phrases
           )
         )}
@@ -1077,16 +1077,16 @@ export default function AssistantAdminPage() {
   function renderScreenContextsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aqui ves lo que Margarita entiende cuando la persona pregunta por la pantalla actual.")}
+        {renderInfoBanner("Aquí ves lo que Margarita entiende cuando la persona pregunta por la pantalla actual.")}
         {screenForm.routePrefix ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del contexto</strong>
-            <input value={screenForm.title} onChange={(e) => setScreenForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Titulo" style={assistantFieldStyle} />
+            <input value={screenForm.title} onChange={(e) => setScreenForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Título" style={assistantFieldStyle} />
             <input value={screenForm.routePrefix} onChange={(e) => setScreenForm((prev) => ({ ...prev, routePrefix: e.target.value }))} placeholder="Ruta" style={assistantFieldStyle} />
-            <input value={screenForm.moduleKey} onChange={(e) => setScreenForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Modulo" style={assistantFieldStyle} />
+            <input value={screenForm.moduleKey} onChange={(e) => setScreenForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Módulo" style={assistantFieldStyle} />
             <textarea rows={3} value={screenForm.summary} onChange={(e) => setScreenForm((prev) => ({ ...prev, summary: e.target.value }))} placeholder="Resumen" style={assistantTextareaStyle} />
-            <textarea rows={4} value={screenForm.hintsText} onChange={(e) => setScreenForm((prev) => ({ ...prev, hintsText: e.target.value }))} placeholder="Hints, uno por linea" style={assistantTextareaStyle} />
-            <textarea rows={4} value={screenForm.examplesText} onChange={(e) => setScreenForm((prev) => ({ ...prev, examplesText: e.target.value }))} placeholder="Ejemplos, uno por linea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={screenForm.hintsText} onChange={(e) => setScreenForm((prev) => ({ ...prev, hintsText: e.target.value }))} placeholder="Pistas, una por línea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={screenForm.examplesText} onChange={(e) => setScreenForm((prev) => ({ ...prev, examplesText: e.target.value }))} placeholder="Ejemplos, uno por línea" style={assistantTextareaStyle} />
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button className="primary-btn" type="button" onClick={() => void handleSaveScreen()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar contexto de pantalla"}</button>
               <button type="button" onClick={resetScreenForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 700 }}>Cancelar</button>
@@ -1100,7 +1100,7 @@ export default function AssistantAdminPage() {
             [...item.hints.map((hint) => `Hint: ${hint}`), ...item.exampleQuestions.map((question) => `Ejemplo: ${question}`)],
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button type="button" onClick={() => startEditScreen(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
-              <button type="button" onClick={() => prepareOverride("PANTALLA", `Refuerzo de contexto: ${item.title}`, `Si la persona esta en ${item.title}, prioriza estas ayudas: ${item.hints.join(" | ")}`, 55)} style={actionButtonStyle}>Crear indicacion sobre este contexto</button>
+              <button type="button" onClick={() => prepareOverride("PANTALLA", `Refuerzo de contexto: ${item.title}`, `Si la persona está en ${item.title}, priorizá estas ayudas: ${item.hints.join(" | ")}`, 55)} style={actionButtonStyle}>Crear indicación sobre este contexto</button>
             </div>
           )
         )}
@@ -1111,15 +1111,15 @@ export default function AssistantAdminPage() {
   function renderFormsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aqui ves el orden sugerido de campos cuando Margarita ayuda a llenar formularios.")}
+        {renderInfoBanner("Aquí ves el orden sugerido de campos cuando Margarita ayuda a llenar formularios.")}
         {formGuideForm.formKey ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del formulario</strong>
-            <input value={formGuideForm.title} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Titulo" style={assistantFieldStyle} />
+            <input value={formGuideForm.title} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Título" style={assistantFieldStyle} />
             <input value={formGuideForm.routePrefix} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, routePrefix: e.target.value }))} placeholder="Ruta" style={assistantFieldStyle} />
-            <input value={formGuideForm.moduleKey} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Modulo" style={assistantFieldStyle} />
+            <input value={formGuideForm.moduleKey} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Módulo" style={assistantFieldStyle} />
             <textarea rows={3} value={formGuideForm.summary} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, summary: e.target.value }))} placeholder="Resumen" style={assistantTextareaStyle} />
-            <textarea rows={4} value={formGuideForm.aliasesText} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, aliasesText: e.target.value }))} placeholder="Aliases, uno por linea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={formGuideForm.aliasesText} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, aliasesText: e.target.value }))} placeholder="Alias, uno por línea" style={assistantTextareaStyle} />
             <textarea rows={6} value={formGuideForm.fieldsText} onChange={(e) => setFormGuideForm((prev) => ({ ...prev, fieldsText: e.target.value }))} placeholder="Campos: orden|nombre|si/no|ayuda" style={assistantTextareaStyle} />
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button className="primary-btn" type="button" onClick={() => void handleSaveFormGuide()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar formulario base"}</button>
@@ -1137,7 +1137,7 @@ export default function AssistantAdminPage() {
             ],
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button type="button" onClick={() => startEditFormGuide(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
-              <button type="button" onClick={() => prepareOverride("FORMULARIO", `Refuerzo de formulario: ${item.title}`, `Cuando la persona llene ${item.title}, explicale este orden de campos: ${item.fields.sort((a, b) => a.order - b.order).map((field) => `${field.fieldName}${field.required ? " requerido" : ""}`).join(" | ")}`, 60)} style={actionButtonStyle}>Crear indicacion sobre este formulario</button>
+              <button type="button" onClick={() => prepareOverride("FORMULARIO", `Refuerzo de formulario: ${item.title}`, `Cuando la persona llene ${item.title}, explícale este orden de campos: ${item.fields.sort((a, b) => a.order - b.order).map((field) => `${field.fieldName}${field.required ? " requerido" : ""}`).join(" | ")}`, 60)} style={actionButtonStyle}>Crear indicación sobre este formulario</button>
             </div>
           )
         )}
@@ -1148,17 +1148,17 @@ export default function AssistantAdminPage() {
   function renderSubflowsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner('Aqui ves los subflujos activos que Margarita usa cuando alguien pregunta "que hago aca" o "ahora que sigue".')}
+        {renderInfoBanner('Aquí ves los subflujos activos que Margarita usa cuando alguien pregunta "qué hago acá" o "ahora qué sigue".')}
         {subflowForm.subflowKey ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del subflujo</strong>
-            <input value={subflowForm.title} onChange={(e) => setSubflowForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Titulo" style={assistantFieldStyle} />
+            <input value={subflowForm.title} onChange={(e) => setSubflowForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Título" style={assistantFieldStyle} />
             <input value={subflowForm.routePrefix} onChange={(e) => setSubflowForm((prev) => ({ ...prev, routePrefix: e.target.value }))} placeholder="Ruta" style={assistantFieldStyle} />
-            <input value={subflowForm.moduleKey} onChange={(e) => setSubflowForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Modulo" style={assistantFieldStyle} />
+            <input value={subflowForm.moduleKey} onChange={(e) => setSubflowForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Módulo" style={assistantFieldStyle} />
             <textarea rows={3} value={subflowForm.summary} onChange={(e) => setSubflowForm((prev) => ({ ...prev, summary: e.target.value }))} placeholder="Resumen" style={assistantTextareaStyle} />
-            <textarea rows={4} value={subflowForm.aliasesText} onChange={(e) => setSubflowForm((prev) => ({ ...prev, aliasesText: e.target.value }))} placeholder="Aliases, uno por linea" style={assistantTextareaStyle} />
-            <textarea rows={4} value={subflowForm.hintsText} onChange={(e) => setSubflowForm((prev) => ({ ...prev, hintsText: e.target.value }))} placeholder="Hints, uno por linea" style={assistantTextareaStyle} />
-            <textarea rows={4} value={subflowForm.examplesText} onChange={(e) => setSubflowForm((prev) => ({ ...prev, examplesText: e.target.value }))} placeholder="Ejemplos, uno por linea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={subflowForm.aliasesText} onChange={(e) => setSubflowForm((prev) => ({ ...prev, aliasesText: e.target.value }))} placeholder="Alias, uno por línea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={subflowForm.hintsText} onChange={(e) => setSubflowForm((prev) => ({ ...prev, hintsText: e.target.value }))} placeholder="Pistas, una por línea" style={assistantTextareaStyle} />
+            <textarea rows={4} value={subflowForm.examplesText} onChange={(e) => setSubflowForm((prev) => ({ ...prev, examplesText: e.target.value }))} placeholder="Ejemplos, uno por línea" style={assistantTextareaStyle} />
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button className="primary-btn" type="button" onClick={() => void handleSaveSubflow()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar subflujo base"}</button>
               <button type="button" onClick={resetSubflowForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 700 }}>Cancelar</button>
@@ -1172,7 +1172,7 @@ export default function AssistantAdminPage() {
             [`Aliases: ${item.aliases.join(", ") || "Sin aliases"}`, ...item.hints.map((hint) => `Hint: ${hint}`), ...item.exampleQuestions.map((question) => `Ejemplo: ${question}`)],
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button type="button" onClick={() => startEditSubflow(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
-              <button type="button" onClick={() => prepareOverride("GUIA", `Refuerzo de subflujo: ${item.title}`, `Cuando la persona este en el subflujo ${item.title}, refuerza estas ayudas: ${item.hints.join(" | ")}`, 65)} style={actionButtonStyle}>Crear indicacion sobre este subflujo</button>
+              <button type="button" onClick={() => prepareOverride("GUIA", `Refuerzo de subflujo: ${item.title}`, `Cuando la persona esté en el subflujo ${item.title}, refuerza estas ayudas: ${item.hints.join(" | ")}`, 65)} style={actionButtonStyle}>Crear indicación sobre este subflujo</button>
             </div>
           )
         )}
@@ -1183,22 +1183,22 @@ export default function AssistantAdminPage() {
   function renderFaqsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner('Aqui definis respuestas directas y chequeos de diagnostico para que Margarita resuelva dudas frecuentes como "no me aparece", "no me deja" o "como hago".')}
+        {renderInfoBanner('Aquí definís respuestas directas y chequeos de diagnóstico para que Margarita resuelva dudas frecuentes como "no me aparece", "no me deja" o "cómo hago".')}
         <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
-          <strong style={{ color: "#0f172a", fontSize: "18px" }}>{faqForm.faqKey ? "Editar FAQ o diagnostico" : "Nueva FAQ o diagnostico"}</strong>
-          <input value={faqForm.faqKey} onChange={(e) => setFaqForm((prev) => ({ ...prev, faqKey: e.target.value }))} placeholder="Clave unica" style={assistantFieldStyle} />
-          <input value={faqForm.moduleKey} onChange={(e) => setFaqForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Modulo" style={assistantFieldStyle} />
+          <strong style={{ color: "#0f172a", fontSize: "18px" }}>{faqForm.faqKey ? "Editar FAQ o diagnóstico" : "Nueva FAQ o diagnóstico"}</strong>
+          <input value={faqForm.faqKey} onChange={(e) => setFaqForm((prev) => ({ ...prev, faqKey: e.target.value }))} placeholder="Clave única" style={assistantFieldStyle} />
+            <input value={faqForm.moduleKey} onChange={(e) => setFaqForm((prev) => ({ ...prev, moduleKey: e.target.value }))} placeholder="Módulo" style={assistantFieldStyle} />
           <input value={faqForm.routePrefix} onChange={(e) => setFaqForm((prev) => ({ ...prev, routePrefix: e.target.value }))} placeholder="Ruta" style={assistantFieldStyle} />
-          <input value={faqForm.title} onChange={(e) => setFaqForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Titulo" style={assistantFieldStyle} />
+          <input value={faqForm.title} onChange={(e) => setFaqForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Título" style={assistantFieldStyle} />
           <select value={faqForm.kind} onChange={(e) => setFaqForm((prev) => ({ ...prev, kind: e.target.value }))} style={assistantFieldStyle}>
             <option value="FAQ">FAQ</option>
-            <option value="DIAGNOSTICO">Diagnostico</option>
+            <option value="DIAGNOSTICO">Diagnóstico</option>
           </select>
           <textarea rows={3} value={faqForm.summary} onChange={(e) => setFaqForm((prev) => ({ ...prev, summary: e.target.value }))} placeholder="Resumen corto" style={assistantTextareaStyle} />
           <textarea rows={5} value={faqForm.answer} onChange={(e) => setFaqForm((prev) => ({ ...prev, answer: e.target.value }))} placeholder="Respuesta principal" style={assistantTextareaStyle} />
-          <textarea rows={4} value={faqForm.allowedRolesText} onChange={(e) => setFaqForm((prev) => ({ ...prev, allowedRolesText: e.target.value }))} placeholder="Roles permitidos, uno por linea. Vacio = todos" style={assistantTextareaStyle} />
-          <textarea rows={5} value={faqForm.questionPatternsText} onChange={(e) => setFaqForm((prev) => ({ ...prev, questionPatternsText: e.target.value }))} placeholder="Patrones o preguntas gatillo, uno por linea" style={assistantTextareaStyle} />
-          <textarea rows={5} value={faqForm.stepsText} onChange={(e) => setFaqForm((prev) => ({ ...prev, stepsText: e.target.value }))} placeholder="Pasos o chequeos sugeridos, uno por linea" style={assistantTextareaStyle} />
+          <textarea rows={4} value={faqForm.allowedRolesText} onChange={(e) => setFaqForm((prev) => ({ ...prev, allowedRolesText: e.target.value }))} placeholder="Roles permitidos, uno por línea. Vacío = todos" style={assistantTextareaStyle} />
+          <textarea rows={5} value={faqForm.questionPatternsText} onChange={(e) => setFaqForm((prev) => ({ ...prev, questionPatternsText: e.target.value }))} placeholder="Patrones o preguntas gatillo, uno por línea" style={assistantTextareaStyle} />
+          <textarea rows={5} value={faqForm.stepsText} onChange={(e) => setFaqForm((prev) => ({ ...prev, stepsText: e.target.value }))} placeholder="Pasos o chequeos sugeridos, uno por línea" style={assistantTextareaStyle} />
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
             <button className="primary-btn" type="button" onClick={() => void handleSaveFaq()} disabled={savingBase}>{savingBase ? "Guardando..." : "Guardar FAQ"}</button>
             <button type="button" onClick={resetFaqForm} style={{ border: "1px solid #94a3b8", borderRadius: "12px", padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 700 }}>Cancelar</button>
@@ -1207,7 +1207,7 @@ export default function AssistantAdminPage() {
         {knowledge.faqs.map((item) =>
           renderKnowledgeCard(
             `${item.title} (${item.kind})`,
-            `${item.summary || "Sin resumen"} Ruta: ${item.routePrefix} / Modulo: ${item.moduleKey}`,
+            `${item.summary || "Sin resumen"} Ruta: ${item.routePrefix} / Módulo: ${item.moduleKey}`,
             [
               `Roles: ${(item.allowedRoles || []).join(", ") || "Todos"}`,
               `Patrones: ${item.questionPatterns.join(" | ") || "Sin patrones"}`,
@@ -1217,7 +1217,7 @@ export default function AssistantAdminPage() {
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               <button type="button" onClick={() => startEditFaq(item)} style={{ ...actionButtonStyle, background: "#dcfce7", color: "#166534", border: "1px solid #86efac" }}>Editar base</button>
               <button type="button" onClick={() => void handleRemoveFaq(item)} style={{ ...actionButtonStyle, background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5" }}>Quitar</button>
-              <button type="button" onClick={() => prepareOverride("FAQ", `Refuerzo FAQ: ${item.title}`, `Cuando la persona pregunte algo cercano a ${item.questionPatterns.join(" | ")}, reforza esta respuesta: ${item.answer}`, 70)} style={actionButtonStyle}>Crear indicacion sobre esta FAQ</button>
+              <button type="button" onClick={() => prepareOverride("FAQ", `Refuerzo FAQ: ${item.title}`, `Cuando la persona pregunte algo cercano a ${item.questionPatterns.join(" | ")}, reforzá esta respuesta: ${item.answer}`, 70)} style={actionButtonStyle}>Crear indicación sobre esta FAQ</button>
             </div>
           )
         )}
@@ -1253,7 +1253,7 @@ export default function AssistantAdminPage() {
       <div style={{ display: "grid", gap: "8px", padding: "18px", borderRadius: "18px", background: "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)", border: cardBorder }}>
         <h2 style={{ margin: 0, color: "#0f172a" }}>Admin</h2>
         <p style={{ margin: 0, color: "#1e3a8a", fontWeight: 700 }}>
-          Aqui administras la ayuda de Margarita. Podes ver lo que ya sabe, crear indicaciones nuevas y usar cada bloque como base para reforzar respuestas sin tocar codigo.
+          Aquí administrás la ayuda de Margarita. Podés ver lo que ya sabe, crear indicaciones nuevas y usar cada bloque como base para reforzar respuestas sin tocar código.
         </p>
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
           <button
@@ -1333,7 +1333,7 @@ export default function AssistantAdminPage() {
 
       {activeTab !== "indicaciones" ? (
         <div style={{ padding: "12px 14px", borderRadius: "14px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", fontWeight: 700 }}>
-          En estas pestañas ves la base que ya trae Margarita. Si queres ajustarla, usá el boton de cada bloque para crear una indicacion nueva y reforzar ese comportamiento.
+          En estas pestañas ves la base que ya trae Margarita. Si querés ajustarla, usá el botón de cada bloque para crear una indicación nueva y reforzar ese comportamiento.
         </div>
       ) : null}
 

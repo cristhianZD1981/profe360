@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 
 import multer from "multer";
 
@@ -154,7 +154,7 @@ function getInstitutionId(req: any, res: any) {
 
   if (institucionId === null || institucionId === undefined || Number.isNaN(Number(institucionId))) {
 
-    badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+    badRequest(res, "El usuario no tiene institución asignada");
 
     return null;
 
@@ -186,7 +186,7 @@ function toRequiredNumber(value: any, field: string, res: any) {
 
   if (!Number.isFinite(parsed) || parsed <= 0) {
 
-    badRequest(res, `El campo ${field} es invÃ¡lido`);
+    badRequest(res, `El campo ${field} es inválido`);
 
     return null;
 
@@ -584,11 +584,37 @@ function getOpenAiEvalModel() {
 
 }
 
+function getOpenAiExamModel() {
+
+  return sanitizeEnvScalar(process.env.OPENAI_EVAL360_EXAM_MODEL)
+
+    || sanitizeEnvScalar(process.env.OPENAI_EXAM_MODEL)
+
+    || sanitizeEnvScalar(process.env.OPENAI_EXAMENES_MODEL)
+
+    || "gpt-5.4";
+
+}
+
 
 
 function isGpt5FamilyModel(model: string) {
 
   return normalizeText(model).toLowerCase().includes("gpt-5");
+
+}
+
+function getOpenAiExamMaxOutputTokens() {
+
+  const configured = Number(process.env.OPENAI_EVAL360_MAX_OUTPUT_TOKENS || 0);
+
+  if (Number.isFinite(configured) && configured > 0) {
+
+    return Math.max(4000, Math.min(24000, Math.round(configured)));
+
+  }
+
+  return 16000;
 
 }
 
@@ -2230,19 +2256,19 @@ function buildWordRunsXml(text: string, style?: { font?: string; sizePt?: number
 
 function normalizeMathForWord(input: string) {
 
-  const supers: Record<string, string> = { "0": "ï¿½", "1": "ï¿½", "2": "ï¿½", "3": "ï¿½", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "?", "+": "?", "-": "?" };
+  const supers: Record<string, string> = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "+": "⁺", "-": "⁻" };
 
   let text = String(input || "");
 
   text = text
 
-    .replace(/\\cdot/g, "ï¿½")
+    .replace(/\\cdot/g, "·")
 
-    .replace(/\\times/g, "ï¿½")
+    .replace(/\\times/g, "×")
 
-    .replace(/\\div/g, "ï¿½")
+    .replace(/\\div/g, "÷")
 
-    .replace(/\\pm/g, "ï¿½")
+    .replace(/\\pm/g, "±")
 
     .replace(/\\leq/g, "=")
 
@@ -2448,7 +2474,7 @@ async function renderDocxFromTemplate(
 
 
 
-    // Marcador de conteo exacto de pï¿½ginas del documento (Word lo recalcula al abrir/imprimir)
+    // Marcador de conteo exacto de páginas del documento (Word lo recalcula al abrir/imprimir)
 
     xml = injectNumPagesFieldMarker(xml, "TOTAL_PAGINAS_DOCUMENTO", style);
 
@@ -2496,7 +2522,7 @@ async function renderDocxFromTemplate(
 
 
 
-  // Agregar contenido al final cuando no hubo inserciï¿½n real del examen.
+  // Agregar contenido al final cuando no hubo inserción real del examen.
 
   if (!insertedExamContent) {
 
@@ -2530,7 +2556,7 @@ async function renderDocxFromTemplate(
 
   // Seguro final: si por formato del machote no quedaron preguntas visibles,
 
-  // forzar inserciï¿½n del contenido del examen al final del documento.
+  // forzar inserción del contenido del examen al final del documento.
 
   const docFileFinal = zip.file("word/document.xml");
 
@@ -2718,7 +2744,7 @@ async function loadDefaultMachoteBase64() {
 
     String(process.env.EXAMEN_MACHOTE_PATH || "").trim(),
 
-    "C:\\Users\\HP\\OneDrive - Colegio de Profesionales en Informï¿½tica y Comp\\CURSOS ONLINE\\Material Profe en linea\\Indicaciones prueba escrita - MACHOTE IA.docx",
+    "C:\\Users\\HP\\OneDrive - Colegio de Profesionales en Informática y Comp\\CURSOS ONLINE\\Material Profe en linea\\Indicaciones prueba escrita - MACHOTE IA.docx",
 
     "C:\\Users\\HP\\OneDrive - Colegio de Profesionales en Informatica y Comp\\CURSOS ONLINE\\Material Profe en linea\\Indicaciones prueba escrita - MACHOTE IA.docx"
 
@@ -2748,11 +2774,11 @@ async function loadDefaultMachoteBase64() {
 
 
 
-  // Bï¿½squeda adicional por nombre dentro de rutas conocidas (resiliente a tildes/ruta exacta)
+  // Búsqueda adicional por nombre dentro de rutas conocidas (resiliente a tildes/ruta exacta)
 
   const roots = [
 
-    "C:\\Users\\HP\\OneDrive - Colegio de Profesionales en Informï¿½tica y Comp\\CURSOS ONLINE\\Material Profe en linea",
+    "C:\\Users\\HP\\OneDrive - Colegio de Profesionales en Informática y Comp\\CURSOS ONLINE\\Material Profe en linea",
 
     "C:\\Users\\HP\\OneDrive - Colegio de Profesionales en Informatica y Comp\\CURSOS ONLINE\\Material Profe en linea"
 
@@ -2806,7 +2832,7 @@ function replaceTemplateMarkers(text: string, markers: Record<string, string>) {
 
   }
 
-  // Aliases robustos para aï¿½o lectivo por variantes de escritura en plantillas
+  // Aliases robustos para año lectivo por variantes de escritura en plantillas
 
   const anio = String((markers as any)?.["ANO_LECTIVO"] || (markers as any)?.["ANO_LECTIVO"] || "");
 
@@ -2890,7 +2916,7 @@ function sweepRemainingMarkers(xml: string, markers: Record<string, string>) {
 
     out = replaceMarkerLooseAcrossXml(out, k, String(v ?? ""));
 
-    // Caso con una sola llave accidental por ediciï¿½n manual del machote
+    // Caso con una sola llave accidental por edición manual del machote
 
     out = out.replace(new RegExp(`\\{\\s*${escaped}\\s*\\}`, "gi"), xmlEscape(String(v ?? "")));
 
@@ -2924,13 +2950,71 @@ function tryParseExamItems(resultadoIA: string) {
 
   if (!raw) return [] as any[];
 
+  const findItemsArray = (value: any): any[] => {
+
+    if (!value || typeof value !== "object") return [];
+
+    if (Array.isArray(value)) {
+
+      const looksLikeItems = value.some((item) =>
+
+        item && typeof item === "object" && (
+
+          item.tipoItem !== undefined ||
+
+          item.enunciado !== undefined ||
+
+          item.pregunta !== undefined ||
+
+          item.puntaje !== undefined
+
+        )
+
+      );
+
+      if (looksLikeItems) return value;
+
+      for (const item of value) {
+
+        const found = findItemsArray(item);
+
+        if (found.length) return found;
+
+      }
+
+      return [];
+
+    }
+
+    const directKeys = ["items", "preguntas", "reactivos", "examenItems", "instrumentos"];
+
+    for (const key of directKeys) {
+
+      const found = findItemsArray(value[key]);
+
+      if (found.length) return found;
+
+    }
+
+    for (const key of Object.keys(value)) {
+
+      const found = findItemsArray(value[key]);
+
+      if (found.length) return found;
+
+    }
+
+    return [];
+
+  };
+
   const tryJson = (txt: string) => {
 
     try {
 
       const obj = JSON.parse(txt);
 
-      const items = Array.isArray(obj?.items) ? obj.items : [];
+      const items = findItemsArray(obj);
 
       return Array.isArray(items) ? items : [];
 
@@ -2954,7 +3038,7 @@ function tryParseExamItems(resultadoIA: string) {
 
 
 
-  // Recuperaciï¿½n robusta cuando el JSON fue editado y quedï¿½ con basura alrededor:
+  // Recuperación robusta cuando el JSON fue editado y quedó con basura alrededor:
 
   // extrae solo el array de "items" por balanceo de corchetes.
 
@@ -2998,7 +3082,7 @@ function tryParseExamItems(resultadoIA: string) {
 
         } catch {
 
-          // ignora y retorna vacï¿½o
+          // ignora y retorna vacío
 
         }
 
@@ -3378,23 +3462,23 @@ function buildExamContentFromItems(items: any[]) {
 
   const labels: Record<string, string> = {
 
-    SR: "SELECCIï¿½N DE RESPUESTA",
+    SR: "SELECCIÓN DE RESPUESTA",
 
     RC: "RESPUESTA CORTA",
 
     C: "CORRESPONDENCIA",
 
-    I: "IDENTIFICACIï¿½N",
+    I: "IDENTIFICACIÓN",
 
-    RE: "RESOLUCIï¿½N DE EJERCICIOS",
+    RE: "RESOLUCIÓN DE EJERCICIOS",
 
-    RP: "RESOLUCIï¿½N DE PROBLEMAS",
+    RP: "RESOLUCIÓN DE PROBLEMAS",
 
     RR: "RESPUESTA RESTRINGIDA",
 
-    RCAS: "RESOLUCIï¿½N DE CASOS",
+    RCAS: "RESOLUCIÓN DE CASOS",
 
-    PE: "PRODUCCIï¿½N ESCRITA"
+    PE: "PRODUCCIÓN ESCRITA"
 
   };
 
@@ -3426,23 +3510,23 @@ function buildAnswerContentFromItems(items: any[]) {
 
   const labels: Record<string, string> = {
 
-    SR: "CLAVE - SELECCIï¿½N DE RESPUESTA",
+    SR: "CLAVE - SELECCIÓN DE RESPUESTA",
 
     RC: "CLAVE - RESPUESTA CORTA",
 
     C: "CLAVE - CORRESPONDENCIA",
 
-    I: "CLAVE - IDENTIFICACIï¿½N",
+    I: "CLAVE - IDENTIFICACIÓN",
 
-    RE: "CLAVE - RESOLUCIï¿½N DE EJERCICIOS",
+    RE: "CLAVE - RESOLUCIÓN DE EJERCICIOS",
 
-    RP: "CLAVE - RESOLUCIï¿½N DE PROBLEMAS",
+    RP: "CLAVE - RESOLUCIÓN DE PROBLEMAS",
 
     RR: "CLAVE - RESPUESTA RESTRINGIDA",
 
-    RCAS: "CLAVE - RESOLUCIï¿½N DE CASOS",
+    RCAS: "CLAVE - RESOLUCIÓN DE CASOS",
 
-    PE: "CLAVE - PRODUCCIï¿½N ESCRITA"
+    PE: "CLAVE - PRODUCCIÓN ESCRITA"
 
   };
 
@@ -4224,25 +4308,25 @@ function parseQuestionBlocksFromPlainText(text: string) {
 
     const u = line.toUpperCase();
 
-    if (u.includes("SELECCIï¿½N DE RESPUESTA") || u.includes("SELECCION DE RESPUESTA")) return "SR";
+    if (u.includes("SELECCIÓN DE RESPUESTA") || u.includes("SELECCION DE RESPUESTA")) return "SR";
 
     if (u.includes("RESPUESTA CORTA")) return "RC";
 
     if (u.includes("CORRESPONDENCIA")) return "C";
 
-    if (u.includes("IDENTIFICACIï¿½N") || u.includes("IDENTIFICACION")) return "I";
+    if (u.includes("IDENTIFICACIÓN") || u.includes("IDENTIFICACION")) return "I";
 
-    if (u.includes("RESOLUCIï¿½N DE EJERCICIOS") || u.includes("RESOLUCION DE EJERCICIOS")) return "RE";
+    if (u.includes("RESOLUCIÓN DE EJERCICIOS") || u.includes("RESOLUCION DE EJERCICIOS")) return "RE";
 
-    if (u.includes("RESOLUCIï¿½N DE CASOS Y PROBLEMAS") || u.includes("RESOLUCION DE CASOS Y PROBLEMAS")) return "RP";
+    if (u.includes("RESOLUCIÓN DE CASOS Y PROBLEMAS") || u.includes("RESOLUCION DE CASOS Y PROBLEMAS")) return "RP";
 
-    if (u.includes("RESOLUCIï¿½N DE PROBLEMAS") || u.includes("RESOLUCION DE PROBLEMAS")) return "RP";
+    if (u.includes("RESOLUCIÓN DE PROBLEMAS") || u.includes("RESOLUCION DE PROBLEMAS")) return "RP";
 
     if (u.includes("RESPUESTA RESTRINGIDA")) return "RR";
 
-    if (u.includes("RESOLUCIï¿½N DE CASOS") || u.includes("RESOLUCION DE CASOS")) return "RCAS";
+    if (u.includes("RESOLUCIÓN DE CASOS") || u.includes("RESOLUCION DE CASOS")) return "RCAS";
 
-    if (u.includes("PRODUCCIï¿½N ESCRITA") || u.includes("PRODUCCION ESCRITA")) return "PE";
+    if (u.includes("PRODUCCIÓN ESCRITA") || u.includes("PRODUCCION ESCRITA")) return "PE";
 
     return "";
 
@@ -4648,7 +4732,7 @@ function assertCanAccess(req: any, res: any) {
 
   if (isSuperAdmin(req) || isInstitutionAdmin(req) || isProfesor(req)) return true;
 
-  forbidden(res, "No tenÃ©s permisos para acceder al mÃ³dulo de evaluaciÃ³n");
+  forbidden(res, "No tenés permisos para acceder al módulo de evaluación");
 
   return false;
 
@@ -4856,7 +4940,7 @@ async function getAsignacionPermitida(req: any, res: any, input: {
 
   if (!result.recordset[0]) {
 
-    forbidden(res, "No tenÃ©s permisos para trabajar con ese grupo, materia y periodo");
+    forbidden(res, "No tenés permisos para trabajar con ese grupo, materia y periodo");
 
     return null;
 
@@ -4914,11 +4998,11 @@ function inferComponenteCatalogoId(nombreComponente: string, catalogo: any[]) {
 
     { palabras: ["EXAM", "EXAMEN", "PRUEBA"], nombreCatalogo: "Pruebas" },
 
-    { palabras: ["SUMATIVA", "INSTRUMENTO"], nombreCatalogo: "Instrumento de evaluaciÃ³n sumativa" },
+    { palabras: ["SUMATIVA", "INSTRUMENTO"], nombreCatalogo: "Instrumento de evaluación sumativa" },
 
     { palabras: ["PORTAFOLIO"], nombreCatalogo: "Portafolio de evidencias" },
 
-    { palabras: ["DEMOSTRACION", "APRENDIDO"], nombreCatalogo: "DemostraciÃ³n de lo aprendido" },
+    { palabras: ["DEMOSTRACION", "APRENDIDO"], nombreCatalogo: "Demostración de lo aprendido" },
 
     { palabras: ["ASISTENCIA"], nombreCatalogo: "Asistencia" }
 
@@ -5598,7 +5682,7 @@ router.get("/plantillas", async (req, res) => {
 
     console.error("Error listando plantillas Eval360:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudieron cargar las plantillas de evaluaciÃ³n" });
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar las plantillas de evaluación" });
 
   }
 
@@ -5666,7 +5750,7 @@ router.get("/plantillas/:id/detalle", async (req, res) => {
 
 
 
-    if (!plantilla.recordset[0]) return badRequest(res, "No se encontrÃ³ la plantilla indicada");
+    if (!plantilla.recordset[0]) return badRequest(res, "No se encontró la plantilla indicada");
 
 
 
@@ -5796,7 +5880,7 @@ router.get("/estructuras/grupo", async (req, res) => {
 
     console.error("Error cargando estructura Eval360:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudo cargar la estructura de evaluaciÃ³n" });
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la estructura de evaluación" });
 
   }
 
@@ -6028,7 +6112,7 @@ router.get("/estructuras/:id", async (req, res) => {
 
     if (!data.estructura || (!isSuperAdmin(req) && Number(data.estructura.InstitucionId) !== institucionId)) {
 
-      return forbidden(res, "No tenÃ©s permisos para ver esta estructura");
+      return forbidden(res, "No tenés permisos para ver esta estructura");
 
     }
 
@@ -6040,7 +6124,7 @@ router.get("/estructuras/:id", async (req, res) => {
 
     console.error("Error cargando estructura por id Eval360:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudo cargar la estructura de evaluaciÃ³n" });
+    return res.status(500).json({ ok: false, message: "No se pudo cargar la estructura de evaluación" });
 
   }
 
@@ -6059,7 +6143,7 @@ router.delete("/estructuras/:id/calificaciones", async (req, res) => {
     const estructuraGrupoId = toRequiredNumber(req.params.id, "estructuraGrupoId", res);
     if (estructuraGrupoId === null) return;
     const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
-    if (!institucionSeleccionadaId) return badRequest(res, "Debes indicar el colegio seleccionado");
+    if (!institucionSeleccionadaId) return badRequest(res, "Debés indicar el colegio seleccionado");
 
     const estructuraResult = await pool.request()
       .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
@@ -6153,7 +6237,7 @@ router.delete("/estructuras/:id/plantilla-asignada", async (req, res) => {
     const estructuraGrupoId = toRequiredNumber(req.params.id, "estructuraGrupoId", res);
     if (estructuraGrupoId === null) return;
     const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
-    if (!institucionSeleccionadaId) return badRequest(res, "Debes indicar el colegio seleccionado");
+    if (!institucionSeleccionadaId) return badRequest(res, "Debés indicar el colegio seleccionado");
 
     const pool = await getPool();
     const estructuraResult = await pool.request()
@@ -6432,7 +6516,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
     const plantilla = plantillaResult.recordset[0];
 
-    if (!plantilla) return badRequest(res, "No se encontrÃ³ una plantilla de evaluaciÃ³n activa para este grupo, materia y periodo");
+    if (!plantilla) return badRequest(res, "No se encontró una plantilla de evaluación activa para este grupo, materia y periodo");
 
 
 
@@ -6666,7 +6750,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
     const data = await getEstructuraCompleta(pool, estructuraGrupoId);
 
-    return created(res, { ...data, creada: true }, "Estructura de evaluaciÃ³n creada correctamente");
+    return created(res, { ...data, creada: true }, "Estructura de evaluación creada correctamente");
 
   } catch (error) {
 
@@ -6678,7 +6762,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
     console.error("Error creando estructura Eval360 desde plantilla:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudo crear la estructura de evaluaciÃ³n" });
+    return res.status(500).json({ ok: false, message: "No se pudo crear la estructura de evaluación" });
 
   }
 
@@ -6704,7 +6788,7 @@ router.put("/estructuras/:id/detalles", async (req, res) => {
 
     const detalles = Array.isArray(req.body.detalles) ? req.body.detalles : [];
 
-    if (!detalles.length) return badRequest(res, "DebÃ©s enviar al menos un rubro de evaluaciÃ³n");
+    if (!detalles.length) return badRequest(res, "Debés enviar al menos un rubro de evaluación");
 
 
 
@@ -6744,7 +6828,7 @@ router.put("/estructuras/:id/detalles", async (req, res) => {
 
     const row = estructura.recordset[0];
 
-    if (!row) return badRequest(res, "No se encontrÃ³ la estructura indicada");
+    if (!row) return badRequest(res, "No se encontró la estructura indicada");
 
 
 
@@ -6894,7 +6978,7 @@ router.put("/estructuras/:id/detalles", async (req, res) => {
 
     const data = await getEstructuraCompleta(pool, estructuraGrupoId);
 
-    return ok(res, data, "Estructura de evaluaciÃ³n actualizada correctamente");
+    return ok(res, data, "Estructura de evaluación actualizada correctamente");
 
   } catch (error) {
 
@@ -6906,7 +6990,7 @@ router.put("/estructuras/:id/detalles", async (req, res) => {
 
     console.error("Error actualizando detalles Eval360:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudo actualizar la estructura de evaluaciÃ³n" });
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la estructura de evaluación" });
 
   }
 
@@ -7058,7 +7142,7 @@ function generarIndicadorInicial(base: string) {
 
 
 
-  return `${texto} de forma inicial, con apoyo constante, ejemplos modelados y acompaÃ±amiento docente.`;
+  return `${texto} de forma inicial, con apoyo constante, ejemplos modelados y acompañamiento docente.`;
 
 }
 
@@ -7138,7 +7222,7 @@ async function getEstructuraPermitidaPorId(req: any, res: any, pool: any, estruc
 
   if (!row) {
 
-    forbidden(res, "No tenÃ©s permisos para usar esta estructura de evaluaciÃ³n");
+    forbidden(res, "No tenés permisos para usar esta estructura de evaluación");
 
     return null;
 
@@ -7352,7 +7436,7 @@ function buildPromptIndicadores(input: {
 
   return `
 
-${input.plantilla?.IndicacionesSistema || "Sos un especialista en evaluaciÃ³n educativa del MEP de Costa Rica."}
+${input.plantilla?.IndicacionesSistema || "Sos un especialista en evaluación educativa del MEP de Costa Rica."}
 
 
 
@@ -7360,7 +7444,7 @@ ${input.plantilla?.ContextoBase || ""}
 
 
 
-Vas a generar niveles de desempeÃ±o para el seguimiento de: ${input.tipoUso}.
+Vas a generar niveles de desempeño para el seguimiento de: ${input.tipoUso}.
 
 Planeamiento base: ${input.planeamientoNombre || "Planeamiento seleccionado"}.
 
@@ -7374,7 +7458,7 @@ ${input.indicacionesDocente || "No se indicaron instrucciones adicionales."}
 
 IMPORTANTE:
 
-Las indicaciones adicionales de la persona docente deben respetarse siempre que no contradigan la estructura tÃ©cnica solicitada.
+Las indicaciones adicionales de la persona docente deben respetarse siempre que no contradigan la estructura técnica solicitada.
 
 
 
@@ -7384,7 +7468,7 @@ ${indicadoresTexto}
 
 
 
-Reglas de construcciÃ³n:
+Reglas de construcción:
 
 ${input.plantilla?.ReglasConstruccion || ""}
 
@@ -7392,37 +7476,37 @@ ${input.plantilla?.ReglasConstruccion || ""}
 
 Instrucciones obligatorias:
 
-1. NO generÃ©s indicadores nuevos.
+1. NO generés indicadores nuevos.
 
-2. NO dividÃ¡s un indicador base en varios indicadores.
+2. NO dividás un indicador base en varios indicadores.
 
-3. NO usÃ©s la secciÃ³n "Estructura de salida" de la plantilla para crear mÃ¡s filas.
+3. NO usés la sección "Estructura de salida" de la plantilla para crear más filas.
 
 4. La cantidad de objetos en el arreglo "indicadores" debe ser EXACTAMENTE ${input.indicadoresBase.length}.
 
-5. El objeto 1 corresponde al indicador base 1, el objeto 2 al indicador base 2, y asÃ­ sucesivamente.
+5. El objeto 1 corresponde al indicador base 1, el objeto 2 al indicador base 2, y así sucesivamente.
 
 6. El indicador avanzado debe ser exactamente el indicador base original.
 
-7. El indicador intermedio debe describir un desempeÃ±o parcial, observable y medible.
+7. El indicador intermedio debe describir un desempeño parcial, observable y medible.
 
-8. El indicador inicial debe describir un desempeÃ±o bÃ¡sico o inicial, observable y medible.
+8. El indicador inicial debe describir un desempeño básico o inicial, observable y medible.
 
 9. Cada indicador debe estar redactado en tercera persona singular.
 
 10. Cada indicador debe contener una sola conducta observable.
 
-11. UsÃ¡ estructura: acciÃ³n + conocimiento + condiciÃ³n.
+11. Usá estructura: acción + conocimiento + condición.
 
-12. No usÃ©s markdown.
+12. No usés markdown.
 
-13. No agreguÃ©s explicaciones fuera del JSON.
+13. No agregués explicaciones fuera del JSON.
 
 
 
 Formato de salida:
 
-DevolvÃ© SOLO JSON vÃ¡lido con esta estructura exacta:
+Devolvé SOLO JSON válido con esta estructura exacta:
 
 
 
@@ -7448,7 +7532,7 @@ DevolvÃ© SOLO JSON vÃ¡lido con esta estructura exacta:
 
 
 
-Estructura de salida de la plantilla, usada SOLO como guÃ­a de redacciÃ³n, no como permiso para agregar filas:
+Estructura de salida de la plantilla, usada SOLO como guía de redacción, no como permiso para agregar filas:
 
 ${input.plantilla?.EstructuraSalida || ""}
 
@@ -7554,7 +7638,7 @@ async function callOpenAiIndicadores(prompt: string) {
 
       } catch (parseError) {
 
-        console.error("Respuesta OpenAI Eval360 indicadores no es JSON vï¿½lido:", parseError);
+        console.error("Respuesta OpenAI Eval360 indicadores no es JSON válido:", parseError);
 
         return null;
 
@@ -7564,7 +7648,7 @@ async function callOpenAiIndicadores(prompt: string) {
 
   } catch (error) {
 
-    console.error("No se pudo consultar OpenAI Eval360 indicadores; se usarï¿½ fallback local:", error);
+    console.error("No se pudo consultar OpenAI Eval360 indicadores; se usará fallback local:", error);
 
     return null;
 
@@ -7792,9 +7876,9 @@ router.get("/plantillas-ia-examenes", async (req, res) => {
 
   } catch (error) {
 
-    console.error("Error listando plantillas IA de exï¿½menes:", error);
+    console.error("Error listando plantillas IA de exámenes:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudieron cargar las plantillas IA de exï¿½menes" });
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar las plantillas IA de exámenes" });
 
   }
 
@@ -7846,9 +7930,9 @@ router.get("/examenes-ia", async (req, res) => {
 
   } catch (error) {
 
-    console.error("Error listando exï¿½menes IA:", error);
+    console.error("Error listando exámenes IA:", error);
 
-    return res.status(500).json({ ok: false, message: "No se pudieron listar los exï¿½menes IA" });
+    return res.status(500).json({ ok: false, message: "No se pudieron listar los exámenes IA" });
 
   }
 
@@ -7922,9 +8006,10 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
 
     const nombreSolicitado = normalizeText(bodyAny.nombre);
 
-    const documentoApoyoTexto = await extractUploadedText(documentoApoyoFile);
-
-    const formatoSalidaTexto = await extractUploadedText(formatoSalidaFile);
+    const [documentoApoyoTexto, formatoSalidaTexto] = await Promise.all([
+      extractUploadedText(documentoApoyoFile),
+      extractUploadedText(formatoSalidaFile)
+    ]);
 
     const documentoApoyoTextoCompacto = compactPromptText(documentoApoyoTexto, 5000);
 
@@ -7998,7 +8083,7 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
 
     const ctx = contexto.recordset[0];
 
-    if (!ctx) return badRequest(res, "No se encontrï¿½ el contexto de la estructura");
+    if (!ctx) return badRequest(res, "No se encontró el contexto de la estructura");
 
 
 
@@ -8028,7 +8113,7 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
 
     const plantilla = plantillaResult.recordset[0];
 
-    if (!plantilla) return badRequest(res, "No se encontrï¿½ una plantilla IA de exï¿½menes");
+    if (!plantilla) return badRequest(res, "No se encontró una plantilla IA de exámenes");
 
     const plantillaEstructuraCompacta = compactPromptText(plantilla?.EstructuraSalida, 6000);
 
@@ -8220,25 +8305,25 @@ router.post("/examenes-ia/generar", examenIaUpload, async (req, res) => {
 
       ? `Reglas obligatorias de formato:
 
-- Usï¿½ el archivo DOCX de salida como formato base obligatorio.
+- Usá el archivo DOCX de salida como formato base obligatorio.
 
-- No alterï¿½s encabezado, membrete, tablas fijas ni orden del documento.
+- No alterés encabezado, membrete, tablas fijas ni orden del documento.
 
-- No agreguï¿½s secciones nuevas.
+- No agregués secciones nuevas.
 
-- Solo completï¿½ campos variables del examen.
+- Solo completá campos variables del examen.
 
 - Si el archivo de salida tiene espacios, tablas o apartados por tipo de pregunta, respetalos y llenalos con el contenido correspondiente.`
 
       : `Reglas obligatorias de formato:
 
-- Construï¿½ una salida limpia y estructurada para examen sin agregar texto administrativo ni secciones irrelevantes.`;
+- Construí una salida limpia y estructurada para examen sin agregar texto administrativo ni secciones irrelevantes.`;
 
 
 
     const prompt = `
 
-${normalizeText(plantilla.IndicacionesSistema) || "Sos un asistente experto en construcciï¿½n de exï¿½menes de Matemï¿½tica."}
+${normalizeText(plantilla.IndicacionesSistema) || "Sos un asistente experto en construcción de exámenes de Matemática."}
 
 ${normalizeText(plantilla.ContextoBase)}
 
@@ -8262,19 +8347,19 @@ ${plantillaFormatoRespuestaCompacta || "Devolver unicamente JSON valido"}
 
 
 
-Reglas obligatorias de notaciï¿½n matemï¿½tica:
+Reglas obligatorias de notación matemática:
 
 - No usar LaTeX en la salida final.
 
-- Escribir expresiones en formato legible para Word (ejemplo: xï¿½, v(16), (a+b)/c, sen(x), log(x)).
+- Escribir expresiones en formato legible para Word (ejemplo: x², v(16), (a+b)/c, sen(x), log(x)).
 
-- Evitar sï¿½mbolos rotos o comandos tï¿½cnicos.
+- Evitar símbolos rotos o comandos técnicos.
 
 
 
 Encabezado institucional (obligatorio):
 
-- Direcciï¿½n Regional: ${normalizeText(ctx.DireccionRegional)}
+- Dirección Regional: ${normalizeText(ctx.DireccionRegional)}
 
 - Circuito: ${normalizeText(ctx.Circuito)}
 
@@ -8310,7 +8395,7 @@ Tabla de especificaciones (FUENTE PRIORITARIA Y OBLIGATORIA):
 
 - Total de puntos esperados: ${totalPuntosEsperado}
 
-- Distribuciï¿½n por tipo de ï¿½tem (exacta):
+- Distribución por tipo de ítem (exacta):
 
 ${tiposActivos.map((t) => `  - ${t.tipoItem}: ${t.cantidad} pregunta(s), ${t.valorPorPregunta} punto(s) c/u, subtotal ${t.subtotalPuntos}`).join("\n")}
 
@@ -8342,7 +8427,7 @@ ${documentoApoyoNombre || "No adjuntado"}
 
 
 
-Contenido extraï¿½do del documento de apoyo (si existe, uso obligatorio):
+Contenido extraído del documento de apoyo (si existe, uso obligatorio):
 
 ${documentoApoyoTextoCompacto || "No se pudo extraer contenido o no fue adjuntado"}
 
@@ -8354,13 +8439,13 @@ ${formatoSalidaNombre || normalizeText(plantilla.FormatoRespuesta) || "JSON"}
 
 
 
-Contenido extraï¿½do de la plantilla/formato de salida (si existe, uso obligatorio):
+Contenido extraído de la plantilla/formato de salida (si existe, uso obligatorio):
 
 ${formatoSalidaTextoCompacto || "No se pudo extraer contenido o no fue adjuntado"}
 
 
 
-Devolvï¿½ contenido de examen listo para revisiï¿½n docente.
+Devolvé contenido de examen listo para revisión docente.
 
 Cada pregunta debe corresponder a una habilidad o aprendizaje esperado y a uno de los indicadores listados.
 
@@ -8370,7 +8455,7 @@ La suma de puntos por pregunta debe coincidir exactamente con la tabla de especi
 
 
 
-Salida obligatoria en JSON vï¿½lido (sin markdown), con esta estructura:
+Salida obligatoria en JSON válido (sin markdown), con esta estructura:
 
 {
 
@@ -8750,9 +8835,19 @@ Estructura de salida obligatoria:
 
       }));
 
-      respuestaIATexto = String(await callOpenAiGenericJsonStrict(promptUltraEstricto, openAiAttempts) || "").trim();
+      const respuestaJsonEstricta = String(await callOpenAiGenericJsonStrict(promptUltraEstricto, openAiAttempts) || "").trim();
 
-      parsed = parseExamPayload(respuestaIATexto);
+      if (respuestaJsonEstricta) {
+
+        respuestaIATexto = respuestaJsonEstricta;
+
+        parsed = parseExamPayload(respuestaIATexto);
+
+      } else if (respuestaIATexto) {
+
+        parsed = parseExamPayload(respuestaIATexto);
+
+      }
 
     }
 
@@ -8760,7 +8855,7 @@ Estructura de salida obligatoria:
 
       const debugInfo = {
 
-        model: getOpenAiEvalModel(),
+        model: getOpenAiExamModel(),
 
         hadText: Boolean(respuestaIATexto),
 
@@ -8816,7 +8911,7 @@ Estructura de salida obligatoria:
 
       if (got !== Number(t.cantidad || 0)) {
 
-        warnings.push(`Distribuciï¿½n incompleta en ${t.tipoItem}: esperado ${t.cantidad}, generado ${got}.`);
+        warnings.push(`Distribución incompleta en ${t.tipoItem}: esperado ${t.cantidad}, generado ${got}.`);
 
       }
 
@@ -8837,6 +8932,8 @@ Estructura de salida obligatoria:
       ? JSON.stringify({
 
           ...parsed.parsed,
+
+          items: Array.isArray(parsed.parsed.items) && parsed.parsed.items.length ? parsed.parsed.items : parsed.items,
 
           encabezado: {
 
@@ -9248,7 +9345,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
     const row = result.recordset?.[0];
 
-    if (!row) return badRequest(res, "No se encontrï¿½ el examen");
+    if (!row) return badRequest(res, "No se encontró el examen");
 
     const modo = normalizeKey(req.query.modo || "EXAMEN");
 
@@ -9476,7 +9573,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
     };
 
-    const nombreAsignatura = String(row.Materia || "Matemï¿½tica");
+    const nombreAsignatura = String(row.Materia || "Matemática");
 
     const nombreDocente = String(encabezado?.docente || await getSessionTeacherDisplayName(pool, req, Number(row.UsuarioId || 0)) || "");
 
@@ -9552,7 +9649,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
       COMPLETAR_ESPACIOS_C: "los conceptos",
 
-      ELEMENTOS_RELACION_C: "la letra o nï¿½mero",
+      ELEMENTOS_RELACION_C: "la letra o número",
 
       MODO_USO_RELACION_C: "una, varias o ninguna vez.",
 
@@ -9690,7 +9787,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
     if (!templateBase64) {
 
-      return badRequest(res, "No se encontrï¿½ un machote DOCX vï¿½lido para generar el examen. Subï¿½ nuevamente 'Indicaciones prueba escrita - MACHOTE IA.docx' al crear el examen.");
+      return badRequest(res, "No se encontró un machote DOCX válido para generar el examen. Subí nuevamente 'Indicaciones prueba escrita - MACHOTE IA.docx' al crear el examen.");
 
     }
 
@@ -9700,7 +9797,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
       // Prioridad: respetar siempre el machote y sus marcadores.
 
-      // Evitamos degradar por heurï¿½sticas de validaciï¿½n que pueden dar falsos negativos.
+      // Evitamos degradar por heurísticas de validación que pueden dar falsos negativos.
 
       const fromTemplate = await renderDocxFromTemplate(templateBase64, contenido, markers, sectionBlocks, estiloWord);
 
@@ -9712,7 +9809,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
       } else {
 
-        // ï¿½ltimo recurso: mantener machote y anexar contenido.
+        // último recurso: mantener machote y anexar contenido.
 
         buffer = await forceAppendExamToTemplate(templateBase64, contenido, estiloWord);
 
@@ -9736,7 +9833,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
       try {
 
-        // Importante: reconstruir siempre desde el machote base vï¿½lido.
+        // Importante: reconstruir siempre desde el machote base válido.
 
         buffer = await forceAppendExamToTemplate(recoveryBase64, contenido, estiloWord);
 
@@ -9746,7 +9843,7 @@ router.get("/examenes-ia/:id/word", async (req, res) => {
 
         recoveryError = String(err?.message || err || "recovery-append-failed").slice(0, 180);
 
-        // ï¿½ltimo seguro: devolver el machote ï¿½ntegro, no un doc pequeï¿½o corrupto.
+        // último seguro: devolver el machote íntegro, no un doc pequeño corrupto.
 
         if (recoveryBase64) {
 
@@ -10577,7 +10674,7 @@ router.get("/indicadores", async (req, res) => {
 
     if (!estructuraIdFinal) {
 
-      return badRequest(res, "DebÃ©s indicar estructuraGrupoId o planeamientoId");
+      return badRequest(res, "Debés indicar estructuraGrupoId o planeamientoId");
 
     }
 
@@ -10811,7 +10908,7 @@ async function getEstructuraDesdePlaneamiento(req: any, res: any, pool: any, pla
 
   if (!planeamiento) {
 
-    forbidden(res, "No tenÃ©s permisos para usar este planeamiento o no existe");
+    forbidden(res, "No tenés permisos para usar este planeamiento o no existe");
 
     return null;
 
@@ -10883,7 +10980,7 @@ async function getEstructuraDesdePlaneamiento(req: any, res: any, pool: any, pla
 
     .input("usuarioId", sql.Int, Number(planeamiento.UsuarioId || userId || 0) || null)
 
-    .input("nombre", sql.NVarChar(200), `Estructura de evaluaciÃ³n - ${planeamiento.Nombre || "Planeamiento"}`)
+    .input("nombre", sql.NVarChar(200), `Estructura de evaluación - ${planeamiento.Nombre || "Planeamiento"}`)
 
     .query(`
 
@@ -10995,7 +11092,7 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
 
 
 
-    if (!tiposUso.length) return badRequest(res, "DebÃ©s indicar al menos un tipo de uso vÃ¡lido");
+    if (!tiposUso.length) return badRequest(res, "Debés indicar al menos un tipo de uso válido");
 
 
 
@@ -11011,15 +11108,15 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
 
 
 
-    if (!planeamiento) return badRequest(res, "No se encontrÃ³ el planeamiento seleccionado");
+    if (!planeamiento) return badRequest(res, "No se encontró el planeamiento seleccionado");
 
-    if (!indicadores.length) return badRequest(res, "El planeamiento seleccionado no tiene indicadores de evaluaciÃ³n");
+    if (!indicadores.length) return badRequest(res, "El planeamiento seleccionado no tiene indicadores de evaluación");
 
 
 
     const plantilla = await getPlantillaIndicadores(req, pool, plantillaPromptIAId);
 
-    if (!plantilla) return badRequest(res, "No se encontrÃ³ una plantilla IA activa de indicadores");
+    if (!plantilla) return badRequest(res, "No se encontró una plantilla IA activa de indicadores");
 
 
 
@@ -11169,7 +11266,7 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
 
           .input("plantillaBaseId", sql.Int, plantillaBaseId)
 
-          .input("nombre", sql.NVarChar(200), `Estructura de evaluaciï¿½n - ${planeamiento.Nombre || "Planeamiento"}`)
+          .input("nombre", sql.NVarChar(200), `Estructura de evaluación - ${planeamiento.Nombre || "Planeamiento"}`)
 
           .query(`
 
@@ -11257,7 +11354,7 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
 
     if (!estructurasDestino.length) {
 
-      return badRequest(res, "No hay secciones con plantilla de evaluaciï¿½n activa para aplicar los indicadores");
+      return badRequest(res, "No hay secciones con plantilla de evaluación activa para aplicar los indicadores");
 
     }
 
@@ -11265,9 +11362,9 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
 
     // Limpieza preventiva: si antes se generaron indicadores extra por el JSON
 
-    // del planeamiento o por una respuesta de IA mÃ¡s larga, se desactivan para
+    // del planeamiento o por una respuesta de IA más larga, se desactivan para
 
-    // que la pantalla muestre Ãºnicamente los indicadores base reales del planeamiento.
+    // que la pantalla muestre únicamente los indicadores base reales del planeamiento.
 
     const basesPermitidas = new Set(indicadores.map((base) => normalizeKey(base)));
 
@@ -11641,7 +11738,7 @@ router.put("/indicadores/:id", async (req, res) => {
 
     const indicador = lookup.recordset[0];
 
-    if (!indicador) return badRequest(res, "No se encontrÃ³ el indicador");
+    if (!indicador) return badRequest(res, "No se encontró el indicador");
 
 
 
@@ -11945,7 +12042,7 @@ router.delete("/indicadores/planeamiento/:planeamientoId", async (req, res) => {
 
     if (!estructurasDestinoIds.length) {
 
-      return badRequest(res, "No hay secciones con plantilla de evaluaciï¿½n activa para eliminar indicadores");
+      return badRequest(res, "No hay secciones con plantilla de evaluación activa para eliminar indicadores");
 
     }
 
@@ -12121,7 +12218,7 @@ router.delete("/indicadores/:id", async (req, res) => {
 
     const indicador = lookup.recordset[0];
 
-    if (!indicador) return badRequest(res, "No se encontrÃ³ el indicador");
+    if (!indicador) return badRequest(res, "No se encontró el indicador");
 
 
 
@@ -12223,13 +12320,13 @@ async function callOpenAiGeneric(prompt: string, debugAttempts?: OpenAiExamAttem
 
     console.error("OpenAI Eval360 examenes: OPENAI_API_KEY no esta configurada en el backend.");
 
-    debugAttempts?.push({ stage: "responses", ok: false, status: null, model: getOpenAiEvalModel(), detail: "OPENAI_API_KEY no configurada" });
+    debugAttempts?.push({ stage: "responses", ok: false, status: null, model: getOpenAiExamModel(), detail: "OPENAI_API_KEY no configurada" });
 
     return null;
 
   }
 
-  const model = getOpenAiEvalModel();
+  const model = getOpenAiExamModel();
 
   const body: Record<string, any> = {
 
@@ -12237,7 +12334,7 @@ async function callOpenAiGeneric(prompt: string, debugAttempts?: OpenAiExamAttem
 
     input: prompt,
 
-    max_output_tokens: 8000
+    max_output_tokens: getOpenAiExamMaxOutputTokens()
 
   };
 
@@ -12267,7 +12364,7 @@ async function callOpenAiGeneric(prompt: string, debugAttempts?: OpenAiExamAttem
 
     const text = await response.text();
 
-    console.error("Error OpenAI Eval360 exï¿½menes:", text);
+    console.error("Error OpenAI Eval360 exámenes:", text);
 
     debugAttempts?.push({
 
@@ -12355,7 +12452,7 @@ async function callOpenAiGenericJsonStrict(prompt: string, debugAttempts?: OpenA
 
   if (!apiKey) return "";
 
-  const model = getOpenAiEvalModel();
+  const model = getOpenAiExamModel();
 
   return await callOpenAiGenericChatFallback(prompt, apiKey, model, debugAttempts);
 
@@ -12399,13 +12496,13 @@ async function callOpenAiGenericChatFallback(prompt: string, apiKey: string, mod
 
     if (isGpt5Model) {
 
-      body.max_completion_tokens = 8000;
+      body.max_completion_tokens = getOpenAiExamMaxOutputTokens();
 
     } else {
 
       body.temperature = 0.2;
 
-      body.max_tokens = 8000;
+      body.max_tokens = getOpenAiExamMaxOutputTokens();
 
     }
 
@@ -13035,17 +13132,17 @@ function buildSeguimientoCorreo(params: {
 
   const materia = normalizeText(params.materiaNombre) || "Materia";
 
-  const anio = normalizeText(params.anioNombre) || "aÃ±o lectivo";
+  const anio = normalizeText(params.anioNombre) || "año lectivo";
 
-  const subject = `${params.estudianteNombre}-${rubro}-${materia} aÃ±o lectivo ${anio}`;
+  const subject = `${params.estudianteNombre}-${rubro}-${materia} año lectivo ${anio}`;
 
-  const text = observacion || `Se informa seguimiento acadÃ©mico de ${params.estudianteNombre}. Rubro: ${rubro}. Indicador: ${params.indicadorBase}. Resultado: ${params.estadoLabel}.`;
+  const text = observacion || `Se informa seguimiento académico de ${params.estudianteNombre}. Rubro: ${rubro}. Indicador: ${params.indicadorBase}. Resultado: ${params.estadoLabel}.`;
 
   const html = `
 
     <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.5;">
 
-      <h2 style="margin: 0 0 12px; color: #1e3a8a;">Seguimiento acadÃ©mico Profe360</h2>
+      <h2 style="margin: 0 0 12px; color: #1e3a8a;">Seguimiento académico Profe360</h2>
 
       <p>${escapeHtml(text)}</p>
 
@@ -13057,13 +13154,13 @@ function buildSeguimientoCorreo(params: {
 
       <p><strong>Materia:</strong> ${escapeHtml(materia)}</p>
 
-      <p><strong>AÃ±o lectivo:</strong> ${escapeHtml(anio)}</p>
+      <p><strong>Año lectivo:</strong> ${escapeHtml(anio)}</p>
 
       <p><strong>Indicador:</strong> ${escapeHtml(params.indicadorBase)}</p>
 
       <p><strong>Resultado:</strong> ${escapeHtml(params.estadoLabel)}</p>
 
-      <p style="margin-top: 20px; color: #475569;">Este correo fue enviado desde Profe360 por seguimiento acadÃ©mico.</p>
+      <p style="margin-top: 20px; color: #475569;">Este correo fue enviado desde Profe360 por seguimiento académico.</p>
 
     </div>`;
 
@@ -13203,7 +13300,7 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
 
   const telefono = normalizeWhatsAppPhone(params.telefono);
 
-  if (!telefono) return { enviado: false, modo: "omitido", motivo: "Sin telï¿½fono vï¿½lido de encargado" };
+  if (!telefono) return { enviado: false, modo: "omitido", motivo: "Sin teléfono válido de encargado" };
 
 
 
@@ -13315,7 +13412,7 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
 
     const readable = String(error?.message || error || "Error desconocido");
 
-    console.error("Excepciï¿½n enviando WhatsApp por webhook:", readable);
+    console.error("Excepción enviando WhatsApp por webhook:", readable);
 
     return { enviado: false, modo: "webhook", telefono, error: readable };
 
@@ -14051,7 +14148,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
     const periodoId = toRequiredNumber(req.query.periodoId, "periodoId", res);
 
-    const sincronizarSolicitado = ["1", "true", "si", "sï¿½"].includes(
+    const sincronizarSolicitado = ["1", "true", "si", "sí"].includes(
 
       String(req.query.sincronizar ?? "").trim().toLowerCase()
 
@@ -15277,7 +15374,7 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
       if ((indicadoresValidos.recordset || []).length !== indicadorIds.length) {
 
-        return badRequest(res, "Hay indicadores invï¿½lidos o fuera de este grupo");
+        return badRequest(res, "Hay indicadores inválidos o fuera de este grupo");
 
       }
 
@@ -15305,7 +15402,7 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
         if ((indicadoresAsignadosOtraActividad.recordset || []).length > 0) {
 
-          return badRequest(res, "Uno o mï¿½s indicadores ya estï¿½n asignados a otra actividad");
+          return badRequest(res, "Uno o más indicadores ya están asignados a otra actividad");
 
         }
 
@@ -15329,7 +15426,7 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
         if ((indicadoresCalificadosOtraActividad.recordset || []).length > 0) {
 
-          return badRequest(res, "Uno o mï¿½s indicadores ya tienen calificaciones en otra actividad");
+          return badRequest(res, "Uno o más indicadores ya tienen calificaciones en otra actividad");
 
         }
 
@@ -15853,7 +15950,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
     const indicador = indicadorResult.recordset[0];
 
-    if (!indicador) return badRequest(res, "No se encontrÃ³ el indicador seleccionado");
+    if (!indicador) return badRequest(res, "No se encontró el indicador seleccionado");
 
 
 
@@ -16141,7 +16238,7 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
         await transaction.rollback();
 
-        return badRequest(res, "El indicador no estï¿½ asociado a la actividad seleccionada. Asignalo primero desde Registro diario.");
+        return badRequest(res, "El indicador no está asociado a la actividad seleccionada. Asignalo primero desde Registro diario.");
 
       }
 
@@ -16827,13 +16924,13 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
     const actividad = actividadResult.recordset[0];
 
-    if (!actividad) return badRequest(res, "No se encontrÃ³ la actividad seleccionada");
+    if (!actividad) return badRequest(res, "No se encontró la actividad seleccionada");
 
 
 
     const puntosMaximos = Number(req.body.puntosMaximos ?? actividad.PuntosMaximos ?? 0);
 
-    if (!Number.isFinite(puntosMaximos) || puntosMaximos <= 0) return badRequest(res, "Indicï¿½ la cantidad de puntos que vale la actividad");
+    if (!Number.isFinite(puntosMaximos) || puntosMaximos <= 0) return badRequest(res, "Indicá la cantidad de puntos que vale la actividad");
 
 
 
@@ -16961,7 +17058,7 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
         await transaction.rollback();
 
-        return badRequest(res, "Los puntos obtenidos deben ser enteros entre 0 y los puntos mï¿½ximos de la actividad");
+        return badRequest(res, "Los puntos obtenidos deben ser enteros entre 0 y los puntos máximos de la actividad");
 
       }
 
@@ -17908,20 +18005,6 @@ router.put("/seguimiento/componentes/ajustar-porcentaje", async (req, res) => {
 
 
 export default router;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

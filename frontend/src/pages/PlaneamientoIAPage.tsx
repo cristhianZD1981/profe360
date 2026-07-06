@@ -454,7 +454,7 @@ export default function PlaneamientoIAPage() {
       {showImport && (
         <section className="card">
           <h3>Importar habilidades desde Excel</h3>
-          <p>El Excel debe tener columnas como: Materia, Colegio, Ciclo, Grado, mes, Area, Numero de Habilidad, Descripcion de la Habilidad y Documento de referencia.</p>
+          <p>El Excel debe tener columnas como: Materia, Colegio, Ciclo, Grado, mes, Área, Número de Habilidad, Descripción de la Habilidad y Documento de referencia.</p>
           <form className="form" onSubmit={handleImportExcel}>
             <label>
               Archivo Excel

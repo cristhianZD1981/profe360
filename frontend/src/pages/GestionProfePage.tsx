@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
@@ -349,9 +349,12 @@ export default function GestionProfePage() {
   const [generandoExamenIa, setGenerandoExamenIa] = useState(false);
   const [savingExamenIaProgress, setSavingExamenIaProgress] = useState(0);
   const [savingExamenIaMode, setSavingExamenIaMode] = useState<"generar" | "guardar" | "eliminar" | null>(null);
+  const [savingExamenIaPhase, setSavingExamenIaPhase] = useState("");
+  const [savingExamenIaElapsedSeconds, setSavingExamenIaElapsedSeconds] = useState(0);
   const [deletingExamenIaId, setDeletingExamenIaId] = useState<string>("");
   const [pendingScrollExamenId, setPendingScrollExamenId] = useState<string>("");
   const savingExamenIaTimerRef = useRef<number | null>(null);
+  const savingExamenIaStartedAtRef = useRef<number>(0);
   const generadorExamenRef = useRef<HTMLDivElement | null>(null);
   const [examenIaDraft, setExamenIaDraft] = useState<ExamenIaDraft>({
     tablaId: "",
@@ -1086,32 +1089,32 @@ export default function GestionProfePage() {
   const seguimientoPasosEvaluacion = useMemo(() => {
     if (!seguimientoTipo) {
       return [
-        "Selecciona el Rubro a Calificar.",
-        "Verifica el listado de estudiantes y el periodo.",
+        "Seleccioná el Rubro a Calificar.",
+        "Verificá el listado de estudiantes y el período.",
         "Completa las calificaciones y guarda."
       ];
     }
 
     if (isTipoAsistenciaSeguimiento(seguimientoTipo)) {
       return [
-        "Selecciona la fecha de asistencia.",
-        "Marca el estado por leccion para cada estudiante.",
-        "Guarda la asistencia para aplicar el calculo del rubro."
+        "Seleccioná la fecha de asistencia.",
+        "Marcá el estado por lección para cada estudiante.",
+        "Guardá la asistencia para aplicar el cálculo del rubro."
       ];
     }
 
     if (seguimientoModoActividadDirecta) {
       return [
-        "Selecciona la actividad evaluativa del rubro.",
-        "Define los puntos maximos y registra los puntos obtenidos.",
-        "Presiona Calificar para guardar la evaluacion."
+        "Seleccioná la actividad evaluativa del rubro.",
+        "Definí los puntos máximos y registrá los puntos obtenidos.",
+        "Presioná Calificar para guardar la evaluación."
       ];
     }
 
     return [
-      "Selecciona el indicador del rubro.",
+      "Seleccioná el indicador del rubro.",
       "Marca el nivel por estudiante (Inicial, Intermedio, Avanzado o No entregado/Ausente).",
-      "Presiona Calificar para guardar la evaluación."
+      "Presioná Calificar para guardar la evaluación."
     ];
   }, [seguimientoTipo, seguimientoModoActividadDirecta]);
 
@@ -1614,6 +1617,25 @@ export default function GestionProfePage() {
       setSeguimientoTipo(seguimientoComponentes[0].tipo);
     }
   }, [seguimientoComponentes, seguimientoTipo]);
+
+  useEffect(() => {
+    if (activePanel !== "seguimiento") return;
+    if (!selected) return;
+    if (!asistenciaFecha) return;
+    if (!isTipoAsistenciaSeguimiento(seguimientoTipo)) return;
+
+    setSavedAsistencia(false);
+    setAsistenciaNotificaciones({});
+    void loadAsistencia(selected, asistenciaFecha);
+  }, [
+    activePanel,
+    selected?.GrupoId,
+    selected?.MateriaId,
+    selected?.AnioLectivoId,
+    selected?.PeriodoId,
+    asistenciaFecha,
+    seguimientoTipo
+  ]);
 
   useEffect(() => {
     if (seguimientoActividadesFiltradas.length && !seguimientoActividadesFiltradas.some((item) => String(item.ActividadId) === String(seguimientoActividadId))) {
@@ -3635,6 +3657,71 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
+  function startExamenIaProgress(mode: "generar" | "guardar" | "eliminar") {
+    savingExamenIaStartedAtRef.current = Date.now();
+    setSavingExamenIaElapsedSeconds(0);
+    setSavingExamenIaPhase(
+      mode === "generar"
+        ? "Preparando datos de la tabla de especificaciones..."
+        : (mode === "guardar" ? "Guardando cambios del examen..." : "Eliminando examen...")
+    );
+    setSavingExamenIaProgress(mode === "generar" ? 8 : 12);
+    if (savingExamenIaTimerRef.current !== null) {
+      window.clearInterval(savingExamenIaTimerRef.current);
+      savingExamenIaTimerRef.current = null;
+    }
+    savingExamenIaTimerRef.current = window.setInterval(() => {
+      const elapsed = Math.max(0, Math.floor((Date.now() - savingExamenIaStartedAtRef.current) / 1000));
+      setSavingExamenIaElapsedSeconds(elapsed);
+      if (mode === "generar") {
+        setSavingExamenIaPhase(
+          elapsed < 4
+            ? "Preparando datos de la tabla de especificaciones..."
+            : (elapsed < 35
+                ? "La IA está construyendo las preguntas..."
+                : "La IA sigue trabajando; algunas tablas tardan más por cantidad de ítems o documentos adjuntos...")
+        );
+        setSavingExamenIaProgress((prev) => {
+          const cap = elapsed < 4 ? 22 : (elapsed < 20 ? 48 : (elapsed < 60 ? 66 : 76));
+          return Math.min(cap, prev + Math.max(1, Math.round((cap - prev) * 0.08)));
+        });
+        return;
+      }
+      setSavingExamenIaProgress((prev) => Math.min(88, prev + Math.max(1, Math.round((88 - prev) * 0.14))));
+    }, 900);
+  }
+
+  function formatProgressElapsed(seconds: number) {
+    if (!seconds) return "";
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+  }
+
+  function mapExamenIaRow(row: any, fallback: Partial<ExamenIaCreado> = {}): ExamenIaCreado {
+    return {
+      id: String(row?.ExamenIAGeneradoId || fallback.id || ""),
+      actividadIdTabla: String(row?.ActividadIdTabla || fallback.actividadIdTabla || ""),
+      nombre: String(row?.Nombre || fallback.nombre || ""),
+      materia: String(row?.Materia || fallback.materia || ""),
+      grado: String(row?.Grado || fallback.grado || ""),
+      periodo: String(row?.Periodo || fallback.periodo || ""),
+      secciones: (() => {
+        if (Array.isArray(fallback.secciones) && !row?.SeccionesJson) return fallback.secciones;
+        try {
+          const arr = JSON.parse(String(row?.SeccionesJson || "[]"));
+          return Array.isArray(arr) ? arr.map((x: any) => String(x)) : [];
+        } catch { return []; }
+      })(),
+      tablaNombre: String(row?.ActividadNombre || fallback.tablaNombre || `Actividad ${row?.ActividadIdTabla || fallback.actividadIdTabla || ""}`),
+      plantillaNombre: String(row?.PlantillaPromptIAId || fallback.plantillaNombre || ""),
+      indicaciones: String(row?.Indicaciones || fallback.indicaciones || ""),
+      resultadoIA: String(row?.ResultadoIA || fallback.resultadoIA || ""),
+      creadoEn: String(row?.CreatedAt || fallback.creadoEn || getCostaRicaIsoDate()).slice(0, 10)
+    };
+  }
+
   async function guardarExamenCreado() {
     if (!selected) {
       setErrorMessage("Seleccioná un grupo");
@@ -3663,15 +3750,9 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
     const tablaActivaId = String(examenIaDraft.tablaId || "");
     try {
       setGenerandoExamenIa(true);
-      setSavingExamenIaMode(editingExamenId || examenIaGeneradoId ? "guardar" : "generar");
-      setSavingExamenIaProgress(8);
-      if (savingExamenIaTimerRef.current !== null) {
-        window.clearInterval(savingExamenIaTimerRef.current);
-        savingExamenIaTimerRef.current = null;
-      }
-      savingExamenIaTimerRef.current = window.setInterval(() => {
-        setSavingExamenIaProgress((prev) => (prev >= 92 ? 92 : prev + 5));
-      }, 320);
+      const progressMode = editingExamenId || examenIaGeneradoId ? "guardar" : "generar";
+      setSavingExamenIaMode(progressMode);
+      startExamenIaProgress(progressMode);
       if (editingExamenId || examenIaGeneradoId) {
         const idToUpdate = editingExamenId || examenIaGeneradoId;
         await api.put(`/eval360/examenes-ia/${idToUpdate}`, {
@@ -3679,6 +3760,8 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
           indicaciones: (examenIaDraft.indicaciones || "").trim(),
           resultadoIA: (examenIaResultadoDraft || "").trim()
         });
+        setSavingExamenIaPhase("Actualizando lista de exámenes...");
+        setSavingExamenIaProgress((prev) => Math.max(prev, 90));
         await loadExamenesIa();
         setTablaVerGuardadasOpen(true);
         setTablaGuardadasItemsMinimizados((prev) => ({ ...prev, [Number(tablaActivaId || 0)]: false }));
@@ -3704,19 +3787,39 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
         if (examenIaDraft.documentoApoyo) {
           form.append("documentoApoyoArchivo", examenIaDraft.documentoApoyo);
         }
+        setSavingExamenIaPhase("Enviando datos y solicitando generación a la IA...");
         const response = await api.post("/eval360/examenes-ia/generar", form);
+        setSavingExamenIaPhase("Validando respuesta y preparando el resultado editable...");
+        setSavingExamenIaProgress((prev) => Math.max(prev, 84));
         const row = response?.data?.data || response?.data || {};
         const generatedId = String(row?.ExamenIAGeneradoId || "");
         const resultado = String(row?.ResultadoIA || "");
-        const examenesRecargados = await loadExamenesIa();
-        const examenRecargado = examenesRecargados.find((item) => String(item.id) === generatedId);
-        const resultadoFinal = String((resultado || examenRecargado?.resultadoIA || "")).trim();
-        const generatedIdFinal = generatedId || String(examenRecargado?.id || "");
+        const examenGenerado = mapExamenIaRow(row, {
+          id: generatedId,
+          actividadIdTabla: tablaActivaId,
+          nombre: nombreFinal,
+          materia,
+          grado,
+          periodo,
+          secciones: seccionesIds.map((id) => String(id)),
+          tablaNombre: getPruebaExamenLabel(tablaActividadesExamen.find((a) => String(a.ActividadId) === tablaActivaId) || null),
+          indicaciones: (examenIaDraft.indicaciones || "").trim(),
+          resultadoIA: resultado
+        });
+        const resultadoFinal = String((resultado || examenGenerado.resultadoIA || "")).trim();
+        const generatedIdFinal = generatedId || String(examenGenerado.id || "");
         setExamenIaGeneradoId(generatedIdFinal);
         setExamenIaResultadoDraft(resultadoFinal);
         if (!resultadoFinal) {
           throw new Error("La generación terminó, pero no devolvió contenido editable para el examen.");
         }
+        setExamenesCreados((prev) => [
+          { ...examenGenerado, id: generatedIdFinal, resultadoIA: resultadoFinal },
+          ...prev.filter((item) => String(item.id) !== generatedIdFinal)
+        ]);
+        setPendingScrollExamenId(generatedIdFinal);
+        setSavingExamenIaPhase("Mostrando examen generado...");
+        setSavingExamenIaProgress((prev) => Math.max(prev, 96));
         setMessage("Examen generado. Revisalo, ajustalo y luego guardalo.");
         setTablaVerGuardadasOpen(true);
         setTablaGuardadasItemsMinimizados((prev) => ({ ...prev, [Number(tablaActivaId || 0)]: false }));
@@ -3748,6 +3851,8 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       window.setTimeout(() => {
         setSavingExamenIaProgress(0);
         setSavingExamenIaMode(null);
+        setSavingExamenIaPhase("");
+        setSavingExamenIaElapsedSeconds(0);
       }, 500);
     }
   }
@@ -3758,14 +3863,7 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
     setGenerandoExamenIa(true);
     setSavingExamenIaMode("eliminar");
     setDeletingExamenIaId(String(examenId));
-    setSavingExamenIaProgress(8);
-    if (savingExamenIaTimerRef.current !== null) {
-      window.clearInterval(savingExamenIaTimerRef.current);
-      savingExamenIaTimerRef.current = null;
-    }
-    savingExamenIaTimerRef.current = window.setInterval(() => {
-      setSavingExamenIaProgress((prev) => (prev >= 92 ? 92 : prev + 6));
-    }, 320);
+    startExamenIaProgress("eliminar");
     try {
       await api.delete(`/eval360/examenes-ia/${examenId}`);
       await loadExamenesIa();
@@ -3798,6 +3896,8 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
       window.setTimeout(() => {
         setSavingExamenIaProgress(0);
         setSavingExamenIaMode(null);
+        setSavingExamenIaPhase("");
+        setSavingExamenIaElapsedSeconds(0);
       }, 500);
     }
   }
@@ -6107,25 +6207,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const response = await api.get("/eval360/examenes-ia", { params: { estructuraGrupoId } });
       const data = response.data?.data || response.data || [];
       const rows = Array.isArray(data) ? data : [];
-      const mapped: ExamenIaCreado[] = rows.map((row: any) => ({
-        id: String(row.ExamenIAGeneradoId),
-        actividadIdTabla: String(row.ActividadIdTabla || ""),
-        nombre: String(row.Nombre || ""),
-        materia: String(row.Materia || ""),
-        grado: String(row.Grado || ""),
-        periodo: String(row.Periodo || ""),
-        secciones: (() => {
-          try {
-            const arr = JSON.parse(String(row.SeccionesJson || "[]"));
-            return Array.isArray(arr) ? arr.map((x: any) => String(x)) : [];
-          } catch { return []; }
-        })(),
-        tablaNombre: String(row.ActividadNombre || `Actividad ${row.ActividadIdTabla}`),
-        plantillaNombre: String(row.PlantillaPromptIAId || ""),
-        indicaciones: String(row.Indicaciones || ""),
-        resultadoIA: String(row.ResultadoIA || ""),
-        creadoEn: String(row.CreatedAt || "").slice(0, 10)
-      }));
+      const mapped: ExamenIaCreado[] = rows.map((row: any) => mapExamenIaRow(row));
       setExamenesCreados(mapped);
       return mapped;
     } catch (error) {
@@ -6661,7 +6743,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
     const invalid = registrosGuardar.find((item) => !Number.isFinite(item.minutosTardia) || item.minutosTardia < 0);
     if (invalid) {
-      setErrorMessage("Los minutos de tardóa deben ser un número válido");
+      setErrorMessage("Los minutos de tardía deben ser un número válido");
       return;
     }
 
@@ -8136,10 +8218,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : getGestionPanelButtonStyle("planeamientos")} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadPlantillasPlaneamientoIa(); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
               <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : getGestionPanelButtonStyle("seguimiento")} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
-              <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitacora</button>
+              <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitácora</button>
               <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); }}>Reportes</button>
               <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
-              <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : getGestionPanelButtonStyle("examenes_tabla")} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Espesificaciones y Examenes</button>
+              <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : getGestionPanelButtonStyle("examenes_tabla")} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Especificaciones y Exámenes</button>
             </div>
 
             <div style={{ marginTop: "10px", padding: "10px 12px", borderRadius: "12px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a" }}>
@@ -8161,7 +8243,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               <div style={{ display: "grid", gap: "14px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "16px", background: "#ffffff", color: "#0f172a" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                   <div>
-                    <h4 style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 900, fontSize: "20px" }}>Bitacora</h4>
+                    <h4 style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 900, fontSize: "20px" }}>Bitácora</h4>
                     <p style={{ margin: 0, color: "#334155", fontWeight: 700 }}>
                       Registro diario de temas desarrollados, observaciones y hechos relevantes.
                     </p>
@@ -8187,7 +8269,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <div style={{ color: "#475569", fontWeight: 700, fontSize: "12px" }}>Fecha de inclusión: automática del sistema.</div>
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                     <button type="button" className="primary-btn" onClick={guardarBitacora} disabled={savingBitacora || !selected}>
-                      {savingBitacora ? "Guardando..." : "Guardar bitacora"}
+                      {savingBitacora ? "Guardando..." : "Guardar bitácora"}
                     </button>
                     <button
                       type="button"
@@ -8749,10 +8831,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </div>
                 ) : debeMostrarSelectorPlantillaSeguimiento ? (
                   <div style={{ display: "grid", gap: "12px", padding: "14px", background: "white", border: "1px solid #e2e8f0", borderRadius: "14px" }}>
-                    <strong>{mostrarSelectorCambioPlantilla ? "Cambiar plantilla de evaluacion" : "Primera vez en este grupo"}</strong>
+                    <strong>{mostrarSelectorCambioPlantilla ? "Cambiar plantilla de evaluación" : "Primera vez en este grupo"}</strong>
                     <span style={{ color: "#475569" }}>
                       {mostrarSelectorCambioPlantilla
-                        ? "Selecciona la nueva plantilla que se va a usar en esta seccion."
+                        ? "Seleccioná la nueva plantilla que se va a usar en esta sección."
                         : "Seleccioná la plantilla de parametrización de evaluación que se va a usar para esta sección. Esta asignación queda guardada para el grupo, materia, año y periodo seleccionados."}
                     </span>
                     <label style={{ display: "grid", gap: "6px" }}>
@@ -8885,7 +8967,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 setAsistenciaFecha(event.target.value);
                                 setSavedAsistencia(false);
                                 setAsistenciaNotificaciones({});
-                                if (selected) loadAsistencia(selected, event.target.value);
                               }}
                               style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px", fontWeight: 800 }}
                             />
@@ -9755,7 +9836,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         onChange={(e) => {
                           setAsistenciaFecha(e.target.value);
                           setAsistenciaNotificaciones({});
-                          if (selected) loadAsistencia(selected, e.target.value);
                         }}
                       />
                     </label>
@@ -10145,7 +10225,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           <option key={mes} value={mes}>{mes}</option>
                         ))}
                       </select>
-                      <small style={{ color: "#b8c7da" }}>Ctrl + clic para seleccionar varios meses. Si no seleccionés ninguno, se muestran todos.</small>
+                      <small style={{ color: "#b8c7da" }}>Ctrl + clic para seleccionar varios meses. Si no seleccionás ninguno, se muestran todos.</small>
                     </label>
 
                     <label style={{ color: "#e5eefb" }}>
@@ -11034,7 +11114,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               <div style={{ display: "grid", gap: "14px", padding: "14px", border: "1px solid #1f3b63", borderRadius: "16px", background: "linear-gradient(180deg, #081a33 0%, #0b2342 100%)", color: "#f8fafc" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                   <div>
-                    <h4 style={{ margin: "0 0 4px", color: "#f8fafc", fontWeight: 900, fontSize: "20px" }}>Tabla de Espesificaciones y Examenes</h4>
+                    <h4 style={{ margin: "0 0 4px", color: "#f8fafc", fontWeight: 900, fontSize: "20px" }}>Tabla de Especificaciones y Exámenes</h4>
                     <p style={{ margin: 0, color: "#cbd5e1", fontWeight: 700 }}>
                       Gestioná la matriz y las tablas por prueba.
                     </p>
@@ -11279,11 +11359,16 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               ? "Generando examen..."
                               : (savingExamenIaMode === "guardar" ? "Guardando examen..." : "Eliminando examen...")}
                           </div>
+                          {savingExamenIaPhase ? (
+                            <div style={{ color: "#bfdbfe", fontWeight: 700, fontSize: "13px" }}>
+                              {savingExamenIaPhase}
+                            </div>
+                          ) : null}
                           <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#dbeafe", overflow: "hidden", border: "1px solid #93c5fd" }}>
                             <div style={{ width: `${savingExamenIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #38bdf8 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
                           </div>
                           <div style={{ color: "#bfdbfe", fontWeight: 700, fontSize: "13px" }}>
-                            {savingExamenIaProgress}% completado
+                            {savingExamenIaProgress}% completado{savingExamenIaElapsedSeconds ? ` · ${formatProgressElapsed(savingExamenIaElapsedSeconds)}` : ""}
                           </div>
                         </div>
                       ) : null}
@@ -11788,7 +11873,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     {!tablaValidacionPruebaSeleccionada.coincide ? (
                       <div style={{ marginBottom: "6px", color: "#991b1b", fontWeight: 700 }}>
                         {tablaValidacionPruebaSeleccionada.filasIncompletas > 0
-                        ? `No se puede guardar: hay ${tablaValidacionPruebaSeleccionada.filasIncompletas} fila(s) incompleta(s) o con restriccion invalida. Debes indicar item, cantidad de preguntas y puntos del indicador. Ademas: SR = 1 punto; RC/C/I = entre 1 y 5 puntos.`
+                        ? `No se puede guardar: hay ${tablaValidacionPruebaSeleccionada.filasIncompletas} fila(s) incompleta(s) o con restricción inválida. Debés indicar ítem, cantidad de preguntas y puntos del indicador. Además: SR = 1 punto; RC/C/I = entre 1 y 5 puntos.`
                         : !tablaValidacionPruebaSeleccionada.cumpleMinimoPorcentaje
                         ? `No se puede guardar: el total de puntos (${tablaValidacionPruebaSeleccionada.totalCalculado.toFixed(2)}) debe ser mayor o igual al porcentaje de la prueba (${tablaValidacionPruebaSeleccionada.minimoPorcentaje.toFixed(2)}).`
                         : (tablaTipoFormato === "ANTES"

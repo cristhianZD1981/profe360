@@ -1,4 +1,4 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest, forbidden } from "../../utils/http";
@@ -49,7 +49,7 @@ function getInstitutionId(req: any, res: any) {
   const institucionId = auth.institucionId ?? null;
 
   if (institucionId === null || institucionId === undefined || Number.isNaN(Number(institucionId))) {
-    badRequest(res, "El usuario no tiene instituciÃ³n asignada");
+    badRequest(res, "El usuario no tiene institución asignada");
     return null;
   }
 
@@ -59,7 +59,7 @@ function getInstitutionId(req: any, res: any) {
 function toNumber(value: any, fieldName: string, res: any) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
-    badRequest(res, `El campo ${fieldName} es invÃ¡lido`);
+    badRequest(res, `El campo ${fieldName} es inválido`);
     return null;
   }
   return parsed;
@@ -153,7 +153,7 @@ async function resolveMateriaEvaluacionId(pool: any, institucionId: number, mate
   );
 
   if (!cicloEvaluacion) {
-    badRequest(res, "Debe seleccionar un ciclo vÃ¡lido para la plantilla de evaluaciÃ³n");
+    badRequest(res, "Debe seleccionar un ciclo válido para la plantilla de evaluación");
     return null;
   }
 
@@ -193,7 +193,7 @@ async function resolveMateriaEvaluacionId(pool: any, institucionId: number, mate
         @institucionId,
         @codigo,
         @nombre,
-        N'Ciclo usado para parametrizaciÃ³n de evaluaciÃ³n',
+        N'Ciclo usado para parametrización de evaluación',
         1,
         SYSDATETIME()
       )
@@ -456,7 +456,7 @@ async function marcarPlantillaComoBorrador(pool: any, plantillaId: number) {
 }
 
 /* =========================================================
-   CATÃLOGOS PARA PARAMETRIZACIÃ“N
+   CATÁLOGOS PARA PARAMETRIZACIÓN
    ========================================================= */
 router.get("/catalogos", async (req, res) => {
   try {
@@ -525,13 +525,13 @@ router.get("/catalogos", async (req, res) => {
     bootstrapCache.set(cacheKey, { at: Date.now(), data });
     return ok(res, data);
   } catch (error) {
-    console.error("Error cargando catÃ¡logos de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "Error interno al cargar catÃ¡logos de evaluaciÃ³n" });
+    console.error("Error cargando catálogos de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al cargar catálogos de evaluación" });
   }
 });
 
 /* =========================================================
-   NIVELES DE DESEMPEÃ‘O
+   NIVELES DE DESEMPEÑO
    ========================================================= */
 router.get("/niveles-desempeno", async (req, res) => {
   try {
@@ -579,8 +579,8 @@ router.get("/niveles-desempeno", async (req, res) => {
 
     return ok(res, rows);
   } catch (error) {
-    console.error("Error listando niveles de desempeÃ±o:", error);
-    return res.status(500).json({ ok: false, message: "No se pudieron cargar los niveles de desempeÃ±o" });
+    console.error("Error listando niveles de desempeño:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar los niveles de desempeño" });
   }
 });
 
@@ -595,7 +595,7 @@ router.post("/niveles-desempeno", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCION
     const descripcion = normalizeText(req.body.descripcion);
     const valor = toNumber(req.body.valor, "valor", res);
     if (valor === null) return;
-    if (!descripcion) return badRequest(res, "La descripciÃ³n es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -607,10 +607,10 @@ router.post("/niveles-desempeno", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCION
         VALUES (@institucionId, @descripcion, @valor, 1)
       `);
 
-    return created(res, result.recordset[0], "Nivel de desempeÃ±o creado correctamente");
+    return created(res, result.recordset[0], "Nivel de desempeño creado correctamente");
   } catch (error) {
-    console.error("Error creando nivel de desempeÃ±o:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo crear el nivel de desempeÃ±o" });
+    console.error("Error creando nivel de desempeño:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo crear el nivel de desempeño" });
   }
 });
 
@@ -624,7 +624,7 @@ router.put("/niveles-desempeno/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUC
     const descripcion = normalizeText(req.body.descripcion);
     const valor = toNumber(req.body.valor, "valor", res);
     if (valor === null) return;
-    if (!descripcion) return badRequest(res, "La descripciÃ³n es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const request = pool.request()
       .input("id", sql.Int, id)
@@ -647,11 +647,11 @@ router.put("/niveles-desempeno/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUC
         ${filtroInstitucion}
     `);
 
-    if (!result.recordset.length) return res.status(404).json({ ok: false, message: "Nivel de desempeÃ±o no encontrado" });
-    return ok(res, result.recordset[0], "Nivel de desempeÃ±o actualizado correctamente");
+    if (!result.recordset.length) return res.status(404).json({ ok: false, message: "Nivel de desempeño no encontrado" });
+    return ok(res, result.recordset[0], "Nivel de desempeño actualizado correctamente");
   } catch (error) {
-    console.error("Error actualizando nivel de desempeÃ±o:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo actualizar el nivel de desempeÃ±o" });
+    console.error("Error actualizando nivel de desempeño:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar el nivel de desempeño" });
   }
 });
 
@@ -675,10 +675,10 @@ router.delete("/niveles-desempeno/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTI
       WHERE NivelDesempenoId = @id ${filtroInstitucion}
     `);
 
-    return ok(res, null, "Nivel de desempeÃ±o desactivado correctamente");
+    return ok(res, null, "Nivel de desempeño desactivado correctamente");
   } catch (error) {
-    console.error("Error desactivando nivel de desempeÃ±o:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo desactivar el nivel de desempeÃ±o" });
+    console.error("Error desactivando nivel de desempeño:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo desactivar el nivel de desempeño" });
   }
 });
 
@@ -702,15 +702,15 @@ router.patch("/niveles-desempeno/:id/reactivar", requireRoles("SUPER_ADMIN", "AD
       WHERE NivelDesempenoId = @id ${filtroInstitucion}
     `);
 
-    return ok(res, null, "Nivel de desempeÃ±o reactivado correctamente");
+    return ok(res, null, "Nivel de desempeño reactivado correctamente");
   } catch (error) {
-    console.error("Error reactivando nivel de desempeÃ±o:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo reactivar el nivel de desempeÃ±o" });
+    console.error("Error reactivando nivel de desempeño:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo reactivar el nivel de desempeño" });
   }
 });
 
 /* =========================================================
-   PLANTILLAS DE EVALUACIÃ“N
+   PLANTILLAS DE EVALUACIÓN
    ========================================================= */
 router.get("/plantillas", async (req, res) => {
   try {
@@ -800,8 +800,8 @@ router.get("/plantillas", async (req, res) => {
 
     return ok(res, result.recordset);
   } catch (error) {
-    console.error("Error listando plantillas de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudieron cargar las plantillas de evaluaciÃ³n" });
+    console.error("Error listando plantillas de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar las plantillas de evaluación" });
   }
 });
 
@@ -813,13 +813,13 @@ router.get("/plantillas/:id", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
-    if (!(await canReadPlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para consultar esta plantilla");
+    if (!(await canReadPlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para consultar esta plantilla");
 
     const detalle = await getPlantillaDetalle(pool, plantillaId);
     return ok(res, detalle);
   } catch (error) {
-    console.error("Error consultando plantilla de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo consultar la plantilla de evaluaciÃ³n" });
+    console.error("Error consultando plantilla de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar la plantilla de evaluación" });
   }
 });
 
@@ -833,7 +833,7 @@ router.post("/plantillas", async (req, res) => {
     if (institucionId === null) return;
 
     if (!isSuperAdmin(req) && !isInstitutionAdmin(req) && !isProfesor(req)) {
-      return forbidden(res, "No tenÃ©s permisos para crear plantillas");
+      return forbidden(res, "No tenés permisos para crear plantillas");
     }
 
     const anioLectivoId = toNumber(req.body.anioLectivoId, "anioLectivoId", res);
@@ -868,7 +868,7 @@ router.post("/plantillas", async (req, res) => {
       `);
 
     if (duplicada.recordset.length) {
-      return badRequest(res, "Ya existe una plantilla con ese nombre para ese aÃ±o, periodo y ciclo");
+      return badRequest(res, "Ya existe una plantilla con ese nombre para ese año, periodo y ciclo");
     }
 
     const result = await pool.request()
@@ -915,8 +915,8 @@ router.post("/plantillas", async (req, res) => {
 
     return created(res, result.recordset[0], "Plantilla de evaluación creada correctamente");
   } catch (error) {
-    console.error("Error creando plantilla de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo crear la plantilla de evaluaciÃ³n" });
+    console.error("Error creando plantilla de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo crear la plantilla de evaluación" });
   }
 });
 
@@ -928,7 +928,7 @@ router.put("/plantillas/:id", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenes permisos para modificar esta plantilla");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para modificar esta plantilla");
 
     const nombre = normalizeText(req.body.nombre);
     const anioLectivoId = toNumber(req.body.anioLectivoId, "anioLectivoId", res);
@@ -1002,7 +1002,7 @@ router.delete("/plantillas/:id", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para eliminar esta plantilla");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para eliminar esta plantilla");
 
     const asignaciones = await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
@@ -1077,7 +1077,7 @@ router.delete("/plantillas/:id", async (req, res) => {
 
     const usos = Number(asignaciones.recordset[0]?.Usos || 0);
     if (usos > 0) {
-      return badRequest(res, "No se puede eliminar la plantilla porque ya estÃ¡ asignada a uno o mÃ¡s grupos");
+      return badRequest(res, "No se puede eliminar la plantilla porque ya está asignada a uno o más grupos");
     }
 
     const usoNotas = await pool.request()
@@ -1119,8 +1119,8 @@ router.delete("/plantillas/:id", async (req, res) => {
 
     return ok(res, null, "Plantilla de evaluación eliminada correctamente");
   } catch (error) {
-    console.error("Error eliminando plantilla de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo eliminar la plantilla de evaluaciÃ³n" });
+    console.error("Error eliminando plantilla de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar la plantilla de evaluación" });
   }
 });
 
@@ -1131,7 +1131,7 @@ router.patch("/plantillas/:id/reactivar", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para reactivar esta plantilla");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para reactivar esta plantilla");
 
     await pool.request()
       .input("plantillaId", sql.Int, plantillaId)
@@ -1145,8 +1145,8 @@ router.patch("/plantillas/:id/reactivar", async (req, res) => {
 
     return ok(res, null, "Plantilla de evaluación reactivada correctamente");
   } catch (error) {
-    console.error("Error reactivando plantilla de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo reactivar la plantilla de evaluaciÃ³n" });
+    console.error("Error reactivando plantilla de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo reactivar la plantilla de evaluación" });
   }
 });
 
@@ -1183,7 +1183,7 @@ router.patch("/plantillas/:id/activar", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para activar esta plantilla");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para activar esta plantilla");
 
     const totalComponentes = await validarSumaComponentes(pool, plantillaId);
     if (Number(totalComponentes.toFixed(2)) !== 100) {
@@ -1234,8 +1234,8 @@ router.patch("/plantillas/:id/activar", async (req, res) => {
 
     return ok(res, null, "Plantilla de evaluación activada correctamente");
   } catch (error) {
-    console.error("Error activando plantilla de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo activar la plantilla de evaluaciÃ³n" });
+    console.error("Error activando plantilla de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo activar la plantilla de evaluación" });
   }
 });
 
@@ -1249,7 +1249,7 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla origen no encontrada" });
-    if (!(await canReadPlantilla(pool, req, plantilla))) return forbidden(res, "No tenes permisos para copiar esta plantilla");
+    if (!(await canReadPlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para copiar esta plantilla");
 
     const institucionDestinoId = isSuperAdmin(req)
       ? toOptionalNumber(req.body.institucionId) || Number(plantilla.InstitucionId)
@@ -1429,7 +1429,7 @@ router.post("/plantillas/:plantillaId/componentes", async (req, res) => {
     const plantilla = await getPlantillaHeader(pool, plantillaId);
 
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla no encontrada" });
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para modificar esta plantilla");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para modificar esta plantilla");
 
     const descripcion = normalizeText(req.body.descripcion);
     const porcentaje = validatePercent(req.body.porcentaje, "porcentaje", res);
@@ -1439,7 +1439,7 @@ router.post("/plantillas/:plantillaId/componentes", async (req, res) => {
     const tipoSeguimiento = permitePlaneamiento ? normalizeTipoSeguimiento(req.body.tipoSeguimiento) : null;
 
     if (porcentaje === null) return;
-    if (!descripcion) return badRequest(res, "La descripciÃ³n del componente es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción del componente es obligatoria");
     if (permitePlaneamiento && !tipoSeguimiento) {
       return badRequest(res, "Debe seleccionar si el componente se relaciona con Trabajo cotidiano, Tareas o Asistencia diaria");
     }
@@ -1492,8 +1492,8 @@ router.post("/plantillas/:plantillaId/componentes", async (req, res) => {
 
     return created(res, result.recordset[0], message);
   } catch (error) {
-    console.error("Error creando componente de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo crear el componente de evaluaciÃ³n" });
+    console.error("Error creando componente de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo crear el componente de evaluación" });
   }
 });
 
@@ -1516,7 +1516,7 @@ router.put("/componentes/:id", async (req, res) => {
     if (!plantillaId) return res.status(404).json({ ok: false, message: "Componente no encontrado" });
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para modificar este componente");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para modificar este componente");
 
     const descripcion = normalizeText(req.body.descripcion);
     const porcentaje = validatePercent(req.body.porcentaje, "porcentaje", res);
@@ -1525,7 +1525,7 @@ router.put("/componentes/:id", async (req, res) => {
     const tipoSeguimiento = permitePlaneamiento ? normalizeTipoSeguimiento(req.body.tipoSeguimiento) : null;
 
     if (porcentaje === null) return;
-    if (!descripcion) return badRequest(res, "La descripciÃ³n del componente es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción del componente es obligatoria");
     if (permitePlaneamiento && !tipoSeguimiento) {
       return badRequest(res, "Debe seleccionar si el componente se relaciona con Trabajo cotidiano, Tareas o Asistencia diaria");
     }
@@ -1583,8 +1583,8 @@ router.put("/componentes/:id", async (req, res) => {
     await marcarPlantillaComoBorrador(pool, Number(plantillaId));
     return ok(res, { componente: result.recordset[0], totalComponentes: total }, "Componente actualizado. La plantilla quedó en borrador para volver a activarla.");
   } catch (error) {
-    console.error("Error actualizando componente de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo actualizar el componente de evaluaciÃ³n" });
+    console.error("Error actualizando componente de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar el componente de evaluación" });
   }
 });
 
@@ -1660,7 +1660,7 @@ router.patch("/componentes/:id/reactivar", async (req, res) => {
     if (!plantillaId) return res.status(404).json({ ok: false, message: "Componente no encontrado" });
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para reactivar este componente");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para reactivar este componente");
     const duplicadoOrden = await pool.request()
       .input("componenteId", sql.Int, componenteId)
       .query(`
@@ -1688,8 +1688,8 @@ router.patch("/componentes/:id/reactivar", async (req, res) => {
 
     return ok(res, null, "Componente reactivado correctamente");
   } catch (error) {
-    console.error("Error reactivando componente de evaluaciÃ³n:", error);
-    return res.status(500).json({ ok: false, message: "No se pudo reactivar el componente de evaluaciÃ³n" });
+    console.error("Error reactivando componente de evaluación:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo reactivar el componente de evaluación" });
   }
 });
 
@@ -1713,7 +1713,7 @@ router.post("/componentes/:componenteId/actividades", async (req, res) => {
     if (!plantillaId) return res.status(404).json({ ok: false, message: "Componente no encontrado" });
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para modificar este componente");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para modificar este componente");
 
     const descripcion = normalizeText(req.body.descripcion);
     const porcentaje = validatePercent(req.body.porcentaje, "porcentaje", res);
@@ -1722,7 +1722,7 @@ router.post("/componentes/:componenteId/actividades", async (req, res) => {
     const usaIndicadoresPlaneamiento = toBooleanFlag(req.body.usaIndicadoresPlaneamiento);
 
     if (porcentaje === null) return;
-    if (!descripcion) return badRequest(res, "La descripciÃ³n de la actividad es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción de la actividad es obligatoria");
     const duplicadoOrden = await pool.request()
       .input("componenteId", sql.Int, componenteId)
       .input("orden", sql.Int, orden)
@@ -1790,7 +1790,7 @@ router.put("/actividades/:id", async (req, res) => {
     if (!actividad) return res.status(404).json({ ok: false, message: "Actividad no encontrada" });
 
     const plantilla = await getPlantillaHeader(pool, Number(actividad.EvaluacionPlantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para modificar esta actividad");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para modificar esta actividad");
 
     const descripcion = normalizeText(req.body.descripcion);
     const porcentaje = validatePercent(req.body.porcentaje, "porcentaje", res);
@@ -1799,7 +1799,7 @@ router.put("/actividades/:id", async (req, res) => {
     const usaIndicadoresPlaneamiento = toBooleanFlag(req.body.usaIndicadoresPlaneamiento);
 
     if (porcentaje === null) return;
-    if (!descripcion) return badRequest(res, "La descripciÃ³n de la actividad es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción de la actividad es obligatoria");
     const duplicadoOrden = await pool.request()
       .input("actividadId", sql.Int, actividadId)
       .input("componenteId", sql.Int, Number(actividad.EvaluacionComponenteId))
@@ -1924,7 +1924,7 @@ router.patch("/actividades/:id/reactivar", async (req, res) => {
     if (!plantillaId) return res.status(404).json({ ok: false, message: "Actividad no encontrada" });
 
     const plantilla = await getPlantillaHeader(pool, Number(plantillaId));
-    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenÃ©s permisos para reactivar esta actividad");
+    if (!(await canWritePlantilla(pool, req, plantilla))) return forbidden(res, "No tenés permisos para reactivar esta actividad");
     const duplicadoOrden = await pool.request()
       .input("actividadId", sql.Int, actividadId)
       .query(`
@@ -1958,5 +1958,4 @@ router.patch("/actividades/:id/reactivar", async (req, res) => {
 });
 
 export default router;
-
 

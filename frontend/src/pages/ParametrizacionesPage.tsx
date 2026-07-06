@@ -18,7 +18,7 @@ const opciones: OpcionParametrizacion[] = [
     allowedRoles: PARAMETRIZACIONES_ROLES
   },
   {
-    title: "Promt IA",
+    title: "Prompt IA",
     path: "/parametrizaciones/promt-ia",
     allowedRoles: PARAMETRIZACIONES_ROLES
   }
@@ -46,7 +46,7 @@ export default function ParametrizacionesPage() {
       <section className="card">
         <h2>Parametrizaciones</h2>
         <p className="muted">
-          Configurá evaluaciones y plantillas de Promt IA.
+          Configurá evaluaciones y plantillas de Prompt IA.
         </p>
 
         <div className="param-top-nav" role="tablist" aria-label="Opciones de parametrizaciones">

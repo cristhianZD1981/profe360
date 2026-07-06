@@ -1507,7 +1507,7 @@ router.post("/especialidades", async (req, res) => {
     const permiteMultiplesPorSeccion = !!req.body?.permiteMultiplesPorSeccion;
 
     if (!descripcion) {
-      return badRequest(res, "descripcion es obligatoria");
+      return badRequest(res, "La descripción es obligatoria");
     }
 
     const pool = await getPool();
@@ -1571,7 +1571,7 @@ router.put("/especialidades/:id", async (req, res) => {
     }
 
     if (!descripcion) {
-      return badRequest(res, "descripcion es obligatoria");
+      return badRequest(res, "La descripción es obligatoria");
     }
 
     const pool = await getPool();
@@ -1874,7 +1874,7 @@ router.post("/tipos-estudiante", async (req, res) => {
     if (institucionId === null) return;
 
     const descripcion = String(req.body?.descripcion || "").trim();
-    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const pool = await getPool();
     const duplicado = await pool.request()
@@ -1927,7 +1927,7 @@ router.put("/tipos-estudiante/:id", async (req, res) => {
     if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
 
     const descripcion = String(req.body?.descripcion || "").trim();
-    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const pool = await getPool();
     const duplicado = await pool.request()
@@ -2073,7 +2073,7 @@ router.post("/tipos-adecuacion", async (req, res) => {
     if (institucionId === null) return;
 
     const descripcion = String(req.body?.descripcion || "").trim();
-    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const pool = await getPool();
     const duplicado = await pool.request()
@@ -2126,7 +2126,7 @@ router.put("/tipos-adecuacion/:id", async (req, res) => {
     if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
 
     const descripcion = String(req.body?.descripcion || "").trim();
-    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const pool = await getPool();
     const duplicado = await pool.request()
@@ -2534,7 +2534,7 @@ router.post("/rutas-transporte", async (req, res) => {
     const horaInicio = req.body?.horaInicio || null;
     const horaFin = req.body?.horaFin || null;
 
-    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const pool = await getPool();
     const duplicada = await pool.request()
@@ -2612,7 +2612,7 @@ router.put("/rutas-transporte/:id", async (req, res) => {
     const horaFin = req.body?.horaFin || null;
 
     if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
-    if (!descripcion) return badRequest(res, "descripcion es obligatoria");
+    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
 
     const pool = await getPool();
     const duplicada = await pool.request()
@@ -4869,7 +4869,7 @@ async function processMatriculaImportRows(params: {
           cedula: payload.cedula,
           seccion: payload.seccion,
           estado: "ERROR",
-          motivo: "La cedula y la seccion son obligatorias"
+          motivo: "La cédula y la sección son obligatorias"
         };
       } else {
         const estudiante = await findEstudianteParaMatricula(pool, institucionId, payload.cedula);
@@ -4879,7 +4879,7 @@ async function processMatriculaImportRows(params: {
             cedula: payload.cedula,
             seccion: payload.seccion,
             estado: "ERROR",
-            motivo: "No existe un estudiante con esa cedula en la institucion"
+            motivo: "No existe un estudiante con esa cédula en la institución"
           };
         } else if (!estudiante.Activo) {
           resultado = {
@@ -4905,7 +4905,7 @@ async function processMatriculaImportRows(params: {
               seccion: payload.seccion,
               estudiante: getEstudianteNombre(estudiante),
               estado: "ERROR",
-              motivo: "No existe un grupo activo con esa seccion para el anio lectivo seleccionado"
+              motivo: "No existe un grupo activo con esa sección para el año lectivo seleccionado"
             };
           } else {
             resultado = await procesarMatriculaImportada({
@@ -5040,8 +5040,8 @@ router.get("/matriculas/plantilla-excel", async (_req, res) => {
   try {
     const wb = XLSX.utils.book_new();
     const instrucciones = [
-      { Campo: "cedula", Obligatorio: "Si", Descripcion: "Cedula o identificacion del estudiante ya registrado" },
-      { Campo: "seccion", Obligatorio: "Si", Descripcion: "Nombre de la seccion/grupo activo en el anio lectivo seleccionado" },
+      { Campo: "cedula", Obligatorio: "Si", Descripcion: "Cédula o identificación del estudiante ya registrado" },
+      { Campo: "seccion", Obligatorio: "Si", Descripcion: "Nombre de la sección/grupo activo en el año lectivo seleccionado" },
       { Campo: "fecha matricula", Obligatorio: "No", Descripcion: "Fecha en formato AAAA-MM-DD. Si se deja vacia se usa la fecha actual" },
       { Campo: "tipo matricula", Obligatorio: "No", Descripcion: "Ejemplo: Regular" },
       { Campo: "especialidad", Obligatorio: "No", Descripcion: "Descripcion de la especialidad que se desea dejar registrada en la matricula" },
@@ -5227,7 +5227,7 @@ router.post("/matriculas/importar-excel", upload.single("archivo"), async (req, 
             cedula: payload.cedula,
             seccion: payload.seccion,
             estado: "ERROR",
-            motivo: "La cedula y la seccion son obligatorias"
+            motivo: "La cédula y la sección son obligatorias"
           });
           continue;
         }
@@ -5239,7 +5239,7 @@ router.post("/matriculas/importar-excel", upload.single("archivo"), async (req, 
             cedula: payload.cedula,
             seccion: payload.seccion,
             estado: "ERROR",
-            motivo: "No existe un estudiante con esa cedula en la institucion"
+            motivo: "No existe un estudiante con esa cédula en la institución"
           });
           continue;
         }
@@ -5270,7 +5270,7 @@ router.post("/matriculas/importar-excel", upload.single("archivo"), async (req, 
             seccion: payload.seccion,
             estudiante: getEstudianteNombre(estudiante),
             estado: "ERROR",
-            motivo: "No existe un grupo activo con esa seccion para el anio lectivo seleccionado"
+            motivo: "No existe un grupo activo con esa sección para el año lectivo seleccionado"
           });
           continue;
         }
@@ -5745,7 +5745,7 @@ router.put("/matriculas/:id", async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({
         ok: false,
-        message: "MatrÃ­cula no encontrada"
+        message: "Matrícula no encontrada"
       });
     }
 

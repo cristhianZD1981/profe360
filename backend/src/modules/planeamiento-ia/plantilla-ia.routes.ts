@@ -101,7 +101,7 @@ function canMaintainTipos(req: any) {
 
 function denyIfCannotMaintainTipos(req: any, res: any) {
   if (!canMaintainTipos(req)) {
-    forbidden(res, "No tenes permisos para administrar tipos de plantillas IA");
+    forbidden(res, "No tenés permisos para administrar tipos de plantillas IA");
     return true;
   }
   return false;
@@ -366,7 +366,7 @@ router.get("/plantillas/:id", async (req, res) => {
 
     const plantilla = await getPlantillaById(pool, id);
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
-    if (!canReadPlantilla(req, plantilla)) return forbidden(res, "No tenes permisos para consultar esta plantilla");
+    if (!canReadPlantilla(req, plantilla)) return forbidden(res, "No tenés permisos para consultar esta plantilla");
 
     ok(res, plantilla, "Plantilla IA obtenida correctamente");
   } catch (error) {
@@ -385,7 +385,7 @@ router.get("/plantillas/:id/exportar-word", async (req, res) => {
 
     const plantilla = await getPlantillaById(pool, id);
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
-    if (!canReadPlantilla(req, plantilla)) return forbidden(res, "No tenes permisos para consultar esta plantilla");
+    if (!canReadPlantilla(req, plantilla)) return forbidden(res, "No tenés permisos para consultar esta plantilla");
 
     const doc = new Document({
       sections: [
@@ -521,7 +521,7 @@ router.put("/plantillas/:id", async (req, res) => {
 
     const plantilla = await getPlantillaById(pool, id);
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
-    if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenes permisos para modificar esta plantilla");
+    if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenés permisos para modificar esta plantilla");
 
     const institucionId = isSuperAdminRole(req)
       ? toRequiredInt(req.body.institucionId, "institucionId", res)
@@ -585,7 +585,7 @@ router.patch("/plantillas/:id/estado", async (req, res) => {
 
     const plantilla = await getPlantillaById(pool, id);
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
-    if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenes permisos para cambiar el estado de esta plantilla");
+    if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenés permisos para cambiar el estado de esta plantilla");
 
     const result = await pool.request()
       .input("id", sql.Int, id)
@@ -615,7 +615,7 @@ router.delete("/plantillas/:id", async (req, res) => {
 
     const plantilla = await getPlantillaById(pool, id);
     if (!plantilla) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
-    if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenes permisos para eliminar esta plantilla");
+    if (!canWritePlantilla(req, plantilla)) return forbidden(res, "No tenés permisos para eliminar esta plantilla");
 
     const result = await pool.request()
       .input("id", sql.Int, id)
@@ -644,7 +644,7 @@ router.post("/plantillas/:id/copiar", async (req, res) => {
 
     const origen = await getPlantillaById(pool, id);
     if (!origen) return res.status(404).json({ ok: false, message: "Plantilla IA no encontrada" });
-    if (!canReadPlantilla(req, origen)) return forbidden(res, "No tenes permisos para copiar esta plantilla");
+    if (!canReadPlantilla(req, origen)) return forbidden(res, "No tenés permisos para copiar esta plantilla");
 
     const nombrePlantilla = normalizeText(req.body.nombrePlantilla || `${origen.NombrePlantilla} - copia`);
     if (!nombrePlantilla) return badRequest(res, "El nombre de la plantilla copiada es obligatorio");

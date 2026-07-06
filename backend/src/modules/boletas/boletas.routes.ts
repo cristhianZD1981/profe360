@@ -59,7 +59,7 @@ function getInstitutionId(req: any, res: any) {
 
 async function sendBoletaConductaEmail(input: {
   to: string;
-  cc?: string;
+  cc?: string | string[];
   subject: string;
   html: string;
   text: string;
@@ -230,10 +230,17 @@ function getAuthUserId(req: any) {
 }
 
 function resolveNotificationCc(req: any, ...candidates: any[]) {
-  const values = [req.auth?.correo, ...candidates]
+  const seen = new Set<string>();
+  return [req.auth?.correo, req.auth?.Correo, req.auth?.email, ...candidates]
+    .flatMap((value) => Array.isArray(value) ? value : [value])
     .map((value) => String(value || "").trim())
-    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
-  return values[0] || "";
+    .filter((value) => {
+      if (!value) return false;
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function formatDateCR(value?: any) {
@@ -1472,6 +1479,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
           e.Telefono AS TelefonoEstudiante,
           e.AutorizaWhatsAppEncargado,
           u.Correo AS ProfesorCorreo,
+          guia.ProfesorGuiaCorreo,
           enc.Telefonos AS EncargadosTelefonos,
           i.Nombre AS InstitucionNombre,
           i.NombreComercial AS InstitucionNombreComercial,
@@ -1484,6 +1492,20 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = b.EstudianteId
         INNER JOIN dbo.Institucion i ON i.InstitucionId = b.InstitucionId
         LEFT JOIN dbo.Usuario u ON u.UsuarioId = b.UsuarioReportaId
+        OUTER APPLY (
+          SELECT TOP 1
+            ug.Correo AS ProfesorGuiaCorreo
+          FROM dbo.AsignacionDocente adg
+          INNER JOIN dbo.Usuario ug
+            ON ug.UsuarioId = adg.UsuarioId
+           AND ug.Activo = 1
+          WHERE adg.InstitucionId = b.InstitucionId
+            AND adg.GrupoId = b.GrupoId
+            AND adg.Activo = 1
+            AND UPPER(LTRIM(RTRIM(ISNULL(adg.TipoAsignacion, N'')))) = N'PROFESOR_GUIA'
+            AND NULLIF(LTRIM(RTRIM(ISNULL(ug.Correo, N''))), N'') IS NOT NULL
+          ORDER BY adg.AnioLectivoId DESC, ISNULL(adg.PeriodoId, 0) DESC, adg.AsignacionDocenteId DESC
+        ) guia
         OUTER APPLY (
           SELECT
             STUFF((
@@ -1506,7 +1528,9 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
 
     const correoEstudiante = String(row.EstudianteCorreo || `${String(row.Identificacion || "").trim()}@mep.go.cr`).trim();
     if (!correoEstudiante) return badRequest(res, "El estudiante no tiene correo registrado");
-    const correoProfesor = resolveNotificationCc(req, row.ProfesorCorreo) || null;
+    const correosCopia = resolveNotificationCc(req, row.ProfesorCorreo, row.ProfesorGuiaCorreo)
+      .filter((correo: string) => correo.toLowerCase() !== correoEstudiante.toLowerCase());
+    const correosCopiaTexto = correosCopia.join(", ") || null;
     const estudianteNombre = fullName(row);
     const fechaIso = String(row.Fecha || "").slice(0, 10);
     const fechaCR = formatDateCR(row.Fecha);
@@ -1545,7 +1569,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
     try {
       const correo = await sendBoletaConductaEmail({
         to: correoEstudiante,
-        cc: correoProfesor || undefined,
+        cc: correosCopia.length ? correosCopia : undefined,
         subject: asunto,
         text: cuerpo,
         html: `<p>${escapeHtml(cuerpo)}</p>`,
@@ -1601,7 +1625,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
       .input("institucionId", sql.Int, institucionId)
       .input("estudianteId", sql.Int, Number(row.EstudianteId || 0))
       .input("correoDestino", sql.NVarChar(320), correoEstudiante)
-      .input("correoCC", sql.NVarChar(320), correoProfesor)
+      .input("correoCC", sql.NVarChar(320), correosCopiaTexto)
       .input("asunto", sql.NVarChar(300), asunto)
       .input("correoEnviado", sql.Bit, enviado ? 1 : 0)
       .input("whatsAppEnviado", sql.Bit, whatsappEnviado ? 1 : 0)

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import ExcelJS from "exceljs";
 import { requireAuth } from "../../middlewares/auth.middleware";
 import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, ok } from "../../utils/http";
@@ -75,6 +76,77 @@ const SQL_ORDER_BY_SECCION_Y_ESTUDIANTE = `
     e.SegundoApellido,
     e.Nombre
 `;
+
+function safeExcelFileNamePart(value: any) {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "seccion";
+}
+
+async function buildReporteSeccionData(pool: any, institucionId: number, grupoId: number) {
+  const grupoResult = await timedQuery("reportes.gestion-profe.secciones.grupo", () => pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("grupoId", sql.Int, grupoId)
+    .query(`
+      SELECT TOP 1
+        g.GrupoId,
+        g.Nombre AS GrupoNombre
+      FROM dbo.Grupo g
+      WHERE g.InstitucionId = @institucionId
+        AND g.GrupoId = @grupoId
+    `));
+
+  const grupo = grupoResult.recordset[0];
+  if (!grupo) return null;
+
+  const result = await timedQuery("reportes.gestion-profe.secciones", () => pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("grupoId", sql.Int, grupoId)
+    .query(`
+      WITH AlumnosSeccion AS (
+        SELECT
+          e.EstudianteId,
+          e.Identificacion,
+          e.PrimerApellido,
+          e.SegundoApellido,
+          e.Nombre,
+          ROW_NUMBER() OVER (
+            PARTITION BY e.EstudianteId
+            ORDER BY m.MatriculaId DESC
+          ) AS rn
+        FROM dbo.Matricula m
+        INNER JOIN dbo.Estudiante e
+          ON e.EstudianteId = m.EstudianteId
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = m.GrupoId
+        WHERE e.InstitucionId = @institucionId
+          AND e.Activo = 1
+          AND g.InstitucionId = @institucionId
+          AND g.GrupoId = @grupoId
+          AND ISNULL(m.Estado, N'') <> N'Inactiva'
+      )
+      SELECT
+        ROW_NUMBER() OVER (
+          ORDER BY PrimerApellido, SegundoApellido, Nombre, EstudianteId
+        ) AS linea,
+        Identificacion AS cedula,
+        PrimerApellido AS apellido1,
+        SegundoApellido AS apellido2,
+        Nombre AS nombre
+      FROM AlumnosSeccion
+      WHERE rn = 1
+      ORDER BY PrimerApellido, SegundoApellido, Nombre, EstudianteId
+    `));
+
+  return {
+    seccion: String(grupo.GrupoNombre || ""),
+    rows: result.recordset
+  };
+}
 
 async function ensureBoletaConductaEnvioReportColumns(pool: any) {
   await pool.request().query(`
@@ -1529,6 +1601,133 @@ router.get("/gestion-filtros", async (req, res) => {
   }
 });
 
+router.get("/gestion-profe/secciones/excel", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const grupoId = req.query.grupoId ? Number(req.query.grupoId) : 0;
+
+    if (!grupoId) {
+      return badRequest(res, "Seleccioná una sección para exportar el reporte");
+    }
+
+    const reporte = await buildReporteSeccionData(pool, institucionId, grupoId);
+    if (!reporte) {
+      return badRequest(res, "La sección seleccionada no existe para esta institución");
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Profe360";
+    workbook.created = new Date();
+    workbook.modified = new Date();
+    workbook.subject = `Lista de alumnos de la sección ${reporte.seccion}`;
+    workbook.title = `Sección ${reporte.seccion}`;
+    workbook.company = "Profe360";
+    workbook.properties.date1904 = false;
+
+    const worksheet = workbook.addWorksheet("Seccion", {
+      views: [{ state: "frozen", ySplit: 2 }]
+    });
+
+    worksheet.pageSetup = {
+      orientation: "portrait",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      paperSize: 9,
+      horizontalCentered: true,
+      verticalCentered: false,
+      printTitlesRow: "1:2",
+      margins: {
+        left: 0.25,
+        right: 0.25,
+        top: 0.35,
+        bottom: 0.35,
+        header: 0.2,
+        footer: 0.2
+      }
+    };
+
+    worksheet.columns = [
+      { key: "linea", width: 6 },
+      { key: "cedula", width: 16 },
+      { key: "apellido1", width: 22 },
+      { key: "apellido2", width: 22 },
+      { key: "nombre", width: 26 }
+    ];
+
+    worksheet.mergeCells("A1:E1");
+    const titleCell = worksheet.getCell("A1");
+    titleCell.value = `Sección ${reporte.seccion}`;
+    titleCell.font = { bold: true, size: 16, color: { argb: "FF000000" } };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+    worksheet.getRow(1).height = 24;
+
+    const headerRow = worksheet.getRow(2);
+    headerRow.values = ["#", "Cédula", "Apellido 1", "Apellido 2", "Nombre"];
+    headerRow.height = 18;
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FF000000" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDDEBFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FF334155" } },
+        left: { style: "thin", color: { argb: "FF334155" } },
+        bottom: { style: "thin", color: { argb: "FF334155" } },
+        right: { style: "thin", color: { argb: "FF334155" } }
+      };
+    });
+
+    reporte.rows.forEach((item: any, idx: number) => {
+      const rowNumber = idx + 3;
+      const row = worksheet.getRow(rowNumber);
+      row.values = [
+        Number(item.linea || idx + 1),
+        String(item.cedula || ""),
+        String(item.apellido1 || ""),
+        String(item.apellido2 || ""),
+        String(item.nombre || "")
+      ];
+      row.height = 18;
+      const fillColor = idx % 2 === 0 ? "FFFFFFFF" : "FFEEF6FF";
+      row.eachCell((cell, colNumber) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fillColor } };
+        cell.alignment = {
+          horizontal: colNumber === 1 ? "center" : "left",
+          vertical: "middle",
+          wrapText: false
+        };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF64748B" } },
+          left: { style: "thin", color: { argb: "FF64748B" } },
+          bottom: { style: "thin", color: { argb: "FF64748B" } },
+          right: { style: "thin", color: { argb: "FF64748B" } }
+        };
+      });
+      worksheet.getCell(`B${rowNumber}`).numFmt = "@";
+      worksheet.getCell(`B${rowNumber}`).alignment = { horizontal: "left", vertical: "middle", wrapText: false };
+    });
+
+    worksheet.autoFilter = {
+      from: "A2",
+      to: "E2"
+    };
+
+    const rawBuffer: any = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.isBuffer(rawBuffer) ? rawBuffer : Buffer.from(rawBuffer);
+    const fileName = `seccion-${safeExcelFileNamePart(reporte.seccion)}.xlsx`;
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Type, Content-Length");
+    res.setHeader("Content-Length", String(buffer.length));
+    return res.send(buffer);
+  } catch (error) {
+    console.error("Error exportando reporte de sección en Excel:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo exportar el reporte de sección" });
+  }
+});
+
 router.get("/gestion-profe", async (req, res) => {
   const pool = await getPool();
   const institucionId = Number(req.auth?.institucionId || 0);
@@ -1577,6 +1776,19 @@ router.get("/gestion-profe", async (req, res) => {
       ORDER BY g.Nombre, e.PrimerApellido, e.SegundoApellido, e.Nombre
     `);
     return ok(res, result.recordset);
+  }
+
+  if (tipo === "SECCIONES") {
+    if (!grupoId) {
+      return badRequest(res, "Seleccioná una sección para consultar el reporte");
+    }
+
+    const reporte = await buildReporteSeccionData(pool, institucionId, grupoId);
+    if (!reporte) {
+      return badRequest(res, "La sección seleccionada no existe para esta institución");
+    }
+
+    return ok(res, reporte);
   }
 
   if (tipo === "ESTUDIANTES") {
@@ -1875,16 +2087,16 @@ router.get("/gestion-profe", async (req, res) => {
     await ensureBoletaConductaEnvioReportColumns(pool);
 
     if (!["ALUMNO", "SECCION", "PROFESOR"].includes(vistaPor)) {
-      return badRequest(res, "Vista de boletas invÃ¡lida");
+      return badRequest(res, "Vista de boletas inválida");
     }
     if (vistaPor === "ALUMNO" && !estudianteId) {
-      return badRequest(res, "DebÃ©s seleccionar un alumno para este reporte");
+      return badRequest(res, "Debés seleccionar un alumno para este reporte");
     }
     if (vistaPor === "SECCION" && !grupoId) {
-      return badRequest(res, "DebÃ©s seleccionar una secciÃ³n para este reporte");
+      return badRequest(res, "Debés seleccionar una sección para este reporte");
     }
     if (vistaPor === "PROFESOR" && !(profesorId || (!isAdminReportUser(req) && getUserId(req)))) {
-      return badRequest(res, "DebÃ©s seleccionar un profesor para este reporte");
+      return badRequest(res, "Debés seleccionar un profesor para este reporte");
     }
 
     const profesorFiltroId = isAdminReportUser(req) ? profesorId : (getUserId(req) || null);
@@ -2420,7 +2632,7 @@ router.get("/certificaciones/constancia-estudio/:certificacionId", async (req, r
   const pool = await getPool();
   const institucionId = Number(req.auth?.institucionId || 0);
   const certificacionId = Number(req.params.certificacionId || 0);
-  if (!certificacionId) return badRequest(res, "CertificaciÃ³n invÃ¡lida");
+  if (!certificacionId) return badRequest(res, "Certificación inválida");
 
   await ensureCertificacionEstudioTables(pool);
 
@@ -2448,7 +2660,7 @@ router.get("/certificaciones/constancia-estudio/:certificacionId", async (req, r
     `);
 
   const row = result.recordset[0];
-  if (!row) return res.status(404).json({ ok: false, message: "No se encontrÃ³ la certificaciÃ³n" });
+  if (!row) return res.status(404).json({ ok: false, message: "No se encontró la certificación" });
 
   const html = String(row.HtmlSnapshot || "").trim() || buildConstanciaHtml({
     institucion: row,
