@@ -28,6 +28,8 @@ import { parseDateInputAsLocalDate } from "../../utils/date.utils";
 
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
+import { assertCierreCursoAbierto } from "../academico/cierre-curso.utils";
+
 import { reaplicarTrasladosPendientesEnGrupo } from "../academico/matricula-traslado.utils";
 
 
@@ -7231,6 +7233,40 @@ async function getEstructuraPermitidaPorId(req: any, res: any, pool: any, estruc
 
 
   return row;
+
+}
+
+async function responderSiEstructuraCursoCerrado(res: any, pool: any, estructura: any) {
+
+  const input = {
+
+    institucionId: Number(estructura?.InstitucionId || 0),
+
+    grupoId: Number(estructura?.GrupoId || 0),
+
+    materiaId: Number(estructura?.MateriaId || 0),
+
+    anioLectivoId: Number(estructura?.AnioLectivoId || 0),
+
+    periodoId: Number(estructura?.PeriodoId || 0)
+
+  };
+
+  if (!input.institucionId || !input.grupoId || !input.materiaId || !input.anioLectivoId || !input.periodoId) return false;
+
+  const guard = await assertCierreCursoAbierto(pool, input);
+
+  if (guard.abierto) return false;
+
+  return res.status(409).json({
+
+    ok: false,
+
+    message: "El curso ya esta cerrado. Solicita a Direccion la reapertura para realizar cambios.",
+
+    data: { cierre: guard.cierre || null }
+
+  });
 
 }
 
@@ -15312,6 +15348,8 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
     if (!estructura) return;
 
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
+
 
 
     const actividadResult = await pool.request()
@@ -15658,6 +15696,8 @@ router.post("/seguimiento/eliminar-tabla-especificaciones", async (req, res) => 
 
     if (!estructura) return;
 
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
+
 
 
     const actividadResult = await pool.request()
@@ -15923,6 +15963,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
 
     if (!estructura) return;
+
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
 
 
 
@@ -16722,6 +16764,8 @@ router.post("/seguimiento/guardar-nombre-actividad", async (req, res) => {
 
     if (!estructura) return;
 
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
+
 
 
     const actividadResult = await pool.request()
@@ -16893,6 +16937,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
 
     if (!estructura) return;
+
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
 
 
 
@@ -17648,6 +17694,14 @@ router.put("/seguimiento/notas/:notaActividadId/porcentaje", async (req, res) =>
 
 
 
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) {
+
+      await transaction.rollback();
+
+      return;
+
+    }
+
     const puntosMaximos = Number(nota.PuntosMaximos || 0);
 
     const porcentajeAnterior = Number(nota.PorcentajeObtenido || 0);
@@ -17821,6 +17875,8 @@ router.put("/seguimiento/componentes/ajustar-porcentaje", async (req, res) => {
     if (!estructura) return;
 
 
+
+    if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
 
     const detalleRes = await pool.request()
 

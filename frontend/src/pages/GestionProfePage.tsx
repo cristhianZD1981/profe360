@@ -309,6 +309,10 @@ export default function GestionProfePage() {
     observaciones: "",
     hechosRelevantes: ""
   });
+  const [cierreCurso, setCierreCurso] = useState<any | null>(null);
+  const [cierreCursoPreview, setCierreCursoPreview] = useState<any | null>(null);
+  const [loadingCierreCurso, setLoadingCierreCurso] = useState(false);
+  const [savingCierreCurso, setSavingCierreCurso] = useState(false);
   const asistenciaInFlightKeyRef = useRef<string>("");
   const auditoriaInFlightKeyRef = useRef<string>("");
   const bitacoraInFlightKeyRef = useRef<string>("");
@@ -435,6 +439,34 @@ export default function GestionProfePage() {
     () => userRoles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role)),
     [userRoles]
   );
+  const cursoGestionCerrado = useMemo(
+    () => Boolean(cierreCurso?.Cerrado) || String(cierreCurso?.Estado || "").toUpperCase() === "CERRADO_DOCENTE",
+    [cierreCurso]
+  );
+  const panelesBloqueadosPorCierre = useMemo<ActivePanel[]>(
+    () => ["planeamientos", "seguimiento", "examenes_tabla"],
+    []
+  );
+  const panelBloqueadoPorCierre = (panel: ActivePanel) =>
+    cursoGestionCerrado && panelesBloqueadosPorCierre.includes(panel);
+  const getGestionPanelButtonStyleCierre = (panel: ActivePanel): React.CSSProperties => {
+    const base = getGestionPanelButtonStyle(panel);
+    if (!panelBloqueadoPorCierre(panel)) return base;
+    return {
+      ...base,
+      background: "#f1f5f9",
+      borderColor: "#cbd5e1",
+      color: "#64748b",
+      cursor: "not-allowed",
+      opacity: 0.58,
+      boxShadow: "none"
+    };
+  };
+
+  useEffect(() => {
+    if (!cursoGestionCerrado || !panelesBloqueadosPorCierre.includes(activePanel)) return;
+    setActivePanel("");
+  }, [activePanel, cursoGestionCerrado, panelesBloqueadosPorCierre]);
 
   useEffect(() => {
     return () => {
@@ -4262,6 +4294,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setSeguimientoMatrizAsignacionMinimizada(true);
     setBitacorasGrupo([]);
     setBitacoraForm({ temasDesarrollados: "", observaciones: "", hechosRelevantes: "" });
+    setCierreCurso(null);
+    setCierreCursoPreview(null);
     resetPlaneamientoForm();
     setPlaneamientoIaForm({
       ...initialPlaneamientoIaForm,
@@ -4282,6 +4316,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setMessage("");
     setErrorMessage("");
     void loadBitacora(item);
+    void cargarCierreCurso(item, true);
     if (!item.EvaluacionPlantillaId) {
       void loadPlantillasAsignables(item);
     }
@@ -4821,6 +4856,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     estudianteId: number;
     porcentajeActual: number;
   }) {
+    if (cursoGestionCerrado) {
+      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para editar calificaciones.");
+      return;
+    }
     const key = getSeguimientoActividadKey(params.actividadId, params.estudianteId);
     const draftValue = String(notaPorcentajeDrafts[key] ?? "").trim();
     const porcentajeNuevo = Number(draftValue);
@@ -4913,6 +4952,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   async function guardarSeguimientoActividad() {
+    if (cursoGestionCerrado) {
+      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para guardar calificaciones.");
+      return;
+    }
     const estructuraGrupoDetalleId = Number(seguimientoActividadSeleccionada?.EstructuraGrupoDetalleId || seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || 0);
     if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !estructuraGrupoDetalleId || !seguimientoActividadSeleccionada) {
       setErrorMessage("Seleccioná el grupo, la plantilla, el componente y la actividad para guardar");
@@ -5017,6 +5060,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   async function guardarSeguimientoIndicador() {
+    if (cursoGestionCerrado) {
+      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para calificar.");
+      return;
+    }
     if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || !seguimientoIndicadorSeleccionado || (seguimientoModoHibridoTareas && !seguimientoActividadSeleccionada)) {
       setErrorMessage("Seleccioná el grupo, la plantilla, el componente y el indicador para guardar");
       return;
@@ -6657,8 +6704,110 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
   }
 
+  async function cargarCierreCurso(item = selected, soloEstado = false) {
+    if (!item) return;
+    setLoadingCierreCurso(true);
+    try {
+      const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}/cierre`, {
+        params: {
+          anioLectivoId: item.AnioLectivoId,
+          periodoId: item.PeriodoId,
+          soloEstado: soloEstado ? "true" : undefined
+        }
+      });
+      const data = response.data?.data || {};
+      setCierreCurso(data.cierre || null);
+      actualizarCierreCursoEnListado(item, data.cierre || null);
+      if (!soloEstado) setCierreCursoPreview(data.preview || null);
+    } catch (error: any) {
+      console.error("Error cargando cierre del curso:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar el cierre del curso");
+    } finally {
+      setLoadingCierreCurso(false);
+    }
+  }
+
+  function actualizarCierreCursoEnListado(item: GrupoProfesor, cierre: any | null) {
+    const estado = String(cierre?.Estado || "").toUpperCase();
+    const cerrado = Boolean(cierre?.Cerrado) || estado === "CERRADO_DOCENTE";
+    setGrupos((prev) => prev.map((grupo) => {
+      const mismoCurso = Number(grupo.GrupoId) === Number(item.GrupoId)
+        && Number(grupo.MateriaId) === Number(item.MateriaId)
+        && Number(grupo.AnioLectivoId) === Number(item.AnioLectivoId)
+        && Number(grupo.PeriodoId) === Number(item.PeriodoId);
+      if (!mismoCurso) return grupo;
+      return {
+        ...grupo,
+        CursoCerrado: cerrado ? 1 : 0,
+        CierreCursoEstado: cierre?.Estado || null,
+        CierreCursoCerradoAt: cierre?.CerradoAt || null,
+        CierreCursoReabiertoAt: cierre?.ReabiertoAt || null
+      };
+    }));
+  }
+
+  async function cerrarCursoSeleccionado() {
+    if (!selected) return;
+    const incompletos = Number(cierreCursoPreview?.resumen?.totalIncompletos || 0);
+    const mensaje = incompletos > 0
+      ? `El curso tiene ${incompletos} estudiante(s) con advertencias. Se cerrara como Incompleto. Deseas continuar?`
+      : "Deseas cerrar este curso? Al cerrarlo se bloquean nuevas notas, asistencia y bitacora hasta que Direccion lo reabra.";
+    if (!window.confirm(mensaje)) return;
+
+    setSavingCierreCurso(true);
+    try {
+      setMessage("");
+      setErrorMessage("");
+      const response = await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/cierre`, {
+        anioLectivoId: selected.AnioLectivoId,
+        periodoId: selected.PeriodoId
+      });
+      const data = response.data?.data || {};
+      setCierreCurso(data.cierre || null);
+      actualizarCierreCursoEnListado(selected, data.cierre || null);
+      setCierreCursoPreview(data.preview || null);
+      setMessage(response.data?.message || "Curso cerrado correctamente");
+    } catch (error: any) {
+      console.error("Error cerrando curso:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo cerrar el curso");
+    } finally {
+      setSavingCierreCurso(false);
+    }
+  }
+
+  async function reabrirCursoSeleccionado() {
+    if (!selected || !isGestionAdminRole) return;
+    const motivo = window.prompt("Indica el motivo de reapertura");
+    if (!motivo || !motivo.trim()) return;
+
+    setSavingCierreCurso(true);
+    try {
+      setMessage("");
+      setErrorMessage("");
+      const response = await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/cierre/reabrir`, {
+        anioLectivoId: selected.AnioLectivoId,
+        periodoId: selected.PeriodoId,
+        motivo: motivo.trim()
+      });
+      const data = response.data?.data || {};
+      setCierreCurso(data.cierre || null);
+      actualizarCierreCursoEnListado(selected, data.cierre || null);
+      await cargarCierreCurso(selected);
+      setMessage(response.data?.message || "Curso reabierto correctamente");
+    } catch (error: any) {
+      console.error("Error reabriendo curso:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo reabrir el curso");
+    } finally {
+      setSavingCierreCurso(false);
+    }
+  }
+
   async function guardarBitacora() {
     if (!selected) return;
+    if (cursoGestionCerrado) {
+      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para guardar cambios.");
+      return;
+    }
     if (!String(bitacoraForm.temasDesarrollados || "").trim()) {
       setErrorMessage("Temas desarrollados es obligatorio");
       return;
@@ -6687,6 +6836,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   async function handleSaveAsistencia() {
     if (!selected || !detalle) return;
+    if (cursoGestionCerrado) {
+      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para guardar asistencia.");
+      return;
+    }
 
     const leccionesUsar = asistenciaLecciones.length ? asistenciaLecciones : getAsistenciaLeccionesFallback();
     const registros = detalle.estudiantes.flatMap((estudiante) =>
@@ -6831,6 +6984,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   async function handleSaveNotas() {
     if (!selected || !detalle) return;
+    if (cursoGestionCerrado) {
+      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para guardar notas.");
+      return;
+    }
 
     if (!detalle.plantilla) {
       setErrorMessage("No hay una plantilla de evaluación para este grupo y materia");
@@ -7607,6 +7764,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               const tienePlantilla = !!item.EvaluacionPlantillaNombre;
               const tieneCalificaciones = Boolean(Number(item.TieneCalificacionesEvaluacion || 0));
               const puedeCambiarPlantilla = tienePlantilla && !tieneCalificaciones;
+              const estadoCierreListado = String(item.CierreCursoEstado || "").toUpperCase();
+              const cursoCerradoListado = Boolean(Number(item.CursoCerrado || 0)) || estadoCierreListado === "CERRADO_DOCENTE";
+              const cursoCerradoTarjeta = isSelected ? (cursoGestionCerrado || cursoCerradoListado) : cursoCerradoListado;
               const paletaFondos = [
                 { bg: "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)", borde: "#cbd5e1" },
                 { bg: "linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)", borde: "#bfdbfe" },
@@ -7636,9 +7796,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <strong>{item.GrupoNombre}</strong>
                   <span>{item.MateriaCodigo ? `${item.MateriaCodigo} - ` : ""}{item.MateriaNombre}</span>
                   <span style={{ opacity: 0.75 }}>{item.AnioNombre} / {item.PeriodoNombre}</span>
+                  {cursoCerradoTarjeta ? (
+                    <span style={{ display: "inline-flex", width: "fit-content", padding: "5px 9px", borderRadius: "999px", background: "#fee2e2", border: "1px solid #fca5a5", color: "#991b1b", fontWeight: 900 }}>
+                      Curso Cerrado
+                    </span>
+                  ) : null}
                   {!tienePlantilla ? (
                     <span style={{ color: "#b91c1c", fontWeight: 700 }}>Sin plantilla activa</span>
-                  ) : puedeCambiarPlantilla ? (
+                  ) : puedeCambiarPlantilla && !cursoCerradoTarjeta ? (
                     <span style={{ color: "#166534", fontWeight: 700 }}>
                       Plantilla de evaluacion:{" "}
                       <span
@@ -8215,13 +8380,49 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               );
             })()}
 
+            {cursoGestionCerrado ? (
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center", padding: "10px 12px", borderRadius: "12px", border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 900 }}>
+                <span>Curso cerrado</span>
+                <small style={{ color: "#7f1d1d", fontWeight: 700 }}>
+                  Planeamiento e Indicadores, Evaluaciones y Tabla de Especificaciones y Exámenes quedan inactivos hasta que Dirección reabra el curso.
+                </small>
+              </div>
+            ) : null}
+
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <button type="button" className={activePanel === "planeamientos" ? "primary-btn" : undefined} style={activePanel === "planeamientos" ? undefined : getGestionPanelButtonStyle("planeamientos")} onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadPlantillasPlaneamientoIa(); loadEval360PlantillasIaIndicadores(); }}>Planeamiento e Indicadores</button>
-              <button type="button" className={activePanel === "seguimiento" ? "primary-btn" : undefined} style={activePanel === "seguimiento" ? undefined : getGestionPanelButtonStyle("seguimiento")} onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}>Evaluaciones</button>
+              <button
+                type="button"
+                className={activePanel === "planeamientos" && !panelBloqueadoPorCierre("planeamientos") ? "primary-btn" : undefined}
+                style={activePanel === "planeamientos" && !panelBloqueadoPorCierre("planeamientos") ? undefined : getGestionPanelButtonStyleCierre("planeamientos")}
+                onClick={() => { setActivePanel("planeamientos"); loadPlaneamientos(selected); loadPlantillasPlaneamientoIa(); loadEval360PlantillasIaIndicadores(); }}
+                disabled={panelBloqueadoPorCierre("planeamientos")}
+                title={panelBloqueadoPorCierre("planeamientos") ? "Curso cerrado. Solicita a Dirección la reapertura." : undefined}
+              >
+                Planeamiento e Indicadores
+              </button>
+              <button
+                type="button"
+                className={activePanel === "seguimiento" && !panelBloqueadoPorCierre("seguimiento") ? "primary-btn" : undefined}
+                style={activePanel === "seguimiento" && !panelBloqueadoPorCierre("seguimiento") ? undefined : getGestionPanelButtonStyleCierre("seguimiento")}
+                onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}
+                disabled={panelBloqueadoPorCierre("seguimiento")}
+                title={panelBloqueadoPorCierre("seguimiento") ? "Curso cerrado. Solicita a Dirección la reapertura." : undefined}
+              >
+                Evaluaciones
+              </button>
               <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitácora</button>
-              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); }}>Reportes</button>
+              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); cargarCierreCurso(selected); }}>Reportes</button>
               <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
-              <button type="button" className={activePanel === "examenes_tabla" ? "primary-btn" : undefined} style={activePanel === "examenes_tabla" ? undefined : getGestionPanelButtonStyle("examenes_tabla")} onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}>Tabla de Especificaciones y Exámenes</button>
+              <button
+                type="button"
+                className={activePanel === "examenes_tabla" && !panelBloqueadoPorCierre("examenes_tabla") ? "primary-btn" : undefined}
+                style={activePanel === "examenes_tabla" && !panelBloqueadoPorCierre("examenes_tabla") ? undefined : getGestionPanelButtonStyleCierre("examenes_tabla")}
+                onClick={() => { setTablaMatrizMinimizada(true); setActivePanel("examenes_tabla"); if (selected) loadSeguimientoEvaluacion(selected); }}
+                disabled={panelBloqueadoPorCierre("examenes_tabla")}
+                title={panelBloqueadoPorCierre("examenes_tabla") ? "Curso cerrado. Solicita a Dirección la reapertura." : undefined}
+              >
+                Tabla de Especificaciones y Exámenes
+              </button>
             </div>
 
             <div style={{ marginTop: "10px", padding: "10px 12px", borderRadius: "12px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a" }}>
@@ -8268,7 +8469,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </label>
                   <div style={{ color: "#475569", fontWeight: 700, fontSize: "12px" }}>Fecha de inclusión: automática del sistema.</div>
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                    <button type="button" className="primary-btn" onClick={guardarBitacora} disabled={savingBitacora || !selected}>
+                    <button type="button" className="primary-btn" onClick={guardarBitacora} disabled={savingBitacora || !selected || cursoGestionCerrado}>
                       {savingBitacora ? "Guardando..." : "Guardar bitácora"}
                     </button>
                     <button
@@ -8474,8 +8675,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                     borderColor: (componente as any).ajustadoManual ? "#ef4444" : (secondaryButtonStyle as any).borderColor,
                                                     fontWeight: 800
                                                   }}
-                                                  disabled={savingNotaPorcentajeKey === keyAjuste}
+                                                  disabled={savingNotaPorcentajeKey === keyAjuste || cursoGestionCerrado}
                                                   onClick={async () => {
+                                                    if (cursoGestionCerrado) {
+                                                      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para editar calificaciones.");
+                                                      return;
+                                                    }
                                                     const valor = Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0);
                                                     const nuevoTxt = String(window.prompt(`Nuevo % obtenido para ${alumno.nombre} en ${detalleItem.Nombre} (máximo ${valor.toFixed(2)}):`, valorActual.toFixed(2)) || "").trim();
                                                     const nuevo = Number(nuevoTxt);
@@ -8513,7 +8718,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                     }
                                                   }}
                                                 >
-                                                  {savingNotaPorcentajeKey === keyAjuste ? "..." : ((componente as any).ajustadoManual ? "Editado" : "Editar")}
+                                                  {cursoGestionCerrado ? "Cerrado" : (savingNotaPorcentajeKey === keyAjuste ? "..." : ((componente as any).ajustadoManual ? "Editado" : "Editar"))}
                                                 </button>
                                               </div>
                                             </td>
@@ -8569,7 +8774,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                           <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>Estado</th>
                                                           <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>Nota</th>
                                                           <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>% ganado</th>
-                                                          <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>Editar % obtenido</th>
+                                                          <th style={{ padding: "7px", border: "1px solid #cbd5e1", textAlign: "left" }}>{cursoGestionCerrado ? "Modo lectura" : "Editar % obtenido"}</th>
                                                         </tr>
                                                       </thead>
                                                       <tbody>
@@ -8624,7 +8829,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                                     min={0}
                                                                     max={100}
                                                                     step="0.01"
-                                                                    style={{ ...inputNotaStyle, minWidth: "86px", width: "86px", padding: "4px 6px", fontSize: "12px" }}
+                                                                    disabled={cursoGestionCerrado}
+                                                                    style={{
+                                                                      ...inputNotaStyle,
+                                                                      minWidth: "86px",
+                                                                      width: "86px",
+                                                                      padding: "4px 6px",
+                                                                      fontSize: "12px",
+                                                                      background: cursoGestionCerrado ? "#e2e8f0" : inputNotaStyle.background,
+                                                                      color: cursoGestionCerrado ? "#64748b" : inputNotaStyle.color,
+                                                                      cursor: cursoGestionCerrado ? "not-allowed" : "text"
+                                                                    }}
                                                                     value={
                                                                       notaPorcentajeDrafts[getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0))]
                                                                       ?? String(Number((detalleItem as any).porcentajeObtenido || detalleItem.nota || 0).toFixed(2))
@@ -8644,19 +8859,23 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                                       borderColor: Number((detalleItem as any).fueEditado || 0) === 1 ? "#ef4444" : (secondaryButtonStyle as any).borderColor,
                                                                       fontWeight: 800
                                                                     }}
-                                                                    disabled={savingNotaPorcentajeKey === getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0))}
-                                                                    onClick={() =>
+                                                                    disabled={savingNotaPorcentajeKey === getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0)) || cursoGestionCerrado}
+                                                                    onClick={() => {
+                                                                      if (cursoGestionCerrado) {
+                                                                        setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para editar calificaciones.");
+                                                                        return;
+                                                                      }
                                                                       guardarEdicionPorcentajeNota({
                                                                         notaActividadId: Number((detalleItem as any).notaActividadId),
                                                                         actividadId: Number((detalleItem as any).actividadId),
                                                                         estudianteId: Number(alumno.estudiante?.EstudianteId || 0),
                                                                         porcentajeActual: Number((detalleItem as any).porcentajeObtenido || detalleItem.nota || 0)
-                                                                      })
-                                                                    }
+                                                                      });
+                                                                    }}
                                                                   >
                                                                     {savingNotaPorcentajeKey === getSeguimientoActividadKey(Number((detalleItem as any).actividadId || 0), Number(alumno.estudiante?.EstudianteId || 0))
                                                                       ? "Guardando..."
-                                                                      : (Number((detalleItem as any).fueEditado || 0) === 1 ? "Editado" : "Guardar")}
+                                                                      : (cursoGestionCerrado ? "Cerrado" : (Number((detalleItem as any).fueEditado || 0) === 1 ? "Editado" : "Guardar"))}
                                                                   </button>
                                                                 </div>
                                                               ) : (
@@ -9085,7 +9304,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 type="button"
                                 className="primary-btn"
                                 onClick={handleSaveAsistencia}
-                                disabled={savingAsistencia || loadingAsistencia || !detalle?.estudiantes?.length}
+                                disabled={savingAsistencia || loadingAsistencia || !detalle?.estudiantes?.length || cursoGestionCerrado}
                                 style={savedAsistencia ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
                               >
                                 {savingAsistencia ? "Guardando..." : (savedAsistencia ? "Guardado" : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia"))}
@@ -9282,6 +9501,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   savingSeguimiento
                                   || !seguimientoActividadSeleccionada
                                   || toNumeroComparacion(getSeguimientoActividadPuntosMaximos(seguimientoActividadSeleccionada)) <= 0
+                                  || cursoGestionCerrado
                                 }
                                 style={savedSeguimientoModo === "actividad" ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
                               >
@@ -9597,7 +9817,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                   type="button"
                                   className="primary-btn"
                                   onClick={guardarSeguimientoIndicador}
-                                  disabled={savingSeguimiento || !seguimientoIndicadorSeleccionado}
+                                  disabled={savingSeguimiento || !seguimientoIndicadorSeleccionado || cursoGestionCerrado}
                                   style={savedSeguimientoModo === "indicador" ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
                                 >
                                   {savingSeguimiento && savingSeguimientoModo === "indicador" ? "Guardando..." : (savedSeguimientoModo === "indicador" ? "Guardado" : "Calificar")}
@@ -9770,7 +9990,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               <div style={{ overflowX: "auto" }}>
                 <h4>Estructura de evaluación</h4>
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
-                  <button type="button" className="primary-btn" onClick={handleSaveNotas} disabled={savingNotas || !detalle.plantilla || detalle.actividades.length === 0}>
+                  <button type="button" className="primary-btn" onClick={handleSaveNotas} disabled={savingNotas || !detalle.plantilla || detalle.actividades.length === 0 || cursoGestionCerrado}>
                     {savingNotas ? "Guardando notas..." : "Guardar notas"}
                   </button>
                 </div>
@@ -9839,7 +10059,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         }}
                       />
                     </label>
-                    <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia}>
+                    <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia || cursoGestionCerrado}>
                       {savingAsistencia ? "Guardando asistencia..." : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia")}
                     </button>
                   </div>
@@ -12212,6 +12432,70 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </div>
                   </div>
                 </div>
+                <div style={{ display: "grid", gap: "12px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "12px", background: "#ffffff", color: "#0f172a" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                    <div>
+                      <h4 style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 900 }}>Cierre del curso</h4>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{
+                          padding: "6px 10px",
+                          borderRadius: "999px",
+                          background: cursoGestionCerrado ? "#fee2e2" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "#fef3c7" : "#dcfce7"),
+                          color: cursoGestionCerrado ? "#991b1b" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "#92400e" : "#166534"),
+                          border: cursoGestionCerrado ? "1px solid #fecaca" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "1px solid #fde68a" : "1px solid #bbf7d0"),
+                          fontWeight: 900
+                        }}>
+                          {loadingCierreCurso ? "Cargando..." : (cursoGestionCerrado ? "Cerrado por docente" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "Reabierto por Direccion" : "Abierto"))}
+                        </span>
+                        {cierreCurso?.CerradoAt ? (
+                          <span style={{ color: "#475569", fontWeight: 700 }}>Cerrado: {new Date(cierreCurso.CerradoAt).toLocaleString("es-CR")}</span>
+                        ) : null}
+                        {cierreCurso?.ReabiertoAt ? (
+                          <span style={{ color: "#475569", fontWeight: 700 }}>Reabierto: {new Date(cierreCurso.ReabiertoAt).toLocaleString("es-CR")}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => cargarCierreCurso(selected)} disabled={!selected || loadingCierreCurso || savingCierreCurso}>
+                        Actualizar
+                      </button>
+                      <button type="button" className="primary-btn" onClick={cerrarCursoSeleccionado} disabled={!selected || loadingCierreCurso || savingCierreCurso || cursoGestionCerrado}>
+                        {savingCierreCurso && !cursoGestionCerrado ? "Cerrando..." : "Cerrar curso"}
+                      </button>
+                      {isGestionAdminRole && cursoGestionCerrado ? (
+                        <button type="button" style={secondaryButtonStyle} onClick={reabrirCursoSeleccionado} disabled={!selected || loadingCierreCurso || savingCierreCurso}>
+                          {savingCierreCurso ? "Reabriendo..." : "Reabrir curso"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "10px" }}>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}>
+                      <strong>Estado de datos</strong>
+                      <span style={{ fontSize: "22px", fontWeight: 900 }}>{cierreCursoPreview?.resumen?.estado || "-"}</span>
+                    </div>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}>
+                      <strong>Promedio general</strong>
+                      <span style={{ fontSize: "22px", fontWeight: 900 }}>{cierreCursoPreview?.resumen?.promedioGeneral ?? "-"}</span>
+                    </div>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}>
+                      <strong>Estudiantes</strong>
+                      <span style={{ fontSize: "22px", fontWeight: 900 }}>{cierreCursoPreview?.resumen?.totalEstudiantes ?? "-"}</span>
+                    </div>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}>
+                      <strong>Incompletos</strong>
+                      <span style={{ fontSize: "22px", fontWeight: 900, color: Number(cierreCursoPreview?.resumen?.totalIncompletos || 0) > 0 ? "#b91c1c" : "#166534" }}>{cierreCursoPreview?.resumen?.totalIncompletos ?? "-"}</span>
+                    </div>
+                  </div>
+
+                  {Array.isArray(cierreCursoPreview?.advertencias) && cierreCursoPreview.advertencias.length ? (
+                    <div style={{ padding: "10px 12px", borderRadius: "10px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", fontWeight: 800 }}>
+                      {cierreCursoPreview.advertencias.slice(0, 3).join(" ")}
+                      {cierreCursoPreview.advertencias.length > 3 ? ` y ${cierreCursoPreview.advertencias.length - 3} advertencia(s) mas.` : ""}
+                    </div>
+                  ) : null}
+                </div>
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                   <button type="button" className="primary-btn" onClick={exportarReporteActualExcel} disabled={!selected}>
                     Exportar Excel
@@ -12685,9 +12969,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   </div>
                   <strong>Acumulado grupal: {formatPercent(resumenGrupo.totalPorcentaje)}</strong>
                 </div>
+                {cursoGestionCerrado ? (
+                  <div style={{ marginBottom: "12px", padding: "10px 12px", borderRadius: "12px", border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", fontWeight: 900 }}>
+                    Curso Cerrado. Las notas quedan en modo lectura hasta que Dirección reabra el curso.
+                  </div>
+                ) : null}
 
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
-                  <button type="button" className="primary-btn" onClick={handleSaveNotas} disabled={savingNotas || !detalle.plantilla || detalle.actividades.length === 0}>
+                  <button type="button" className="primary-btn" onClick={handleSaveNotas} disabled={savingNotas || !detalle.plantilla || detalle.actividades.length === 0 || cursoGestionCerrado}>
                     {savingNotas ? "Guardando notas..." : "Guardar notas"}
                   </button>
                 </div>
@@ -12741,7 +13030,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     onChange={(e) => updateNotaDraft(estudiante.EstudianteId, actividad.EvaluacionActividadId, e.target.value)}
                                     onBlur={() => normalizeNotaOnBlur(estudiante.EstudianteId, actividad.EvaluacionActividadId)}
                                     placeholder="0-100"
-                                    style={inputNotaStyle}
+                                    disabled={cursoGestionCerrado}
+                                    style={{
+                                      ...inputNotaStyle,
+                                      background: cursoGestionCerrado ? "#e2e8f0" : inputNotaStyle.background,
+                                      color: cursoGestionCerrado ? "#64748b" : inputNotaStyle.color,
+                                      cursor: cursoGestionCerrado ? "not-allowed" : "text"
+                                    }}
                                   />
                                   <small style={{ opacity: 0.75 }}>Gana: {formatPercent(porcentajeGanado)}</small>
                                 </div>

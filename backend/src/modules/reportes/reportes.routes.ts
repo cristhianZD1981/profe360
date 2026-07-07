@@ -5,6 +5,11 @@ import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, ok } from "../../utils/http";
 import { getCostaRicaIsoDate, parseDateInputAsLocalDate } from "../../utils/date.utils";
 import {
+  CIERRE_CURSO_ESTADO_CERRADO,
+  CIERRE_CURSO_ESTADO_REABIERTO,
+  ensureCierreAcademicoCursoTables
+} from "../academico/cierre-curso.utils";
+import {
   AlignmentType,
   BorderStyle,
   Document,
@@ -145,6 +150,405 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
   return {
     seccion: String(grupo.GrupoNombre || ""),
     rows: result.recordset
+  };
+}
+
+function toRoundedNumber(value: number | null | undefined, digits = 2) {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(Number(value))) return null;
+  return Number(Number(value).toFixed(digits));
+}
+
+function calcularPuntosAsistenciaArticulo37(totalLecciones: number, ausenciasEquivalentes: number) {
+  if (!totalLecciones) return 0;
+  const porcentajeAusencias = (Number(ausenciasEquivalentes || 0) * 100) / Number(totalLecciones || 1);
+  if (porcentajeAusencias >= 50) return 0;
+  if (porcentajeAusencias >= 40) return 1;
+  if (porcentajeAusencias >= 30) return 2;
+  if (porcentajeAusencias >= 20) return 3;
+  if (porcentajeAusencias >= 10) return 4;
+  return 5;
+}
+
+async function buildPromediosAcademicosPreview(params: {
+  pool: any;
+  institucionId: number;
+  anioLectivoId: number;
+  periodoId: number | null;
+  grupoId: number | null;
+  modo: "PERIODO" | "ANUAL";
+}) {
+  const { pool, institucionId, anioLectivoId, periodoId, grupoId, modo } = params;
+
+  const periodosResult = await timedQuery("reportes.promedios.periodos", () => pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anioLectivoId)
+    .input("periodoId", sql.Int, periodoId)
+    .input("grupoId", sql.Int, grupoId)
+    .input("modo", sql.NVarChar(20), modo)
+    .query(`
+      SELECT
+        p.PeriodoId,
+        p.Nombre AS PeriodoNombre,
+        p.NumeroOrden,
+        a.Nombre AS AnioNombre
+      FROM dbo.Periodo p
+      INNER JOIN dbo.AnioLectivo a
+        ON a.AnioLectivoId = p.AnioLectivoId
+      WHERE a.InstitucionId = @institucionId
+        AND p.AnioLectivoId = @anioLectivoId
+        AND p.Activo = 1
+        AND (@modo = N'ANUAL' OR p.PeriodoId = @periodoId)
+        AND (
+          @modo <> N'ANUAL'
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.GrupoMateria gm
+            INNER JOIN dbo.Grupo g
+              ON g.GrupoId = gm.GrupoId
+            INNER JOIN dbo.Materia ma
+              ON ma.MateriaId = gm.MateriaId
+            WHERE g.InstitucionId = @institucionId
+              AND gm.Activo = 1
+              AND ISNULL(ma.Activa, 1) = 1
+              AND ma.Nombre COLLATE Latin1_General_CI_AI NOT LIKE N'%GUIA%'
+              AND ISNULL(ma.Codigo, N'') COLLATE Latin1_General_CI_AI NOT LIKE N'%GUIA%'
+              AND (gm.PeriodoId = p.PeriodoId OR gm.PeriodoId IS NULL)
+              AND (@grupoId IS NULL OR gm.GrupoId = @grupoId)
+          )
+        )
+      ORDER BY p.NumeroOrden, p.PeriodoId
+    `));
+
+  const periodos = periodosResult.recordset || [];
+  if (!periodos.length) {
+    return {
+      resumen: {
+        modo,
+        anioLectivoId,
+        periodoId,
+        grupoId,
+        totalEstudiantes: 0,
+        completos: 0,
+        incompletos: 0,
+        promedioGeneral: null,
+        advertencia: "No hay períodos activos para los filtros seleccionados."
+      },
+      rows: []
+    };
+  }
+
+  const result = await timedQuery("reportes.promedios.preview", () => pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anioLectivoId)
+    .input("periodoId", sql.Int, periodoId)
+    .input("grupoId", sql.Int, grupoId)
+    .input("modo", sql.NVarChar(20), modo)
+    .query(`
+      WITH PeriodosObjetivo AS (
+        SELECT p.PeriodoId, p.Nombre AS PeriodoNombre, p.NumeroOrden
+        FROM dbo.Periodo p
+        INNER JOIN dbo.AnioLectivo a
+          ON a.AnioLectivoId = p.AnioLectivoId
+        WHERE a.InstitucionId = @institucionId
+          AND p.AnioLectivoId = @anioLectivoId
+          AND p.Activo = 1
+          AND (@modo = N'ANUAL' OR p.PeriodoId = @periodoId)
+          AND (
+            @modo <> N'ANUAL'
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.GrupoMateria gm
+              INNER JOIN dbo.Grupo g
+                ON g.GrupoId = gm.GrupoId
+              INNER JOIN dbo.Materia ma
+                ON ma.MateriaId = gm.MateriaId
+              WHERE g.InstitucionId = @institucionId
+                AND gm.Activo = 1
+                AND ISNULL(ma.Activa, 1) = 1
+                AND ma.Nombre COLLATE Latin1_General_CI_AI NOT LIKE N'%GUIA%'
+                AND ISNULL(ma.Codigo, N'') COLLATE Latin1_General_CI_AI NOT LIKE N'%GUIA%'
+                AND (gm.PeriodoId = p.PeriodoId OR gm.PeriodoId IS NULL)
+                AND (@grupoId IS NULL OR gm.GrupoId = @grupoId)
+            )
+          )
+      ),
+      EstudiantesActuales AS (
+        SELECT *
+        FROM (
+          SELECT
+            m.MatriculaId,
+            m.EstudianteId,
+            m.GrupoId,
+            e.Identificacion,
+            e.PrimerApellido,
+            e.SegundoApellido,
+            e.Nombre,
+            g.Nombre AS GrupoNombre,
+            ROW_NUMBER() OVER (
+              PARTITION BY m.EstudianteId
+              ORDER BY
+                CASE WHEN UPPER(LTRIM(RTRIM(ISNULL(m.Estado, N'')))) = N'ACTIVA' THEN 0 ELSE 1 END,
+                m.MatriculaId DESC
+            ) AS rn
+          FROM dbo.Matricula m
+          INNER JOIN dbo.Estudiante e
+            ON e.EstudianteId = m.EstudianteId
+          INNER JOIN dbo.Grupo g
+            ON g.GrupoId = m.GrupoId
+          WHERE e.InstitucionId = @institucionId
+            AND e.Activo = 1
+            AND g.InstitucionId = @institucionId
+            AND m.AnioLectivoId = @anioLectivoId
+            AND ISNULL(m.Estado, N'') <> N'Inactiva'
+        ) base
+        WHERE rn = 1
+          AND (@grupoId IS NULL OR GrupoId = @grupoId)
+      ),
+      MateriasPeriodo AS (
+        SELECT
+          gm.GrupoId,
+          gm.MateriaId,
+          p.PeriodoId,
+          MIN(gm.GrupoMateriaId) AS GrupoMateriaId
+        FROM dbo.GrupoMateria gm
+        INNER JOIN dbo.Materia ma
+          ON ma.MateriaId = gm.MateriaId
+        INNER JOIN PeriodosObjetivo p
+          ON gm.PeriodoId = p.PeriodoId OR gm.PeriodoId IS NULL
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+        WHERE g.InstitucionId = @institucionId
+          AND gm.Activo = 1
+          AND ISNULL(ma.Activa, 1) = 1
+          AND ma.Nombre COLLATE Latin1_General_CI_AI NOT LIKE N'%GUIA%'
+          AND ISNULL(ma.Codigo, N'') COLLATE Latin1_General_CI_AI NOT LIKE N'%GUIA%'
+        GROUP BY gm.GrupoId, gm.MateriaId, p.PeriodoId
+      ),
+      NotasMateria AS (
+        SELECT
+          en.EstudianteId,
+          en.GrupoId,
+          en.MateriaId,
+          en.PeriodoId,
+          COUNT(en.EvaluacionNotaId) AS RegistrosNota,
+          SUM(CAST(ISNULL(en.PorcentajeGanado, 0) AS DECIMAL(10,4))) AS AcumuladoEvaluacion
+        FROM dbo.EvaluacionNota en
+        INNER JOIN PeriodosObjetivo p
+          ON p.PeriodoId = en.PeriodoId
+        GROUP BY en.EstudianteId, en.GrupoId, en.MateriaId, en.PeriodoId
+      ),
+      TotalLecciones AS (
+        SELECT
+          ar.GrupoId,
+          ar.MateriaId,
+          ar.PeriodoId,
+          COUNT(DISTINCT CONCAT(CONVERT(varchar(10), ar.Fecha, 23), '-', ISNULL(CONVERT(varchar(20), ar.HorarioGrupoId), '0'))) AS TotalLecciones
+        FROM dbo.AsistenciaRegistro ar
+        INNER JOIN PeriodosObjetivo p
+          ON p.PeriodoId = ar.PeriodoId
+        WHERE ar.AnioLectivoId = @anioLectivoId
+        GROUP BY ar.GrupoId, ar.MateriaId, ar.PeriodoId
+      ),
+      AusenciasEstudiante AS (
+        SELECT
+          ar.EstudianteId,
+          ar.GrupoId,
+          ar.MateriaId,
+          ar.PeriodoId,
+          SUM(CASE
+            WHEN UPPER(LTRIM(RTRIM(ISNULL(ar.Estado, N'')))) IN (N'AUSENTE_INJUSTIFICADA', N'TARDIA_MAYOR_10') THEN 1.0
+            WHEN UPPER(LTRIM(RTRIM(ISNULL(ar.Estado, N'')))) = N'TARDIA_MENOR_10' THEN 0.5
+            ELSE 0.0
+          END) AS AusenciasEquivalentes
+        FROM dbo.AsistenciaRegistro ar
+        INNER JOIN PeriodosObjetivo p
+          ON p.PeriodoId = ar.PeriodoId
+        WHERE ar.AnioLectivoId = @anioLectivoId
+        GROUP BY ar.EstudianteId, ar.GrupoId, ar.MateriaId, ar.PeriodoId
+      )
+      SELECT
+        ea.EstudianteId,
+        ea.Identificacion,
+        ea.PrimerApellido,
+        ea.SegundoApellido,
+        ea.Nombre,
+        ea.GrupoId,
+        ea.GrupoNombre,
+        p.PeriodoId,
+        p.PeriodoNombre,
+        p.NumeroOrden,
+        mp.MateriaId,
+        ma.Nombre AS MateriaNombre,
+        ISNULL(nm.RegistrosNota, 0) AS RegistrosNota,
+        ISNULL(nm.AcumuladoEvaluacion, 0) AS AcumuladoEvaluacion,
+        ISNULL(tl.TotalLecciones, 0) AS TotalLecciones,
+        ISNULL(ae.AusenciasEquivalentes, 0) AS AusenciasEquivalentes
+      FROM EstudiantesActuales ea
+      CROSS JOIN PeriodosObjetivo p
+      LEFT JOIN MateriasPeriodo mp
+        ON mp.GrupoId = ea.GrupoId
+       AND mp.PeriodoId = p.PeriodoId
+      LEFT JOIN dbo.Materia ma
+        ON ma.MateriaId = mp.MateriaId
+      LEFT JOIN NotasMateria nm
+        ON nm.EstudianteId = ea.EstudianteId
+       AND nm.GrupoId = ea.GrupoId
+       AND nm.MateriaId = mp.MateriaId
+       AND nm.PeriodoId = p.PeriodoId
+      LEFT JOIN TotalLecciones tl
+        ON tl.GrupoId = ea.GrupoId
+       AND tl.MateriaId = mp.MateriaId
+       AND tl.PeriodoId = p.PeriodoId
+      LEFT JOIN AusenciasEstudiante ae
+        ON ae.EstudianteId = ea.EstudianteId
+       AND ae.GrupoId = ea.GrupoId
+       AND ae.MateriaId = mp.MateriaId
+       AND ae.PeriodoId = p.PeriodoId
+      ORDER BY
+        TRY_CONVERT(int, LEFT(LTRIM(ea.GrupoNombre), PATINDEX('%[^0-9]%', LTRIM(ea.GrupoNombre) + 'X') - 1)),
+        TRY_CONVERT(int, SUBSTRING(ea.GrupoNombre, CHARINDEX('-', ea.GrupoNombre + '-') + 1, 20)),
+        ea.GrupoNombre,
+        ea.PrimerApellido,
+        ea.SegundoApellido,
+        ea.Nombre,
+        p.NumeroOrden,
+        ma.Nombre
+    `));
+
+  const periodosOrdenados = periodos.map((item: any) => ({
+    periodoId: Number(item.PeriodoId),
+    nombre: String(item.PeriodoNombre || ""),
+    orden: Number(item.NumeroOrden || 0),
+    anioNombre: String(item.AnioNombre || "")
+  }));
+
+  const estudiantes = new Map<number, any>();
+  for (const row of result.recordset || []) {
+    const estudianteId = Number(row.EstudianteId);
+    if (!estudiantes.has(estudianteId)) {
+      estudiantes.set(estudianteId, {
+        estudianteId,
+        cedula: String(row.Identificacion || ""),
+        apellido1: String(row.PrimerApellido || ""),
+        apellido2: String(row.SegundoApellido || ""),
+        nombre: String(row.Nombre || ""),
+        seccion: String(row.GrupoNombre || ""),
+        periodos: new Map<number, any>()
+      });
+    }
+
+    const estudiante = estudiantes.get(estudianteId);
+    const periodoIdRow = Number(row.PeriodoId);
+    if (!estudiante.periodos.has(periodoIdRow)) {
+      estudiante.periodos.set(periodoIdRow, {
+        periodoId: periodoIdRow,
+        nombre: String(row.PeriodoNombre || ""),
+        materiasEsperadas: 0,
+        materiasConNota: 0,
+        sumaNotas: 0,
+        materiasSinNota: [] as string[]
+      });
+    }
+
+    const periodo = estudiante.periodos.get(periodoIdRow);
+    const materiaId = Number(row.MateriaId || 0);
+    if (!materiaId) continue;
+
+    periodo.materiasEsperadas += 1;
+    const materiaNombre = String(row.MateriaNombre || "").trim() || `Materia ${materiaId}`;
+    const registrosNota = Number(row.RegistrosNota || 0);
+    const acumulado = Number(row.AcumuladoEvaluacion || 0);
+    const totalLecciones = Number(row.TotalLecciones || 0);
+    const ausenciasEquivalentes = Number(row.AusenciasEquivalentes || 0);
+    const asistencia = calcularPuntosAsistenciaArticulo37(totalLecciones, ausenciasEquivalentes);
+    const notaFinal = Math.max(0, Math.min(100, Number((acumulado + asistencia).toFixed(2))));
+
+    if (registrosNota > 0) {
+      periodo.materiasConNota += 1;
+      periodo.sumaNotas += notaFinal;
+    } else {
+      periodo.materiasSinNota.push(materiaNombre);
+    }
+  }
+
+  const rows = Array.from(estudiantes.values()).map((estudiante: any, index: number) => {
+    for (const periodo of periodosOrdenados) {
+      if (!estudiante.periodos.has(periodo.periodoId)) {
+        estudiante.periodos.set(periodo.periodoId, {
+          periodoId: periodo.periodoId,
+          nombre: periodo.nombre,
+          materiasEsperadas: 0,
+          materiasConNota: 0,
+          sumaNotas: 0,
+          materiasSinNota: []
+        });
+      }
+    }
+
+    const periodosAlumno = periodosOrdenados.map((periodo) => estudiante.periodos.get(periodo.periodoId));
+    const advertencias: string[] = [];
+
+    for (const periodo of periodosAlumno) {
+      if (!periodo.materiasEsperadas) {
+        advertencias.push(`${periodo.nombre}: no hay materias activas configuradas.`);
+      } else if (periodo.materiasSinNota.length) {
+        const lista = periodo.materiasSinNota.slice(0, 4).join(", ");
+        const extra = periodo.materiasSinNota.length > 4 ? ` y ${periodo.materiasSinNota.length - 4} más` : "";
+        advertencias.push(`${periodo.nombre}: faltan notas en ${lista}${extra}.`);
+      }
+    }
+
+    const periodosConPromedio = periodosAlumno
+      .map((periodo) => periodo.materiasConNota > 0 ? periodo.sumaNotas / periodo.materiasConNota : null)
+      .filter((value) => value !== null) as number[];
+
+    const materiasEsperadas = periodosAlumno.reduce((total, item) => total + Number(item.materiasEsperadas || 0), 0);
+    const materiasConNota = periodosAlumno.reduce((total, item) => total + Number(item.materiasConNota || 0), 0);
+    const promedio = modo === "ANUAL"
+      ? (periodosConPromedio.length ? periodosConPromedio.reduce((total, value) => total + value, 0) / periodosConPromedio.length : null)
+      : (periodosAlumno[0]?.materiasConNota > 0 ? periodosAlumno[0].sumaNotas / periodosAlumno[0].materiasConNota : null);
+
+    const estado = advertencias.length ? "Incompleto" : "Completo";
+    const advertenciaTexto = advertencias.length
+      ? `${advertencias.slice(0, 3).join(" ")}${advertencias.length > 3 ? ` ${advertencias.length - 3} advertencia(s) adicional(es).` : ""}`
+      : "";
+
+    return {
+      linea: index + 1,
+      cedula: estudiante.cedula,
+      apellido1: estudiante.apellido1,
+      apellido2: estudiante.apellido2,
+      nombre: estudiante.nombre,
+      seccion: estudiante.seccion,
+      periodos: `${periodosConPromedio.length}/${periodosOrdenados.length}`,
+      materias: `${materiasConNota}/${materiasEsperadas}`,
+      promedio: toRoundedNumber(promedio),
+      estado,
+      advertencias: advertenciaTexto
+    };
+  });
+
+  const promediosValidos = rows
+    .map((row: any) => Number(row.promedio))
+    .filter((value: number) => Number.isFinite(value));
+
+  return {
+    resumen: {
+      modo,
+      anioLectivoId,
+      anioLectivo: String(periodosOrdenados[0]?.anioNombre || ""),
+      periodoId: modo === "PERIODO" ? Number(periodoId || 0) : null,
+      periodo: modo === "PERIODO" ? String(periodosOrdenados[0]?.nombre || "") : "Anual",
+      grupoId,
+      totalEstudiantes: rows.length,
+      completos: rows.filter((row: any) => row.estado === "Completo").length,
+      incompletos: rows.filter((row: any) => row.estado !== "Completo").length,
+      promedioGeneral: promediosValidos.length
+        ? toRoundedNumber(promediosValidos.reduce((total: number, value: number) => total + value, 0) / promediosValidos.length)
+        : null
+    },
+    rows
   };
 }
 
@@ -1495,6 +1899,40 @@ router.get("/gestion-filtros", async (req, res) => {
     const filtroProfesor = isAdminReportUser(req) ? "" : "AND u.UsuarioId = @usuarioId";
     const institucionId = Number(req.auth?.institucionId || 0);
 
+    const aniosResult = await timedQuery("reportes.gestion-filtros.anios", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT
+          AnioLectivoId,
+          Nombre,
+          FechaInicio,
+          FechaFin,
+          Activo
+        FROM dbo.AnioLectivo
+        WHERE InstitucionId = @institucionId
+          AND Activo = 1
+        ORDER BY FechaInicio DESC, AnioLectivoId DESC
+      `));
+
+    const periodosResult = await timedQuery("reportes.gestion-filtros.periodos", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT
+          p.PeriodoId,
+          p.AnioLectivoId,
+          p.Nombre,
+          p.NumeroOrden,
+          p.FechaInicio,
+          p.FechaFin,
+          a.Nombre AS AnioNombre
+        FROM dbo.Periodo p
+        INNER JOIN dbo.AnioLectivo a
+          ON a.AnioLectivoId = p.AnioLectivoId
+        WHERE a.InstitucionId = @institucionId
+          AND p.Activo = 1
+        ORDER BY a.FechaInicio DESC, p.NumeroOrden ASC
+      `));
+
     const seccionesResult = await timedQuery("reportes.gestion-filtros.secciones", () => pool.request()
       .input("institucionId", sql.Int, institucionId)
       .query(`
@@ -1589,6 +2027,8 @@ router.get("/gestion-filtros", async (req, res) => {
       `));
 
     return ok(res, {
+      aniosLectivos: aniosResult.recordset,
+      periodos: periodosResult.recordset,
       secciones: seccionesResult.recordset,
       alumnos: alumnosResult.recordset,
       profesores: profesoresResult.recordset,
@@ -1728,6 +2168,202 @@ router.get("/gestion-profe/secciones/excel", async (req, res) => {
   }
 });
 
+function normalizeCierreCursoReporteRow(row: any) {
+  let advertencias: string[] = [];
+  try {
+    const parsed = row.AdvertenciasJson ? JSON.parse(String(row.AdvertenciasJson)) : [];
+    advertencias = Array.isArray(parsed) ? parsed.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  } catch {
+    advertencias = [];
+  }
+
+  return {
+    cierreAcademicoCursoId: Number(row.CierreAcademicoCursoId || 0),
+    institucionId: Number(row.InstitucionId || 0),
+    grupoId: Number(row.GrupoId || 0),
+    grupoNombre: String(row.GrupoNombre || ""),
+    materiaId: Number(row.MateriaId || 0),
+    materiaNombre: String(row.MateriaNombre || ""),
+    materiaCodigo: row.MateriaCodigo || null,
+    anioLectivoId: Number(row.AnioLectivoId || 0),
+    anioNombre: String(row.AnioNombre || ""),
+    periodoId: Number(row.PeriodoId || 0),
+    periodoNombre: String(row.PeriodoNombre || ""),
+    estado: String(row.Estado || ""),
+    promedioGeneral: row.PromedioGeneral === null || row.PromedioGeneral === undefined ? null : Number(row.PromedioGeneral),
+    totalEstudiantes: Number(row.TotalEstudiantes || 0),
+    totalCompletos: Number(row.TotalCompletos || 0),
+    totalIncompletos: Number(row.TotalIncompletos || 0),
+    docente: String(row.DocenteNombre || "").trim(),
+    cerradoPor: String(row.CerradoPorNombre || "").trim(),
+    cerradoAt: row.CerradoAt || null,
+    reabiertoPor: String(row.ReabiertoPorNombre || "").trim(),
+    reabiertoAt: row.ReabiertoAt || null,
+    motivoReapertura: row.MotivoReapertura || null,
+    advertencias
+  };
+}
+
+router.get("/cierre-cursos", async (req, res) => {
+  try {
+    if (!isAdminReportUser(req)) {
+      return res.status(403).json({ ok: false, message: "Solo Dirección o Administración puede consultar cursos cerrados" });
+    }
+
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
+    const periodoId = req.query.periodoId ? Number(req.query.periodoId) : null;
+    const grupoId = req.query.grupoId ? Number(req.query.grupoId) : null;
+
+    await ensureCierreAcademicoCursoTables(pool);
+
+    const result = await timedQuery("reportes.cierre-cursos.listado", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("grupoId", sql.Int, grupoId)
+      .query(`
+        SELECT
+          c.CierreAcademicoCursoId,
+          c.InstitucionId,
+          c.GrupoId,
+          g.Nombre AS GrupoNombre,
+          c.MateriaId,
+          m.Nombre AS MateriaNombre,
+          m.Codigo AS MateriaCodigo,
+          c.AnioLectivoId,
+          al.Nombre AS AnioNombre,
+          c.PeriodoId,
+          p.Nombre AS PeriodoNombre,
+          p.NumeroOrden,
+          c.Estado,
+          c.PromedioGeneral,
+          c.TotalEstudiantes,
+          c.TotalCompletos,
+          c.TotalIncompletos,
+          c.AdvertenciasJson,
+          c.CerradoAt,
+          c.ReabiertoAt,
+          c.MotivoReapertura,
+          LTRIM(RTRIM(CONCAT(ISNULL(doc.Nombre, N''), N' ', ISNULL(doc.PrimerApellido, N''), N' ', ISNULL(doc.SegundoApellido, N'')))) AS DocenteNombre,
+          LTRIM(RTRIM(CONCAT(ISNULL(cerradoPor.Nombre, N''), N' ', ISNULL(cerradoPor.PrimerApellido, N''), N' ', ISNULL(cerradoPor.SegundoApellido, N'')))) AS CerradoPorNombre,
+          LTRIM(RTRIM(CONCAT(ISNULL(reabiertoPor.Nombre, N''), N' ', ISNULL(reabiertoPor.PrimerApellido, N''), N' ', ISNULL(reabiertoPor.SegundoApellido, N'')))) AS ReabiertoPorNombre
+        FROM dbo.CierreAcademicoCurso c
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = c.GrupoId
+         AND g.InstitucionId = c.InstitucionId
+        LEFT JOIN dbo.Materia m
+          ON m.MateriaId = c.MateriaId
+        INNER JOIN dbo.AnioLectivo al
+          ON al.AnioLectivoId = c.AnioLectivoId
+         AND al.InstitucionId = c.InstitucionId
+        LEFT JOIN dbo.Periodo p
+          ON p.PeriodoId = c.PeriodoId
+        LEFT JOIN dbo.Usuario doc
+          ON doc.UsuarioId = c.UsuarioDocenteId
+        LEFT JOIN dbo.Usuario cerradoPor
+          ON cerradoPor.UsuarioId = c.CerradoPorUsuarioId
+        LEFT JOIN dbo.Usuario reabiertoPor
+          ON reabiertoPor.UsuarioId = c.ReabiertoPorUsuarioId
+        WHERE c.InstitucionId = @institucionId
+          AND c.Activo = 1
+          AND c.Estado = N'${CIERRE_CURSO_ESTADO_CERRADO}'
+          AND (@anioLectivoId IS NULL OR c.AnioLectivoId = @anioLectivoId)
+          AND (@periodoId IS NULL OR c.PeriodoId = @periodoId)
+          AND (@grupoId IS NULL OR c.GrupoId = @grupoId)
+        ORDER BY
+          al.FechaInicio DESC,
+          p.NumeroOrden ASC,
+          TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)),
+          TRY_CONVERT(int, SUBSTRING(g.Nombre, CHARINDEX('-', g.Nombre + '-') + 1, 20)),
+          g.Nombre,
+          m.Nombre
+      `));
+
+    return ok(res, result.recordset.map(normalizeCierreCursoReporteRow));
+  } catch (error) {
+    console.error("Error consultando cursos cerrados:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron consultar los cursos cerrados" });
+  }
+});
+
+router.post("/cierre-cursos/:cierreId/reabrir", async (req, res) => {
+  try {
+    if (!isAdminReportUser(req)) {
+      return res.status(403).json({ ok: false, message: "Solo Dirección o Administración puede reabrir cursos cerrados" });
+    }
+
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const cierreId = Number(req.params.cierreId || 0);
+    const motivo = String(req.body?.motivo || "").trim().slice(0, 1000);
+    if (!cierreId) return badRequest(res, "Cierre inválido");
+    if (!motivo) return badRequest(res, "El motivo de reapertura es obligatorio");
+
+    await ensureCierreAcademicoCursoTables(pool);
+
+    const actualResult = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("cierreId", sql.Int, cierreId)
+      .query(`
+        SELECT TOP 1 *
+        FROM dbo.CierreAcademicoCurso
+        WHERE InstitucionId = @institucionId
+          AND CierreAcademicoCursoId = @cierreId
+          AND Activo = 1
+      `);
+
+    const cierreActual = actualResult.recordset[0];
+    if (!cierreActual) return res.status(404).json({ ok: false, message: "No se encontró el cierre seleccionado" });
+    if (String(cierreActual.Estado || "").toUpperCase() !== CIERRE_CURSO_ESTADO_CERRADO) {
+      return badRequest(res, "El curso no está cerrado actualmente");
+    }
+
+    const usuarioId = getUserId(req) || null;
+    const update = await pool.request()
+      .input("cierreId", sql.Int, cierreId)
+      .input("usuarioId", sql.Int, usuarioId)
+      .input("motivo", sql.NVarChar(1000), motivo)
+      .query(`
+        UPDATE dbo.CierreAcademicoCurso
+        SET Estado = N'${CIERRE_CURSO_ESTADO_REABIERTO}',
+            ReabiertoPorUsuarioId = @usuarioId,
+            ReabiertoAt = SYSDATETIME(),
+            MotivoReapertura = @motivo,
+            UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE CierreAcademicoCursoId = @cierreId
+          AND Activo = 1
+      `);
+
+    const cierreReabierto = update.recordset[0];
+    await pool.request()
+      .input("cierreId", sql.Int, cierreId)
+      .input("accion", sql.NVarChar(40), "REAPERTURA_DIRECCION")
+      .input("usuarioId", sql.Int, usuarioId)
+      .input("motivo", sql.NVarChar(1000), motivo)
+      .input("estadoAnterior", sql.NVarChar(40), cierreActual.Estado || null)
+      .input("estadoNuevo", sql.NVarChar(40), CIERRE_CURSO_ESTADO_REABIERTO)
+      .input("snapshotJson", sql.NVarChar(sql.MAX), JSON.stringify(cierreReabierto || {}))
+      .query(`
+        INSERT INTO dbo.CierreAcademicoCursoAuditoria
+          (CierreAcademicoCursoId, Accion, UsuarioId, Motivo, EstadoAnterior, EstadoNuevo, SnapshotJson, CreatedAt)
+        VALUES
+          (@cierreId, @accion, @usuarioId, @motivo, @estadoAnterior, @estadoNuevo, @snapshotJson, SYSDATETIME())
+      `);
+
+    return ok(res, {
+      cierreAcademicoCursoId: cierreId,
+      estado: CIERRE_CURSO_ESTADO_REABIERTO,
+      reabiertoAt: cierreReabierto?.ReabiertoAt || null
+    }, "Curso reabierto correctamente");
+  } catch (error) {
+    console.error("Error reabriendo curso desde reportes:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo reabrir el curso" });
+  }
+});
+
 router.get("/gestion-profe", async (req, res) => {
   const pool = await getPool();
   const institucionId = Number(req.auth?.institucionId || 0);
@@ -1743,6 +2379,9 @@ router.get("/gestion-profe", async (req, res) => {
   const desde = String(req.query.desde || "").trim() || null;
   const hasta = String(req.query.hasta || "").trim() || null;
   const vistaPor = String(req.query.vistaPor || "SECCION").trim().toUpperCase();
+  const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
+  const periodoId = req.query.periodoId ? Number(req.query.periodoId) : null;
+  const modoPromedios = String(req.query.modoPromedios || "PERIODO").trim().toUpperCase() === "ANUAL" ? "ANUAL" : "PERIODO";
 
   const request = pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -1776,6 +2415,28 @@ router.get("/gestion-profe", async (req, res) => {
       ORDER BY g.Nombre, e.PrimerApellido, e.SegundoApellido, e.Nombre
     `);
     return ok(res, result.recordset);
+  }
+
+  if (tipo === "PROMEDIOS_ACADEMICOS") {
+    if (!isAdminReportUser(req)) {
+      return res.status(403).json({ ok: false, message: "Solo administración puede consultar la vista previa de promedios académicos" });
+    }
+    if (!anioLectivoId) {
+      return badRequest(res, "Seleccioná el año lectivo para consultar promedios académicos");
+    }
+    if (modoPromedios === "PERIODO" && !periodoId) {
+      return badRequest(res, "Seleccioná el período para consultar la vista previa");
+    }
+
+    const preview = await buildPromediosAcademicosPreview({
+      pool,
+      institucionId,
+      anioLectivoId,
+      periodoId,
+      grupoId,
+      modo: modoPromedios
+    });
+    return ok(res, preview);
   }
 
   if (tipo === "SECCIONES") {

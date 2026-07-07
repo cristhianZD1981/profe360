@@ -26,6 +26,10 @@ export type GrupoProfesor = {
   EvaluacionPlantillaEstado?: string | null;
   TieneEstructuraEvaluacion?: boolean | number | null;
   TieneCalificacionesEvaluacion?: boolean | number | null;
+  CursoCerrado?: boolean | number | null;
+  CierreCursoEstado?: string | null;
+  CierreCursoCerradoAt?: string | null;
+  CierreCursoReabiertoAt?: string | null;
 };
 
 export type EstudianteGrupo = {

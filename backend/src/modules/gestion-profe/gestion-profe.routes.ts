@@ -2,6 +2,14 @@ import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, forbidden, ok } from "../../utils/http";
+import {
+  CIERRE_CURSO_ESTADO_CERRADO,
+  CIERRE_CURSO_ESTADO_REABIERTO,
+  assertCierreCursoAbierto,
+  ensureCierreAcademicoCursoTables,
+  getCierreAcademicoCurso,
+  isCierreCursoCerrado
+} from "../academico/cierre-curso.utils";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 import * as XLSX from "xlsx";
 import multer from "multer";
@@ -930,6 +938,7 @@ router.get("/mis-grupos", async (req, res) => {
       const shared = await inFlight;
       return ok(res, shared);
     }
+    await ensureCierreAcademicoCursoTables(pool);
 
     const request = pool.request()
       .input("q", sql.NVarChar(250), q)
@@ -1095,6 +1104,31 @@ router.get("/mis-grupos", async (req, res) => {
            AND b.MateriaId = ar.MateriaId
            AND b.AnioLectivoId = ar.AnioLectivoId
            AND b.PeriodoId = ar.PeriodoId
+      ),
+      CierresCurso AS (
+        SELECT
+          c.CierreAcademicoCursoId,
+          c.InstitucionId,
+          c.GrupoId,
+          c.MateriaId,
+          c.AnioLectivoId,
+          c.PeriodoId,
+          c.Estado,
+          c.CerradoAt,
+          c.ReabiertoAt,
+          ROW_NUMBER() OVER (
+            PARTITION BY c.InstitucionId, c.GrupoId, c.MateriaId, c.AnioLectivoId, c.PeriodoId
+            ORDER BY c.UpdatedAt DESC, c.CierreAcademicoCursoId DESC
+          ) AS rn
+        FROM dbo.CierreAcademicoCurso c
+        INNER JOIN (
+          SELECT DISTINCT InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId FROM AsignacionesBase
+        ) b ON b.InstitucionId = c.InstitucionId
+           AND b.GrupoId = c.GrupoId
+           AND b.MateriaId = c.MateriaId
+           AND b.AnioLectivoId = c.AnioLectivoId
+           AND b.PeriodoId = c.PeriodoId
+        WHERE c.Activo = 1
       )
       SELECT
         b.AsignacionDocenteId,
@@ -1126,7 +1160,11 @@ router.get("/mis-grupos", async (req, res) => {
         CASE WHEN nc.EstructuraGrupoId IS NOT NULL
                OR sc.EstructuraGrupoId IS NOT NULL
                OR ac.GrupoId IS NOT NULL
-             THEN 1 ELSE 0 END AS TieneCalificacionesEvaluacion
+             THEN 1 ELSE 0 END AS TieneCalificacionesEvaluacion,
+        CASE WHEN cc.Estado = N'CERRADO_DOCENTE' THEN 1 ELSE 0 END AS CursoCerrado,
+        cc.Estado AS CierreCursoEstado,
+        cc.CerradoAt AS CierreCursoCerradoAt,
+        cc.ReabiertoAt AS CierreCursoReabiertoAt
       FROM AsignacionesBase b
       LEFT JOIN Matriculados ma
         ON ma.GrupoId = b.GrupoId AND ma.AnioLectivoId = b.AnioLectivoId
@@ -1151,6 +1189,13 @@ router.get("/mis-grupos", async (req, res) => {
        AND ac.MateriaId = b.MateriaId
        AND ac.AnioLectivoId = b.AnioLectivoId
        AND ac.PeriodoId = b.PeriodoId
+      LEFT JOIN CierresCurso cc
+        ON cc.InstitucionId = b.InstitucionId
+       AND cc.GrupoId = b.GrupoId
+       AND cc.MateriaId = b.MateriaId
+       AND cc.AnioLectivoId = b.AnioLectivoId
+       AND cc.PeriodoId = b.PeriodoId
+       AND cc.rn = 1
       ORDER BY b.AnioNombre DESC, b.NumeroOrden, b.GrupoNombre, b.MateriaNombre
       OPTION (RECOMPILE)
     `);
@@ -2332,6 +2377,14 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/notas", async (req, res) =
     const asignacion = access.recordset[0];
     if (!asignacion) return forbidden(res, "No tenés permisos para registrar notas en este grupo y materia");
 
+    if (await responderSiCursoCerrado(res, pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId
+    })) return;
+
     const plantillaResult = await pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
@@ -2937,6 +2990,163 @@ async function getAsignacionPermitida(req: any, res: any, grupoId: number, mater
   `);
 
   return result.recordset[0] || null;
+}
+
+function normalizeCierreCursoRow(row: any) {
+  if (!row) return null;
+
+  let advertencias: string[] = [];
+  try {
+    const parsed = row.AdvertenciasJson ? JSON.parse(String(row.AdvertenciasJson)) : [];
+    advertencias = Array.isArray(parsed) ? parsed.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  } catch {
+    advertencias = [];
+  }
+
+  return {
+    CierreAcademicoCursoId: Number(row.CierreAcademicoCursoId || 0),
+    InstitucionId: Number(row.InstitucionId || 0),
+    GrupoId: Number(row.GrupoId || 0),
+    MateriaId: Number(row.MateriaId || 0),
+    AnioLectivoId: Number(row.AnioLectivoId || 0),
+    PeriodoId: Number(row.PeriodoId || 0),
+    UsuarioDocenteId: row.UsuarioDocenteId === null || row.UsuarioDocenteId === undefined ? null : Number(row.UsuarioDocenteId),
+    Estado: String(row.Estado || "ABIERTO"),
+    Cerrado: isCierreCursoCerrado(row),
+    PromedioGeneral: row.PromedioGeneral === null || row.PromedioGeneral === undefined ? null : Number(row.PromedioGeneral),
+    TotalEstudiantes: Number(row.TotalEstudiantes || 0),
+    TotalCompletos: Number(row.TotalCompletos || 0),
+    TotalIncompletos: Number(row.TotalIncompletos || 0),
+    CerradoPorUsuarioId: row.CerradoPorUsuarioId === null || row.CerradoPorUsuarioId === undefined ? null : Number(row.CerradoPorUsuarioId),
+    CerradoAt: row.CerradoAt || null,
+    ReabiertoPorUsuarioId: row.ReabiertoPorUsuarioId === null || row.ReabiertoPorUsuarioId === undefined ? null : Number(row.ReabiertoPorUsuarioId),
+    ReabiertoAt: row.ReabiertoAt || null,
+    MotivoReapertura: row.MotivoReapertura || null,
+    Advertencias: advertencias
+  };
+}
+
+function buildCierreCursoPreview(data: any, cierreActual: any = null) {
+  const actividades = Array.isArray(data?.actividades) ? data.actividades : [];
+  const estudiantesBase = Array.isArray(data?.estudiantes) ? data.estudiantes : [];
+  const totalActividades = actividades.length;
+  const advertenciasCurso = new Set<string>();
+
+  if (!data?.plantilla) {
+    advertenciasCurso.add("No hay plantilla de evaluacion configurada para este periodo.");
+  } else if (totalActividades === 0) {
+    advertenciasCurso.add("No hay actividades evaluativas configuradas en la plantilla.");
+  }
+
+  const estudiantes = estudiantesBase.map((estudiante: any) => {
+    const detalleNotas = Array.isArray(estudiante?.detalleNotas) ? estudiante.detalleNotas : [];
+    const notasRegistradas = detalleNotas.filter((nota: any) => nota?.nota !== null && nota?.nota !== undefined && String(nota?.nota).trim() !== "").length;
+    const advertencias: string[] = [];
+
+    if (!data?.plantilla) {
+      advertencias.push("Sin plantilla de evaluacion.");
+    } else if (totalActividades === 0) {
+      advertencias.push("Sin actividades evaluativas.");
+    } else if (notasRegistradas < totalActividades) {
+      advertencias.push(`Faltan ${totalActividades - notasRegistradas} de ${totalActividades} notas.`);
+    }
+
+    if (Number(estudiante?.totalLecciones || 0) <= 0) {
+      advertencias.push("Sin asistencia registrada para el Articulo 37.");
+    }
+
+    for (const advertencia of advertencias) advertenciasCurso.add(advertencia);
+
+    return {
+      EstudianteId: Number(estudiante?.EstudianteId || 0),
+      Identificacion: estudiante?.Identificacion || "",
+      NombreCompleto: estudiante?.NombreCompleto || fullName(estudiante),
+      NotasRegistradas: notasRegistradas,
+      TotalActividades: totalActividades,
+      AcumuladoEvaluacion: Number(estudiante?.acumuladoEvaluacion || 0),
+      TotalLecciones: Number(estudiante?.totalLecciones || 0),
+      PorcentajeAsistencia: Number(estudiante?.porcentajeAsistencia || 0),
+      PromedioFinal: Number(estudiante?.promedioFinal || 0),
+      Estado: advertencias.length ? "Incompleto" : "Completo",
+      Advertencias: advertencias
+    };
+  });
+
+  const totalEstudiantes = estudiantes.length;
+  const totalCompletos = estudiantes.filter((estudiante: any) => estudiante.Estado === "Completo").length;
+  const totalIncompletos = totalEstudiantes - totalCompletos;
+  const sumaPromedios = estudiantes.reduce((total: number, estudiante: any) => total + Number(estudiante.PromedioFinal || 0), 0);
+  const promedioGeneral = totalEstudiantes > 0 ? Number((sumaPromedios / totalEstudiantes).toFixed(2)) : null;
+
+  return {
+    contexto: {
+      InstitucionId: Number(data?.contexto?.InstitucionId || 0),
+      InstitucionNombre: data?.contexto?.Nombre || "",
+      GrupoId: Number(data?.contexto?.GrupoId || 0),
+      GrupoNombre: data?.contexto?.GrupoNombre || "",
+      MateriaId: Number(data?.contexto?.MateriaId || 0),
+      MateriaNombre: data?.contexto?.MateriaNombre || "",
+      AnioNombre: data?.contexto?.AnioNombre || "",
+      PeriodoNombre: data?.contexto?.PeriodoNombre || "",
+      ProfesorNombre: [data?.contexto?.ProfesorNombre || "", data?.contexto?.ProfesorPrimerApellido || "", data?.contexto?.ProfesorSegundoApellido || ""].join(" ").replace(/\s+/g, " ").trim()
+    },
+    resumen: {
+      totalEstudiantes,
+      totalCompletos,
+      totalIncompletos,
+      promedioGeneral,
+      estado: totalIncompletos > 0 || advertenciasCurso.size > 0 ? "Incompleto" : "Completo",
+      totalActividades
+    },
+    estudiantes,
+    advertencias: Array.from(advertenciasCurso),
+    cierreActual: normalizeCierreCursoRow(cierreActual),
+    generadoEn: new Date().toISOString()
+  };
+}
+
+async function responderSiCursoCerrado(res: any, pool: any, input: {
+  institucionId: number;
+  grupoId: number;
+  materiaId: number;
+  anioLectivoId: number;
+  periodoId: number;
+}) {
+  const guard = await assertCierreCursoAbierto(pool, input);
+  if (guard.abierto) return false;
+
+  return res.status(409).json({
+    ok: false,
+    message: "El curso ya esta cerrado. Solicita a Direccion la reapertura para realizar cambios.",
+    data: {
+      cierre: normalizeCierreCursoRow(guard.cierre)
+    }
+  });
+}
+
+async function insertarAuditoriaCierreCurso(pool: any, input: {
+  cierreId: number;
+  accion: string;
+  usuarioId: number | null;
+  motivo?: string | null;
+  estadoAnterior?: string | null;
+  estadoNuevo?: string | null;
+  snapshot?: any;
+}) {
+  await pool.request()
+    .input("cierreId", sql.Int, input.cierreId)
+    .input("accion", sql.NVarChar(40), input.accion)
+    .input("usuarioId", sql.Int, input.usuarioId)
+    .input("motivo", sql.NVarChar(1000), input.motivo || null)
+    .input("estadoAnterior", sql.NVarChar(40), input.estadoAnterior || null)
+    .input("estadoNuevo", sql.NVarChar(40), input.estadoNuevo || null)
+    .input("snapshotJson", sql.NVarChar(sql.MAX), input.snapshot ? JSON.stringify(input.snapshot) : null)
+    .query(`
+      INSERT INTO dbo.CierreAcademicoCursoAuditoria
+        (CierreAcademicoCursoId, Accion, UsuarioId, Motivo, EstadoAnterior, EstadoNuevo, SnapshotJson, CreatedAt)
+      VALUES
+        (@cierreId, @accion, @usuarioId, @motivo, @estadoAnterior, @estadoNuevo, @snapshotJson, SYSDATETIME())
+    `);
 }
 
 async function copiarPlaneamientosDesdeSeccionMismoGradoSiFaltan(pool: any, input: {
@@ -4237,6 +4447,14 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     if (!asignacion) return forbidden(res, "No tenés permisos para registrar asistencia en este grupo y materia");
 
     const pool = await getPool();
+    if (await responderSiCursoCerrado(res, pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId
+    })) return;
+
     await ensureReporteEnvioBitacoraTable(pool);
     const estudiantesResult = await pool.request()
       .input("grupoId", sql.Int, grupoId)
@@ -4603,6 +4821,14 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/bitacora", async (req, res
     if (!asignacion) return forbidden(res, "No tenés permiso para este grupo/materia");
 
     const pool = await getPool();
+    if (await responderSiCursoCerrado(res, pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId
+    })) return;
+
     await ensureBitacoraGrupoTable(pool);
     const usuarioId = getUserId(req) || null;
     const insert = await pool.request()
@@ -4629,6 +4855,247 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/bitacora", async (req, res
   }
 });
 
+
+router.get("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+
+    const grupoId = toOptionalNumber(req.params.grupoId);
+    const materiaId = toOptionalNumber(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
+    const periodoId = toOptionalNumber(req.query.periodoId);
+    if (!grupoId || !materiaId || !anioLectivoId || !periodoId) return badRequest(res, "Faltan parametros para consultar el cierre");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenes permiso para este grupo/materia");
+
+    const pool = await getPool();
+    await ensureCierreAcademicoCursoTables(pool);
+    const cierreActual = await getCierreAcademicoCurso(pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId
+    });
+    const cierreResponse = normalizeCierreCursoRow(cierreActual) || {
+      Estado: "ABIERTO",
+      Cerrado: false,
+      GrupoId: grupoId,
+      MateriaId: materiaId,
+      AnioLectivoId: anioLectivoId,
+      PeriodoId: periodoId,
+      Advertencias: []
+    };
+
+    if (String(req.query.soloEstado || "").toLowerCase() === "true") {
+      return ok(res, { cierre: cierreResponse, preview: null });
+    }
+
+    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!data) return;
+
+    const preview = buildCierreCursoPreview(data, cierreActual);
+
+    return ok(res, {
+      cierre: cierreResponse,
+      preview
+    });
+  } catch (error) {
+    console.error("Error consultando cierre de curso:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar el cierre del curso" });
+  }
+});
+
+router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+
+    const grupoId = toOptionalNumber(req.params.grupoId);
+    const materiaId = toOptionalNumber(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.body?.anioLectivoId ?? req.query.anioLectivoId);
+    const periodoId = toOptionalNumber(req.body?.periodoId ?? req.query.periodoId);
+    if (!grupoId || !materiaId || !anioLectivoId || !periodoId) return badRequest(res, "Faltan parametros para cerrar el curso");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenes permiso para cerrar este grupo/materia");
+
+    const pool = await getPool();
+    await ensureCierreAcademicoCursoTables(pool);
+    const cierreActual = await getCierreAcademicoCurso(pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId
+    });
+    if (isCierreCursoCerrado(cierreActual)) {
+      return res.status(409).json({
+        ok: false,
+        message: "El curso ya esta cerrado.",
+        data: { cierre: normalizeCierreCursoRow(cierreActual) }
+      });
+    }
+
+    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!data) return;
+
+    const preview = buildCierreCursoPreview(data, cierreActual);
+    const snapshotJson = JSON.stringify(preview);
+    const advertenciasJson = JSON.stringify(preview.advertencias || []);
+    const usuarioId = getUserId(req) || null;
+    const promedioGeneral = preview.resumen.promedioGeneral === null || preview.resumen.promedioGeneral === undefined
+      ? null
+      : Number(preview.resumen.promedioGeneral);
+
+    const upsert = await pool.request()
+      .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+      .input("grupoId", sql.Int, grupoId)
+      .input("materiaId", sql.Int, materiaId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("usuarioDocenteId", sql.Int, Number(asignacion.UsuarioId || usuarioId || 0) || null)
+      .input("promedioGeneral", sql.Decimal(10, 2), promedioGeneral)
+      .input("totalEstudiantes", sql.Int, Number(preview.resumen.totalEstudiantes || 0))
+      .input("totalCompletos", sql.Int, Number(preview.resumen.totalCompletos || 0))
+      .input("totalIncompletos", sql.Int, Number(preview.resumen.totalIncompletos || 0))
+      .input("snapshotJson", sql.NVarChar(sql.MAX), snapshotJson)
+      .input("advertenciasJson", sql.NVarChar(sql.MAX), advertenciasJson)
+      .input("usuarioId", sql.Int, usuarioId)
+      .query(`
+        MERGE dbo.CierreAcademicoCurso WITH (HOLDLOCK) AS target
+        USING (
+          SELECT
+            @institucionId AS InstitucionId,
+            @grupoId AS GrupoId,
+            @materiaId AS MateriaId,
+            @anioLectivoId AS AnioLectivoId,
+            @periodoId AS PeriodoId
+        ) AS source
+        ON target.InstitucionId = source.InstitucionId
+          AND target.GrupoId = source.GrupoId
+          AND target.MateriaId = source.MateriaId
+          AND target.AnioLectivoId = source.AnioLectivoId
+          AND target.PeriodoId = source.PeriodoId
+          AND target.Activo = 1
+        WHEN MATCHED THEN
+          UPDATE SET
+            UsuarioDocenteId = @usuarioDocenteId,
+            Estado = N'${CIERRE_CURSO_ESTADO_CERRADO}',
+            PromedioGeneral = @promedioGeneral,
+            TotalEstudiantes = @totalEstudiantes,
+            TotalCompletos = @totalCompletos,
+            TotalIncompletos = @totalIncompletos,
+            SnapshotJson = @snapshotJson,
+            AdvertenciasJson = @advertenciasJson,
+            CerradoPorUsuarioId = @usuarioId,
+            CerradoAt = SYSDATETIME(),
+            MotivoReapertura = NULL,
+            UpdatedAt = SYSDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (
+            InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, UsuarioDocenteId, Estado,
+            PromedioGeneral, TotalEstudiantes, TotalCompletos, TotalIncompletos, SnapshotJson, AdvertenciasJson,
+            CerradoPorUsuarioId, CerradoAt, Activo, CreatedAt, UpdatedAt
+          )
+          VALUES (
+            @institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioDocenteId, N'${CIERRE_CURSO_ESTADO_CERRADO}',
+            @promedioGeneral, @totalEstudiantes, @totalCompletos, @totalIncompletos, @snapshotJson, @advertenciasJson,
+            @usuarioId, SYSDATETIME(), 1, SYSDATETIME(), SYSDATETIME()
+          )
+        OUTPUT INSERTED.*;
+      `);
+
+    const cierreGuardado = upsert.recordset[0];
+    await insertarAuditoriaCierreCurso(pool, {
+      cierreId: Number(cierreGuardado.CierreAcademicoCursoId),
+      accion: "CIERRE_DOCENTE",
+      usuarioId,
+      estadoAnterior: cierreActual?.Estado || null,
+      estadoNuevo: CIERRE_CURSO_ESTADO_CERRADO,
+      snapshot: preview
+    });
+    bootstrapCache.clear();
+
+    return ok(res, {
+      cierre: normalizeCierreCursoRow(cierreGuardado),
+      preview
+    }, preview.resumen.estado === "Completo" ? "Curso cerrado correctamente" : "Curso cerrado con advertencias");
+  } catch (error) {
+    console.error("Error cerrando curso:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cerrar el curso" });
+  }
+});
+
+router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre/reabrir", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    if (!isSuperAdmin(req) && !isInstitutionAdmin(req)) {
+      return forbidden(res, "Solo Direccion o administracion puede reabrir cursos cerrados");
+    }
+
+    const grupoId = toOptionalNumber(req.params.grupoId);
+    const materiaId = toOptionalNumber(req.params.materiaId);
+    const anioLectivoId = toOptionalNumber(req.body?.anioLectivoId ?? req.query.anioLectivoId);
+    const periodoId = toOptionalNumber(req.body?.periodoId ?? req.query.periodoId);
+    const motivo = normalizeText(req.body?.motivo).slice(0, 1000);
+    if (!grupoId || !materiaId || !anioLectivoId || !periodoId) return badRequest(res, "Faltan parametros para reabrir el curso");
+    if (!motivo) return badRequest(res, "El motivo de reapertura es obligatorio");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    if (!asignacion) return forbidden(res, "No tenes permiso para reabrir este grupo/materia");
+
+    const pool = await getPool();
+    await ensureCierreAcademicoCursoTables(pool);
+    const cierreActual = await getCierreAcademicoCurso(pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId
+    });
+    if (!cierreActual) return badRequest(res, "Este curso no tiene un cierre registrado");
+    if (!isCierreCursoCerrado(cierreActual)) {
+      return badRequest(res, "El curso no esta cerrado actualmente");
+    }
+
+    const usuarioId = getUserId(req) || null;
+    const update = await pool.request()
+      .input("cierreId", sql.Int, Number(cierreActual.CierreAcademicoCursoId))
+      .input("usuarioId", sql.Int, usuarioId)
+      .input("motivo", sql.NVarChar(1000), motivo)
+      .query(`
+        UPDATE dbo.CierreAcademicoCurso
+        SET Estado = N'${CIERRE_CURSO_ESTADO_REABIERTO}',
+            ReabiertoPorUsuarioId = @usuarioId,
+            ReabiertoAt = SYSDATETIME(),
+            MotivoReapertura = @motivo,
+            UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE CierreAcademicoCursoId = @cierreId
+          AND Activo = 1
+      `);
+
+    const cierreReabierto = update.recordset[0];
+    await insertarAuditoriaCierreCurso(pool, {
+      cierreId: Number(cierreReabierto.CierreAcademicoCursoId),
+      accion: "REAPERTURA_DIRECCION",
+      usuarioId,
+      motivo,
+      estadoAnterior: cierreActual.Estado || null,
+      estadoNuevo: CIERRE_CURSO_ESTADO_REABIERTO,
+      snapshot: normalizeCierreCursoRow(cierreReabierto)
+    });
+    bootstrapCache.clear();
+
+    return ok(res, {
+      cierre: normalizeCierreCursoRow(cierreReabierto)
+    }, "Curso reabierto correctamente");
+  } catch (error) {
+    console.error("Error reabriendo curso:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo reabrir el curso" });
+  }
+});
 
 
 router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/excel", async (req, res) => {

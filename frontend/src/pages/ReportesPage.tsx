@@ -1,13 +1,16 @@
 ﻿import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api from "../lib/http";
+import { useAuth } from "../context/auth";
 import { getCostaRicaIsoDate } from "../utils/date";
 
 type TipoReporte =
   | "ASISTENCIA"
   | "BOLETAS"
   | "SECCIONES"
-  | "ESTUDIANTES";
+  | "ESTUDIANTES"
+  | "PROMEDIOS_ACADEMICOS"
+  | "CIERRE_CURSOS";
 
 type VistaAsistencia = "ALUMNO" | "SECCION" | "PROFESOR";
 
@@ -68,6 +71,35 @@ type CertificacionRow = {
   CursoLectivo: string;
   OtroColegioDestino?: string | null;
   FechaEmisionTexto: string;
+};
+
+type PromediosResumen = {
+  modo?: "PERIODO" | "ANUAL";
+  anioLectivo?: string;
+  periodo?: string;
+  totalEstudiantes?: number;
+  completos?: number;
+  incompletos?: number;
+  promedioGeneral?: number | null;
+  advertencia?: string;
+};
+
+type CierreCursoReporteRow = {
+  cierreAcademicoCursoId: number;
+  grupoNombre: string;
+  materiaNombre: string;
+  materiaCodigo?: string | null;
+  anioNombre: string;
+  periodoNombre: string;
+  estado: string;
+  promedioGeneral?: number | null;
+  totalEstudiantes: number;
+  totalCompletos: number;
+  totalIncompletos: number;
+  docente: string;
+  cerradoPor: string;
+  cerradoAt?: string | null;
+  advertencias?: string[];
 };
 
 function descargarBlob(blob: Blob, fileName: string) {
@@ -146,15 +178,21 @@ function getAlertStyle(alertaTemprana: string): React.CSSProperties {
 export default function ReportesPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
 
   const [tipo, setTipo] = useState<TipoReporte>("ASISTENCIA");
   const [secciones, setSecciones] = useState<any[]>([]);
   const [alumnos, setAlumnos] = useState<any[]>([]);
   const [profesores, setProfesores] = useState<any[]>([]);
+  const [aniosLectivos, setAniosLectivos] = useState<any[]>([]);
+  const [periodos, setPeriodos] = useState<any[]>([]);
   const [tiposEstudiante, setTiposEstudiante] = useState<any[]>([]);
   const [tiposAdecuacion, setTiposAdecuacion] = useState<any[]>([]);
 
   const [vistaAsistencia, setVistaAsistencia] = useState<VistaAsistencia>("SECCION");
+  const [modoPromedios, setModoPromedios] = useState<"PERIODO" | "ANUAL">("PERIODO");
+  const [anioLectivoIdReporte, setAnioLectivoIdReporte] = useState<string>("");
+  const [periodoIdReporte, setPeriodoIdReporte] = useState<string>("");
   const [grupoId, setGrupoId] = useState<string>("");
   const [estudianteId, setEstudianteId] = useState<string>("");
   const [profesorIdReporte, setProfesorIdReporte] = useState<string>("");
@@ -168,6 +206,9 @@ export default function ReportesPage() {
   const [filas, setFilas] = useState<any[]>([]);
   const [asistenciaRows, setAsistenciaRows] = useState<AsistenciaResumen[]>([]);
   const [boletasRows, setBoletasRows] = useState<BoletaReporteRow[]>([]);
+  const [promediosResumen, setPromediosResumen] = useState<PromediosResumen | null>(null);
+  const [cierreCursosRows, setCierreCursosRows] = useState<CierreCursoReporteRow[]>([]);
+  const [reabriendoCierreId, setReabriendoCierreId] = useState<number | null>(null);
   const [seccionReporteTitulo, setSeccionReporteTitulo] = useState<string>("");
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
 
@@ -190,15 +231,36 @@ export default function ReportesPage() {
   const [generandoConstancia, setGenerandoConstancia] = useState(false);
 
   const vistaActual = useMemo(() => getVistaActual(location.pathname), [location.pathname]);
+  const puedeAdministrarCierres = useMemo(() => {
+    const roles = Array.isArray(user?.roles) ? user.roles.map((role) => String(role || "").toUpperCase()) : [];
+    return roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role));
+  }, [user?.roles]);
+
+  useEffect(() => {
+    if (!puedeAdministrarCierres && tipo === "CIERRE_CURSOS") {
+      setTipo("ASISTENCIA");
+      setCierreCursosRows([]);
+    }
+  }, [puedeAdministrarCierres, tipo]);
 
   useEffect(() => {
     api.get("/reportes/gestion-filtros").then((r) => {
       const data = r.data?.data || {};
+      const anios = Array.isArray(data.aniosLectivos) ? data.aniosLectivos : [];
+      const periodosData = Array.isArray(data.periodos) ? data.periodos : [];
+      setAniosLectivos(anios);
+      setPeriodos(periodosData);
       setSecciones(Array.isArray(data.secciones) ? data.secciones : []);
       setAlumnos(Array.isArray(data.alumnos) ? data.alumnos : []);
       setProfesores(Array.isArray(data.profesores) ? data.profesores : []);
       setTiposEstudiante(Array.isArray(data.tiposEstudiante) ? data.tiposEstudiante : []);
       setTiposAdecuacion(Array.isArray(data.tiposAdecuacion) ? data.tiposAdecuacion : []);
+      const anioInicial = anios[0]?.AnioLectivoId ? String(anios[0].AnioLectivoId) : "";
+      if (anioInicial) {
+        setAnioLectivoIdReporte((prev) => prev || anioInicial);
+        const periodoInicial = periodosData.find((item: any) => String(item.AnioLectivoId) === anioInicial);
+        if (periodoInicial?.PeriodoId) setPeriodoIdReporte((prev) => prev || String(periodoInicial.PeriodoId));
+      }
     });
   }, []);
 
@@ -227,6 +289,11 @@ export default function ReportesPage() {
     if (!gradoReporte) return secciones;
     return secciones.filter((item) => String(getGradoFromGrupoNombre(item.GrupoNombre)) === gradoReporte);
   }, [secciones, gradoReporte]);
+
+  const periodosReporteFiltrados = useMemo(() => {
+    if (!anioLectivoIdReporte) return periodos;
+    return periodos.filter((item) => String(item.AnioLectivoId) === String(anioLectivoIdReporte));
+  }, [periodos, anioLectivoIdReporte]);
 
   const alumnosConstanciaFiltrados = useMemo(() => {
     let base = alumnos;
@@ -263,6 +330,8 @@ export default function ReportesPage() {
     setFilas([]);
     setAsistenciaRows([]);
     setBoletasRows([]);
+    setCierreCursosRows([]);
+    setPromediosResumen(null);
     setSeccionReporteTitulo("");
     setExpandedRows({});
     setGrupoId("");
@@ -273,6 +342,7 @@ export default function ReportesPage() {
     setGradoReporte("");
     setTipoEstudianteReporte("");
     setAdecuacionReporte("");
+    setModoPromedios("PERIODO");
     setDesde("");
     setHasta("");
     setProgressPct(0);
@@ -321,6 +391,20 @@ export default function ReportesPage() {
       window.alert("Seleccioná una sección para consultar el reporte.");
       return;
     }
+    if (tipo === "PROMEDIOS_ACADEMICOS") {
+      if (!anioLectivoIdReporte) {
+        window.alert("Seleccioná el año lectivo para consultar promedios.");
+        return;
+      }
+      if (modoPromedios === "PERIODO" && !periodoIdReporte) {
+        window.alert("Seleccioná el período para consultar la vista previa.");
+        return;
+      }
+    }
+    if (tipo === "CIERRE_CURSOS" && !puedeAdministrarCierres) {
+      window.alert("Solo Dirección o Administración puede consultar cursos cerrados.");
+      return;
+    }
 
     setLoading(true);
     setProgressPct(8);
@@ -348,6 +432,7 @@ export default function ReportesPage() {
         setExpandedRows({});
         setFilas([]);
         setBoletasRows([]);
+        setCierreCursosRows([]);
         return;
       }
 
@@ -368,6 +453,7 @@ export default function ReportesPage() {
         setAsistenciaRows([]);
         setExpandedRows({});
         setFilas([]);
+        setCierreCursosRows([]);
         return;
       }
 
@@ -381,6 +467,46 @@ export default function ReportesPage() {
         const data = response.data?.data || {};
         setFilas(Array.isArray(data.rows) ? data.rows : []);
         setSeccionReporteTitulo(String(data.seccion || ""));
+        setAsistenciaRows([]);
+        setBoletasRows([]);
+        setCierreCursosRows([]);
+        setExpandedRows({});
+        return;
+      }
+
+      if (tipo === "PROMEDIOS_ACADEMICOS") {
+        const response = await api.get("/reportes/gestion-profe", {
+          params: {
+            tipo,
+            modoPromedios,
+            anioLectivoId: anioLectivoIdReporte,
+            periodoId: modoPromedios === "PERIODO" ? periodoIdReporte : undefined,
+            grupoId: grupoId || undefined
+          }
+        });
+        const data = response.data?.data || {};
+        setFilas(Array.isArray(data.rows) ? data.rows : []);
+        setPromediosResumen(data.resumen || null);
+        setSeccionReporteTitulo("");
+        setAsistenciaRows([]);
+        setBoletasRows([]);
+        setCierreCursosRows([]);
+        setExpandedRows({});
+        return;
+      }
+
+      if (tipo === "CIERRE_CURSOS") {
+        const response = await api.get("/reportes/cierre-cursos", {
+          params: {
+            anioLectivoId: anioLectivoIdReporte || undefined,
+            periodoId: periodoIdReporte || undefined,
+            grupoId: grupoId || undefined
+          }
+        });
+        setCierreCursosRows(Array.isArray(response.data?.data) ? response.data.data : []);
+        setFilas([]);
+        setPromediosResumen(null);
+        setSeccionReporteTitulo("");
         setAsistenciaRows([]);
         setBoletasRows([]);
         setExpandedRows({});
@@ -402,6 +528,7 @@ export default function ReportesPage() {
         setSeccionReporteTitulo("");
         setAsistenciaRows([]);
         setBoletasRows([]);
+        setCierreCursosRows([]);
         setExpandedRows({});
         return;
       }
@@ -419,6 +546,7 @@ export default function ReportesPage() {
       setSeccionReporteTitulo("");
       setAsistenciaRows([]);
       setBoletasRows([]);
+      setCierreCursosRows([]);
     } catch (error: any) {
       window.alert(error?.response?.data?.message || "No se pudo consultar el reporte.");
     } finally {
@@ -431,6 +559,22 @@ export default function ReportesPage() {
 
   function toggleAsistenciaDetalle(estudianteIdValue: number) {
     setExpandedRows((prev) => ({ ...prev, [estudianteIdValue]: !prev[estudianteIdValue] }));
+  }
+
+  async function reabrirCursoCerrado(row: CierreCursoReporteRow) {
+    const motivo = String(window.prompt(`Motivo de reapertura para ${row.grupoNombre} - ${row.materiaNombre}:`) || "").trim();
+    if (!motivo) return;
+
+    setReabriendoCierreId(row.cierreAcademicoCursoId);
+    try {
+      await api.post(`/reportes/cierre-cursos/${row.cierreAcademicoCursoId}/reabrir`, { motivo });
+      setCierreCursosRows((prev) => prev.filter((item) => item.cierreAcademicoCursoId !== row.cierreAcademicoCursoId));
+      window.alert("Curso reabierto correctamente.");
+    } catch (error: any) {
+      window.alert(error?.response?.data?.message || "No se pudo reabrir el curso.");
+    } finally {
+      setReabriendoCierreId(null);
+    }
   }
 
   async function generarConstancia() {
@@ -558,6 +702,55 @@ export default function ReportesPage() {
       return;
     }
 
+    if (tipo === "PROMEDIOS_ACADEMICOS") {
+      const headers = ["#", "Cédula", "Apellido 1", "Apellido 2", "Nombre", "Sección", "Períodos", "Con nota / materias", "Promedio", "Estado", "Advertencias"];
+      const rows = filas.map((f) => [
+        f.linea,
+        f.cedula,
+        f.apellido1,
+        f.apellido2,
+        f.nombre,
+        f.seccion,
+        f.periodos,
+        f.materias,
+        f.promedio ?? "",
+        f.estado,
+        f.advertencias
+      ]);
+      const titulo = `Vista previa de promedios académicos - ${promediosResumen?.periodo || (modoPromedios === "ANUAL" ? "Anual" : "Período")}`;
+      const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
+      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtml(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
+      const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+      descargarBlob(blob, `vista-previa-promedios-${modoPromedios.toLowerCase()}.xls`);
+      return;
+    }
+
+    if (tipo === "CIERRE_CURSOS") {
+      const headers = ["#", "Sección", "Materia", "Año", "Período", "Docente", "Cerrado por", "Fecha cierre", "Estudiantes", "Completos", "Incompletos", "Promedio", "Advertencias"];
+      const rows = cierreCursosRows.map((item, idx) => [
+        idx + 1,
+        item.grupoNombre,
+        item.materiaCodigo ? `${item.materiaCodigo} - ${item.materiaNombre}` : item.materiaNombre,
+        item.anioNombre,
+        item.periodoNombre,
+        item.docente,
+        item.cerradoPor,
+        item.cerradoAt ? new Date(item.cerradoAt).toLocaleString("es-CR") : "",
+        item.totalEstudiantes,
+        item.totalCompletos,
+        item.totalIncompletos,
+        item.promedioGeneral == null ? "" : Number(item.promedioGeneral).toFixed(2),
+        (item.advertencias || []).join(" ")
+      ]);
+      const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
+      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Cursos cerrados</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
+      const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+      descargarBlob(blob, "cursos-cerrados.xls");
+      return;
+    }
+
     if (tipo === "ASISTENCIA") {
       const headers = ["Alumno", "Identificación", "Sección", "Alerta Temprana", "Tardías", "Ausencias Justificadas", "Ausencias Injustificadas", "Presentes", "Cantidad de correos enviados", "Cantidad de WhatsApp enviados"];
       const rows = asistenciaRows.map((item) => [
@@ -672,6 +865,8 @@ export default function ReportesPage() {
     ? asistenciaRows.length > 0
     : tipo === "BOLETAS"
       ? boletasRows.length > 0
+      : tipo === "CIERRE_CURSOS"
+        ? cierreCursosRows.length > 0
       : filas.length > 0;
 
   return (
@@ -738,6 +933,8 @@ export default function ReportesPage() {
                   setFilas([]);
                   setAsistenciaRows([]);
                   setBoletasRows([]);
+                  setCierreCursosRows([]);
+                  setPromediosResumen(null);
                   setSeccionReporteTitulo("");
                   setExpandedRows({});
                   setGrupoId("");
@@ -748,12 +945,15 @@ export default function ReportesPage() {
                   setGradoReporte("");
                   setTipoEstudianteReporte("");
                   setAdecuacionReporte("");
+                  setModoPromedios("PERIODO");
                 }}
               >
                 <option value="ASISTENCIA">Reporte de Asistencia</option>
                 <option value="BOLETAS">Reporte de Boletas</option>
                 <option value="SECCIONES">Secciones</option>
                 <option value="ESTUDIANTES">Estudiante</option>
+                <option value="PROMEDIOS_ACADEMICOS">Promedios Académicos</option>
+                {puedeAdministrarCierres ? <option value="CIERRE_CURSOS">Cursos Cerrados</option> : null}
               </select>
             </label>
             {tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
@@ -823,6 +1023,74 @@ export default function ReportesPage() {
                   {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
                 </select>
               </label>
+            ) : tipo === "PROMEDIOS_ACADEMICOS" ? (
+              <>
+                <label>Vista
+                  <select value={modoPromedios} onChange={(e) => {
+                    const next = e.target.value === "ANUAL" ? "ANUAL" : "PERIODO";
+                    setModoPromedios(next);
+                    setFilas([]);
+                    setPromediosResumen(null);
+                  }}>
+                    <option value="PERIODO">Por período</option>
+                    <option value="ANUAL">Anual</option>
+                  </select>
+                </label>
+                <label>Año lectivo
+                  <select value={anioLectivoIdReporte} onChange={(e) => {
+                    const nextAnio = e.target.value;
+                    setAnioLectivoIdReporte(nextAnio);
+                    const nextPeriodo = periodos.find((item) => String(item.AnioLectivoId) === String(nextAnio));
+                    setPeriodoIdReporte(nextPeriodo?.PeriodoId ? String(nextPeriodo.PeriodoId) : "");
+                    setFilas([]);
+                    setPromediosResumen(null);
+                  }}>
+                    <option value="">Seleccione</option>
+                    {aniosLectivos.map((item) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
+                  </select>
+                </label>
+                {modoPromedios === "PERIODO" ? (
+                  <label>Período
+                    <select value={periodoIdReporte} onChange={(e) => { setPeriodoIdReporte(e.target.value); setFilas([]); setPromediosResumen(null); }}>
+                      <option value="">Seleccione</option>
+                      {periodosReporteFiltrados.map((item) => <option key={item.PeriodoId} value={item.PeriodoId}>{item.Nombre}</option>)}
+                    </select>
+                  </label>
+                ) : null}
+                <label>Sección
+                  <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setFilas([]); setPromediosResumen(null); }}>
+                    <option value="">Todo el colegio</option>
+                    {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
+                  </select>
+                </label>
+              </>
+            ) : tipo === "CIERRE_CURSOS" ? (
+              <>
+                <label>Año lectivo
+                  <select value={anioLectivoIdReporte} onChange={(e) => {
+                    const nextAnio = e.target.value;
+                    setAnioLectivoIdReporte(nextAnio);
+                    const nextPeriodo = periodos.find((item) => String(item.AnioLectivoId) === String(nextAnio));
+                    setPeriodoIdReporte(nextPeriodo?.PeriodoId ? String(nextPeriodo.PeriodoId) : "");
+                    setCierreCursosRows([]);
+                  }}>
+                    <option value="">Todos</option>
+                    {aniosLectivos.map((item) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
+                  </select>
+                </label>
+                <label>Período
+                  <select value={periodoIdReporte} onChange={(e) => { setPeriodoIdReporte(e.target.value); setCierreCursosRows([]); }}>
+                    <option value="">Todos</option>
+                    {periodosReporteFiltrados.map((item) => <option key={item.PeriodoId} value={item.PeriodoId}>{item.Nombre}</option>)}
+                  </select>
+                </label>
+                <label>Sección
+                  <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setCierreCursosRows([]); }}>
+                    <option value="">Todo el colegio</option>
+                    {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
+                  </select>
+                </label>
+              </>
             ) : tipo === "ESTUDIANTES" ? (
               <>
                 <label>Buscar estudiante
@@ -1088,6 +1356,124 @@ export default function ReportesPage() {
                       <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido1 ?? "")}</td>
                       <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido2 ?? "")}</td>
                       <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.nombre ?? "")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : tipo === "PROMEDIOS_ACADEMICOS" ? (
+            <div className="table-wrap">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8, padding: "10px 12px", background: "#102738", borderBottom: "1px solid #24465d", color: "#f8fafc" }}>
+                <div><strong>{promediosResumen?.totalEstudiantes ?? 0}</strong><br /><span style={{ color: "#cbd5e1" }}>Estudiantes</span></div>
+                <div><strong>{promediosResumen?.completos ?? 0}</strong><br /><span style={{ color: "#cbd5e1" }}>Completos</span></div>
+                <div><strong>{promediosResumen?.incompletos ?? 0}</strong><br /><span style={{ color: "#cbd5e1" }}>Incompletos</span></div>
+                <div><strong>{promediosResumen?.promedioGeneral == null ? "-" : Number(promediosResumen.promedioGeneral).toFixed(2)}</strong><br /><span style={{ color: "#cbd5e1" }}>Promedio general</span></div>
+              </div>
+              {promediosResumen?.advertencia ? (
+                <div style={{ padding: "9px 12px", background: "#422006", color: "#fde68a", borderBottom: "1px solid #92400e", fontWeight: 700 }}>
+                  {promediosResumen.advertencia}
+                </div>
+              ) : null}
+              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 62, textAlign: "center", fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>#</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Cédula</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Apellido 1</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Apellido 2</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Nombre</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Sección</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Períodos</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Con nota / materias</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Promedio</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Estado</th>
+                    <th style={{ minWidth: 260, fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Advertencias</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!filas.length ? (
+                    <tr><td colSpan={11} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
+                  ) : filas.map((fila, idx) => {
+                    const completo = String(fila.estado || "").toLowerCase() === "completo";
+                    return (
+                      <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
+                        <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{Number(fila.linea || idx + 1)}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.cedula ?? "")}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido1 ?? "")}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido2 ?? "")}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.nombre ?? "")}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.seccion ?? "")}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d", textAlign: "center" }}>{String(fila.periodos ?? "")}</td>
+                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d", textAlign: "center" }}>{String(fila.materias ?? "")}</td>
+                        <td style={{ color: "#f8fafc", fontWeight: 900, borderBottom: "1px solid #24465d", textAlign: "center" }}>{fila.promedio == null ? "-" : Number(fila.promedio).toFixed(2)}</td>
+                        <td style={{ borderBottom: "1px solid #24465d" }}>
+                          <span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 999, fontWeight: 800, color: completo ? "#166534" : "#92400e", background: completo ? "#dcfce7" : "#fef3c7" }}>
+                            {String(fila.estado || "")}
+                          </span>
+                        </td>
+                        <td style={{ color: completo ? "#bbf7d0" : "#fde68a", borderBottom: "1px solid #24465d", whiteSpace: "normal" }}>{String(fila.advertencias || "")}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : tipo === "CIERRE_CURSOS" ? (
+            <div className="table-wrap">
+              <div style={{ padding: "10px 12px", background: "#102738", borderBottom: "1px solid #24465d", color: "#f8fafc", fontWeight: 800 }}>
+                Cursos cerrados pendientes de reapertura
+              </div>
+              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+                <thead>
+                  <tr>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Sección</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Materia</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Período</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Docente</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Cerrado</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Resumen</th>
+                    <th style={{ minWidth: 220, fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Advertencias</th>
+                    <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!cierreCursosRows.length ? (
+                    <tr><td colSpan={8} style={{ textAlign: "center", padding: "12px" }}>No hay cursos cerrados con esos filtros.</td></tr>
+                  ) : cierreCursosRows.map((fila, idx) => (
+                    <tr key={fila.cierreAcademicoCursoId} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
+                      <td style={{ color: "#f8fafc", fontWeight: 900, borderBottom: "1px solid #24465d" }}>{fila.grupoNombre}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>
+                        {fila.materiaCodigo ? `${fila.materiaCodigo} - ` : ""}{fila.materiaNombre}
+                      </td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{fila.anioNombre} / {fila.periodoNombre}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{fila.docente || "-"}</td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <span>{fila.cerradoAt ? new Date(fila.cerradoAt).toLocaleString("es-CR") : "-"}</span>
+                          <small style={{ color: "#cbd5e1", fontWeight: 700 }}>{fila.cerradoPor || ""}</small>
+                        </div>
+                      </td>
+                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>
+                        <div style={{ display: "grid", gap: 4 }}>
+                          <span>Estudiantes: {fila.totalEstudiantes}</span>
+                          <span>Completos: {fila.totalCompletos} / Incompletos: {fila.totalIncompletos}</span>
+                          <span>Promedio: {fila.promedioGeneral == null ? "-" : Number(fila.promedioGeneral).toFixed(2)}</span>
+                        </div>
+                      </td>
+                      <td style={{ color: "#fde68a", borderBottom: "1px solid #24465d", whiteSpace: "normal" }}>
+                        {(fila.advertencias || []).length ? fila.advertencias!.join(" ") : "-"}
+                      </td>
+                      <td style={{ borderBottom: "1px solid #24465d", textAlign: "center" }}>
+                        <button
+                          type="button"
+                          className="primary-btn"
+                          style={{ padding: "7px 10px" }}
+                          onClick={() => reabrirCursoCerrado(fila)}
+                          disabled={reabriendoCierreId === fila.cierreAcademicoCursoId}
+                        >
+                          {reabriendoCierreId === fila.cierreAcademicoCursoId ? "Reabriendo..." : "Reabrir curso"}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
