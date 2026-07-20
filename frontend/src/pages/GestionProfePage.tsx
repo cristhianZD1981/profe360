@@ -695,9 +695,9 @@ export default function GestionProfePage() {
   }, [apoyoEducativoCatalogo]);
 
   const tienePlantillaSeguimientoAsignada = Boolean(
-    seguimientoContexto?.estructura?.PlantillaBaseId
-    || detalle?.plantilla?.EvaluacionPlantillaId
-    || selected?.EvaluacionPlantillaId
+    seguimientoContexto?.estructura?.EstructuraGrupoId
+    || seguimientoContexto?.estructura?.PlantillaBaseId
+    || eval360Estructura?.estructura?.EstructuraGrupoId
   );
 
   const debeMostrarSelectorPlantillaSeguimiento = !loadingSeguimiento && (
@@ -4315,7 +4315,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setActivePanel("");
     setMessage("");
     setErrorMessage("");
-    void loadBitacora(item);
     void cargarCierreCurso(item, true);
     if (!item.EvaluacionPlantillaId) {
       void loadPlantillasAsignables(item);
@@ -4336,7 +4335,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const data = response.data?.data || response.data || null;
       setDetalle(data);
       setNoteDrafts(buildDraftsFromDetalle(data));
-      await loadBitacora(item);
     } catch (error: any) {
       console.error("Error cargando detalle del grupo:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar el detalle del grupo seleccionado");
@@ -4555,7 +4553,21 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             act.PorcentajeDentroRubro = porcentajePorActividad;
           });
         }
-        return { ...dataRaw, actividades: actividadesAjustadas };
+        return {
+          ...dataRaw,
+          plantillas: Array.isArray(dataRaw.plantillas) ? dataRaw.plantillas : [],
+          estudiantes: Array.isArray(dataRaw.estudiantes) ? dataRaw.estudiantes : [],
+          planeamientos: Array.isArray(dataRaw.planeamientos) ? dataRaw.planeamientos : [],
+          detalles,
+          indicadores: Array.isArray(dataRaw.indicadores) ? dataRaw.indicadores : [],
+          seguimientos: Array.isArray(dataRaw.seguimientos) ? dataRaw.seguimientos : [],
+          actividades: actividadesAjustadas,
+          actividadIndicadores: Array.isArray(dataRaw.actividadIndicadores) ? dataRaw.actividadIndicadores : [],
+          notasActividades: Array.isArray(dataRaw.notasActividades) ? dataRaw.notasActividades : [],
+          asistenciaRegistros: Array.isArray(dataRaw.asistenciaRegistros) ? dataRaw.asistenciaRegistros : [],
+          componenteAjustesManuales: Array.isArray(dataRaw.componenteAjustesManuales) ? dataRaw.componenteAjustesManuales : [],
+          mensajesSeguimiento: Array.isArray(dataRaw.mensajesSeguimiento) ? dataRaw.mensajesSeguimiento : []
+        };
       })();
       setSeguimientoContexto(data);
       setEval360Plantillas(Array.isArray(data?.plantillas) ? data.plantillas : []);
@@ -7184,7 +7196,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       }
       setMessage("Indicadores asignados correctamente");
       await loadSeguimientoEvaluacion(selected);
-      if (activePanel === "notas") await loadDetalle(selected);
       if (activePanel === "notas") await loadDetalle(selected);
       setSeguimientoMatrizAsignacionMinimizada(true);
       stopSeguimientoSaving(true, "asignacion");

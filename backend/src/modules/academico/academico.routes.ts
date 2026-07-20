@@ -735,6 +735,94 @@ async function getDocentesCatalogo(pool: any, institucionId: number) {
     `);
 }
 
+async function getDocentesProfeGuia12Catalogo(pool: any, institucionId: number) {
+  return pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .query(`
+      SELECT
+        u.UsuarioId,
+        u.Correo,
+        u.Nombre,
+        u.PrimerApellido,
+        u.SegundoApellido
+      FROM dbo.Usuario u
+      WHERE u.InstitucionId = @institucionId
+        AND u.Activo = 1
+        AND EXISTS (
+          SELECT 1
+          FROM dbo.UsuarioRol ur
+          INNER JOIN dbo.Rol r
+            ON r.RolId = ur.RolId
+          WHERE ur.UsuarioId = u.UsuarioId
+            AND ur.Activo = 1
+            AND r.Nombre IN (N'PROFESOR', N'PROFESOR_GUIA')
+        )
+      ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre
+    `);
+}
+
+function grupoDuodecimoWhereSql(alias = "g") {
+  return `(
+    ${alias}.NivelAcademico = 12
+    OR LTRIM(RTRIM(ISNULL(${alias}.Nivel, N''))) LIKE N'12%'
+    OR UPPER(LTRIM(RTRIM(ISNULL(${alias}.Nivel, N'')))) LIKE N'DUOD%'
+    OR LTRIM(RTRIM(ISNULL(${alias}.Nombre, N''))) LIKE N'12-%'
+  )`;
+}
+
+function grupoOrdenSeccionSql(alias = "g") {
+  return `
+    TRY_CONVERT(INT, LEFT(LTRIM(RTRIM(ISNULL(${alias}.Nombre, N''))), CHARINDEX(N'-', LTRIM(RTRIM(ISNULL(${alias}.Nombre, N''))) + N'-') - 1)),
+    TRY_CONVERT(INT, SUBSTRING(LTRIM(RTRIM(ISNULL(${alias}.Nombre, N''))), CHARINDEX(N'-', LTRIM(RTRIM(ISNULL(${alias}.Nombre, N''))) + N'-') + 1, 20)),
+    LTRIM(RTRIM(ISNULL(${alias}.Nombre, N'')))
+  `;
+}
+
+async function getProfeGuia12AsignacionById(pool: any, institucionId: number, asignacionDocenteId: number) {
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("asignacionDocenteId", sql.Int, asignacionDocenteId)
+    .query(`
+      SELECT TOP 1
+        ad.AsignacionDocenteId,
+        ad.InstitucionId,
+        ad.UsuarioId,
+        ad.GrupoId,
+        ad.MateriaId,
+        ad.AnioLectivoId,
+        ad.PeriodoId,
+        ad.TipoAsignacion,
+        ad.Activo,
+        ad.CreatedAt,
+        ad.UpdatedAt,
+        u.Correo,
+        u.Nombre,
+        u.PrimerApellido,
+        u.SegundoApellido,
+        g.Nombre AS GrupoNombre,
+        g.Nivel AS GrupoNivel,
+        g.NivelAcademico AS GrupoNivelAcademico,
+        NULL AS MateriaNombre,
+        a.Nombre AS AnioNombre,
+        NULL AS PeriodoNombre
+      FROM dbo.AsignacionDocente ad
+      INNER JOIN dbo.Usuario u
+        ON u.UsuarioId = ad.UsuarioId
+      INNER JOIN dbo.Grupo g
+        ON g.GrupoId = ad.GrupoId
+      INNER JOIN dbo.AnioLectivo a
+        ON a.AnioLectivoId = ad.AnioLectivoId
+      WHERE ad.InstitucionId = @institucionId
+        AND ad.AsignacionDocenteId = @asignacionDocenteId
+        AND ad.TipoAsignacion = N'PROFESOR_GUIA'
+        AND ad.MateriaId IS NULL
+        AND ad.PeriodoId IS NULL
+        AND ${grupoDuodecimoWhereSql("g")}
+    `);
+
+  return result.recordset[0] || null;
+}
+
 async function getConfiguracionCorreoEstudiante(pool: any, institucionId: number) {
   const result = await pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -942,6 +1030,7 @@ router.get("/catalogos", async (req, res) => {
             g.AnioLectivoId,
             g.Nombre,
             g.Nivel,
+            g.NivelAcademico,
             g.Jornada,
             g.Activo,
             a.Nombre AS AnioNombre
@@ -3398,6 +3487,7 @@ router.get("/grupos", async (req, res) => {
           g.AnioLectivoId,
           g.Nombre,
           g.Nivel,
+          g.NivelAcademico,
           g.Jornada,
           g.Activo,
           a.Nombre AS AnioNombre
@@ -6838,6 +6928,433 @@ router.patch("/asignaciones-docentes/:id/reactivar", async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: "Error interno al reactivar asignación docente"
+    });
+  }
+});
+
+/* =========================================================
+   PROFE GUIA 12
+   ========================================================= */
+router.get("/profes-guia-12", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const incluirInactivos = String(req.query.incluirInactivos || "false") === "true";
+    const requestedAnioLectivoId = Number(req.query.anioLectivoId || 0);
+
+    const pool = await getPool();
+
+    const aniosResult = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT
+          AnioLectivoId,
+          Nombre,
+          FechaInicio,
+          FechaFin,
+          Activo
+        FROM dbo.AnioLectivo
+        WHERE InstitucionId = @institucionId
+          AND Activo = 1
+        ORDER BY
+          CASE
+            WHEN CAST(GETDATE() AS DATE) BETWEEN ISNULL(FechaInicio, '19000101') AND ISNULL(FechaFin, '29991231') THEN 0
+            ELSE 1
+          END,
+          FechaInicio DESC,
+          AnioLectivoId DESC
+      `);
+
+    const aniosLectivos = aniosResult.recordset;
+    const anioLectivoActivo = aniosLectivos.find((item: any) => Number(item.AnioLectivoId) === requestedAnioLectivoId)
+      || aniosLectivos[0]
+      || null;
+    const anioLectivoId = anioLectivoActivo ? Number(anioLectivoActivo.AnioLectivoId) : 0;
+
+    const docentesPromise = getDocentesProfeGuia12Catalogo(pool, institucionId);
+
+    if (!anioLectivoId) {
+      const docentes = await docentesPromise;
+      return ok(res, {
+        aniosLectivos,
+        anioLectivoActivo: null,
+        anioLectivoId: null,
+        grupos: [],
+        docentes: docentes.recordset,
+        asignaciones: []
+      });
+    }
+
+    const [grupos, asignaciones, docentes] = await Promise.all([
+      pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("anioLectivoId", sql.Int, anioLectivoId)
+        .query(`
+          SELECT
+            g.GrupoId,
+            g.AnioLectivoId,
+            g.Nombre,
+            g.Nivel,
+            g.NivelAcademico,
+            g.Jornada,
+            g.Activo,
+            a.Nombre AS AnioNombre
+          FROM dbo.Grupo g
+          INNER JOIN dbo.AnioLectivo a
+            ON a.AnioLectivoId = g.AnioLectivoId
+          WHERE g.InstitucionId = @institucionId
+            AND g.AnioLectivoId = @anioLectivoId
+            AND g.Activo = 1
+            AND ${grupoDuodecimoWhereSql("g")}
+          ORDER BY ${grupoOrdenSeccionSql("g")}
+        `),
+      pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("anioLectivoId", sql.Int, anioLectivoId)
+        .input("incluirInactivos", sql.Bit, incluirInactivos)
+        .query(`
+          SELECT
+            ad.AsignacionDocenteId,
+            ad.InstitucionId,
+            ad.UsuarioId,
+            ad.GrupoId,
+            ad.MateriaId,
+            ad.AnioLectivoId,
+            ad.PeriodoId,
+            ad.TipoAsignacion,
+            ad.Activo,
+            ad.CreatedAt,
+            ad.UpdatedAt,
+            u.Correo,
+            u.Nombre,
+            u.PrimerApellido,
+            u.SegundoApellido,
+            g.Nombre AS GrupoNombre,
+            g.Nivel AS GrupoNivel,
+            g.NivelAcademico AS GrupoNivelAcademico,
+            NULL AS MateriaNombre,
+            a.Nombre AS AnioNombre,
+            NULL AS PeriodoNombre
+          FROM dbo.AsignacionDocente ad
+          INNER JOIN dbo.Usuario u
+            ON u.UsuarioId = ad.UsuarioId
+          INNER JOIN dbo.Grupo g
+            ON g.GrupoId = ad.GrupoId
+          INNER JOIN dbo.AnioLectivo a
+            ON a.AnioLectivoId = ad.AnioLectivoId
+          WHERE ad.InstitucionId = @institucionId
+            AND ad.AnioLectivoId = @anioLectivoId
+            AND (@incluirInactivos = 1 OR ad.Activo = 1)
+            AND ad.TipoAsignacion = N'PROFESOR_GUIA'
+            AND ad.MateriaId IS NULL
+            AND ad.PeriodoId IS NULL
+            AND ${grupoDuodecimoWhereSql("g")}
+          ORDER BY ${grupoOrdenSeccionSql("g")}, ad.Activo DESC, ad.AsignacionDocenteId DESC
+        `),
+      docentesPromise
+    ]);
+
+    return ok(res, {
+      aniosLectivos,
+      anioLectivoActivo,
+      anioLectivoId,
+      grupos: grupos.recordset,
+      docentes: docentes.recordset,
+      asignaciones: asignaciones.recordset
+    });
+  } catch (error) {
+    console.error("Error al listar profes guía 12:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "Error interno al listar profesores guía de duodécimo"
+    });
+  }
+});
+
+async function validateProfeGuia12Input(pool: any, institucionId: number, payload: any) {
+  const usuarioId = Number(payload.usuarioId);
+  const grupoId = Number(payload.grupoId);
+  const anioLectivoId = Number(payload.anioLectivoId);
+
+  if (!isValidNonNegativeId(usuarioId) || !isValidNonNegativeId(grupoId) || !isValidNonNegativeId(anioLectivoId)) {
+    throw Object.assign(new Error("Docente, sección y año lectivo son obligatorios"), { statusCode: 400 });
+  }
+
+  const docente = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("usuarioId", sql.Int, usuarioId)
+    .query(`
+      SELECT TOP 1 u.UsuarioId
+      FROM dbo.Usuario u
+      INNER JOIN dbo.UsuarioRol ur
+        ON ur.UsuarioId = u.UsuarioId
+       AND ur.Activo = 1
+      INNER JOIN dbo.Rol r
+        ON r.RolId = ur.RolId
+      WHERE u.InstitucionId = @institucionId
+        AND u.UsuarioId = @usuarioId
+        AND u.Activo = 1
+        AND r.Nombre IN (N'PROFESOR', N'PROFESOR_GUIA')
+    `);
+
+  if (!docente.recordset.length) {
+    throw Object.assign(new Error("El docente seleccionado no existe o no está activo en este colegio"), { statusCode: 400 });
+  }
+
+  const grupo = await pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("grupoId", sql.Int, grupoId)
+    .input("anioLectivoId", sql.Int, anioLectivoId)
+    .query(`
+      SELECT TOP 1
+        g.GrupoId,
+        g.AnioLectivoId,
+        g.Nombre,
+        g.Nivel,
+        g.NivelAcademico
+      FROM dbo.Grupo g
+      INNER JOIN dbo.AnioLectivo a
+        ON a.AnioLectivoId = g.AnioLectivoId
+      WHERE g.InstitucionId = @institucionId
+        AND g.GrupoId = @grupoId
+        AND g.AnioLectivoId = @anioLectivoId
+        AND g.Activo = 1
+        AND a.Activo = 1
+        AND ${grupoDuodecimoWhereSql("g")}
+    `);
+
+  if (!grupo.recordset.length) {
+    throw Object.assign(new Error("La sección seleccionada no pertenece al año lectivo activo o no es de duodécimo"), { statusCode: 400 });
+  }
+
+  return { usuarioId, grupoId, anioLectivoId };
+}
+
+router.post("/profes-guia-12", async (req, res) => {
+  const institucionId = getInstitutionId(req, res);
+  if (institucionId === null) return;
+
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+
+  try {
+    const { usuarioId, grupoId, anioLectivoId } = await validateProfeGuia12Input(pool, institucionId, req.body);
+
+    await transaction.begin();
+
+    await transaction.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("grupoId", sql.Int, grupoId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .query(`
+        UPDATE dbo.AsignacionDocente
+        SET Activo = 0,
+            UpdatedAt = SYSDATETIME()
+        WHERE InstitucionId = @institucionId
+          AND GrupoId = @grupoId
+          AND AnioLectivoId = @anioLectivoId
+          AND Activo = 1
+          AND TipoAsignacion = N'PROFESOR_GUIA'
+          AND MateriaId IS NULL
+          AND PeriodoId IS NULL
+      `);
+
+    const existing = await transaction.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("usuarioId", sql.Int, usuarioId)
+      .input("grupoId", sql.Int, grupoId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .query(`
+        SELECT TOP 1 AsignacionDocenteId
+        FROM dbo.AsignacionDocente
+        WHERE InstitucionId = @institucionId
+          AND UsuarioId = @usuarioId
+          AND GrupoId = @grupoId
+          AND AnioLectivoId = @anioLectivoId
+          AND TipoAsignacion = N'PROFESOR_GUIA'
+          AND MateriaId IS NULL
+          AND PeriodoId IS NULL
+        ORDER BY AsignacionDocenteId DESC
+      `);
+
+    let asignacionDocenteId = Number(existing.recordset[0]?.AsignacionDocenteId || 0);
+
+    if (asignacionDocenteId) {
+      await transaction.request()
+        .input("asignacionDocenteId", sql.Int, asignacionDocenteId)
+        .input("institucionId", sql.Int, institucionId)
+        .query(`
+          UPDATE dbo.AsignacionDocente
+          SET Activo = 1,
+              UpdatedAt = SYSDATETIME()
+          WHERE AsignacionDocenteId = @asignacionDocenteId
+            AND InstitucionId = @institucionId
+        `);
+    } else {
+      const inserted = await transaction.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("usuarioId", sql.Int, usuarioId)
+        .input("grupoId", sql.Int, grupoId)
+        .input("anioLectivoId", sql.Int, anioLectivoId)
+        .query(`
+          INSERT INTO dbo.AsignacionDocente
+          (
+            InstitucionId,
+            UsuarioId,
+            GrupoId,
+            MateriaId,
+            AnioLectivoId,
+            PeriodoId,
+            TipoAsignacion,
+            Activo,
+            CreatedAt
+          )
+          OUTPUT INSERTED.AsignacionDocenteId
+          VALUES
+          (
+            @institucionId,
+            @usuarioId,
+            @grupoId,
+            NULL,
+            @anioLectivoId,
+            NULL,
+            N'PROFESOR_GUIA',
+            1,
+            SYSDATETIME()
+          )
+        `);
+
+      asignacionDocenteId = Number(inserted.recordset[0]?.AsignacionDocenteId || 0);
+    }
+
+    await transaction.commit();
+
+    const row = await getProfeGuia12AsignacionById(pool, institucionId, asignacionDocenteId);
+    return created(res, row, "Profesor guía de duodécimo guardado correctamente");
+  } catch (error: any) {
+    try {
+      if ((transaction as any)._aborted === false) await transaction.rollback();
+    } catch {}
+
+    console.error("Error al guardar profe guía 12:", error);
+    return res.status(error?.statusCode || 500).json({
+      ok: false,
+      message: error?.message || "Error interno al guardar el profesor guía de duodécimo"
+    });
+  }
+});
+
+router.put("/profes-guia-12/:id", async (req, res) => {
+  const institucionId = getInstitutionId(req, res);
+  if (institucionId === null) return;
+
+  const id = Number(req.params.id);
+  if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+
+  try {
+    const { usuarioId, grupoId, anioLectivoId } = await validateProfeGuia12Input(pool, institucionId, req.body);
+
+    const current = await getProfeGuia12AsignacionById(pool, institucionId, id);
+    if (!current) {
+      return res.status(404).json({ ok: false, message: "Asignación de profesor guía no encontrada" });
+    }
+
+    await transaction.begin();
+
+    await transaction.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("grupoId", sql.Int, grupoId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("id", sql.Int, id)
+      .query(`
+        UPDATE dbo.AsignacionDocente
+        SET Activo = 0,
+            UpdatedAt = SYSDATETIME()
+        WHERE InstitucionId = @institucionId
+          AND GrupoId = @grupoId
+          AND AnioLectivoId = @anioLectivoId
+          AND AsignacionDocenteId <> @id
+          AND Activo = 1
+          AND TipoAsignacion = N'PROFESOR_GUIA'
+          AND MateriaId IS NULL
+          AND PeriodoId IS NULL
+      `);
+
+    await transaction.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("usuarioId", sql.Int, usuarioId)
+      .input("grupoId", sql.Int, grupoId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .query(`
+        UPDATE dbo.AsignacionDocente
+        SET UsuarioId = @usuarioId,
+            GrupoId = @grupoId,
+            MateriaId = NULL,
+            AnioLectivoId = @anioLectivoId,
+            PeriodoId = NULL,
+            TipoAsignacion = N'PROFESOR_GUIA',
+            Activo = 1,
+            UpdatedAt = SYSDATETIME()
+        WHERE AsignacionDocenteId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    await transaction.commit();
+
+    const row = await getProfeGuia12AsignacionById(pool, institucionId, id);
+    return ok(res, row, "Profesor guía de duodécimo actualizado correctamente");
+  } catch (error: any) {
+    try {
+      if ((transaction as any)._aborted === false) await transaction.rollback();
+    } catch {}
+
+    console.error("Error al actualizar profe guía 12:", error);
+    return res.status(error?.statusCode || 500).json({
+      ok: false,
+      message: error?.message || "Error interno al actualizar el profesor guía de duodécimo"
+    });
+  }
+});
+
+router.delete("/profes-guia-12/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.AsignacionDocente
+        SET Activo = 0,
+            UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.AsignacionDocenteId
+        WHERE AsignacionDocenteId = @id
+          AND InstitucionId = @institucionId
+          AND TipoAsignacion = N'PROFESOR_GUIA'
+          AND MateriaId IS NULL
+          AND PeriodoId IS NULL
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Asignación de profesor guía no encontrada" });
+    }
+
+    return ok(res, { AsignacionDocenteId: id }, "Profesor guía de duodécimo eliminado correctamente");
+  } catch (error) {
+    console.error("Error al eliminar profe guía 12:", error);
+    return res.status(500).json({
+      ok: false,
+      message: "Error interno al eliminar el profesor guía de duodécimo"
     });
   }
 });

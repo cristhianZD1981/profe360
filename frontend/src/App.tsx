@@ -123,6 +123,7 @@ export default function App() {
                     "materias",
                     "habilidadesPlaneamiento",
                     "asignaciones",
+                    "profesGuia12",
                     "bloques",
                     "gruposMateria",
                     "horarios",

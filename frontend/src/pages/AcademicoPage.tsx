@@ -224,6 +224,7 @@ type AsignacionDocente = {
   SegundoApellido: string | null;
   GrupoNombre: string | null;
   GrupoNivel: string | null;
+  GrupoNivelAcademico?: number | null;
   MateriaNombre: string | null;
   AnioNombre: string | null;
   PeriodoNombre: string | null;
@@ -544,6 +545,12 @@ const initialAsignacionForm = {
   tipoAsignacion: "PROFESOR_MATERIA"
 };
 
+const initialProfeGuia12Form = {
+  usuarioId: "",
+  grupoId: "",
+  anioLectivoId: ""
+};
+
 const initialBloqueForm = {
   nombre: "",
   horaInicio: "",
@@ -679,6 +686,28 @@ function getTeacherFullName(item: {
     .trim();
 }
 
+function getGrupoSeccionLabel(item: { Nombre?: string | null; Nivel?: string | null; GrupoNombre?: string | null; GrupoNivel?: string | null }) {
+  const nombre = String(item.Nombre ?? item.GrupoNombre ?? "").trim();
+  const nivel = String(item.Nivel ?? item.GrupoNivel ?? "").trim();
+  return nivel ? `${nombre} - ${nivel}` : nombre;
+}
+
+function getSeccionSortParts(value?: string | null) {
+  const text = String(value || "").trim();
+  const match = text.match(/(\d+)\D+(\d+)/);
+  if (match) return [Number(match[1]), Number(match[2]), text] as const;
+  const first = text.match(/\d+/);
+  return [first ? Number(first[0]) : 999, 999, text] as const;
+}
+
+function sortBySeccionNombre<T extends { Nombre?: string | null; GrupoNombre?: string | null }>(items: T[]) {
+  return [...items].sort((a, b) => {
+    const left = getSeccionSortParts(a.Nombre ?? a.GrupoNombre);
+    const right = getSeccionSortParts(b.Nombre ?? b.GrupoNombre);
+    return left[0] - right[0] || left[1] - right[1] || left[2].localeCompare(right[2], "es", { numeric: true });
+  });
+}
+
 function diaSemanaLabel(value?: number | null) {
   switch (Number(value)) {
     case 1: return "Domingo";
@@ -706,6 +735,7 @@ type TabKey =
   | "evaluacion"
   | "materias"
   | "asignaciones"
+  | "profesGuia12"
   | "bloques"
   | "gruposMateria"
   | "horarios"
@@ -729,6 +759,7 @@ type FormSectionKey =
   | "rutasTransporte"
   | "materias"
   | "asignaciones"
+  | "profesGuia12"
   | "bloques"
   | "gruposMateria"
   | "horarios"
@@ -748,6 +779,7 @@ const initialOpenSections: Record<FormSectionKey, boolean> = {
   rutasTransporte: false,
   materias: false,
   asignaciones: false,
+  profesGuia12: false,
   bloques: false,
   gruposMateria: false,
   horarios: false,
@@ -760,6 +792,10 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const location = useLocation();
   const consumedNavigationKeyRef = useRef<string | null>(null);
   const [tab, setTab] = useState<TabKey>(initialTab);
+  const profesGuia12RequestKeyRef = useRef("");
+  const profesGuia12LoadedKeysRef = useRef<Set<string>>(new Set());
+  const tabRequestKeyRef = useRef("");
+  const tabLoadedKeysRef = useRef<Set<string>>(new Set());
 
   const [anios, setAnios] = useState<AnioLectivo[]>([]);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
@@ -778,6 +814,10 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [materias, setMaterias] = useState<Materia[]>([]);
   const [docentesCatalogo, setDocentesCatalogo] = useState<DocenteCatalogo[]>([]);
   const [asignaciones, setAsignaciones] = useState<AsignacionDocente[]>([]);
+  const [profesGuia12, setProfesGuia12] = useState<AsignacionDocente[]>([]);
+  const [profesGuia12Docentes, setProfesGuia12Docentes] = useState<DocenteCatalogo[]>([]);
+  const [profesGuia12Grupos, setProfesGuia12Grupos] = useState<Grupo[]>([]);
+  const [profesGuia12Anios, setProfesGuia12Anios] = useState<AnioLectivo[]>([]);
   const [bloquesCatalogo, setBloquesCatalogo] = useState<BloqueHorario[]>([]);
   const [bloques, setBloques] = useState<BloqueHorario[]>([]);
   const [gruposMateria, setGruposMateria] = useState<GrupoMateria[]>([]);
@@ -798,6 +838,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [rutaTransporteForm, setRutaTransporteForm] = useState(initialRutaTransporteForm);
   const [materiaForm, setMateriaForm] = useState(initialMateriaForm);
   const [asignacionForm, setAsignacionForm] = useState(initialAsignacionForm);
+  const [profeGuia12Form, setProfeGuia12Form] = useState(initialProfeGuia12Form);
   const [bloqueForm, setBloqueForm] = useState(initialBloqueForm);
   const [grupoMateriaForm, setGrupoMateriaForm] = useState(initialGrupoMateriaForm);
   const [horarioForm, setHorarioForm] = useState(initialHorarioForm);
@@ -821,6 +862,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [editingRutaTransporteId, setEditingRutaTransporteId] = useState<number | null>(null);
   const [editingMateriaId, setEditingMateriaId] = useState<number | null>(null);
   const [editingAsignacionId, setEditingAsignacionId] = useState<number | null>(null);
+  const [editingProfeGuia12Id, setEditingProfeGuia12Id] = useState<number | null>(null);
   const [editingBloqueId, setEditingBloqueId] = useState<number | null>(null);
   const [editingGrupoMateriaId, setEditingGrupoMateriaId] = useState<number | null>(null);
   const [editingHorarioId, setEditingHorarioId] = useState<number | null>(null);
@@ -861,6 +903,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [rutaTransporteSearch, setRutaTransporteSearch] = useState("");
   const [materiaSearch, setMateriaSearch] = useState("");
   const [asignacionSearch, setAsignacionSearch] = useState("");
+  const [profeGuia12AnioFiltro, setProfeGuia12AnioFiltro] = useState("");
   const [bloqueSearch, setBloqueSearch] = useState("");
   const [grupoMateriaSearch, setGrupoMateriaSearch] = useState("");
   const [horarioSearch, setHorarioSearch] = useState("");
@@ -878,6 +921,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [incluirRutasTransporteInactivas, setIncluirRutasTransporteInactivas] = useState(false);
   const [incluirMateriasInactivas, setIncluirMateriasInactivas] = useState(false);
   const [incluirAsignacionesInactivas, setIncluirAsignacionesInactivas] = useState(false);
+  const [incluirProfesGuia12Inactivos, setIncluirProfesGuia12Inactivos] = useState(false);
   const [incluirGrupoMateriaInactivas, setIncluirGrupoMateriaInactivas] = useState(false);
   const [incluirHorariosInactivos, setIncluirHorariosInactivos] = useState(false);
   const [incluirFeriadosInactivos, setIncluirFeriadosInactivos] = useState(false);
@@ -896,6 +940,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [loadingRutaTransporte, setLoadingRutaTransporte] = useState(false);
   const [loadingMateria, setLoadingMateria] = useState(false);
   const [loadingAsignacion, setLoadingAsignacion] = useState(false);
+  const [loadingProfeGuia12, setLoadingProfeGuia12] = useState(false);
   const [loadingBloque, setLoadingBloque] = useState(false);
   const [loadingGrupoMateria, setLoadingGrupoMateria] = useState(false);
   const [loadingHorario, setLoadingHorario] = useState(false);
@@ -942,6 +987,28 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     () => gruposCatalogo.filter((g) => g.Activo),
     [gruposCatalogo]
   );
+
+  const profesGuia12GruposOrdenados = useMemo(
+    () => sortBySeccionNombre(profesGuia12Grupos),
+    [profesGuia12Grupos]
+  );
+
+  const profesGuia12Ordenados = useMemo(
+    () => sortBySeccionNombre(profesGuia12),
+    [profesGuia12]
+  );
+
+  const profeGuia12ActivoPorGrupo = useMemo(() => {
+    const map = new Map<number, AsignacionDocente>();
+    profesGuia12
+      .filter((item) => item.Activo)
+      .forEach((item) => {
+        const grupoId = Number(item.GrupoId || 0);
+        if (!grupoId || map.has(grupoId)) return;
+        map.set(grupoId, item);
+      });
+    return map;
+  }, [profesGuia12]);
 
   const aniosActivos = useMemo(
     () => anios.filter((a) => a.Activo),
@@ -1092,6 +1159,42 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     setAsignaciones(response.data?.data || []);
   }
 
+  async function loadProfesGuia12(anioLectivoId = profeGuia12AnioFiltro, incluirInactivos = incluirProfesGuia12Inactivos, force = false) {
+    const requestedAnioId = String(anioLectivoId || "").trim();
+    const key = `${requestedAnioId || "activo"}|${incluirInactivos ? "1" : "0"}`;
+    if (!force && (profesGuia12RequestKeyRef.current === key || profesGuia12LoadedKeysRef.current.has(key))) {
+      return;
+    }
+    if (force) {
+      profesGuia12LoadedKeysRef.current.clear();
+    }
+
+    profesGuia12RequestKeyRef.current = key;
+    try {
+      const response = await api.get("/academico/profes-guia-12", {
+        params: {
+          anioLectivoId: requestedAnioId || undefined,
+          incluirInactivos
+        }
+      });
+      const data = response.data?.data || {};
+      const selectedAnioId = data.anioLectivoId ? String(data.anioLectivoId) : "";
+      setProfesGuia12(data.asignaciones || []);
+      setProfesGuia12Docentes(data.docentes || []);
+      setProfesGuia12Grupos(data.grupos || []);
+      setProfesGuia12Anios(data.aniosLectivos || []);
+      setProfeGuia12AnioFiltro(selectedAnioId);
+      profesGuia12LoadedKeysRef.current.add(key);
+      if (selectedAnioId) {
+        profesGuia12LoadedKeysRef.current.add(`${selectedAnioId}|${incluirInactivos ? "1" : "0"}`);
+      }
+    } finally {
+      if (profesGuia12RequestKeyRef.current === key) {
+        profesGuia12RequestKeyRef.current = "";
+      }
+    }
+  }
+
   async function loadBloques(query = "") {
     const response = await api.get("/academico/bloques-horarios", {
       params: { q: query }
@@ -1221,22 +1324,17 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   }
 
   async function loadAll() {
-    try {
-      setErrorMessage("");
-
-      // Importante: antes se cargaban todos los endpoints académicos al mismo tiempo.
-      // Eso saturaba SQL Server y provocaba timeouts de 15 segundos en catálogos.
-      // Ahora se cargan los catálogos base y luego cada pestaña carga su listado cuando se abre.
-      await loadCatalogos();
-    } catch (error: any) {
-      console.error("Error cargando catálogos académicos:", error);
-      setErrorMessage(
-        error?.response?.data?.message || "No se pudo cargar el módulo académico"
-      );
-    }
+    // La pantalla administrativa es grande. Cargar /catalogos al montar dispara
+    // consultas pesadas aunque el usuario solo abra una pestaña simple.
+    // Cada pestaña carga su información bajo demanda en loadTabData.
+    setErrorMessage("");
   }
 
   async function loadTabData(tabToLoad: TabKey) {
+    const key = `${tabToLoad}`;
+    if (tabRequestKeyRef.current === key || tabLoadedKeysRef.current.has(key)) return;
+    tabRequestKeyRef.current = key;
+
     try {
       setErrorMessage("");
 
@@ -1245,16 +1343,16 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           await loadAnios(anioSearch, incluirAniosInactivos);
           break;
         case "periodos":
-          await loadPeriodos(periodoSearch, incluirPeriodosInactivos);
+          await Promise.all([loadAnios(anioSearch, incluirAniosInactivos), loadPeriodos(periodoSearch, incluirPeriodosInactivos)]);
           break;
         case "consecutivos":
           await loadConsecutivosConfig();
           break;
         case "grupos":
-          await loadGrupos(grupoSearch, incluirGruposInactivos);
+          await Promise.all([loadAnios(anioSearch, incluirAniosInactivos), loadGrupos(grupoSearch, incluirGruposInactivos)]);
           break;
         case "matriculas":
-          await loadMatriculas(matriculaSearch, incluirMatriculasInactivas);
+          await Promise.all([loadCatalogos(), loadMatriculas(matriculaSearch, incluirMatriculasInactivas)]);
           break;
         case "tiposEstudiante":
           await loadTiposEstudiante(tipoEstudianteSearch, incluirTiposEstudianteInactivos);
@@ -1263,7 +1361,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           await loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos);
           break;
         case "adecuaciones":
-          await loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas);
+          await Promise.all([loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos), loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas)]);
           break;
         case "especialidades":
           await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
@@ -1275,19 +1373,22 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           await loadMaterias(materiaSearch, incluirMateriasInactivas);
           break;
         case "asignaciones":
-          await loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas);
+          await Promise.all([loadCatalogos(), loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)]);
+          break;
+        case "profesGuia12":
+          await loadProfesGuia12(profeGuia12AnioFiltro, incluirProfesGuia12Inactivos);
           break;
         case "bloques":
           await loadBloques(bloqueSearch);
           break;
         case "gruposMateria":
-          await loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas);
+          await Promise.all([loadCatalogos(), loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas)]);
           break;
         case "horarios":
-          await loadHorarios(horarioSearch, incluirHorariosInactivos);
+          await Promise.all([loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas), loadBloques(bloqueSearch), loadHorarios(horarioSearch, incluirHorariosInactivos)]);
           break;
         case "fechasClase":
-          await loadFechasClase(fechaClaseSearch);
+          await Promise.all([loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas), loadBloques(bloqueSearch), loadFechasClase(fechaClaseSearch)]);
           break;
         case "feriados":
           await loadFeriados(feriadoSearch, incluirFeriadosInactivos);
@@ -1304,11 +1405,16 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
         default:
           break;
       }
+      tabLoadedKeysRef.current.add(key);
     } catch (error: any) {
       console.error(`Error cargando pestaña académica ${tabToLoad}:`, error);
       setErrorMessage(
         error?.response?.data?.message || "No se pudo cargar la información de esta sección"
       );
+    } finally {
+      if (tabRequestKeyRef.current === key) {
+        tabRequestKeyRef.current = "";
+      }
     }
   }
 
@@ -1484,6 +1590,15 @@ function resetMatriculaForm() {
     setAsignacionForm(initialAsignacionForm);
     setEditingAsignacionId(null);
     closeSection("asignaciones");
+  }
+
+  function resetProfeGuia12Form() {
+    setProfeGuia12Form({
+      ...initialProfeGuia12Form,
+      anioLectivoId: profeGuia12AnioFiltro
+    });
+    setEditingProfeGuia12Id(null);
+    closeSection("profesGuia12");
   }
 
   function resetBloqueForm() {
@@ -2417,6 +2532,39 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleProfeGuia12Submit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingProfeGuia12(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        usuarioId: Number(profeGuia12Form.usuarioId),
+        grupoId: Number(profeGuia12Form.grupoId),
+        anioLectivoId: Number(profeGuia12Form.anioLectivoId)
+      };
+
+      if (editingProfeGuia12Id !== null) {
+        await api.put(`/academico/profes-guia-12/${editingProfeGuia12Id}`, payload);
+        setMessage("Profesor guía de 12° actualizado correctamente");
+      } else {
+        await api.post("/academico/profes-guia-12", payload);
+        setMessage("Profesor guía de 12° guardado correctamente");
+      }
+
+      resetProfeGuia12Form();
+      await Promise.all([
+        loadProfesGuia12(String(payload.anioLectivoId), incluirProfesGuia12Inactivos, true),
+        loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)
+      ]);
+    } catch (error: any) {
+      console.error("Error guardando profesor guía 12:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar el profesor guía de 12°");
+    } finally {
+      setLoadingProfeGuia12(false);
+    }
+  }
+
   async function handleBloqueSubmit(e: FormEvent) {
     e.preventDefault();
     setLoadingBloque(true);
@@ -2870,6 +3018,23 @@ function resetMatriculaForm() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function handleEditProfeGuia12(item: AsignacionDocente) {
+    setTab("profesGuia12");
+    openSection("profesGuia12");
+    clearMessages();
+    setEditingProfeGuia12Id(item.AsignacionDocenteId);
+    const anioLectivoId = String(item.AnioLectivoId ?? "");
+    setProfeGuia12Form({
+      usuarioId: String(item.UsuarioId ?? ""),
+      grupoId: String(item.GrupoId ?? ""),
+      anioLectivoId
+    });
+    if (anioLectivoId && anioLectivoId !== profeGuia12AnioFiltro) {
+      void loadProfesGuia12(anioLectivoId, incluirProfesGuia12Inactivos);
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function handleEditBloque(item: BloqueHorario) {
     setTab("bloques");
     openSection("bloques");
@@ -3217,6 +3382,24 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleDeleteProfeGuia12(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar este profesor guía de 12°?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/profes-guia-12/${id}`);
+      setMessage("Profesor guía de 12° eliminado correctamente");
+      if (editingProfeGuia12Id === id) resetProfeGuia12Form();
+      await Promise.all([
+        loadProfesGuia12(profeGuia12AnioFiltro, incluirProfesGuia12Inactivos, true),
+        loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)
+      ]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el profesor guía de 12°");
+    }
+  }
+
   async function handleReactivateAsignacion(id: number) {
     clearMessages();
     try {
@@ -3365,6 +3548,12 @@ function resetMatriculaForm() {
     await loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas);
   }
 
+  function handleProfeGuia12AnioChange(value: string) {
+    setProfeGuia12AnioFiltro(value);
+    setProfeGuia12Form((prev) => ({ ...prev, anioLectivoId: value, grupoId: "" }));
+    void loadProfesGuia12(value, incluirProfesGuia12Inactivos);
+  }
+
   async function handleBloqueSearch(e: FormEvent) {
     e.preventDefault();
     await loadBloques(bloqueSearch);
@@ -3511,6 +3700,7 @@ function resetMatriculaForm() {
     { key: "matriculas", label: "Matrícula", tone: "#7c3aed", help: "Ingreso del estudiante al grupo" },
     { key: "gruposMateria", label: "Materias por grupo", tone: "#16a34a", help: "Qué recibe cada grupo" },
     { key: "asignaciones", label: "Asignación Docentes", tone: "#16a34a", help: "Qué docente atiende cada grupo" },
+    { key: "profesGuia12", label: "Profe Guía 12°", tone: "#16a34a", help: "Docente guía de duodécimo" },
     { key: "bloques", label: "Bloque Horario", tone: "#f59e0b", help: "Franja horaria disponible" },
     { key: "horarios", label: "Horario de clases", tone: "#f59e0b", help: "Cruce de grupo, materia y bloque" },
     { key: "fechasClase", label: "Fecha de clases", tone: "#f59e0b", help: "Generación o ajuste por fecha" },
@@ -5601,6 +5791,146 @@ function resetMatriculaForm() {
                       </tr>
                     ))}
                     {!asignaciones.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>No hay asignaciones docentes registradas</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {tab === "profesGuia12" && (
+          <div className={isSectionOpen("profesGuia12") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("profesGuia12") ? (
+                <>
+                  <h3>{editingProfeGuia12Id !== null ? "Editar Profe Guía 12°" : "Asignar Profe Guía 12°"}</h3>
+                  <form className="form" onSubmit={handleProfeGuia12Submit}>
+                    <label>
+                      Año lectivo
+                      <select value={profeGuia12Form.anioLectivoId} onChange={(e) => handleProfeGuia12AnioChange(e.target.value)}>
+                        <option value="">Seleccione</option>
+                        {(profesGuia12Anios.length ? profesGuia12Anios : aniosActivos).map((item) => (
+                          <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Sección de 12°
+                      <select
+                        value={profeGuia12Form.grupoId}
+                        onChange={(e) => setProfeGuia12Form({ ...profeGuia12Form, grupoId: e.target.value })}
+                        disabled={!profeGuia12Form.anioLectivoId}
+                      >
+                        <option value="">Seleccione</option>
+                        {profesGuia12GruposOrdenados.map((item) => {
+                          const guia = profeGuia12ActivoPorGrupo.get(Number(item.GrupoId || 0));
+                          const guiaNombre = guia ? getTeacherFullName(guia) : "";
+                          return (
+                            <option key={item.GrupoId} value={item.GrupoId}>
+                              {getGrupoSeccionLabel(item)}{guiaNombre ? ` - Guía: ${guiaNombre}` : ""}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                    <label>
+                      Profesor guía
+                      <select value={profeGuia12Form.usuarioId} onChange={(e) => setProfeGuia12Form({ ...profeGuia12Form, usuarioId: e.target.value })}>
+                        <option value="">Seleccione</option>
+                        {(profesGuia12Docentes.length ? profesGuia12Docentes : docentesCatalogo).map((item) => (
+                          <option key={item.UsuarioId} value={item.UsuarioId}>
+                            {getTeacherFullName(item)} - {item.Correo}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingProfeGuia12}>
+                        {loadingProfeGuia12 ? (editingProfeGuia12Id !== null ? "Actualizando..." : "Guardando...") : (editingProfeGuia12Id !== null ? "Actualizar" : "Guardar")}
+                      </button>
+                      <button type="button" onClick={resetProfeGuia12Form} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Profe Guía 12°</h3>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => {
+                        clearMessages();
+                        setEditingProfeGuia12Id(null);
+                        setProfeGuia12Form({ ...initialProfeGuia12Form, anioLectivoId: profeGuia12AnioFiltro });
+                        openSection("profesGuia12");
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                    >
+                      Asignar profesor
+                    </button>
+                    <button type="button" onClick={() => loadProfesGuia12(profeGuia12AnioFiltro, incluirProfesGuia12Inactivos, true)} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                      Actualizar lista
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de profesores guía de 12°</h3>
+              <div style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap", alignItems: "end" }}>
+                <label style={{ minWidth: "220px", flex: "0 1 260px" }}>
+                  Año lectivo
+                  <select value={profeGuia12AnioFiltro} onChange={(e) => handleProfeGuia12AnioChange(e.target.value)}>
+                    <option value="">Año activo</option>
+                    {(profesGuia12Anios.length ? profesGuia12Anios : aniosActivos).map((item) => (
+                      <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>
+                    ))}
+                  </select>
+                </label>
+                <button type="button" className="primary-btn" onClick={() => loadProfesGuia12(profeGuia12AnioFiltro, incluirProfesGuia12Inactivos, true)}>
+                  Consultar
+                </button>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                  <input
+                    type="checkbox"
+                    checked={incluirProfesGuia12Inactivos}
+                    onChange={(e) => {
+                      setIncluirProfesGuia12Inactivos(e.target.checked);
+                      void loadProfesGuia12(profeGuia12AnioFiltro, e.target.checked);
+                    }}
+                  />
+                  Incluir inactivos
+                </label>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>ID</th><th>Sección</th><th>Profesor guía</th><th>Correo</th><th>Año</th><th>Estado</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody>
+                    {profesGuia12Ordenados.map((item) => (
+                      <tr key={item.AsignacionDocenteId}>
+                        <td>{item.AsignacionDocenteId}</td>
+                        <td>{getGrupoSeccionLabel(item)}</td>
+                        <td>{getTeacherFullName(item)}</td>
+                        <td>{item.Correo}</td>
+                        <td>{item.AnioNombre || ""}</td>
+                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => handleEditProfeGuia12(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                            {item.Activo && (
+                              <button type="button" onClick={() => handleDeleteProfeGuia12(item.AsignacionDocenteId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!profesGuia12Ordenados.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: "16px" }}>No hay profesores guía de 12° registrados para el año seleccionado</td></tr>}
                   </tbody>
                 </table>
               </div>
