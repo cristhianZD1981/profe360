@@ -14196,6 +14196,12 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
     );
 
+    const incluirEnvios = ["1", "true", "si"].includes(
+
+      String(req.query.incluirEnvios ?? "").trim().toLowerCase()
+
+    );
+
     if (grupoId === null || materiaId === null || anioLectivoId === null || periodoId === null) return;
 
 
@@ -14212,7 +14218,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
-    cacheKey = getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId });
+    cacheKey = `${getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId })}|asis:${incluirAsistencia ? 1 : 0}|env:${incluirEnvios ? 1 : 0}`;
 
     canUseCache = !sincronizarSolicitado;
 
@@ -14460,13 +14466,153 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
           `)),
 
-        estudiantesCached ?? timedQuery("eval360.contexto.estudiantes", () => pool.request()
+        estudiantesCached ?? timedQuery("eval360.contexto.estudiantes", () => {
+
+          const estudiantesRequest = pool.request()
 
           .input("grupoId", sql.Int, grupoId)
 
-          .input("anioLectivoId", sql.Int, anioLectivoId)
+          .input("anioLectivoId", sql.Int, anioLectivoId);
 
-          .query(`
+          if (!incluirEnvios) {
+
+            return estudiantesRequest.query(`
+
+              ;WITH estudiantesBase AS (
+
+                SELECT
+
+                  e.EstudianteId,
+
+                  e.Identificacion,
+
+                  e.Nombre,
+
+                  e.PrimerApellido,
+
+                  e.SegundoApellido,
+
+                  e.Correo,
+
+                  e.Telefono,
+
+                  e.AutorizaWhatsAppEncargado,
+
+                  m.MatriculaId,
+
+                  m.Estado AS EstadoMatricula,
+
+                  m.GrupoId,
+
+                  m.AnioLectivoId
+
+                FROM dbo.Matricula m
+
+                INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+
+                WHERE m.GrupoId = @grupoId
+
+                  AND m.AnioLectivoId = @anioLectivoId
+
+                  AND ISNULL(e.Activo, 1) = 1
+
+                  AND ISNULL(m.Estado, N'Activa') IN (N'Activa', N'ACTIVA', N'Activo', N'ACTIVO')
+
+              ),
+
+              traslados AS (
+
+                SELECT
+
+                  h.EstudianteId,
+
+                  CAST(1 AS bit) AS FueTrasladado,
+
+                  h.GrupoIdOrigen AS GrupoIdOrigenTraslado,
+
+                  go.Nombre AS GrupoNombreOrigenTraslado,
+
+                  h.GrupoIdDestino AS GrupoIdDestinoTraslado,
+
+                  h.CreatedAt AS TrasladoCreatedAt,
+
+                  ROW_NUMBER() OVER (
+
+                    PARTITION BY h.EstudianteId
+
+                    ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
+
+                  ) AS rn
+
+                FROM dbo.MatriculaTrasladoHistorial h
+
+                INNER JOIN estudiantesBase eb
+
+                  ON eb.EstudianteId = h.EstudianteId
+
+                 AND eb.AnioLectivoId = h.AnioLectivoId
+
+                 AND eb.GrupoId = h.GrupoIdDestino
+
+                LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
+
+              )
+
+              SELECT
+
+                eb.EstudianteId,
+
+                eb.Identificacion,
+
+                eb.Nombre,
+
+                eb.PrimerApellido,
+
+                eb.SegundoApellido,
+
+                eb.Correo,
+
+                eb.Telefono,
+
+                eb.AutorizaWhatsAppEncargado,
+
+                CAST(NULL AS nvarchar(400)) AS EncargadoPrincipalNombre,
+
+                CAST(NULL AS nvarchar(320)) AS EncargadoPrincipalCorreo,
+
+                CAST(NULL AS nvarchar(80)) AS EncargadoPrincipalTelefono,
+
+                CAST(NULL AS nvarchar(max)) AS EncargadosWhatsAppDetalle,
+
+                eb.MatriculaId,
+
+                eb.EstadoMatricula,
+
+                ISNULL(t.FueTrasladado, 0) AS FueTrasladado,
+
+                t.GrupoIdOrigenTraslado,
+
+                t.GrupoNombreOrigenTraslado,
+
+                t.GrupoIdDestinoTraslado,
+
+                t.TrasladoCreatedAt
+
+              FROM estudiantesBase eb
+
+              LEFT JOIN traslados t
+
+                ON t.EstudianteId = eb.EstudianteId
+
+               AND t.rn = 1
+
+              ORDER BY eb.PrimerApellido, eb.SegundoApellido, eb.Nombre
+
+            `);
+
+          }
+
+          return estudiantesRequest.query(`
 
             ;WITH estudiantesBase AS (
 
@@ -14678,7 +14824,9 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
             ORDER BY eb.PrimerApellido, eb.SegundoApellido, eb.Nombre
 
-          `)),
+          `);
+
+        }),
 
         planeamientosCached ?? timedQuery("eval360.contexto.planeamientos", () => pool.request()
 
@@ -14868,9 +15016,9 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               a.Fuente,
 
-              ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+              ${incluirEnvios ? "ISNULL(reb.CorreoEnviado, 0)" : "CAST(0 AS bit)"} AS CorreoEnviado,
 
-              ISNULL(reb.WaEnviado, 0) AS WaEnviado
+              ${incluirEnvios ? "ISNULL(reb.WaEnviado, 0)" : "CAST(0 AS bit)"} AS WaEnviado
 
             FROM dbo.Eval360_SeguimientoIndicador s
 
@@ -14878,7 +15026,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
             INNER JOIN dbo.Eval360_NivelDesempenoGrupo ng ON ng.NivelDesempenoGrupoId = s.NivelDesempenoGrupoId
 
-            LEFT JOIN dbo.ReporteEnvioBitacora reb
+            ${incluirEnvios ? `LEFT JOIN dbo.ReporteEnvioBitacora reb
 
               ON reb.Modulo IN (N'COTIDIANO_INDICADOR', N'TAREAS_INDICADOR')
 
@@ -14892,7 +15040,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                CONVERT(varchar(20), s.EstudianteId)
 
-             )
+             )` : ""}
 
             WHERE a.EstructuraGrupoId = @estructuraGrupoId
 
@@ -14998,9 +15146,9 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               CASE WHEN nea.NotaEdicionAuditoriaId IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS FueEditado,
 
-              ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+              ${incluirEnvios ? "ISNULL(reb.CorreoEnviado, 0)" : "CAST(0 AS bit)"} AS CorreoEnviado,
 
-              ISNULL(reb.WaEnviado, 0) AS WaEnviado
+              ${incluirEnvios ? "ISNULL(reb.WaEnviado, 0)" : "CAST(0 AS bit)"} AS WaEnviado
 
             FROM dbo.Eval360_NotaActividad n
 
@@ -15018,7 +15166,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
             ) nea
 
-            LEFT JOIN dbo.ReporteEnvioBitacora reb
+            ${incluirEnvios ? `LEFT JOIN dbo.ReporteEnvioBitacora reb
 
               ON reb.Modulo IN (N'COTIDIANO_ACTIVIDAD', N'TAREAS_ACTIVIDAD')
 
@@ -15030,7 +15178,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                CONVERT(varchar(20), n.EstudianteId)
 
-             )
+             )` : ""}
 
             WHERE a.EstructuraGrupoId = @estructuraGrupoId
 
@@ -15064,9 +15212,9 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               ar.Observacion,
 
-              ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
+              ${incluirEnvios ? "ISNULL(reb.CorreoEnviado, 0)" : "CAST(0 AS bit)"} AS CorreoEnviado,
 
-              ISNULL(reb.WaEnviado, 0) AS WaEnviado,
+              ${incluirEnvios ? "ISNULL(reb.WaEnviado, 0)" : "CAST(0 AS bit)"} AS WaEnviado,
 
               CASE WHEN COL_LENGTH('dbo.AsistenciaRegistro', 'HorarioGrupoId') IS NULL THEN NULL ELSE TRY_CONVERT(int, ar.HorarioGrupoId) END AS HorarioGrupoId,
 
@@ -15080,7 +15228,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
             FROM dbo.AsistenciaRegistro ar
 
-            LEFT JOIN dbo.ReporteEnvioBitacora reb
+            ${incluirEnvios ? `LEFT JOIN dbo.ReporteEnvioBitacora reb
 
               ON reb.Modulo = N'ASISTENCIA'
 
@@ -15100,7 +15248,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                CONVERT(varchar(20), ISNULL(ar.HorarioGrupoId, 0))
 
-             )
+             )` : ""}
 
             LEFT JOIN dbo.HorarioGrupo hg ON COL_LENGTH('dbo.AsistenciaRegistro', 'HorarioGrupoId') IS NOT NULL AND hg.HorarioGrupoId = ar.HorarioGrupoId
 
