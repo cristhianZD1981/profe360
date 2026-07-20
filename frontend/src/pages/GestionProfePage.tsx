@@ -4509,7 +4509,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
 
-  async function loadSeguimientoEvaluacion(item = selected) {
+  async function loadSeguimientoEvaluacion(item = selected, options: { incluirAsistencia?: boolean; sincronizar?: boolean } = {}) {
     if (!item) return;
     setLoadingSeguimiento(true);
     setErrorMessage("");
@@ -4521,6 +4521,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           materiaId: item.MateriaId,
           anioLectivoId: item.AnioLectivoId,
           periodoId: item.PeriodoId,
+          incluirAsistencia: options.incluirAsistencia ? 1 : undefined,
+          sincronizar: options.sincronizar ? 1 : undefined,
           _ts: Date.now()
         }
       });
@@ -8422,7 +8424,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 Evaluaciones
               </button>
               <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitácora</button>
-              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); cargarCierreCurso(selected); }}>Reportes</button>
+              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true }); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); cargarCierreCurso(selected); }}>Reportes</button>
               <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
               <button
                 type="button"

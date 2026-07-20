@@ -14190,6 +14190,12 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
     );
 
+    const incluirAsistencia = ["1", "true", "si", "sÃ­"].includes(
+
+      String(req.query.incluirAsistencia ?? "").trim().toLowerCase()
+
+    );
+
     if (grupoId === null || materiaId === null || anioLectivoId === null || periodoId === null) return;
 
 
@@ -14290,7 +14296,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
-      if (estructuraGrupoId) {
+      if (sincronizarSolicitado && estructuraGrupoId) {
 
         await timedQuery("eval360.contexto.syncTablaReplica", () =>
 
@@ -14732,7 +14738,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
       const ultimaReaplicacion = trasladosReaplicadosCache.get(trasladoCacheKey) || 0;
 
-      if ((Date.now() - ultimaReaplicacion) > TRASLADOS_REAPLICADOS_TTL_MS) {
+      if (sincronizarSolicitado && (Date.now() - ultimaReaplicacion) > TRASLADOS_REAPLICADOS_TTL_MS) {
 
         try {
 
@@ -15032,7 +15038,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
           `)),
 
-        timedQuery("eval360.contexto.asistencia", () => pool.request()
+        incluirAsistencia ? timedQuery("eval360.contexto.asistencia", () => pool.request()
 
           .input("grupoId", sql.Int, grupoId)
 
@@ -15108,7 +15114,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               AND ar.PeriodoId = @periodoId
 
-          `)),
+          `)) : Promise.resolve({ recordset: [] }),
 
         timedQuery("eval360.contexto.ajustesManuales", () => pool.request()
 
