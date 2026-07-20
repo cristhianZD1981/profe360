@@ -4318,26 +4318,46 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
       .input("periodoId", sql.Int, periodoId)
       .input("diaSemana", sql.Int, diaSemana)
       .query(`
+        ;WITH lecciones AS (
+          SELECT
+            hg.HorarioGrupoId,
+            hg.BloqueHorarioId,
+            bh.Nombre,
+            CONVERT(varchar(5), bh.HoraInicio, 108) AS HoraInicio,
+            CONVERT(varchar(5), bh.HoraFin, 108) AS HoraFin,
+            bh.OrdenVisual,
+            hg.DiaSemana,
+            CASE
+              WHEN gm.PeriodoId = @periodoId THEN 0
+              WHEN gm.PeriodoId IS NULL THEN 1
+              ELSE 2
+            END AS PrioridadPeriodo
+          FROM dbo.HorarioGrupo hg
+          INNER JOIN dbo.GrupoMateria gm
+            ON gm.GrupoMateriaId = hg.GrupoMateriaId
+           AND gm.Activo = 1
+          INNER JOIN dbo.BloqueHorario bh
+            ON bh.BloqueHorarioId = hg.BloqueHorarioId
+          WHERE gm.GrupoId = @grupoId
+            AND gm.MateriaId = @materiaId
+            AND hg.DiaSemana = @diaSemana
+            AND hg.Activo = 1
+        ),
+        leccionesPriorizadas AS (
+          SELECT *, MIN(PrioridadPeriodo) OVER () AS MejorPrioridadPeriodo
+          FROM lecciones
+        )
         SELECT
-          hg.HorarioGrupoId,
-          hg.BloqueHorarioId,
-          bh.Nombre,
-          CONVERT(varchar(5), bh.HoraInicio, 108) AS HoraInicio,
-          CONVERT(varchar(5), bh.HoraFin, 108) AS HoraFin,
-          bh.OrdenVisual,
-          hg.DiaSemana
-        FROM dbo.HorarioGrupo hg
-        INNER JOIN dbo.GrupoMateria gm
-          ON gm.GrupoMateriaId = hg.GrupoMateriaId
-         AND gm.Activo = 1
-        INNER JOIN dbo.BloqueHorario bh
-          ON bh.BloqueHorarioId = hg.BloqueHorarioId
-        WHERE gm.GrupoId = @grupoId
-          AND gm.MateriaId = @materiaId
-          AND (@periodoId IS NULL OR gm.PeriodoId IS NULL OR gm.PeriodoId = @periodoId)
-          AND hg.DiaSemana = @diaSemana
-          AND hg.Activo = 1
-        ORDER BY bh.OrdenVisual, bh.HoraInicio
+          HorarioGrupoId,
+          BloqueHorarioId,
+          Nombre,
+          HoraInicio,
+          HoraFin,
+          OrdenVisual,
+          DiaSemana
+        FROM leccionesPriorizadas
+        WHERE PrioridadPeriodo = MejorPrioridadPeriodo
+        ORDER BY OrdenVisual, HoraInicio
       `);
 
     const estudiantesResult = await pool.request()
@@ -4478,21 +4498,37 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       .input("periodoId", sql.Int, periodoId)
       .input("diaSemana", sql.Int, diaSemana)
       .query(`
+        ;WITH lecciones AS (
+          SELECT
+            hg.HorarioGrupoId,
+            hg.BloqueHorarioId,
+            bh.Nombre AS LeccionNombre,
+            CASE
+              WHEN gm.PeriodoId = @periodoId THEN 0
+              WHEN gm.PeriodoId IS NULL THEN 1
+              ELSE 2
+            END AS PrioridadPeriodo
+          FROM dbo.HorarioGrupo hg
+          INNER JOIN dbo.GrupoMateria gm
+            ON gm.GrupoMateriaId = hg.GrupoMateriaId
+           AND gm.Activo = 1
+          INNER JOIN dbo.BloqueHorario bh
+            ON bh.BloqueHorarioId = hg.BloqueHorarioId
+          WHERE gm.GrupoId = @grupoId
+            AND gm.MateriaId = @materiaId
+            AND hg.DiaSemana = @diaSemana
+            AND hg.Activo = 1
+        ),
+        leccionesPriorizadas AS (
+          SELECT *, MIN(PrioridadPeriodo) OVER () AS MejorPrioridadPeriodo
+          FROM lecciones
+        )
         SELECT
-          hg.HorarioGrupoId,
-          hg.BloqueHorarioId,
-          bh.Nombre AS LeccionNombre
-        FROM dbo.HorarioGrupo hg
-        INNER JOIN dbo.GrupoMateria gm
-          ON gm.GrupoMateriaId = hg.GrupoMateriaId
-         AND gm.Activo = 1
-        INNER JOIN dbo.BloqueHorario bh
-          ON bh.BloqueHorarioId = hg.BloqueHorarioId
-        WHERE gm.GrupoId = @grupoId
-          AND gm.MateriaId = @materiaId
-          AND (@periodoId IS NULL OR gm.PeriodoId IS NULL OR gm.PeriodoId = @periodoId)
-          AND hg.DiaSemana = @diaSemana
-          AND hg.Activo = 1
+          HorarioGrupoId,
+          BloqueHorarioId,
+          LeccionNombre
+        FROM leccionesPriorizadas
+        WHERE PrioridadPeriodo = MejorPrioridadPeriodo
       `);
     const leccionesPermitidas = new Map<number, number>();
     const leccionesNombrePorHorario = new Map<number, string>();
