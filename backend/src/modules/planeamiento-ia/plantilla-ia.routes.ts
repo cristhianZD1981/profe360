@@ -112,7 +112,8 @@ function canReadPlantilla(req: any, plantilla: any) {
   if (isSuperAdminRole(req)) return true;
 
   const institucionId = getUserInstitutionId(req);
-  if (!institucionId || Number(plantilla.InstitucionId || 0) !== institucionId) return false;
+  const plantillaInstitucionId = Number(plantilla.InstitucionId || 0);
+  if (plantillaInstitucionId > 0 && (!institucionId || plantillaInstitucionId !== institucionId)) return false;
 
   if (isAdminRole(req)) return true;
   if (!isProfesorRole(req)) return false;
@@ -319,8 +320,8 @@ router.get("/plantillas", async (req, res) => {
       ? "AND (ISNULL(p.EsPublica, 1) = 1 OR p.UsuarioCreadorId = @usuarioId)"
       : "";
     const filtroInstitucion = isSuperAdminRole(req)
-      ? "AND (@institucionId IS NULL OR p.InstitucionId = @institucionId)"
-      : "AND p.InstitucionId = @institucionId";
+      ? "AND (@institucionId IS NULL OR p.InstitucionId = @institucionId OR p.InstitucionId IS NULL)"
+      : "AND (p.InstitucionId = @institucionId OR p.InstitucionId IS NULL)";
 
     const result = await request.query(`
       SELECT

@@ -10176,6 +10176,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       className="primary-btn"
                       onClick={() => {
                         if (!planeamientoIaFormOpen && selected) {
+                          loadPlantillasPlaneamientoIa();
                           setPlaneamientoIaForm((prev) => ({
                             ...prev,
                             materiaId: String(selected.MateriaId || ""),
