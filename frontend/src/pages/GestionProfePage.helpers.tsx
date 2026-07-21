@@ -295,6 +295,7 @@ export type PlaneamientoIaForm = {
 export type PlantillaPromptIA = {
   Id: number;
   TipoGeneracionIAId: number;
+  TipoGeneracionIANombre?: string | null;
   NombrePlantilla: string;
   IndicacionesSistema?: string | null;
   ContextoBase?: string | null;

@@ -11143,7 +11143,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                 <option value="">Usar plantilla activa recomendada</option>
                                                 {eval360PlantillasIaIndicadores.map((plantilla) => (
                                                   <option key={plantilla.Id} value={plantilla.Id}>
-                                                    {plantilla.NombrePlantilla}
+                                                    {plantilla.NombrePlantilla}{plantilla.TipoGeneracionIANombre ? ` (${plantilla.TipoGeneracionIANombre})` : ""}
                                                   </option>
                                                 ))}
                                               </select>

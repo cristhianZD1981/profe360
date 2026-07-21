@@ -7422,7 +7422,13 @@ async function getPlantillaIndicadores(req: any, pool: any, plantillaPromptIAId?
 
         ON t.Id = p.TipoGeneracionIAId
 
-      WHERE UPPER(LTRIM(RTRIM(ISNULL(t.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI LIKE N'%INDICADOR%'
+      WHERE (
+
+          UPPER(LTRIM(RTRIM(ISNULL(t.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI LIKE N'%INDICADOR%'
+
+          OR LTRIM(RTRIM(ISNULL(t.Nombre, N''))) COLLATE Latin1_General_100_CI_AI = N'Planeamiento didactico'
+
+        )
 
         AND t.Activo = 1
 
@@ -7786,7 +7792,9 @@ router.get("/plantillas-ia-indicadores", async (req, res) => {
 
         p.EsPublica,
 
-        p.Activo
+        p.Activo,
+
+        t.Nombre AS TipoGeneracionIANombre
 
       FROM dbo.PlantillaPromptIA p
 
@@ -7794,7 +7802,13 @@ router.get("/plantillas-ia-indicadores", async (req, res) => {
 
         ON t.Id = p.TipoGeneracionIAId
 
-      WHERE UPPER(LTRIM(RTRIM(ISNULL(t.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI LIKE N'%INDICADOR%'
+      WHERE (
+
+          UPPER(LTRIM(RTRIM(ISNULL(t.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI LIKE N'%INDICADOR%'
+
+          OR LTRIM(RTRIM(ISNULL(t.Nombre, N''))) COLLATE Latin1_General_100_CI_AI = N'Planeamiento didactico'
+
+        )
 
         AND t.Activo = 1
 
@@ -7802,7 +7816,11 @@ router.get("/plantillas-ia-indicadores", async (req, res) => {
 
         AND (@esAdmin = 1 OR ISNULL(p.EsPublica, 1) = 1 OR p.UsuarioCreadorId = @usuarioId)
 
-      ORDER BY p.NombrePlantilla
+      ORDER BY
+
+        CASE WHEN LTRIM(RTRIM(ISNULL(t.Nombre, N''))) COLLATE Latin1_General_100_CI_AI = N'Planeamiento didactico' THEN 0 ELSE 1 END,
+
+        p.NombrePlantilla
 
     `);
 
