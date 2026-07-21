@@ -737,7 +737,7 @@ async function callOpenAiIfConfigured(prompt: string) {
     }
 
     const data: any = await response.json();
-    const text = data.output_text || data.output?.[0]?.content?.[0]?.text || "";
+    const text = extraerTextoRespuestaOpenAI(data);
     if (!text) return null;
 
     try {
@@ -757,6 +757,23 @@ async function callOpenAiIfConfigured(prompt: string) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function extraerTextoRespuestaOpenAI(data: any) {
+  const direct = normalizeText(data?.output_text);
+  if (direct) return direct;
+
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const message of output) {
+    if (message?.type !== "message") continue;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    for (const part of content) {
+      const text = normalizeText(part?.text || part?.output_text);
+      if (text) return text;
+    }
+  }
+
+  return "";
 }
 
 

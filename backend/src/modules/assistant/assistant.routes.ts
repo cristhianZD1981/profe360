@@ -2579,6 +2579,23 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
   return null;
 }
 
+function extraerTextoRespuestaOpenAI(data: any) {
+  const direct = normalizeText(data?.output_text);
+  if (direct) return direct;
+
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const message of output) {
+    if (message?.type !== "message") continue;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    for (const part of content) {
+      const text = normalizeText(part?.text || part?.output_text);
+      if (text) return text;
+    }
+  }
+
+  return "";
+}
+
 async function callAssistantModel(prompt: string) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
@@ -2601,7 +2618,7 @@ async function callAssistantModel(prompt: string) {
   }
 
   const data: any = await response.json();
-  return data?.output_text || data?.output?.[0]?.content?.[0]?.text || null;
+  return extraerTextoRespuestaOpenAI(data) || null;
 }
 
 async function buildContext(pool: any, req: any, question: string, currentPath?: string, screenSnapshotInput?: any) {
