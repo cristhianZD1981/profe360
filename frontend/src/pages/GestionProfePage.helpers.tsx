@@ -525,6 +525,7 @@ export type Planeamiento = {
   FechaFin?: string | null;
   Observaciones?: string | null;
   ResultadoIAJson?: string | null;
+  TieneResultadoIA?: boolean | number;
   Activo: boolean;
   CreatedAt?: string | null;
   UpdatedAt?: string | null;

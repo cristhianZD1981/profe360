@@ -323,24 +323,99 @@ function classifyApoyoTipo(tipo: any) {
   return "curricular";
 }
 
-function metodoFallback(descripcion: string, nivel: string, observaciones: string) {
+function normalizarIntensidadApoyo(value: any, fallback = "Moderada") {
+  const key = normalizeKey(value);
+  if (key === "ALTA" || key.startsWith("ALTA ")) return "Alta";
+  if (key === "MODERADA" || key.startsWith("MODERADA ")) return "Moderada";
+  if (key === "BAJA" || key.startsWith("BAJA ")) return "Baja";
+  return fallback;
+}
+
+function textoApoyoGeneradoEsValido(value: any) {
+  const text = normalizeText(value);
+  const key = normalizeKey(text);
+  if (text.length < 12) return false;
+  return !key.includes("REGISTRO DE APLICACION DE LA ESTRATEGIA")
+    && !key.includes("SE APLICA CONSIDERANDO EL NIVEL DE FUNCIONAMIENTO");
+}
+
+function extraerTextoRespuestaOpenAI(data: any) {
+  const direct = normalizeText(data?.output_text);
+  if (direct) return direct;
+
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const message of output) {
+    if (message?.type !== "message") continue;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    for (const part of content) {
+      const text = normalizeText(part?.text || part?.output_text);
+      if (text) return text;
+    }
+  }
+
+  return "";
+}
+
+function metodoFallback(descripcion: string, tipo = "") {
   const base = `${descripcion}`.trim();
-  const intensity = /todas|siempre|permanente|general/i.test(base)
-    ? "Generalizado: durante el desarrollo de las lecciones y procesos evaluativos."
-    : /tiempo|prueba|trabajo|actividad/i.test(base)
-      ? "Extenso: cuando la actividad demande mayor procesamiento, práctica o demostración de aprendizajes."
-      : "Intermitente: según la demanda de la actividad y las necesidades observadas.";
+  const key = normalizeKey(base);
+  const tipoKey = normalizeKey(tipo);
+  const intensity = /MAS TIEMPO|TIEMPO ADICIONAL|AJUSTAR LOS APRENDIZAJES|DISMINUIR LA LONGITUD|PRUEBA ESPECIFICA|DIVIDIR LA ACTIVIDAD|TUTOR ESPECIALISTA/.test(key)
+    ? "Alta"
+    : "Moderada";
+
+  let evidencia = "Registro de aplicación y seguimiento de la estrategia durante las actividades de clase.";
+  let observaciones = "Favorece la participación y el acceso del estudiante a las actividades de aprendizaje.";
+
+  if (/MAS TIEMPO|TIEMPO ADICIONAL/.test(key)) {
+    evidencia = "Tiempo adicional registrado en actividades de clase y evaluaciones.";
+    observaciones = "Favorece el ritmo de trabajo y reduce la presión durante las actividades evaluativas.";
+  } else if (/AJUSTAR LOS APRENDIZAJES/.test(key)) {
+    evidencia = "Planeamiento y actividades ajustados al nivel de desempeño del estudiante.";
+    observaciones = "Permite adecuar los aprendizajes y las actividades a las necesidades educativas identificadas.";
+  } else if (/SENAS|GESTOS/.test(key)) {
+    evidencia = "Apoyos gestuales aplicados durante las explicaciones y actividades de clase.";
+    observaciones = "Facilita la comprensión de instrucciones y la comunicación durante el aprendizaje.";
+  } else if (/DISMINUIR LA LONGITUD|CANTIDAD DE LAS TAREAS/.test(key)) {
+    evidencia = "Tareas ajustadas en extensión y cantidad según el propósito de aprendizaje.";
+    observaciones = "Disminuye la sobrecarga y favorece la finalización de las actividades.";
+  } else if (/PRUEBA ESPECIFICA/.test(key)) {
+    evidencia = "Instrumento de evaluación específico aplicado y registrado.";
+    observaciones = "Permite valorar los aprendizajes con condiciones de acceso más adecuadas.";
+  } else if (/TAMANO DE LA LETRA/.test(key)) {
+    evidencia = "Instrumento evaluativo ajustado con un tamaño de letra legible.";
+    observaciones = "Facilita la lectura y la comprensión de las consignas de evaluación.";
+  } else if (/EVALUACIONES CORTAS/.test(key)) {
+    evidencia = "Evaluaciones cortas aplicadas de forma periódica y registradas.";
+    observaciones = "Permite valorar los aprendizajes en segmentos manejables y con menor fatiga.";
+  } else if (/CERCA DE COMPANEROS/.test(key)) {
+    evidencia = "Ubicación estratégica aplicada durante las actividades individuales y grupales.";
+    observaciones = "Favorece la atención y el acompañamiento positivo durante las lecciones.";
+  } else if (/VER LA PIZARRA/.test(key)) {
+    evidencia = "Ubicación cercana a la pizarra aplicada durante las lecciones.";
+    observaciones = "Facilita el acceso visual a las instrucciones y los materiales de clase.";
+  } else if (/ORGANIZAR EL TIEMPO|CLIMA ORGANIZACIONAL/.test(key)) {
+    evidencia = "Horario y organización del aula ajustados según las actividades planificadas.";
+    observaciones = "Mejora la gestión del tiempo y mantiene un ambiente de trabajo más ordenado.";
+  } else if (/RUTINAS DE TRABAJO/.test(key)) {
+    evidencia = "Rutinas de trabajo establecidas y revisadas con el estudiante.";
+    observaciones = "Aporta estructura y favorece una mayor autonomía en las tareas.";
+  } else if (tipoKey.includes("EVALU")) {
+    evidencia = "Estrategia evaluativa aplicada y registrada durante el proceso de valoración.";
+    observaciones = "Favorece una evaluación accesible y coherente con las necesidades educativas del estudiante.";
+  }
+
   return {
     estrategia: base,
     intensidad: intensity,
-    evidencia: `Registro de aplicación de la estrategia: ${base}.`,
-    observaciones: `Se aplica considerando el nivel de funcionamiento${nivel ? ` (${nivel})` : ""}${observaciones ? ` y la condición identificada: ${observaciones}` : ""}.`
+    evidencia,
+    observaciones
   };
 }
 
 async function generarTextosApoyoConIA(contexto: any, catalogos: any[]) {
   const fallback = new Map<number, any>();
-  for (const item of catalogos) fallback.set(Number(item.AdecuacionCatalogoId), metodoFallback(item.Descripcion || "", contexto.nivelFuncionamiento || "", contexto.observaciones || ""));
+  for (const item of catalogos) fallback.set(Number(item.AdecuacionCatalogoId), metodoFallback(item.Descripcion || "", item.Tipo || ""));
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || !catalogos.length) return fallback;
@@ -349,6 +424,12 @@ async function generarTextosApoyoConIA(contexto: any, catalogos: any[]) {
 Generá datos breves y profesionales para un informe de apoyos educativos en Costa Rica.
 Devolvé SOLO JSON válido con esta forma:
 {"items":[{"id":123,"intensidad":"...","evidencia":"...","observaciones":"..."}]}
+
+Reglas obligatorias:
+- En intensidad usá exclusivamente uno de estos valores: "Alta", "Moderada" o "Baja".
+- Redactá evidencia y observaciones concretas para cada estrategia; no usés textos genéricos.
+- No escribás "Registro de aplicación de la estrategia" ni "Se aplica considerando el nivel de funcionamiento".
+- La observación debe describir el efecto pedagógico esperado del apoyo, no repetir la condición del estudiante.
 
 Contexto:
 Estudiante: ${contexto.estudianteNombre}
@@ -366,18 +447,23 @@ ${catalogos.map((item) => `- id ${item.AdecuacionCatalogoId}: [${item.Tipo}] ${i
       headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, input: prompt })
     });
-    if (!response.ok) return fallback;
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 500);
+      console.error(`[apoyo-educativo] OpenAI respondió ${response.status} con el modelo ${model}: ${detail}`);
+      return fallback;
+    }
     const data: any = await response.json();
-    const text = data.output_text || data.output?.[0]?.content?.[0]?.text || "";
+    const text = extraerTextoRespuestaOpenAI(data);
+    if (!text) throw new Error("La respuesta de OpenAI no incluyó texto de salida");
     const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || text);
     for (const item of parsed.items || []) {
       const id = Number(item.id);
       const existing = fallback.get(id) || {};
       fallback.set(id, {
         ...existing,
-        intensidad: normalizeText(item.intensidad) || existing.intensidad,
-        evidencia: normalizeText(item.evidencia) || existing.evidencia,
-        observaciones: normalizeText(item.observaciones) || existing.observaciones
+        intensidad: normalizarIntensidadApoyo(item.intensidad, existing.intensidad),
+        evidencia: textoApoyoGeneradoEsValido(item.evidencia) ? normalizeText(item.evidencia) : existing.evidencia,
+        observaciones: textoApoyoGeneradoEsValido(item.observaciones) ? normalizeText(item.observaciones) : existing.observaciones
       });
     }
   } catch (error) {
@@ -1672,7 +1758,7 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
       const textosIA = await generarTextosApoyoConIA(contextoInforme, catalogos);
       const items = catalogos.map((catalogo: any) => {
         const tipo = classifyApoyoTipo(catalogo.Tipo);
-        const ai = textosIA.get(Number(catalogo.AdecuacionCatalogoId)) || metodoFallback(catalogo.Descripcion, estudiante.NivelFuncionamiento, estudiante.Observaciones);
+        const ai = textosIA.get(Number(catalogo.AdecuacionCatalogoId)) || metodoFallback(catalogo.Descripcion, catalogo.Tipo || "");
         return {
           id: Number(catalogo.AdecuacionCatalogoId),
           seccion: tipo === "evaluacion" ? "curricular" : tipo,
@@ -3632,7 +3718,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
         })
       : { copiado: false, grupoOrigenId: null, totalPlaneamientosCopiados: 0 };
 
-    const planeamientosResult = await pool.request()
+    const planeamientosPromise = pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
@@ -3652,7 +3738,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           p.FechaInicio,
           p.FechaFin,
           p.Observaciones,
-          p.ResultadoIAJson,
+          CAST(CASE WHEN p.ResultadoIAJson IS NULL THEN 0 ELSE 1 END AS BIT) AS TieneResultadoIA,
           p.Activo,
           p.CreatedAt,
           p.UpdatedAt
@@ -3667,7 +3753,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
         ORDER BY p.FechaInicio DESC, p.PlaneamientoId DESC
       `);
 
-    const indicadoresResult = await pool.request()
+    const indicadoresPromise = pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
@@ -3697,7 +3783,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
         ORDER BY pi.PlaneamientoId, pi.PlaneamientoIndicadorId
       `);
 
-    const indicadoresEval360Result = await pool.request()
+    const indicadoresEval360Promise = pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
@@ -3732,13 +3818,14 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           i.IndicadorGrupoId
       `);
 
-    const planeamientos = planeamientosResult.recordset.map((planeamiento: any) => ({
-      ...planeamiento,
-      ResultadoIAJson: sanitizeResultadoIAJsonForList(planeamiento.ResultadoIAJson)
-    }));
+    const [planeamientosResult, indicadoresResult, indicadoresEval360Result] = await Promise.all([
+      planeamientosPromise,
+      indicadoresPromise,
+      indicadoresEval360Promise
+    ]);
 
     return ok(res, {
-      planeamientos,
+      planeamientos: planeamientosResult.recordset,
       indicadores: indicadoresResult.recordset,
       indicadoresEval360: indicadoresEval360Result.recordset,
       sincronizacion: sincronizacionPlaneamientos
@@ -3746,6 +3833,74 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
   } catch (error) {
     console.error("Error cargando planeamientos:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los planeamientos" });
+  }
+});
+
+router.get("/planeamientos/:planeamientoId/detalle", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+
+    const planeamientoId = Number(req.params.planeamientoId);
+    if (!Number.isFinite(planeamientoId)) return badRequest(res, "Planeamiento invalido");
+
+    const pool = await getPool();
+    const request = pool.request()
+      .input("planeamientoId", sql.Int, planeamientoId)
+      .input("usuarioId", sql.Int, getUserId(req));
+
+    let filtroInstitucion = "";
+    if (!isSuperAdmin(req)) {
+      const institucionId = getInstitutionId(req, res);
+      if (institucionId === null) return;
+      request.input("institucionId", sql.Int, institucionId);
+      filtroInstitucion = "AND p.InstitucionId = @institucionId";
+    }
+
+    const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
+      ? "AND p.UsuarioId = @usuarioId"
+      : "";
+
+    const result = await request.query(`
+      SELECT TOP 1
+        p.PlaneamientoId,
+        p.InstitucionId,
+        p.AnioLectivoId,
+        p.PeriodoId,
+        p.GrupoId,
+        p.MateriaId,
+        p.UsuarioId,
+        p.Nombre,
+        p.FechaInicio,
+        p.FechaFin,
+        p.Observaciones,
+        CASE
+          WHEN ISJSON(p.ResultadoIAJson) = 1
+            THEN JSON_MODIFY(p.ResultadoIAJson, '$.plantillaFormatoDocx.base64', NULL)
+          ELSE p.ResultadoIAJson
+        END AS ResultadoIAJson,
+        p.Activo,
+        p.CreatedAt,
+        p.UpdatedAt
+      FROM dbo.Planeamiento p
+      WHERE p.PlaneamientoId = @planeamientoId
+        AND p.Activo = 1
+        ${filtroInstitucion}
+        ${filtroProfesor}
+    `);
+
+    const planeamiento = result.recordset[0];
+    if (!planeamiento) return forbidden(res, "No tenes permisos para consultar este planeamiento");
+
+    return ok(res, {
+      planeamiento: {
+        ...planeamiento,
+        TieneResultadoIA: !!planeamiento.ResultadoIAJson,
+        ResultadoIAJson: sanitizeResultadoIAJsonForList(planeamiento.ResultadoIAJson)
+      }
+    });
+  } catch (error) {
+    console.error("Error cargando detalle del planeamiento:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar el detalle del planeamiento" });
   }
 });
 

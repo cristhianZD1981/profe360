@@ -249,6 +249,7 @@ export default function GestionProfePage() {
   const [editingPlaneamientoId, setEditingPlaneamientoId] = useState<number | null>(null);
   const [planeamientoForm, setPlaneamientoForm] = useState<PlaneamientoForm>(initialPlaneamientoForm);
   const [loadingPlaneamientos, setLoadingPlaneamientos] = useState(false);
+  const [loadingPlaneamientoDetalleId, setLoadingPlaneamientoDetalleId] = useState<number | null>(null);
   const [savingPlaneamiento, setSavingPlaneamiento] = useState(false);
   const [planeamientoIaForm, setPlaneamientoIaForm] = useState<PlaneamientoIaForm>(initialPlaneamientoIaForm);
   const [habilidadesIa, setHabilidadesIa] = useState<PlaneamientoHabilidad[]>([]);
@@ -5773,34 +5774,58 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setPlaneamientoFormOpen(true);
   }
 
-  function openEditPlaneamiento(item: Planeamiento) {
+  async function openEditPlaneamiento(item: Planeamiento) {
     setMessage("");
     setErrorMessage("");
     setActivePanel("planeamientos");
 
+    let planeamiento = item;
+    const tieneResultadoIa = !!item.ResultadoIAJson || !!item.TieneResultadoIA;
+
+    if (tieneResultadoIa && !item.ResultadoIAJson) {
+      setLoadingPlaneamientoDetalleId(item.PlaneamientoId);
+      try {
+        const response = await api.get(`/gestion-profe/planeamientos/${item.PlaneamientoId}/detalle`);
+        const data = unwrapApiData(response) || {};
+        const detalle = data.planeamiento;
+        if (!detalle) throw new Error("El API no devolvio el detalle del planeamiento");
+
+        planeamiento = { ...item, ...detalle };
+        setPlaneamientos((prev) => prev.map((actual) =>
+          Number(actual.PlaneamientoId) === Number(item.PlaneamientoId) ? planeamiento : actual
+        ));
+      } catch (error: any) {
+        console.error("Error cargando el detalle del planeamiento:", error);
+        setErrorMessage(error?.response?.data?.message || "No se pudo abrir el planeamiento");
+        return;
+      } finally {
+        setLoadingPlaneamientoDetalleId(null);
+      }
+    }
+
     const indicadoresActivosPlaneamiento = planeamientoIndicadores
-      .filter((indicador) => Number(indicador.PlaneamientoId || 0) === Number(item.PlaneamientoId || 0))
+      .filter((indicador) => Number(indicador.PlaneamientoId || 0) === Number(planeamiento.PlaneamientoId || 0))
       .map((indicador) => String(indicador.Descripcion || "").trim())
       .filter(Boolean);
 
-    if (item.ResultadoIAJson) {
+    if (planeamiento.ResultadoIAJson) {
       try {
-        const parsed = typeof item.ResultadoIAJson === "string"
-          ? JSON.parse(item.ResultadoIAJson)
-          : item.ResultadoIAJson;
+        const parsed = typeof planeamiento.ResultadoIAJson === "string"
+          ? JSON.parse(planeamiento.ResultadoIAJson)
+          : planeamiento.ResultadoIAJson;
 
         setUltimoPlaneamientoIa(normalizePlaneamientoIaResultado({
           ...(parsed || {}),
           indicadoresEvaluacion: indicadoresActivosPlaneamiento,
-          nombre: parsed?.nombre || item.Nombre || "Planeamiento didáctico",
-          observaciones: parsed?.observaciones || item.Observaciones || ""
+          nombre: parsed?.nombre || planeamiento.Nombre || "Planeamiento didáctico",
+          observaciones: parsed?.observaciones || planeamiento.Observaciones || ""
         }));
         setPlaneamientoIaForm((prev) => ({
           ...prev,
           periodicidad: String(parsed?.periodicidad || prev.periodicidad || ""),
           competenciaGeneral: String(parsed?.competenciaGeneral || (Array.isArray(parsed?.competenciasGenerales) ? (parsed.competenciasGenerales[0] || "") : "") || prev.competenciaGeneral || "")
         }));
-        setEditingPlaneamientoIaId(item.PlaneamientoId);
+        setEditingPlaneamientoIaId(planeamiento.PlaneamientoId);
         setPlaneamientoIaFormOpen(true);
         setPlaneamientoFormOpen(false);
         setEditingPlaneamientoId(null);
@@ -5812,7 +5837,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     const indicadores = planeamientoIndicadores
-      .filter((indicador) => indicador.PlaneamientoId === item.PlaneamientoId)
+      .filter((indicador) => indicador.PlaneamientoId === planeamiento.PlaneamientoId)
       .map((indicador) => ({
         PlaneamientoIndicadorId: indicador.PlaneamientoIndicadorId,
         PlaneamientoId: indicador.PlaneamientoId,
@@ -5822,13 +5847,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         NivelValor: indicador.NivelValor
       }));
 
-    setEditingPlaneamientoId(item.PlaneamientoId);
+    setEditingPlaneamientoId(planeamiento.PlaneamientoId);
     setEditingPlaneamientoIaId(null);
     setPlaneamientoForm({
-      nombre: item.Nombre || "",
-      fechaInicio: item.FechaInicio ? String(item.FechaInicio).slice(0, 10) : "",
-      fechaFin: item.FechaFin ? String(item.FechaFin).slice(0, 10) : "",
-      observaciones: item.Observaciones || "",
+      nombre: planeamiento.Nombre || "",
+      fechaInicio: planeamiento.FechaInicio ? String(planeamiento.FechaInicio).slice(0, 10) : "",
+      fechaFin: planeamiento.FechaFin ? String(planeamiento.FechaFin).slice(0, 10) : "",
+      observaciones: planeamiento.Observaciones || "",
       indicadores: indicadores.length > 0 ? indicadores : [{ Descripcion: "", NivelDesempenoId: null }]
     });
     setPlaneamientoFormOpen(true);
@@ -11032,9 +11057,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                     <button
                                       type="button"
                                       style={{ ...secondaryButtonStyle, background: "#dbeafe", borderColor: "#93c5fd", color: "#1e3a8a", fontWeight: 800 }}
-                                      onClick={() => openEditPlaneamiento(planeamiento)}
+                                      onClick={() => void openEditPlaneamiento(planeamiento)}
+                                      disabled={loadingPlaneamientoDetalleId === planeamientoId}
                                     >
-                                      Editar
+                                      {loadingPlaneamientoDetalleId === planeamientoId ? "Abriendo..." : "Editar"}
                                     </button>
                                     <button
                                       type="button"
