@@ -406,12 +406,12 @@ async function buildPromediosAcademicosPreview(params: {
        AND ae.MateriaId = mp.MateriaId
        AND ae.PeriodoId = p.PeriodoId
       ORDER BY
-        TRY_CONVERT(int, LEFT(LTRIM(ea.GrupoNombre), PATINDEX('%[^0-9]%', LTRIM(ea.GrupoNombre) + 'X') - 1)),
-        TRY_CONVERT(int, SUBSTRING(ea.GrupoNombre, CHARINDEX('-', ea.GrupoNombre + '-') + 1, 20)),
-        ea.GrupoNombre,
         ea.PrimerApellido,
         ea.SegundoApellido,
         ea.Nombre,
+        TRY_CONVERT(int, LEFT(LTRIM(ea.GrupoNombre), PATINDEX('%[^0-9]%', LTRIM(ea.GrupoNombre) + 'X') - 1)),
+        TRY_CONVERT(int, SUBSTRING(ea.GrupoNombre, CHARINDEX('-', ea.GrupoNombre + '-') + 1, 20)),
+        ea.GrupoNombre,
         p.NumeroOrden,
         ma.Nombre
     `));
@@ -643,7 +643,7 @@ async function buildReporteAsistenciaGeneral(params: {
     )
     SELECT *
     FROM BaseStudents
-    ORDER BY GrupoNombre, PrimerApellido, SegundoApellido, Nombre
+    ORDER BY PrimerApellido, SegundoApellido, Nombre, GrupoNombre, EstudianteId
   `));
 
   if (vistaPor === "PROFESOR") {
@@ -791,10 +791,11 @@ async function buildReporteAsistenciaGeneral(params: {
        AND rp.GrupoId = bs.GrupoId
        AND rp.AnioLectivoId = bs.AnioLectivoId
       ORDER BY
-        bs.GrupoNombre,
         bs.PrimerApellido,
         bs.SegundoApellido,
-        bs.Nombre
+        bs.Nombre,
+        bs.GrupoNombre,
+        bs.EstudianteId
     `));
 
     const rows = resumenProfesorResult.recordset.map((student: any) => {
@@ -1020,10 +1021,11 @@ async function buildReporteAsistenciaGeneral(params: {
      AND aa.AnioLectivoId = mb.AnioLectivoId
      AND aa.MateriaId = mb.MateriaId
     ORDER BY
-      mb.GrupoNombre,
       mb.PrimerApellido,
       mb.SegundoApellido,
       mb.Nombre,
+      mb.GrupoNombre,
+      mb.EstudianteId,
       mb.MateriaNombre
   `));
 
@@ -2412,7 +2414,7 @@ router.get("/gestion-profe", async (req, res) => {
         AND m.Estado = 'ACTIVA'
         AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
         AND (@estudianteId IS NULL OR e.EstudianteId = @estudianteId)
-      ORDER BY g.Nombre, e.PrimerApellido, e.SegundoApellido, e.Nombre
+      ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, g.Nombre, e.EstudianteId
     `);
     return ok(res, result.recordset);
   }
@@ -2647,12 +2649,13 @@ router.get("/gestion-profe", async (req, res) => {
         LEFT JOIN EncargadosPivot ep
           ON ep.EstudianteId = b.EstudianteId
         ORDER BY
+          b.PrimerApellido,
+          b.SegundoApellido,
+          b.Nombre,
           b.GradoNumero,
           TRY_CONVERT(int, SUBSTRING(b.GrupoNombre, CHARINDEX('-', b.GrupoNombre + '-') + 1, 20)),
           b.GrupoNombre,
-          b.PrimerApellido,
-          b.SegundoApellido,
-          b.Nombre
+          b.EstudianteId
         OPTION (RECOMPILE)
       `));
       return ok(res, result.recordset);
@@ -2812,7 +2815,7 @@ router.get("/gestion-profe", async (req, res) => {
           @profesorFiltroId IS NULL
           OR b.UsuarioReportaId = @profesorFiltroId
         )
-      ORDER BY b.Fecha DESC, b.Consecutivo DESC, b.BoletaConductaId DESC
+      ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, b.Fecha DESC, b.Consecutivo DESC, b.BoletaConductaId DESC
     `));
 
     const rows = result.recordset.map((item: any) => ({
@@ -2876,7 +2879,7 @@ router.get("/gestion-profe", async (req, res) => {
         AND (@desde IS NULL OR ea.Fecha >= @desde)
         AND (@hasta IS NULL OR ea.Fecha <= @hasta)
       GROUP BY g.GrupoId, g.Nombre, e.EstudianteId, e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido
-      ORDER BY g.Nombre, e.PrimerApellido, e.SegundoApellido, e.Nombre
+      ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, g.Nombre, e.EstudianteId
     `);
     return ok(res, result.recordset);
   }
@@ -3274,6 +3277,9 @@ router.get("/certificaciones/constancia-estudio/registros", async (req, res) => 
         cer.OtroColegioDestino,
         CONVERT(varchar(10), cer.FechaEmision, 103) AS FechaEmisionTexto
       FROM dbo.CertificacionEstudioRegistro cer
+      LEFT JOIN dbo.Estudiante e
+        ON e.EstudianteId = cer.EstudianteId
+       AND e.InstitucionId = cer.InstitucionId
       WHERE cer.InstitucionId = @institucionId
         AND (@motivoTramite IS NULL OR cer.MotivoTramite = @motivoTramite)
         AND (@grupoId IS NULL OR cer.GrupoId = @grupoId)
@@ -3283,7 +3289,11 @@ router.get("/certificaciones/constancia-estudio/registros", async (req, res) => 
           OR LOWER(ISNULL(cer.EstudianteNombre, '')) LIKE '%' + @q + '%'
           OR LOWER(ISNULL(cer.Identificacion, '')) LIKE '%' + @q + '%'
         )
-      ORDER BY cer.Consecutivo ASC, cer.CertificacionEstudioId ASC
+      ORDER BY
+        ISNULL(e.PrimerApellido, N''),
+        ISNULL(e.SegundoApellido, N''),
+        ISNULL(e.Nombre, cer.EstudianteNombre),
+        cer.CertificacionEstudioId ASC
     `);
 
   return ok(res, result.recordset);

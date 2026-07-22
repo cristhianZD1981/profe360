@@ -432,6 +432,7 @@ export default function GestionProfePage() {
   const [apoyoEducativoPasoAlumnosConfirmado, setApoyoEducativoPasoAlumnosConfirmado] = useState(false);
   const [apoyoEducativoListaAlumnosMinimizada, setApoyoEducativoListaAlumnosMinimizada] = useState(true);
   const initialLoadStartedRef = useRef(false);
+  const horarioRequestIdRef = useRef(0);
   const apoyoEducativoListaRef = useRef<HTMLDivElement | null>(null);
   const tablaMatrizRef = useRef<HTMLDivElement | null>(null);
   const userRoles = useMemo(() => (Array.isArray(user?.roles) ? user.roles : []), [user?.roles]);
@@ -7142,25 +7143,51 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
+    const requestId = horarioRequestIdRef.current + 1;
+    horarioRequestIdRef.current = requestId;
     setLoadingHorario(true);
     setErrorMessage("");
+    setHorarioBloques([]);
+    setHorarioEntradas([]);
 
     try {
       const params: Record<string, any> = {};
       if (itemHorario?.AnioLectivoId) params.anioLectivoId = itemHorario.AnioLectivoId;
       if (itemHorario?.PeriodoId) params.periodoId = itemHorario.PeriodoId;
+      params._ts = Date.now();
 
-      const response = await api.get("/gestion-profe/mi-horario", { params });
+      const response = await api.get("/gestion-profe/mi-horario", {
+        params,
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache"
+        }
+      });
+      if (requestId !== horarioRequestIdRef.current) return;
       const data = response.data?.data || response.data || {};
       setHorarioBloques(Array.isArray(data.bloques) ? data.bloques : []);
       setHorarioEntradas(Array.isArray(data.entradas) ? data.entradas : []);
     } catch (error: any) {
+      if (requestId !== horarioRequestIdRef.current) return;
       console.error("Error cargando mi horario:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar el horario del profesor");
     } finally {
-      setLoadingHorario(false);
+      if (requestId === horarioRequestIdRef.current) setLoadingHorario(false);
     }
   }
+
+  useEffect(() => {
+    if (!horarioVisible) return;
+    const itemHorario = selected || gruposOrdenados[0];
+    if (!itemHorario) return;
+    void loadMiHorario(itemHorario);
+  }, [
+    horarioVisible,
+    selected?.AnioLectivoId,
+    selected?.PeriodoId,
+    gruposOrdenados[0]?.AnioLectivoId,
+    gruposOrdenados[0]?.PeriodoId
+  ]);
 
   const horarioDias = [
     { key: 2, label: "Lunes" },
@@ -7452,9 +7479,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               onClick={() => {
                 const nuevoEstado = !horarioVisible;
                 setHorarioVisible(nuevoEstado);
-                if (nuevoEstado && !horarioBloques.length) {
-                  loadMiHorario(selected || gruposOrdenados[0]);
-                }
               }}
             >
               {horarioVisible ? "Ocultar horario" : "Ver horario"}

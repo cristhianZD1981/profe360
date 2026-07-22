@@ -10804,6 +10804,8 @@ router.get("/indicadores", async (req, res) => {
 
         i.IndicadorGrupoId
 
+      OPTION (MAX_GRANT_PERCENT = 1)
+
     `);
 
 
@@ -14866,7 +14868,19 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               CAST(NULL AS nvarchar(200)) AS Tema,
 
-              ResultadoIAJson,
+              -- El contexto solo necesita los aprendizajes para la tabla de
+              -- especificaciones; el detalle completo se carga bajo demanda.
+              CAST(CONCAT(
+                N'{"aprendizajesEsperados":',
+                COALESCE(
+                  JSON_QUERY(
+                    CASE WHEN ISJSON(ResultadoIAJson) = 1 THEN ResultadoIAJson ELSE NULL END,
+                    '$.aprendizajesEsperados'
+                  ),
+                  N'[]'
+                ),
+                N'}'
+              ) AS nvarchar(max)) AS ResultadoIAJson,
 
               FechaInicio,
 

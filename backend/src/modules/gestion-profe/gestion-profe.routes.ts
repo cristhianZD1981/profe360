@@ -2019,6 +2019,9 @@ router.delete("/apoyos-educativos/informes/:id", async (req, res) => {
 router.get("/mi-horario", async (req, res) => {
   try {
     if (!assertCanAccessProfessorModule(req, res)) return;
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
 
     const pool = await getPool();
     await ensureMatriculaTrasladoHistorialTable(pool);
@@ -2111,6 +2114,7 @@ router.get("/mi-horario", async (req, res) => {
       INNER JOIN dbo.GrupoMateria gm
         ON gm.GrupoMateriaId = hg.GrupoMateriaId
        AND gm.Activo = 1
+       AND gm.PeriodoId = @periodoId
       INNER JOIN dbo.Grupo g
         ON g.GrupoId = gm.GrupoId
       INNER JOIN dbo.Materia m
@@ -3718,7 +3722,9 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
         })
       : { copiado: false, grupoOrigenId: null, totalPlaneamientosCopiados: 0 };
 
-    const planeamientosPromise = pool.request()
+    // Run these reads in sequence to avoid SQL Server memory waits when they
+    // are launched together. The result sets are independent.
+    const planeamientosResult = await pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
@@ -3753,7 +3759,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
         ORDER BY p.FechaInicio DESC, p.PlaneamientoId DESC
       `);
 
-    const indicadoresPromise = pool.request()
+    const indicadoresResult = await pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
@@ -3783,7 +3789,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
         ORDER BY pi.PlaneamientoId, pi.PlaneamientoIndicadorId
       `);
 
-    const indicadoresEval360Promise = pool.request()
+    const indicadoresEval360Result = await pool.request()
       .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
@@ -3816,13 +3822,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
             ELSE 9
           END,
           i.IndicadorGrupoId
+        OPTION (MAX_GRANT_PERCENT = 1)
       `);
-
-    const [planeamientosResult, indicadoresResult, indicadoresEval360Result] = await Promise.all([
-      planeamientosPromise,
-      indicadoresPromise,
-      indicadoresEval360Promise
-    ]);
 
     return ok(res, {
       planeamientos: planeamientosResult.recordset,

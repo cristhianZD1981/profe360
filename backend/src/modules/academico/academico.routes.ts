@@ -5114,6 +5114,7 @@ router.get("/matriculas", async (req, res) => {
             OR esp.Descripcion LIKE @q
           )
         ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, m.MatriculaId
+        OPTION (MAX_GRANT_PERCENT = 1)
       `);
 
     return ok(res, result.recordset);
