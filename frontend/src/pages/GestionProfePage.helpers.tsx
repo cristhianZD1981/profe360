@@ -207,6 +207,16 @@ export type PlaneamientoReferenciaAnalisis = {
   esDocx: boolean;
   cantidadTablas: number;
   estructuraEstrategias: string[];
+  perfilEstrategias?: {
+    encabezados: string[];
+    cantidadParrafos: number;
+    cantidadActividadesNumeradas: number;
+    cantidadPreguntas: number;
+    usaTemasNumerados: boolean;
+    usaActividadesNumeradas: boolean;
+    nivelDetalle: "breve" | "medio" | "amplio";
+    descripcion: string;
+  };
   usaComoEjemplo: boolean;
   puedeUsarseComoMachote: boolean;
   advertencias: string[];

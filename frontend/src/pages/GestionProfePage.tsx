@@ -10762,10 +10762,25 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                 {analisisReferenciaIa.estructuraEstrategias.length} fase(s) de mediación
                               </span>
                             )}
+                            {analisisReferenciaIa.perfilEstrategias && (
+                              <span style={{ padding: "3px 7px", border: "1px solid #4b8c72", background: "#163c31", fontSize: "12px" }}>
+                                Detalle {analisisReferenciaIa.perfilEstrategias.nivelDetalle}
+                              </span>
+                            )}
+                            {(analisisReferenciaIa.perfilEstrategias?.cantidadActividadesNumeradas ?? 0) > 0 && (
+                              <span style={{ padding: "3px 7px", border: "1px solid #4b8c72", background: "#163c31", fontSize: "12px" }}>
+                                {analisisReferenciaIa.perfilEstrategias?.cantidadActividadesNumeradas} actividades detectadas
+                              </span>
+                            )}
+                            {(analisisReferenciaIa.perfilEstrategias?.cantidadPreguntas ?? 0) > 0 && (
+                              <span style={{ padding: "3px 7px", border: "1px solid #4b8c72", background: "#163c31", fontSize: "12px" }}>
+                                {analisisReferenciaIa.perfilEstrategias?.cantidadPreguntas} bloques con preguntas
+                              </span>
+                            )}
                           </div>
                           {analisisReferenciaIa.estructuraEstrategias.length > 0 && (
                             <small style={{ color: "#bbf7d0" }}>
-                              Secuencia: {analisisReferenciaIa.estructuraEstrategias.map((item) => item.toUpperCase()).join(" → ")}
+                              Secuencia detectada: {analisisReferenciaIa.estructuraEstrategias.join(" → ")}
                             </small>
                           )}
                           {analisisReferenciaIa.advertencias.map((advertencia, index) => (

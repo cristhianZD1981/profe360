@@ -49,6 +49,17 @@ type ImagenApoyoIA = {
   base64: string;
 };
 
+type PerfilEstrategiasReferencia = {
+  encabezados: string[];
+  cantidadParrafos: number;
+  cantidadActividadesNumeradas: number;
+  cantidadPreguntas: number;
+  usaTemasNumerados: boolean;
+  usaActividadesNumeradas: boolean;
+  nivelDetalle: "breve" | "medio" | "amplio";
+  descripcion: string;
+};
+
 const plantillaFormatoDocxCache = new Map<string, PlantillaFormatoDocxGuardada>();
 let planeamientoHabilidadOwnershipColumnsEnsured = false;
 
@@ -357,6 +368,7 @@ function buildFallbackPlaneamiento(input: {
   nombrePlaneamiento?: string;
   estrategiasReferencia?: string;
   estructuraEstrategiasReferencia?: string[];
+  perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
 }) {
   const permiteMultiplesIndicadores = permiteMultiplesIndicadoresPorHabilidad(input.indicacionesDocente || "");
   const habilidadesSeleccionadas = input.habilidades.map((h) => {
@@ -376,13 +388,27 @@ function buildFallbackPlaneamiento(input: {
     ];
   });
 
-  const estrategiasMediacion = [
-    `Momento 1: Propuesta del problema. ${problemaReal}`,
-    "Momento 2: Trabajo estudiantil independiente. El estudiantado trabaja de forma individual, en parejas o en pequeños grupos, explorando estrategias, representaciones, dibujos, tablas, cálculos o recursos concretos/digitales para buscar una solución al problema planteado.",
-    "Momento 3: Discusión interactiva y comunicativa. Se socializan procedimientos, se comparan estrategias, se justifican respuestas y se formalizan los conocimientos matemáticos necesarios, promoviendo el uso correcto del vocabulario y la argumentación.",
-    "Momento 4: Clausura o cierre. Se sistematizan los aprendizajes, se aclaran errores frecuentes, se relacionan los resultados con la habilidad trabajada y se deja una evidencia breve del aprendizaje alcanzado.",
-    "Etapa 2: Movilización y aplicación de los conocimientos. Se proponen nuevos retos, prácticas, tareas o productos donde el estudiantado aplique lo aprendido en situaciones variadas, con realimentación docente y seguimiento del trabajo cotidiano."
-  ];
+  const estructuraReferencia = input.perfilEstrategiasReferencia?.encabezados?.length
+    ? input.perfilEstrategiasReferencia.encabezados
+    : (input.estructuraEstrategiasReferencia || []);
+  const estrategiasMediacion = String(input.estrategiasReferencia || "").trim()
+    ? (
+      estructuraReferencia.length
+        ? estructuraReferencia.map((encabezado, index) =>
+          `${encabezado}\nActividad ${index + 1}. El estudiantado desarrolla acciones nuevas y observables vinculadas con ${habilidadesSeleccionadas[index % Math.max(1, habilidadesSeleccionadas.length)] || input.tema || "la habilidad seleccionada"}, siguiendo la profundidad y secuencia pedagógica del documento de referencia.`
+        )
+        : [
+            `Actividad de mediación. ${problemaReal}`,
+            "El estudiantado desarrolla acciones nuevas según la organización narrativa del documento de referencia, con acompañamiento docente, producción de evidencias y retroalimentación."
+          ]
+    )
+    : [
+        `Momento 1: Propuesta del problema. ${problemaReal}`,
+        "Momento 2: Trabajo estudiantil independiente. El estudiantado trabaja de forma individual, en parejas o en pequeños grupos, explorando estrategias, representaciones, dibujos, tablas, cálculos o recursos concretos/digitales para buscar una solución al problema planteado.",
+        "Momento 3: Discusión interactiva y comunicativa. Se socializan procedimientos, se comparan estrategias, se justifican respuestas y se formalizan los conocimientos necesarios, promoviendo el vocabulario de la materia y la argumentación.",
+        "Momento 4: Clausura o cierre. Se sistematizan los aprendizajes, se aclaran errores frecuentes, se relacionan los resultados con la habilidad trabajada y se deja una evidencia breve del aprendizaje alcanzado.",
+        "Etapa 2: Movilización y aplicación de los conocimientos. Se proponen nuevos retos, prácticas, tareas o productos donde el estudiantado aplique lo aprendido en situaciones variadas, con realimentación docente y seguimiento del trabajo cotidiano."
+      ];
 
   const semanas = Array.from({ length: Math.max(1, input.semanas || 4) }).map((_, index) => {
     const habilidad = input.habilidades[index % Math.max(1, input.habilidades.length)] || input.habilidades[0];
@@ -461,15 +487,41 @@ function buildPrompt(input: {
   nombrePlaneamiento?: string;
   estrategiasReferencia?: string;
   estructuraEstrategiasReferencia?: string[];
+  perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
 }) {
   const habilidadesText = input.habilidades.map((h, index) => (
     `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Número ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
   )).join("\n");
+  const usaReferenciaEstrategias = Boolean(String(input.estrategiasReferencia || "").trim());
+  const reglasEstructuraPredeterminada = usaReferenciaEstrategias
+    ? instruccionPerfilEstrategiasReferencia(input)
+    : `
+ESTRUCTURA PEDAGÓGICA PREDETERMINADA (solo porque no se adjuntó referencia):
+- Momento 1: Propuesta del problema.
+- Momento 2: Trabajo estudiantil independiente.
+- Momento 3: Discusión interactiva y comunicativa.
+- Momento 4: Clausura o cierre.
+- Etapa 2: Movilización y aplicación de los conocimientos.
+En Momento 1 incluí actor real, objetivo, dos alternativas comparables y criterio explícito de decisión. En los demás momentos describí acciones observables concretas.
+`.trim();
+  const ejemploEstrategias = usaReferenciaEstrategias
+    ? (
+      input.perfilEstrategiasReferencia?.encabezados?.length
+        ? input.perfilEstrategiasReferencia.encabezados.map((encabezado) => `"${encabezado}\\nContenido nuevo según la referencia..."`).join(",\n    ")
+        : "\"Bloques nuevos organizados exactamente como la referencia adjunta...\""
+    )
+    : [
+        "\"Momento 1: Propuesta del problema...\"",
+        "\"Momento 2: Trabajo estudiantil independiente...\"",
+        "\"Momento 3: Discusión interactiva y comunicativa...\"",
+        "\"Momento 4: Clausura o cierre...\"",
+        "\"Etapa 2: Movilización y aplicación de los conocimientos...\""
+      ].join(",\n    ");
 
   return `
-Sos un asistente pedagógico experto en planeamiento didáctico del MEP de Costa Rica, con énfasis en Matemáticas cuando la materia sea Matemática o Matemáticas.
+Sos un asistente pedagógico experto en planeamiento didáctico del MEP de Costa Rica para todas las materias, niveles y modalidades.
 
-Generá un planeamiento mensual profesional, editable y aplicable al aula, siguiendo la estructura de la plantilla oficial de planeamiento didáctico de Matemáticas para Tercer Ciclo y Educación Diversificada.
+Generá un planeamiento profesional, editable y aplicable al aula. Cuando exista un planeamiento de referencia, su lógica y estructura específica tienen prioridad sobre cualquier formato genérico.
 Contexto del planeamiento:
 - Tipo de colegio: ${input.tipoColegio || "No indicado"}
 - Materia: ${input.materiaNombre || "No indicada"}
@@ -515,16 +567,12 @@ Si se aportó una plantilla o formato de salida, usalo como referencia principal
 INSTRUCCIÓN PRIORITARIA SOBRE ESTRATEGIAS DE MEDIACIÓN:
 Si se adjuntó un planeamiento de referencia, analizá su sección de Estrategias de mediación y reproducí obligatoriamente su estructura, encabezados, orden, secuencia pedagógica, nivel de detalle y forma de organizar los momentos. Usá contenido nuevo, alineado con las habilidades actuales; nunca copies datos sustantivos del plan anterior. La secuencia obligatoria identificada es: ${(input.estructuraEstrategiasReferencia || []).join(" → ") || "la que aparece en el documento de referencia"}. No la sustituyás por una estructura genérica de Momentos.
 
+${reglasEstructuraPredeterminada}
+
 Criterios obligatorios para construir la respuesta:
-1. Las estrategias de mediación deben organizarse desde la resolución de problemas, no como ejercicios aislados.
-2. Deben partir de contextos reales, situaciones cercanas al estudiantado y modelización cuando aplique.
-3. En estrategias de medición/mediación debe iniciar obligatoriamente con:
-   - Momento 1: Propuesta del problema.
-   Después del título, redactá un problema real y concreto que el estudiantado deba resolver, construido en función de los indicadores dados. No transcribás esta instrucción como contenido.
-   - Momento 2: Trabajo estudiantil independiente
-   - Momento 3: Discusión interactiva y comunicativa
-   - Momento 4: Clausura o cierre
-   - Etapa 2: Movilización y aplicación de los conocimientos
+1. Las estrategias deben seguir la lógica pedagógica propia de la materia y, si existe referencia, la lógica observable de ese documento.
+2. Los contextos, recursos, productos y dinámicas deben ser pertinentes para la materia, el nivel y las habilidades seleccionadas.
+3. No impongás una secuencia fija distinta de la referencia adjunta.
 4. Los indicadores deben estar redactados en tercera persona singular.
 5. Cada indicador debe enfocarse en una única conducta observable.
 6. Cada indicador debe responder a la estructura: Acción observable + conocimiento específico + condición o contexto.
@@ -540,8 +588,8 @@ Criterios obligatorios para construir la respuesta:
 16. En "indicadoresEvaluacion" no iniciés ningún indicador con "Identifica y aplica".
 17. El campo "observaciones" debe quedar como string vacío: "".
 18. Evitá repetir siempre el mismo escenario (por ejemplo, municipalidad). Variá el actor y el contexto según materia, grado, tema y habilidades.
-19. En "Momento 1" incluí contexto específico con al menos: actor, objetivo, dos alternativas comparables y criterio explícito de decisión.
-20. En "Momento 2/3/4" evitá frases genéricas; describí acciones observables concretas que el estudiantado realizará en ese caso.
+19. Evitá frases genéricas; describí acciones observables concretas que el estudiantado realizará.
+20. Igualá el nivel de desarrollo de la referencia: no resumas un documento amplio en cuatro párrafos breves.
 
 Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
 
@@ -559,11 +607,7 @@ Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
     "2: ..."
   ],
   "estrategiasMediacion": [
-    "Momento 1: Propuesta del problema...",
-    "Momento 2: Trabajo estudiantil independiente...",
-    "Momento 3: Discusión interactiva y comunicativa...",
-    "Momento 4: Clausura o cierre...",
-    "Etapa 2: Movilización y aplicación de los conocimientos..."
+    ${ejemploEstrategias}
   ],
   "indicadoresEvaluacion": [
     "Identifica...",
@@ -630,6 +674,7 @@ async function buildPromptDesdeBD(pool: any, input: {
   nombrePlaneamiento?: string;
   estrategiasReferencia?: string;
   estructuraEstrategiasReferencia?: string[];
+  perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
 }) {
   await ensurePlantillaPromptIAVisibilityColumns(pool);
 
@@ -676,6 +721,8 @@ async function buildPromptDesdeBD(pool: any, input: {
   const habilidadesText = input.habilidades.map((h, index) => (
     `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Número ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
   )).join("\n");
+  const usaReferenciaEstrategias = Boolean(String(input.estrategiasReferencia || "").trim());
+  const reglaDinamicaEstrategias = instruccionPerfilEstrategiasReferencia(input);
 
   const prompt = `
 ${clampPromptText(row.IndicacionesSistema, 10000)}
@@ -729,10 +776,12 @@ Si se aportó una plantilla o formato de salida, usalo como referencia principal
 INSTRUCCIÓN PRIORITARIA SOBRE ESTRATEGIAS DE MEDIACIÓN:
 Si se adjuntó un planeamiento de referencia, analizá su sección de Estrategias de mediación y reproducí obligatoriamente su estructura, encabezados, orden, secuencia pedagógica, nivel de detalle y forma de organizar los momentos. Usá contenido nuevo, alineado con las habilidades actuales; nunca copies datos sustantivos del plan anterior. La secuencia obligatoria identificada es: ${(input.estructuraEstrategiasReferencia || []).join(" → ") || "la que aparece en el documento de referencia"}. No la sustituyás por una estructura genérica de Momentos.
 
+${reglaDinamicaEstrategias}
+
 REGLAS DE CALIDAD Y DIVERSIDAD (OBLIGATORIAS):
 - Evitá repetir siempre el mismo caso contextual (por ejemplo municipalidad). Variá el actor y el contexto según materia, grado, tema y habilidades.
-- En Momento 1 incluí: actor real, objetivo, dos alternativas comparables y criterio explícito de decisión.
-- En Momento 2/3/4 redactá acciones observables concretas; evitá textos genéricos de plantilla.
+- ${usaReferenciaEstrategias ? "Seguí la secuencia de la referencia y redactá actividades observables con profundidad semejante." : "En Momento 1 incluí actor real, objetivo, dos alternativas comparables y criterio explícito de decisión."}
+- ${usaReferenciaEstrategias ? "No introduzcás Momentos ni etapas que no existan en la referencia." : "En Momento 2/3/4 redactá acciones observables concretas; evitá textos genéricos de plantilla."}
 - Si el docente no pidió un caso específico, proponé uno original y coherente con los datos de entrada.
 
 Reglas de construcción:
@@ -743,6 +792,11 @@ ${clampPromptText(row.EstructuraSalida, 10000)}
 
 Formato de respuesta:
 ${clampPromptText(row.FormatoRespuesta, 8000)}
+
+REGLA FINAL DE PRECEDENCIA:
+${usaReferenciaEstrategias
+    ? "El perfil dinámico del planeamiento de referencia prevalece sobre cualquier regla anterior de la Plantilla IA que exija Momentos, etapas o una secuencia fija diferente. La salida será rechazada si usa Momento 1–4 cuando esos rótulos no existen en la referencia."
+    : "Como no existe una referencia utilizable, aplicá la estructura pedagógica definida por la Plantilla IA seleccionada."}
 
 Devolvé SOLO JSON válido, sin markdown.
 `;
@@ -1323,6 +1377,7 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   habilidades: any[];
   documentoApoyoTexto?: string;
   estructuraEstrategiasReferencia?: string[];
+  usaReferenciaEstrategias?: boolean;
 }) {
   const resultado = resultadoEntrada && typeof resultadoEntrada === "object" ? { ...resultadoEntrada } : {};
   const indicacionesDocente = input.indicacionesDocente || "";
@@ -1335,12 +1390,15 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   }
   const estrategiasLimpias = limpiarEstrategiasMediacion(resultado.estrategiasMediacion);
   const tieneEstructuraReferencia = (input.estructuraEstrategiasReferencia || []).length > 0;
-  resultado.estrategiasMediacion = tieneEstructuraReferencia
-    ? aplicarEstructuraEstrategiasReferencia(
-        estrategiasLimpias,
-        input.estructuraEstrategiasReferencia || []
-      )
-    : asegurarMomentosEspecificos(
+  if (input.usaReferenciaEstrategias) {
+    resultado.estrategiasMediacion = tieneEstructuraReferencia
+      ? aplicarEstructuraEstrategiasReferencia(
+          estrategiasLimpias,
+          input.estructuraEstrategiasReferencia || []
+        )
+      : estrategiasLimpias;
+  } else {
+    resultado.estrategiasMediacion = asegurarMomentosEspecificos(
         asegurarMomento1Primero(estrategiasLimpias, {
           habilidades: input.habilidades,
           materiaNombre: input.materiaNombre,
@@ -1354,6 +1412,7 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
           tema: input.tema
         }
       );
+  }
 
   resultado.indicadoresEvaluacion = ajustarIndicadoresPorHabilidad({
     indicadoresEntrada: splitLines(resultado.indicadoresEvaluacion),
@@ -2392,7 +2451,7 @@ async function extractDocumentosApoyoText(files: Express.Multer.File[]) {
 function extractPlantillaFormatoText(file?: Express.Multer.File) {
   return extractUploadedText(file, {
     defaultName: "plantilla_formato",
-    maxChars: 16000,
+    maxChars: 50000,
     unsupportedMessage: "Se adjuntó la plantilla de formato {nombre}, pero el sistema no pudo extraer su contenido. Para que la IA siga un formato exacto, subí una plantilla .docx o un archivo de texto, o registrá ese formato en Configuración con IA."
   });
 }
@@ -2404,32 +2463,115 @@ function buildPlaneamientoNombre(input: { mes?: any; grado?: any; materiaNombre?
   return `${mes} - ${grado} - ${materia}`;
 }
 
-function extraerEstrategiasMediacionReferencia(...fuentes: Array<string | null | undefined>) {
+export function extraerEstrategiasMediacionReferencia(...fuentes: Array<string | null | undefined>) {
   const texto = fuentes.filter(Boolean).join("\n\n").replace(/\r/g, "");
-  const marcadorEstructura = /^\s*(?:\d+\s*)?(?:focalizaci[oó]n|exploraci[oó]n|contrastaci[oó]n|aplicaci[oó]n|problematizaci[oó]n|desarrollo|cierre|inicio|mediation\s+phase|introduction|exploration|application)\s*$/im;
+  const inicioSeccion = texto.search(/^\s*estrategias?\s+(?:de\s+)?mediaci[oó]n(?:\s*\([^)]*\))?\s*$/im);
+  if (inicioSeccion >= 0) return texto.slice(inicioSeccion, inicioSeccion + 30000).trim();
+
+  const marcadorEstructura = /^\s*(?:\d+\s*)?(?:tema\s+n?[.°º]?\s*\d+|actividades?\s+de\s+(?:inicio|desarrollo|cierre)|focalizaci[oó]n|exploraci[oó]n|contrastaci[oó]n|aplicaci[oó]n|problematizaci[oó]n|desarrollo|cierre|inicio|mediation\s+phase|introduction|exploration|application)\s*\.?\s*$/im;
   const inicioEstructura = texto.search(marcadorEstructura);
-  if (inicioEstructura >= 0) return texto.slice(inicioEstructura, inicioEstructura + 8000).trim();
+  if (inicioEstructura >= 0) return texto.slice(inicioEstructura, inicioEstructura + 30000).trim();
 
   const inicio = texto.search(/estrategias?\s+(?:de\s+)?mediaci[oó]n|mediation\s+strateg(?:y|ies)/i);
-  return inicio >= 0 ? texto.slice(inicio, inicio + 8000).trim() : "";
+  return inicio >= 0 ? texto.slice(inicio, inicio + 30000).trim() : "";
 }
 
-function extraerEstructuraEstrategiasReferencia(texto: string) {
-  const patrones = /^\s*(?:\d+\s*)?(focalizaci[oó]n|exploraci[oó]n|contrastaci[oó]n|aplicaci[oó]n|problematizaci[oó]n|desarrollo|cierre|inicio|mediation\s+phase|introduction|exploration|application)\s*$/gim;
+function extraerEncabezadoEstrategiaReferencia(linea: string) {
+  const text = String(linea || "").trim();
+  if (!text || text.length > 140) return "";
+  const patterns = [
+    /^(tema\s+n?[.°º]?\s*\d+)\s*\.?\s*$/i,
+    /^(momento\s+\d+\s*:[^.]+)\s*\.?\s*$/i,
+    /^(actividades?\s+de\s+(?:inicio|desarrollo|cierre))\s*\.?\s*$/i,
+    /^(focalizaci[oó]n|exploraci[oó]n|contrastaci[oó]n|aplicaci[oó]n|problematizaci[oó]n|inicio|desarrollo|cierre)\s*\.?\s*$/i,
+    /^(mediation\s+phase|introduction|exploration|application|development|closure)\s*\.?\s*$/i,
+    /^(avances?\s+en\s+monograf[ií]a(?:\s+y\s+lectura\s+diaria)?|monograf[ií]a|lectura\s+diaria)\s*\.?\s*$/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return "";
+}
+
+export function construirPerfilEstrategiasReferencia(texto: string): PerfilEstrategiasReferencia {
+  const lineas = String(texto || "")
+    .replace(/\r/g, "")
+    .split(/\n+/)
+    .map((linea) => linea.trim())
+    .filter(Boolean);
   const vistos = new Set<string>();
-  const estructura: string[] = [];
-  for (const match of texto.matchAll(patrones)) {
-    const encabezado = String(match[1] || "").trim();
+  const encabezados: string[] = [];
+  for (const linea of lineas) {
+    const encabezado = extraerEncabezadoEstrategiaReferencia(linea);
     const key = normalizarParaBusqueda(encabezado);
     if (key && !vistos.has(key)) {
       vistos.add(key);
-      estructura.push(encabezado);
+      encabezados.push(encabezado);
     }
   }
-  return estructura;
+
+  const actividades = Array.from(String(texto || "").matchAll(/\bactividad\s+n?[.°º]?\s*(\d+)\b/gi))
+    .map((match) => Number(match[1]))
+    .filter((numero) => Number.isInteger(numero) && numero > 0);
+  const cantidadActividadesNumeradas = new Set(actividades).size;
+  const cantidadPreguntas = lineas.filter((linea) => /[?¿]/.test(linea)).length;
+  const cantidadParrafos = lineas.length;
+  const nivelDetalle = cantidadParrafos >= 35 || String(texto || "").length >= 12000
+    ? "amplio"
+    : cantidadParrafos >= 15 || String(texto || "").length >= 5000
+      ? "medio"
+      : "breve";
+  const usaTemasNumerados = lineas.some((linea) => /^tema\s+n?[.°º]?\s*\d+/i.test(linea));
+  const usaActividadesNumeradas = cantidadActividadesNumeradas > 0;
+  const descripcion = [
+    encabezados.length ? `Secuencia principal: ${encabezados.join(" → ")}.` : "La referencia no usa fases fijas reconocibles; se debe conservar su organización narrativa.",
+    usaTemasNumerados ? "Organiza el contenido por temas numerados." : "",
+    usaActividadesNumeradas ? `Desarrolla ${cantidadActividadesNumeradas} actividades numeradas con propósito, acciones docentes/estudiantiles y producto o cierre.` : "",
+    cantidadPreguntas ? `Incluye ${cantidadPreguntas} bloque(s) con preguntas o consignas explícitas.` : "",
+    `Nivel de detalle: ${nivelDetalle}; ${cantidadParrafos} párrafos útiles en la sección analizada.`
+  ].filter(Boolean).join(" ");
+
+  return {
+    encabezados,
+    cantidadParrafos,
+    cantidadActividadesNumeradas,
+    cantidadPreguntas,
+    usaTemasNumerados,
+    usaActividadesNumeradas,
+    nivelDetalle,
+    descripcion
+  };
 }
 
-function aplicarEstructuraEstrategiasReferencia(estrategias: string[], estructura: string[]) {
+function extraerEstructuraEstrategiasReferencia(texto: string) {
+  return construirPerfilEstrategiasReferencia(texto).encabezados;
+}
+
+function instruccionPerfilEstrategiasReferencia(input: {
+  estrategiasReferencia?: string;
+  perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
+}) {
+  if (!String(input.estrategiasReferencia || "").trim()) {
+    return `
+No se adjuntó una referencia utilizable para Estrategias de mediación. Aplicá la organización pedagógica predeterminada de la materia y la plantilla IA seleccionada.
+`.trim();
+  }
+
+  const perfil = input.perfilEstrategiasReferencia || construirPerfilEstrategiasReferencia(input.estrategiasReferencia || "");
+  return `
+REGLA DINÁMICA Y PRIORITARIA PARA ESTRATEGIAS DE MEDIACIÓN:
+- El planeamiento adjunto es la autoridad para la lógica, jerarquía, secuencia, cantidad aproximada de bloques y nivel de detalle.
+- Perfil detectado: ${perfil.descripcion}
+- Encabezados y orden que deben conservarse: ${perfil.encabezados.join(" → ") || "los observados en el documento adjunto"}.
+- No uses "Momento 1", "Momento 2", "Momento 3", "Momento 4" ni otra secuencia predeterminada, salvo que esos rótulos aparezcan realmente en la referencia.
+- No copies temas, autores, obras, ejemplos, preguntas ni actividades anteriores. Conservá el patrón pedagógico y redactá contenido completamente nuevo con las habilidades, materia, grado, meses e indicaciones actuales.
+- Si la referencia usa actividades numeradas, generá actividades numeradas con una densidad y profundidad semejantes, ajustadas al alcance solicitado.
+- Cada actividad nueva debe conservar la lógica observable de la referencia: propósito, acción docente, acción del estudiantado, recurso o dinámica, evidencia/producto y forma de retroalimentación cuando corresponda.
+`.trim();
+}
+
+export function aplicarEstructuraEstrategiasReferencia(estrategias: string[], estructura: string[]) {
   const encabezados = (Array.isArray(estructura) ? estructura : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
@@ -2458,7 +2600,7 @@ function aplicarEstructuraEstrategiasReferencia(estrategias: string[], estructur
   }
 
   if (gruposReferencia.every((contenido) => contenido.trim().length > 0)) {
-    return encabezados.map((encabezado, index) => `${encabezado.toUpperCase()}\n${gruposReferencia[index].trim()}`);
+    return encabezados.map((encabezado, index) => `${encabezado}\n${gruposReferencia[index].trim()}`);
   }
 
   const gruposMomento: string[] = [];
@@ -2477,11 +2619,11 @@ function aplicarEstructuraEstrategiasReferencia(estrategias: string[], estructur
     }
   }
 
-  const fuente = gruposMomento.length >= encabezados.length ? gruposMomento : base;
+  const fuente = gruposMomento.length ? gruposMomento : base;
 
   return encabezados.map((encabezado, index) => {
     const contenido = String(fuente[index] || "").trim();
-    return `${encabezado.toUpperCase()}${contenido ? `\n${contenido}` : ""}`;
+    return `${encabezado}${contenido ? `\n${contenido}` : ""}`;
   });
 }
 
@@ -2517,7 +2659,7 @@ function estructurarEstrategiasMediacion(estrategias: any, estructuraReferencia:
       const contenido = primera.startsWith(faseNormalizada)
         ? lineas.slice(1).join("\n").trim()
         : bloque;
-      return { fase: fase.toUpperCase(), contenido };
+      return { fase, contenido };
     });
   }
 
@@ -2568,6 +2710,7 @@ function validarPlaneamientoGenerado(resultado: any, input: {
   indicacionesDocente?: string;
   habilidades?: any[];
   indicadoresEsperadosPorHabilidad?: number[];
+  perfilEstrategias?: PerfilEstrategiasReferencia;
 }) {
   const verificaciones: ValidacionPlaneamientoItem[] = [];
   const textoCompleto = obtenerTextoResultadoPlaneamiento(resultado);
@@ -2645,6 +2788,35 @@ function validarPlaneamientoGenerado(resultado: any, input: {
     });
   }
 
+  const perfilEstrategias = input.perfilEstrategias;
+  if (perfilEstrategias) {
+    const estrategiasTexto = splitLines(resultado?.estrategiasMediacion).join("\n");
+    const referenciaUsaMomentos = perfilEstrategias.encabezados.some((encabezado) =>
+      /^momento\s+\d+/i.test(encabezado)
+    );
+    const resultadoUsaMomentos = /\bmomento\s+[1-4]\s*:/i.test(estrategiasTexto);
+    const actividadesGeneradas = new Set(
+      Array.from(estrategiasTexto.matchAll(/\bactividad\s+n?[.°º]?\s*(\d+)\b/gi))
+        .map((match) => Number(match[1]))
+        .filter((numero) => Number.isInteger(numero) && numero > 0)
+    ).size;
+    const minimoActividades = perfilEstrategias.usaActividadesNumeradas
+      ? Math.max(1, Math.ceil(perfilEstrategias.cantidadActividadesNumeradas * 0.6))
+      : 0;
+    const incumpleMomentos = !referenciaUsaMomentos && resultadoUsaMomentos;
+    const incumpleActividades = minimoActividades > 0 && actividadesGeneradas < minimoActividades;
+    verificaciones.push({
+      codigo: "fidelidad_referencia",
+      etiqueta: "Fidelidad al planeamiento de referencia",
+      estado: incumpleMomentos || incumpleActividades ? "error" : "ok",
+      detalle: incumpleMomentos
+        ? "La referencia no usa Momentos 1–4, pero esa estructura apareció en el resultado."
+        : incumpleActividades
+          ? `La referencia desarrolla ${perfilEstrategias.cantidadActividadesNumeradas} actividades numeradas; el resultado debe incluir al menos ${minimoActividades} con profundidad semejante.`
+          : `Se respetó el patrón dinámico de la referencia (${perfilEstrategias.nivelDetalle}, ${actividadesGeneradas || "sin"} actividades numeradas).`
+    });
+  }
+
   if (nombreSolicitado) {
     const coincide = normalizeText(resultado?.nombre) === nombreSolicitado;
     verificaciones.push({
@@ -2710,7 +2882,8 @@ function revalidarResultadoPlaneamiento(resultado: any, nombreActual: string) {
     indicacionesDocente: normalizeText(controlAnterior.indicacionesDocente),
     indicadoresEsperadosPorHabilidad: Array.isArray(controlAnterior.indicadoresEsperadosPorHabilidad)
       ? controlAnterior.indicadoresEsperadosPorHabilidad
-      : undefined
+      : undefined,
+    perfilEstrategias: controlAnterior.perfilEstrategias || resultado?.perfilEstrategiasReferencia
   });
 
   resultado.estrategiasMediacionEstructuradas = validacion.estrategiasEstructuradas;
@@ -2728,7 +2901,7 @@ function revalidarResultadoPlaneamiento(resultado: any, nombreActual: string) {
 
 async function analizarFormatoDocx(file?: Express.Multer.File) {
   if (!file?.buffer || !/\.docx$/i.test(file.originalname || "")) {
-    return { esDocx: false, cantidadTablas: 0 };
+    return { esDocx: false, cantidadTablas: 0, seccionesPlaneamientoDetectadas: 0 };
   }
 
   try {
@@ -2736,10 +2909,11 @@ async function analizarFormatoDocx(file?: Express.Multer.File) {
     const xml = await zip.file("word/document.xml")?.async("string");
     return {
       esDocx: true,
-      cantidadTablas: xml ? (xml.match(/<w:tbl\b/g) || []).length : 0
+      cantidadTablas: xml ? (xml.match(/<w:tbl\b/g) || []).length : 0,
+      seccionesPlaneamientoDetectadas: xml ? countTemplateContentSections(xml) : 0
     };
   } catch {
-    return { esDocx: true, cantidadTablas: 0 };
+    return { esDocx: true, cantidadTablas: 0, seccionesPlaneamientoDetectadas: 0 };
   }
 }
 
@@ -2768,7 +2942,8 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
     const contenido = await extractPlantillaFormatoText(file);
     const formato = await analizarFormatoDocx(file);
     const estrategiasReferencia = extraerEstrategiasMediacionReferencia(contenido.texto);
-    const estructuraEstrategias = extraerEstructuraEstrategiasReferencia(estrategiasReferencia);
+    const perfilEstrategias = construirPerfilEstrategiasReferencia(estrategiasReferencia);
+    const estructuraEstrategias = perfilEstrategias.encabezados;
     const idioma = detectarIdiomaSalida(contenido.texto);
     const advertencias: string[] = [];
 
@@ -2781,6 +2956,9 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
     if (formato.esDocx && !formato.cantidadTablas) {
       advertencias.push("El Word no contiene tablas detectables; se conservarán sus encabezados y orden cuando sea posible.");
     }
+    if (formato.esDocx && !formato.seccionesPlaneamientoDetectadas) {
+      advertencias.push("No se reconocieron columnas de aprendizajes, estrategias e indicadores. Revisá que el machote tenga esos rótulos visibles antes de generar.");
+    }
 
     return ok(res, {
       nombre: contenido.nombre || file.originalname,
@@ -2788,7 +2966,9 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
       idiomaNombre: idioma === "en" ? "Inglés" : "Español",
       esDocx: formato.esDocx,
       cantidadTablas: formato.cantidadTablas,
+      seccionesPlaneamientoDetectadas: formato.seccionesPlaneamientoDetectadas,
       estructuraEstrategias,
+      perfilEstrategias,
       usaComoEjemplo: true,
       puedeUsarseComoMachote: formato.esDocx,
       advertencias,
@@ -2911,7 +3091,9 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     const plantillaFormatoDocx = cachePlantillaFormatoDocx(plantillaFormatoFile);
     const idiomaSalida = detectarIdiomaSalida(plantillaFormato.texto, documentoApoyo.texto);
     const estrategiasReferencia = extraerEstrategiasMediacionReferencia(plantillaFormato.texto, documentoApoyo.texto);
-    const estructuraEstrategiasReferencia = extraerEstructuraEstrategiasReferencia(estrategiasReferencia);
+    const perfilEstrategiasReferencia = construirPerfilEstrategiasReferencia(estrategiasReferencia);
+    const estructuraEstrategiasReferencia = perfilEstrategiasReferencia.encabezados;
+    const usaReferenciaEstrategias = Boolean(estrategiasReferencia.trim());
     const promptData = await buildPromptDesdeBD(pool, {
       materiaNombre: effectiveMateria,
       tipoColegio,
@@ -2933,6 +3115,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       nombrePlaneamiento,
       estrategiasReferencia,
       estructuraEstrategiasReferencia,
+      perfilEstrategiasReferencia,
       usuarioId: getUserId(req) || null,
       esAdmin: canMaintainAnyHabilidad(req)
     });
@@ -2959,7 +3142,10 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
       plantillaFormatoTexto: plantillaFormato.texto,
       plantillaFormatoNombre: plantillaFormato.nombre || undefined,
-      indicacionesDocente
+      indicacionesDocente,
+      estrategiasReferencia,
+      estructuraEstrategiasReferencia,
+      perfilEstrategiasReferencia
     });
 
     const resultadoBase = aplicarReglasObligatoriasPlaneamiento(resultadoBaseSinReglas, {
@@ -2970,7 +3156,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       tema,
       habilidades: habilidades.recordset,
       documentoApoyoTexto: documentoApoyo.texto,
-      estructuraEstrategiasReferencia
+      estructuraEstrategiasReferencia,
+      usaReferenciaEstrategias
     });
 
     const nombreResultado = nombrePlaneamiento || buildPlaneamientoNombre({ mes, grado, materiaNombre: effectiveMateria });
@@ -2985,7 +3172,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       estructuraEstrategias: estructuraEstrategiasReferencia,
       indicacionesDocente,
       habilidades: habilidades.recordset,
-      indicadoresEsperadosPorHabilidad
+      indicadoresEsperadosPorHabilidad,
+      perfilEstrategias: usaReferenciaEstrategias ? perfilEstrategiasReferencia : undefined
     });
 
     const resultado = {
@@ -2996,6 +3184,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       plantillaFormatoNombre: plantillaFormato.nombre || null,
       idiomaSalida,
       estructuraEstrategiasReferencia,
+      perfilEstrategiasReferencia,
+      usaReferenciaEstrategias,
       controlCalidad: {
         valido: validacion.valido,
         puedeGuardar: validacion.puedeGuardar,
@@ -3004,6 +3194,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         nombreSolicitado: nombrePlaneamiento || null,
         idiomaEsperado: idiomaSalida,
         estructuraEstrategias: estructuraEstrategiasReferencia,
+        perfilEstrategias: usaReferenciaEstrategias ? perfilEstrategiasReferencia : null,
         indicacionesDocente: indicacionesDocente || null,
         indicadoresEsperadosPorHabilidad
       },
@@ -3334,58 +3525,6 @@ function escapeXmlText(value: any) {
     .replace(/"/g, "&quot;");
 }
 
-function xmlTextRun(text: string, opts: { bold?: boolean; size?: number; color?: string } = {}) {
-  const color = opts.color ? `<w:color w:val="${opts.color}"/>` : "";
-  const bold = opts.bold ? "<w:b/>" : "";
-  const size = `<w:sz w:val="${opts.size || 20}"/>`;
-  return `<w:r><w:rPr>${bold}${color}${size}</w:rPr><w:t xml:space="preserve">${escapeXmlText(text)}</w:t></w:r>`;
-}
-
-function xmlParagraph(text: string, opts: { bold?: boolean; size?: number; align?: any; color?: string } = {}) {
-  const marcadoAzul = esTextoAzul(text);
-  const color = opts.color || (marcadoAzul ? "0070C0" : undefined);
-  const align = opts.align ? `<w:pPr><w:jc w:val="${opts.align}"/></w:pPr>` : "";
-  return `<w:p>${align}${xmlTextRun(limpiarMarcadorColor(text), { bold: opts.bold, size: opts.size || 20, color })}</w:p>`;
-}
-
-function xmlFieldParagraph(label: string, value: any, opts: { size?: number } = {}) {
-  return `<w:p>${xmlTextRun(label, { bold: true, size: opts.size || 20 })}${xmlTextRun(String(value || ""), { size: opts.size || 20 })}</w:p>`;
-}
-
-function xmlParagraphsFromList(items: any[], fallback: string, opts: { bulletPrefix?: string; size?: number; numbered?: boolean } = {}) {
-  const values = Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
-  const source = values.length ? values : [fallback];
-  return source
-    .filter((item) => String(item || "").trim())
-    .map((item, index) => xmlParagraph(`${opts.numbered ? `${index + 1}. ` : (opts.bulletPrefix || "")}${item}`, { size: opts.size || 19 }));
-}
-
-function xmlParagraphsEstrategiasMomentos(items: any[], fallback: string, size = 19) {
-  const values = Array.isArray(items) ? items.map((item) => String(item || "").trim()).filter(Boolean) : [];
-  const source = values.length ? values : [fallback];
-  const out: string[] = [];
-  source.forEach((item, idx) => {
-    const m = String(item || "").match(/^\s*(Momento\s+\d+\s*:[^\.]*\.)\s*(.*)$/i);
-    if (m) {
-      const titulo = String(m[1] || "").trim();
-      const cuerpo = String(m[2] || "").trim();
-      out.push(xmlParagraph(titulo, { bold: true, size }));
-      if (cuerpo) out.push(xmlParagraph(cuerpo, { size }));
-      if (idx < source.length - 1) out.push(xmlParagraph("", { size }));
-      return;
-    }
-    out.push(xmlParagraph(`- ${item}`, { size }));
-  });
-  return out;
-}
-
-function replaceCellBody(tcXml: string, paragraphsXml: string[]) {
-  const opening = tcXml.match(/^<w:tc[^>]*>/)?.[0] || "<w:tc>";
-  const props = tcXml.match(/<w:tcPr[\s\S]*?<\/w:tcPr>/)?.[0] || "";
-  const content = paragraphsXml.length ? paragraphsXml.join("") : xmlParagraph("");
-  return `${opening}${props}${content}</w:tc>`;
-}
-
 function escapeXmlTagName(tagName: string) {
   return tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -3434,45 +3573,423 @@ function replaceDirectXmlElements(xml: string, tagName: string, replacer: (eleme
   return result ? `${result}${xml.slice(cursor)}` : xml;
 }
 
-function replaceCellsInRow(rowXml: string, replacers: Array<((cellXml: string) => string) | null | undefined>) {
-  let cellIndex = 0;
-  return replaceDirectXmlElements(rowXml, "w:tc", (cellXml) => {
-    const replacer = replacers[cellIndex++];
-    return replacer ? replacer(cellXml) : cellXml;
-  });
+type TemplateParagraphSpec = {
+  text: string;
+  bold?: boolean;
+};
+
+type TemplateContentRole = "aprendizajes" | "estrategias" | "indicadores";
+
+function getDirectXmlElements(xml: string, tagName: string) {
+  const escapedTagName = escapeXmlTagName(tagName);
+  const openingMatcher = new RegExp(`<${escapedTagName}(?:\\s[^>]*?)?>`, "g");
+  const elements: string[] = [];
+
+  for (let match = openingMatcher.exec(xml); match; match = openingMatcher.exec(xml)) {
+    const endIndex = findXmlElementEnd(xml, match.index, tagName);
+    if (endIndex < 0) break;
+    elements.push(xml.slice(match.index, endIndex));
+    openingMatcher.lastIndex = endIndex;
+  }
+
+  return elements;
 }
 
-function replaceRowsInTable(tableXml: string, replacers: Array<((rowXml: string) => string) | null | undefined>) {
-  let rowIndex = 0;
-  return replaceDirectXmlElements(tableXml, "w:tr", (rowXml) => {
-    const replacer = replacers[rowIndex++];
-    return replacer ? replacer(rowXml) : rowXml;
-  });
+function getCellParagraphTexts(cellXml: string) {
+  return getDirectXmlElements(cellXml, "w:p")
+    .map((paragraphXml) => xmlWordToText(paragraphXml).trim());
 }
 
-function replaceIntroTemplateCell(cellXml: string, values: {
+function isTemplateHeading(value: string) {
+  const text = String(value || "").trim();
+  if (!text || text.length > 100) return false;
+  const normalized = normalizarParaBusqueda(text);
+  const known = [
+    "focalizacion",
+    "exploracion",
+    "contrastacion",
+    "aplicacion",
+    "problematizacion",
+    "inicio",
+    "desarrollo",
+    "cierre",
+    "introduction",
+    "exploration",
+    "application",
+    "mediation phase"
+  ];
+  return known.some((heading) => normalized === heading || normalized.startsWith(`${heading}:`))
+    || /^(tema\s+n?[.°º]?\s*\d+|actividades?\s+de\s+(inicio|desarrollo|cierre)|actividad\s+n?[.°º]?\s*\d+|avances?\s+en\s+monograf[ií]a|monograf[ií]a|lectura\s+diaria)\b/i.test(text)
+    || (text.length >= 3 && text === text.toUpperCase() && /[A-ZÁÉÍÓÚÑ]/.test(text));
+}
+
+function addBoldToRunProperties(runProperties: string) {
+  if (/<w:b(?:\s[^>]*)?\/?>/.test(runProperties)) return runProperties;
+  if (runProperties) return runProperties.replace(/<\/w:rPr>$/, "<w:b/></w:rPr>");
+  return "<w:rPr><w:b/></w:rPr>";
+}
+
+function xmlParagraphFromTemplate(paragraphTemplate: string, spec: TemplateParagraphSpec) {
+  const opening = paragraphTemplate.match(/^<w:p(?:\s[^>]*)?>/)?.[0] || "<w:p>";
+  const paragraphProperties = paragraphTemplate.match(/<w:pPr[\s\S]*?<\/w:pPr>/)?.[0] || "";
+  let runProperties = paragraphTemplate.match(/<w:rPr[\s\S]*?<\/w:rPr>/)?.[0] || "";
+  if (spec.bold) runProperties = addBoldToRunProperties(runProperties);
+  if (!spec.text) return `${opening}${paragraphProperties}</w:p>`;
+  return `${opening}${paragraphProperties}<w:r>${runProperties}<w:t xml:space="preserve">${escapeXmlText(spec.text)}</w:t></w:r></w:p>`;
+}
+
+function replaceCellBodyPreservingFormatting(cellXml: string, specs: TemplateParagraphSpec[]) {
+  const opening = cellXml.match(/^<w:tc(?:\s[^>]*)?>/)?.[0] || "<w:tc>";
+  const properties = cellXml.match(/<w:tcPr[\s\S]*?<\/w:tcPr>/)?.[0] || "";
+  const paragraphs = getDirectXmlElements(cellXml, "w:p");
+  const fallback = paragraphs[0] || "<w:p/>";
+  const headingTemplate = paragraphs.find((paragraph) => isTemplateHeading(xmlWordToText(paragraph))) || fallback;
+  const bodyTemplate = paragraphs.find((paragraph) => {
+    const text = xmlWordToText(paragraph).trim();
+    return text && !isTemplateHeading(text);
+  }) || fallback;
+  const source = specs.length ? specs : [{ text: "" }];
+  const content = source.map((spec) => {
+    const template = spec.bold ? headingTemplate : bodyTemplate;
+    return xmlParagraphFromTemplate(template, spec);
+  }).join("");
+  return `${opening}${properties}${content}</w:tc>`;
+}
+
+function replaceSimpleTemplateField(cellXml: string, value: any) {
+  const lines = getCellParagraphTexts(cellXml);
+  const firstLine = lines.find(Boolean) || xmlWordToText(cellXml).trim();
+  const colonIndex = firstLine.indexOf(":");
+  const label = colonIndex >= 0 ? firstLine.slice(0, colonIndex + 1) : firstLine;
+  return replaceCellBodyPreservingFormatting(cellXml, [{
+    text: `${label}${value ? ` ${String(value).trim()}` : ""}`.trim()
+  }]);
+}
+
+function optionMatchesSelection(option: string, selection: string) {
+  const normalizedOption = normalizarParaBusqueda(option);
+  const normalizedSelection = normalizarParaBusqueda(selection);
+  if (!normalizedOption || !normalizedSelection) return false;
+  if (normalizedSelection.includes(normalizedOption) || normalizedOption.includes(normalizedSelection)) return true;
+
+  const selectionTokens = new Set(normalizedSelection.split(/[^a-z0-9]+/).filter(Boolean));
+  const ordinalGroups = [
+    ["primero", "primer", "1", "i"],
+    ["segundo", "2", "ii"],
+    ["tercero", "tercer", "3", "iii"],
+    ["cuarto", "4", "iv"]
+  ];
+  if (ordinalGroups.some((group) =>
+    group.some((token) => normalizedOption.split(/[^a-z0-9]+/).includes(token))
+    && group.some((token) => selectionTokens.has(token))
+  )) return true;
+
+  const months = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "setiembre", "septiembre", "octubre", "noviembre", "diciembre",
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december"
+  ];
+  return months.some((month) => normalizedOption.includes(month) && normalizedSelection.includes(month));
+}
+
+function markTemplateOptions(value: string, selection: string) {
+  return String(value || "").replace(
+    /\(\s*[xX]?\s*\)([^(]*)/g,
+    (_match, optionText) => `(${optionMatchesSelection(optionText, selection) ? "X" : " "})${optionText}`
+  );
+}
+
+function replacePeriodTemplateField(cellXml: string, selection: string) {
+  const lines = getCellParagraphTexts(cellXml);
+  const source = lines.length ? lines : [xmlWordToText(cellXml).trim()];
+  const hasOptions = source.some((line) => /\(\s*[xX]?\s*\)/.test(line));
+  const specs = source.map((line, index) => {
+    if (hasOptions) return { text: markTemplateOptions(line, selection) };
+    if (index === 0) {
+      const colonIndex = line.indexOf(":");
+      const label = colonIndex >= 0 ? line.slice(0, colonIndex + 1) : line;
+      return { text: `${label}${selection ? ` ${selection}` : ""}`.trim() };
+    }
+    return { text: "" };
+  });
+  return replaceCellBodyPreservingFormatting(cellXml, specs);
+}
+
+function replacePeriodicityTemplateField(cellXml: string, periodicity: string, months: string) {
+  const lines = getCellParagraphTexts(cellXml);
+  const source = lines.length ? lines : [xmlWordToText(cellXml).trim()];
+  const specs = source.map((line, index) => {
+    let next = markTemplateOptions(line, months);
+    if (index === 0) {
+      const optionIndex = next.search(/\(\s*[xX]?\s*\)/);
+      const prefix = optionIndex >= 0 ? next.slice(0, optionIndex) : next;
+      const options = optionIndex >= 0 ? next.slice(optionIndex) : "";
+      const colonIndex = prefix.indexOf(":");
+      const label = colonIndex >= 0 ? prefix.slice(0, colonIndex + 1) : prefix;
+      next = `${label}${periodicity ? ` ${periodicity}` : ""}${options ? ` ${options}` : ""}`.trim();
+    }
+    return { text: next };
+  });
+  return replaceCellBodyPreservingFormatting(cellXml, specs);
+}
+
+function replaceMetadataTemplateCell(cellXml: string, values: {
   direccionRegional: string;
   centroEducativo: string;
   docente: string;
   materia: string;
   anioEscolar: string;
   cursoLectivo: string;
+  periodoTexto: string;
   periodicidad: string;
-  idiomaSalida?: "es" | "en";
+  meses: string;
 }) {
   const text = normalizarParaBusqueda(xmlWordToText(cellXml));
-  const english = values.idiomaSalida === "en";
-  if (text.includes("direccion regional de educacion") || text.includes("regional education")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "Regional Education Directorate: " : "Dirección Regional de Educación: ", values.direccionRegional)]);
-  if (text.includes("centro educativo") || text.includes("school name") || text.includes("educational center")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "School: " : "Centro educativo: ", values.centroEducativo)]);
-  if (text.includes("nombre de la persona docente") || text.includes("teacher name") || text.includes("name of the teacher")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "Teacher's name: " : "Nombre de la persona docente: ", values.docente)]);
-  if (text.includes("asignatura") || text.includes("subarea") || text.includes("subject") || text.includes("sub-area")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "Subject: " : "Asignatura, módulo, disciplina, especialidad, componente, área o subárea: ", values.materia)]);
-  if (text.includes("ano escolar") || text.includes("school year") || text.includes("academic year")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "School year: " : "Año escolar: ", values.anioEscolar)]);
-  if (text.includes("curso lectivo") || text.includes("school term") || text.includes("academic term")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "Academic term: " : "Curso lectivo: ", values.cursoLectivo)]);
-  if (text.includes("periodicidad") || text.includes("frequency") || text.includes("periodicity")) return replaceCellBody(cellXml, [xmlFieldParagraph(english ? "Frequency: " : "Periodicidad: ", values.periodicidad)]);
+  const startsWithAny = (aliases: string[]) => aliases.some((alias) => text.startsWith(alias));
+
+  if (startsWithAny(["direccion regional de educacion", "regional education directorate"])) {
+    return replaceSimpleTemplateField(cellXml, values.direccionRegional);
+  }
+  if (startsWithAny(["centro educativo", "institucion educativa", "school", "educational center"])) {
+    return replaceSimpleTemplateField(cellXml, values.centroEducativo);
+  }
+  if (startsWithAny(["nombre de la persona docente", "nombre del docente", "docente", "teacher name", "name of the teacher"])) {
+    return replaceSimpleTemplateField(cellXml, values.docente);
+  }
+  if (startsWithAny(["asignatura", "materia", "subarea", "modulo", "subject", "sub-area"])) {
+    return replaceSimpleTemplateField(cellXml, values.materia);
+  }
+  if (startsWithAny(["anos escolar", "ano escolar", "school year"])) {
+    return replaceSimpleTemplateField(cellXml, values.anioEscolar);
+  }
+  if (startsWithAny(["curso lectivo", "academic course", "grade level"])) {
+    return replaceSimpleTemplateField(cellXml, values.cursoLectivo);
+  }
+  if (startsWithAny(["grado:", "nivel educativo:", "grade:"])) {
+    return replaceSimpleTemplateField(cellXml, values.cursoLectivo);
+  }
+  if (startsWithAny(["periodo lectivo", "periodo academico", "academic period", "school term"])) {
+    return replacePeriodTemplateField(cellXml, values.periodoTexto);
+  }
+  if (startsWithAny(["periodicidad", "periodicity", "frequency"])) {
+    return replacePeriodicityTemplateField(cellXml, values.periodicidad, values.meses);
+  }
   return cellXml;
 }
 
-async function renderPlaneamientoEnPlantillaDocx(input: {
+function detectTemplateContentRole(cellXml: string): TemplateContentRole | null {
+  const text = normalizarParaBusqueda(xmlWordToText(cellXml));
+  if (
+    text.includes("aprendizaje esperado")
+    || text.includes("aprendizajes esperados")
+    || text.includes("resultado de aprendizaje")
+    || text.includes("resultados de aprendizaje")
+    || text.includes("aprendizaje por lograr")
+    || text.includes("aprendizajes por lograr")
+    || text.includes("saber esencial")
+    || text.includes("saberes esenciales")
+    || text.includes("habilidad especifica")
+    || text.includes("habilidades especificas")
+    || text.includes("learning outcome")
+    || text.includes("expected learning")
+    || text.includes("learning objective")
+    || text.includes("learning goal")
+  ) return "aprendizajes";
+  if (
+    text.includes("estrategias de mediacion")
+    || text.includes("estrategia de mediacion")
+    || text.includes("mediacion pedagogica")
+    || text.includes("actividades de mediacion")
+    || text.includes("situaciones de aprendizaje")
+    || text.includes("experiencias de aprendizaje")
+    || text === "metodologia"
+    || text.includes("mediation strateg")
+    || text.includes("teaching strateg")
+    || text.includes("learning activities")
+  ) return "estrategias";
+  if (
+    text.includes("indicadores de evaluacion")
+    || text.includes("indicador de evaluacion")
+    || text.includes("indicadores del aprendizaje esperado")
+    || text.includes("criterios de evaluacion")
+    || text.includes("criterios de logro")
+    || text.includes("evidencias de aprendizaje")
+    || text.includes("evaluation indicator")
+    || text.includes("assessment indicator")
+    || text.includes("assessment criteria")
+    || text.includes("success criteria")
+  ) return "indicadores";
+  return null;
+}
+
+function countTemplateContentSections(documentXml: string) {
+  return getDirectXmlElements(documentXml, "w:tbl").reduce((total, tableXml) => {
+    const sections = getDirectXmlElements(tableXml, "w:tr").filter((rowXml) => {
+      const roles = getDirectXmlElements(rowXml, "w:tc").map(detectTemplateContentRole);
+      return roles.filter(Boolean).length >= 2;
+    }).length;
+    return total + sections;
+  }, 0);
+}
+
+function buildStrategyParagraphSpecs(items: any[]) {
+  const headingPattern = /^(tema\s+n?[.°º]?\s*\d+|actividades?\s+de\s+(?:inicio|desarrollo|cierre)|actividad\s+n?[.°º]?\s*\d+|avances?\s+en\s+monograf[ií]a(?:\s+y\s+lectura\s+diaria)?|monograf[ií]a|lectura\s+diaria|focalizaci[oó]n|exploraci[oó]n|contrastaci[oó]n|aplicaci[oó]n|problematizaci[oó]n|inicio|desarrollo|cierre|introduction|exploration|application|mediation\s+phase)\b\s*[:.\-]?\s*(.*)$/i;
+  const specs: TemplateParagraphSpec[] = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    for (const line of String(item || "").split(/\r?\n+/).map((part) => part.trim()).filter(Boolean)) {
+      const match = line.match(headingPattern);
+      if (match) {
+        specs.push({ text: String(match[1] || "").trim(), bold: true });
+        if (match[2]) specs.push({ text: String(match[2]).trim() });
+      } else {
+        specs.push({ text: line, bold: isTemplateHeading(line) });
+      }
+    }
+  }
+
+  return specs;
+}
+
+function buildListParagraphSpecs(items: any[]) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .map((text) => ({ text }));
+}
+
+function replaceCompetencyTemplateCell(cellXml: string, selectedCompetency: string) {
+  const lines = getCellParagraphTexts(cellXml);
+  const text = lines.join(" ").trim();
+  const normalized = normalizarParaBusqueda(text);
+  if (
+    !/\(\s*[xX]?\s*\)/.test(text)
+    || !(normalized.includes("competencia") || normalized.includes("competenc"))
+  ) return cellXml;
+
+  const selected = normalizarParaBusqueda(selectedCompetency);
+  const comparable = normalizarParaBusqueda(text.replace(/\(\s*[xX]?\s*\)/g, ""));
+  const ignored = new Set(["competencia", "competencias", "competency", "competencies", "para", "for", "con", "and", "the", "una", "las", "los", "del"]);
+  const selectedTokens = selected.split(/[^a-z0-9]+/).filter((token) => token.length > 3 && !ignored.has(token));
+  const comparableTokens = new Set(comparable.split(/[^a-z0-9]+/).filter((token) => token.length > 3 && !ignored.has(token)));
+  const matchingTokens = selectedTokens.filter((token) => comparableTokens.has(token)).length;
+  const marked = Boolean(selected)
+    && (
+      selected === comparable
+      || selected.includes(comparable)
+      || comparable.includes(selected)
+      || (selectedTokens.length > 0 && matchingTokens / selectedTokens.length >= 0.6)
+    );
+  const replaced = text.replace(/\(\s*[xX]?\s*\)(?![\s\S]*\(\s*[xX]?\s*\))/, `(${marked ? "X" : " "})`);
+  return replaceCellBodyPreservingFormatting(cellXml, [{ text: replaced }]);
+}
+
+function replaceReflectionTemplateCell(cellXml: string, reflections: any) {
+  const lines = getCellParagraphTexts(cellXml);
+  const firstLine = lines.find(Boolean) || "";
+  const text = normalizarParaBusqueda(firstLine);
+  const reflectionMap = [
+    {
+      aliases: ["que funciono", "what worked"],
+      value: reflections?.queFunciono
+    },
+    {
+      aliases: ["que no funciono", "what did not work", "what didnt work"],
+      value: reflections?.queNoFunciono
+    },
+    {
+      aliases: ["que puedo mejorar", "what can i improve"],
+      value: reflections?.quePuedoMejorar
+    }
+  ];
+  const match = reflectionMap.find((item) => item.aliases.some((alias) => text.startsWith(alias)));
+  if (!match) return cellXml;
+  return replaceCellBodyPreservingFormatting(cellXml, [
+    { text: firstLine, bold: true },
+    { text: String(match.value || "").trim() }
+  ]);
+}
+
+function replaceObservationsTemplateCell(cellXml: string, observations: string) {
+  const lines = getCellParagraphTexts(cellXml);
+  const firstLine = lines.find(Boolean) || "";
+  const text = normalizarParaBusqueda(firstLine);
+  if (!(text.startsWith("observaciones") || text.startsWith("observations"))) return cellXml;
+  const colonIndex = firstLine.indexOf(":");
+  const label = colonIndex >= 0 ? firstLine.slice(0, colonIndex + 1) : firstLine;
+  return replaceCellBodyPreservingFormatting(cellXml, [
+    { text: label, bold: true },
+    { text: String(observations || "").trim() }
+  ]);
+}
+
+function renderSemanticTemplateTable(tableXml: string, input: {
+  metadata: Parameters<typeof replaceMetadataTemplateCell>[1];
+  competenciaGeneral: string;
+  aprendizajes: string[];
+  estrategias: string[];
+  indicadores: string[];
+  reflexiones: any;
+  observaciones: string;
+}) {
+  const rows = getDirectXmlElements(tableXml, "w:tr");
+  const headerRoles = rows.map((rowXml) => {
+    const roles = getDirectXmlElements(rowXml, "w:tc").map(detectTemplateContentRole);
+    return roles.filter(Boolean).length >= 2 ? roles : null;
+  });
+  const hasContentSlots = headerRoles.some(Boolean);
+  let activeRoles: Array<TemplateContentRole | null> | null = null;
+  let populatedContentRows = 0;
+  let rowIndex = 0;
+
+  return replaceDirectXmlElements(tableXml, "w:tr", (originalRowXml) => {
+    const currentHeaderRoles = headerRoles[rowIndex++] || null;
+    const rowText = normalizarParaBusqueda(xmlWordToText(originalRowXml));
+    const isReflectionSection = rowText.includes("reflexiones docentes") || rowText.includes("teacher reflections");
+    const isReflectionQuestions = rowText.includes("que funciono")
+      || rowText.includes("que no funciono")
+      || rowText.includes("que puedo mejorar")
+      || rowText.includes("what worked")
+      || rowText.includes("what can i improve");
+    const isObservations = rowText.includes("observaciones") || rowText.includes("observations");
+
+    let cellIndex = 0;
+    let rowXml = replaceDirectXmlElements(originalRowXml, "w:tc", (cellXml) => {
+      const currentCellIndex = cellIndex++;
+      let next = replaceMetadataTemplateCell(cellXml, input.metadata);
+      next = replaceCompetencyTemplateCell(next, input.competenciaGeneral);
+
+      if (isReflectionQuestions) return replaceReflectionTemplateCell(next, input.reflexiones);
+      if (isObservations) return replaceObservationsTemplateCell(next, input.observaciones);
+      if (!hasContentSlots || currentHeaderRoles || isReflectionSection || !activeRoles) return next;
+
+      const role = activeRoles[currentCellIndex];
+      if (!role) return replaceCellBodyPreservingFormatting(next, []);
+      if (populatedContentRows > 0) return replaceCellBodyPreservingFormatting(next, []);
+      if (role === "aprendizajes") {
+        return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(input.aprendizajes));
+      }
+      if (role === "estrategias") {
+        return replaceCellBodyPreservingFormatting(next, buildStrategyParagraphSpecs(input.estrategias));
+      }
+      return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(input.indicadores));
+    });
+
+    if (currentHeaderRoles) {
+      activeRoles = currentHeaderRoles;
+      return rowXml;
+    }
+    if (isReflectionSection || isReflectionQuestions || isObservations) {
+      activeRoles = null;
+      return rowXml;
+    }
+    if (hasContentSlots && activeRoles) populatedContentRows += 1;
+    return rowXml;
+  });
+}
+
+export async function renderPlaneamientoEnPlantillaDocx(input: {
   resultado: any;
   row: any;
   contenido: any;
@@ -3487,107 +4004,38 @@ async function renderPlaneamientoEnPlantillaDocx(input: {
   if (!template?.base64) return null;
 
   const zip = await JSZip.loadAsync(Buffer.from(String(template.base64), "base64"));
+  const originalPackageEntries = new Set(Object.keys(zip.files));
   const documentFile = zip.file("word/document.xml");
   if (!documentFile) return null;
 
-  const english = input.resultado?.idiomaSalida === "en";
-  const competenciasBaseOriginal = [
-    "Competencias para la ciudadanía responsable y solidaria",
-    "Competencias para la vida: sociales, emocionales y de aprendizaje",
-    "Competencias para el empleo digno y el emprendimiento"
-  ];
-  const competenciasBase = english
-    ? [
-        "Competencies for responsible and supportive citizenship",
-        "Life competencies: social, emotional, and learning competencies",
-        "Competencies for dignified employment and entrepreneurship"
-      ]
-    : competenciasBaseOriginal;
-  const competenciaUnica = normalizarParaBusqueda(input.contenido.competenciaGeneral || "");
-  const competenciasSeleccionadas = competenciaUnica
-    ? competenciasBaseOriginal.map((competencia) => normalizarParaBusqueda(competencia).includes(competenciaUnica) || competenciaUnica.includes(normalizarParaBusqueda(competencia)))
-    : (
-      input.contenido.competenciasGenerales?.length
-        ? competenciasBaseOriginal.map((competencia) => input.contenido.competenciasGenerales.some((item: string) => normalizarParaBusqueda(item).includes(normalizarParaBusqueda(competencia).slice(0, 24))))
-        : competenciasBaseOriginal.map(() => true)
-    );
-
-    const estrategiasXml = [
-      ...xmlParagraphsEstrategiasMomentos(input.contenido.estrategias, input.row.Observaciones || "Sin estrategias registradas", 19)
-    ];
-
-  if (input.contenido.cotidiano.length || input.contenido.tareas.length || input.contenido.evaluacion.length || input.contenido.recursos.length) {
-    estrategiasXml.push(xmlParagraph(english ? "Suggested monitoring" : "Seguimiento sugerido", { bold: true, size: 19 }));
-    if (input.contenido.cotidiano.length) estrategiasXml.push(xmlParagraph(english ? "Classwork" : "Trabajo cotidiano", { bold: true, size: 19 }), ...xmlParagraphsFromList(input.contenido.cotidiano, "", { bulletPrefix: "- ", size: 19 }));
-    if (input.contenido.tareas.length) estrategiasXml.push(xmlParagraph(english ? "Assignments" : "Tareas", { bold: true, size: 19 }), ...xmlParagraphsFromList(input.contenido.tareas, "", { bulletPrefix: "- ", size: 19 }));
-    if (input.contenido.evaluacion.length) estrategiasXml.push(xmlParagraph(english ? "Suggested assessment" : "Evaluación sugerida", { bold: true, size: 19 }), ...xmlParagraphsFromList(input.contenido.evaluacion, "", { bulletPrefix: "- ", size: 19 }));
-    if (input.contenido.recursos.length) estrategiasXml.push(xmlParagraph(english ? "Resources" : "Recursos", { bold: true, size: 19 }), ...xmlParagraphsFromList(input.contenido.recursos, "", { bulletPrefix: "- ", size: 19 }));
-  }
-
-  let tableIndex = 0;
   let xml = await documentFile.async("string");
-  xml = replaceDirectXmlElements(xml, "w:tbl", (tableXml) => {
-    const current = tableIndex++;
-
-    if (current === 0) {
-      return replaceDirectXmlElements(tableXml, "w:tc", (cellXml) => replaceIntroTemplateCell(cellXml, {
-        direccionRegional: input.direccionRegional,
-        centroEducativo: input.centroEducativo,
-        docente: input.docente,
-        materia: input.row.MateriaNombre || "",
-        anioEscolar: input.anioEscolar,
-        cursoLectivo: input.cursoLectivo,
-        periodicidad: periodicidadConMarca(input.periodoTexto, input.contenido.periodicidad),
-        idiomaSalida: english ? "en" : "es"
-      }));
-    }
-
-    if (current === 1) {
-      let competenciaIndex = 0;
-      return replaceDirectXmlElements(tableXml, "w:tc", (cellXml) => {
-        const competencia = competenciasBase[competenciaIndex] || xmlWordToText(cellXml);
-        const marcada = competenciasSeleccionadas[competenciaIndex++] ? "X" : " ";
-        return replaceCellBody(cellXml, [xmlParagraph(`${competencia} (${marcada})`, { size: 19 })]);
-      });
-    }
-
-    if (current === 2) {
-      return replaceRowsInTable(tableXml, [
-        null,
-        (rowXml) => replaceCellsInRow(rowXml, [
-          (cellXml) => replaceCellBody(cellXml, xmlParagraphsFromList(input.contenido.aprendizajes, "Sin aprendizajes registrados", { numbered: true, size: 19 })),
-          (cellXml) => replaceCellBody(cellXml, estrategiasXml),
-          (cellXml) => replaceCellBody(cellXml, input.contenido.indicadores.length
-            ? input.contenido.indicadores.map((item: string) => xmlParagraph(limpiarPrefijoIndicador(item), { size: 19 }))
-            : [xmlParagraph("Sin indicadores registrados", { size: 19 })])
-        ]),
-        null,
-        (rowXml) => replaceCellsInRow(rowXml, [
-          (cellXml) => replaceCellBody(cellXml, [
-            xmlParagraph(english ? "What worked?" : "¿Qué funcionó?", { bold: true, size: 19 }),
-            xmlParagraph(String(input.contenido.reflexiones?.queFunciono || ""), { size: 19 })
-          ]),
-          (cellXml) => replaceCellBody(cellXml, [
-            xmlParagraph(english ? "What did not work?" : "¿Qué no funcionó?", { bold: true, size: 19 }),
-            xmlParagraph(String(input.contenido.reflexiones?.queNoFunciono || ""), { size: 19 })
-          ]),
-          (cellXml) => replaceCellBody(cellXml, [
-            xmlParagraph(english ? "What can I improve?" : "¿Qué puedo mejorar?", { bold: true, size: 19 }),
-            xmlParagraph(String(input.contenido.reflexiones?.quePuedoMejorar || ""), { size: 19 })
-          ])
-        ]),
-        (rowXml) => replaceCellsInRow(rowXml, [
-          (cellXml) => replaceCellBody(cellXml, [
-            xmlFieldParagraph(english ? "Observations: " : "Observaciones: ", input.contenido.observaciones || input.row.Observaciones || "", { size: 19 })
-          ])
-        ])
-      ]);
-    }
-
-    return tableXml;
-  });
+  const metadata = {
+    direccionRegional: input.direccionRegional,
+    centroEducativo: input.centroEducativo,
+    docente: input.docente,
+    materia: input.row.MateriaNombre || input.resultado?.materiaNombre || "",
+    anioEscolar: input.anioEscolar,
+    cursoLectivo: input.cursoLectivo,
+    periodoTexto: input.periodoTexto,
+    periodicidad: input.contenido.periodicidad,
+    meses: input.resultado?.mes || input.resultado?.Mes || ""
+  };
+  xml = replaceDirectXmlElements(xml, "w:tbl", (tableXml) => renderSemanticTemplateTable(tableXml, {
+    metadata,
+    competenciaGeneral: input.contenido.competenciaGeneral || "",
+    aprendizajes: input.contenido.aprendizajes,
+    estrategias: input.contenido.estrategias,
+    indicadores: input.contenido.indicadores,
+    reflexiones: input.contenido.reflexiones,
+    observaciones: input.contenido.observaciones || input.row.Observaciones || ""
+  }));
 
   zip.file("word/document.xml", xml);
+  for (const name of Object.keys(zip.files)) {
+    if (zip.files[name]?.dir && !originalPackageEntries.has(name)) {
+      delete zip.files[name];
+    }
+  }
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
@@ -3608,12 +4056,21 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
     ? resultado.estructuraEstrategiasReferencia
     : [];
   const estrategiasSinFormato = limpiarEstrategiasMediacion(estrategiasBase);
-  const estrategiasLimpias = estructuraReferencia.length
-    ? aplicarEstructuraEstrategiasReferencia(estrategiasSinFormato, estructuraReferencia)
+  const usaReferenciaEstrategias = Boolean(
+    resultado?.usaReferenciaEstrategias
+    || resultado?.plantillaFormatoNombre
+    || resultado?.perfilEstrategiasReferencia
+  );
+  const estrategiasLimpias = usaReferenciaEstrategias
+    ? (
+      estructuraReferencia.length
+        ? aplicarEstructuraEstrategiasReferencia(estrategiasSinFormato, estructuraReferencia)
+        : estrategiasSinFormato
+    )
     : asegurarMomento1Primero(estrategiasSinFormato, {
-        habilidades: aprendizajes,
-        tema: resultado?.nombre
-      });
+      habilidades: aprendizajes,
+      tema: resultado?.nombre
+    });
   const estrategias = textoAdecuacionVisible && !estrategiasLimpias.some((item: string) => normalizarParaBusqueda(item).includes("adecuacion significativa"))
     ? (estructuraReferencia.length
         ? [...estrategiasLimpias, textoAdecuacionVisible]
@@ -3623,8 +4080,12 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
           }))
     : estrategiasLimpias;
   const indicadores = splitLines(resultado?.indicadoresEvaluacion).length
-    ? splitLines(resultado?.indicadoresEvaluacion).map(limpiarPrefijoIndicador).filter(Boolean)
-    : indicadoresFallback.map(limpiarPrefijoIndicador).filter(Boolean);
+    ? splitLines(resultado?.indicadoresEvaluacion)
+      .map((item) => String(item || "").trim().replace(/^[\-\*\u2022]\s*/, ""))
+      .filter(Boolean)
+    : indicadoresFallback
+      .map((item) => String(item || "").trim().replace(/^[\-\*\u2022]\s*/, ""))
+      .filter(Boolean);
   const cotidiano = splitLines(resultado?.trabajoCotidiano);
   const tareas = splitLines(resultado?.tareas);
   const evaluacion = splitLines(resultado?.evaluacionSugerida);
@@ -4038,7 +4499,7 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
               templateCell(estrategiasChildren, { width: 8222 }),
               templateCell(
                 contenido.indicadores.length
-                  ? contenido.indicadores.map((item: string) => simpleParagraph(limpiarPrefijoIndicador(item), { size: 19 }))
+                  ? contenido.indicadores.map((item: string) => simpleParagraph(item, { size: 19 }))
                   : [simpleParagraph("Sin indicadores registrados", { size: 19 })],
                 { width: 2982 }
               )
