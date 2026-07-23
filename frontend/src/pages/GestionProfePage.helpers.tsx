@@ -181,6 +181,38 @@ export type PlaneamientoIaResultadoSemana = {
   recursos?: string[];
 };
 
+export type PlaneamientoValidacionItem = {
+  codigo: string;
+  etiqueta: string;
+  estado: "ok" | "alerta" | "error";
+  detalle: string;
+};
+
+export type PlaneamientoControlCalidad = {
+  valido?: boolean;
+  puedeGuardar?: boolean;
+  puntuacion?: number;
+  verificaciones?: PlaneamientoValidacionItem[];
+  nombreSolicitado?: string | null;
+  idiomaEsperado?: "es" | "en";
+  estructuraEstrategias?: string[];
+  indicacionesDocente?: string | null;
+  indicadoresEsperadosPorHabilidad?: number[];
+};
+
+export type PlaneamientoReferenciaAnalisis = {
+  nombre: string;
+  idioma: "es" | "en";
+  idiomaNombre: string;
+  esDocx: boolean;
+  cantidadTablas: number;
+  estructuraEstrategias: string[];
+  usaComoEjemplo: boolean;
+  puedeUsarseComoMachote: boolean;
+  advertencias: string[];
+  listo: boolean;
+};
+
 export type PlaneamientoIaResultado = {
   nombre?: string;
   enfoque?: string;
@@ -190,6 +222,11 @@ export type PlaneamientoIaResultado = {
   competenciasGenerales?: string[];
   aprendizajesEsperados?: string[];
   estrategiasMediacion?: string[] | string;
+  estrategiasMediacionEstructuradas?: Array<{
+    fase: string;
+    contenido: string;
+  }>;
+  controlCalidad?: PlaneamientoControlCalidad;
   estrategiaAdecuacionSignificativa?: {
     aplica?: boolean;
     colorResaltado?: string;
@@ -251,6 +288,15 @@ export function normalizePlaneamientoIaResultado(input: any): PlaneamientoIaResu
     competenciaGeneral: toTextValue(data.competenciaGeneral),
     aprendizajesEsperados: toTextList(data.aprendizajesEsperados),
     estrategiasMediacion: toTextValue(data.estrategiasMediacion),
+    estrategiasMediacionEstructuradas: Array.isArray(data.estrategiasMediacionEstructuradas)
+      ? data.estrategiasMediacionEstructuradas.map((item: any) => ({
+          fase: toTextValue(item?.fase),
+          contenido: toTextValue(item?.contenido)
+        })).filter((item: any) => item.fase || item.contenido)
+      : [],
+    controlCalidad: data.controlCalidad && typeof data.controlCalidad === "object"
+      ? data.controlCalidad
+      : undefined,
     indicadoresEvaluacion: toTextList(data.indicadoresEvaluacion),
     trabajoCotidiano: toTextList(data.trabajoCotidiano),
     tareas: toTextList(data.tareas),
@@ -273,6 +319,7 @@ export function normalizePlaneamientoIaResultado(input: any): PlaneamientoIaResu
 }
 
 export type PlaneamientoIaForm = {
+  nombre: string;
   materiaId: string;
   grado: string;
   grupoId: string;
@@ -494,6 +541,7 @@ export type SeguimientoActividadInformarDraft = { informar: boolean; observacion
 export type SeguimientoActividadInformarDrafts = Record<string, SeguimientoActividadInformarDraft>;
 export type SeguimientoActividadPuntosMaximosDrafts = Record<string, string>;
 export const initialPlaneamientoIaForm: PlaneamientoIaForm = {
+  nombre: "",
   materiaId: "",
   grado: "",
   grupoId: "",

@@ -39,6 +39,7 @@ import {
   type PlaneamientoForm,
   type PlaneamientoHabilidad,
   type PlaneamientoIaForm,
+  type PlaneamientoReferenciaAnalisis,
   type PlaneamientoIaResultado,
   type PlaneamientoIndicador,
   type Plantilla,
@@ -125,6 +126,33 @@ function getApoyoAdecuacionLabel(value?: string | null) {
   if (normalized === "no significativa") return "No Significativa";
   if (normalized === "todas") return "Todas";
   return String(value || "").trim();
+}
+
+function normalizarMesPlaneamiento(value?: string | null) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function habilidadCorrespondeMes(mesHabilidad: string, mesSeleccionado: string) {
+  const habilidad = normalizarMesPlaneamiento(mesHabilidad);
+  const seleccionado = normalizarMesPlaneamiento(mesSeleccionado);
+  if (!habilidad || !seleccionado) return false;
+  if (habilidad === seleccionado) return true;
+
+  const periodosCompuestos: Record<string, string[]> = {
+    "f-m": ["febrero", "marzo"],
+    "a-m-j": ["abril", "mayo", "junio"],
+    "j-a-s": ["julio", "agosto", "setiembre", "septiembre"],
+    "o-n-d": ["octubre", "noviembre", "diciembre"],
+    "noviembre-diciembre": ["noviembre", "diciembre"],
+    "setiembre-octubre": ["setiembre", "septiembre", "octubre"],
+    "septiembre-octubre": ["setiembre", "septiembre", "octubre"]
+  };
+
+  return (periodosCompuestos[habilidad] || []).includes(seleccionado);
 }
 
 function apoyoCatalogoCoincideConTiposPermitidos(
@@ -267,6 +295,13 @@ export default function GestionProfePage() {
   const [editingPlaneamientoIaId, setEditingPlaneamientoIaId] = useState<number | null>(null);
   const [documentoApoyoIa, setDocumentoApoyoIa] = useState<File[]>([]);
   const [plantillaFormatoIa, setPlantillaFormatoIa] = useState<File | null>(null);
+  const [usarPlantillaComoEjemploIa, setUsarPlantillaComoEjemploIa] = useState(true);
+  const [usarPlantillaComoMachoteIa, setUsarPlantillaComoMachoteIa] = useState(true);
+  const [promptPlaneamientoIa, setPromptPlaneamientoIa] = useState("");
+  const [promptPlaneamientoIaEditado, setPromptPlaneamientoIaEditado] = useState(false);
+  const [mejorandoPromptPlaneamientoIa, setMejorandoPromptPlaneamientoIa] = useState(false);
+  const [analizandoReferenciaIa, setAnalizandoReferenciaIa] = useState(false);
+  const [analisisReferenciaIa, setAnalisisReferenciaIa] = useState<PlaneamientoReferenciaAnalisis | null>(null);
   const [plantillasPlaneamientoIa, setPlantillasPlaneamientoIa] = useState<PlantillaPromptIA[]>([]);
   const [plantillaPlaneamientoIaId, setPlantillaPlaneamientoIaId] = useState<string>("");
   const [loadingPlantillasPlaneamientoIa, setLoadingPlantillasPlaneamientoIa] = useState(false);
@@ -1723,13 +1758,17 @@ export default function GestionProfePage() {
   const seccionesAsignadas = useMemo(() => {
     const materiaId = Number(planeamientoIaForm.materiaId || selected?.MateriaId || 0);
     const grado = normalizarGradoPlaneamiento(planeamientoIaForm.grado || getGradoPlaneamientoFromGrupo(selected) || "");
-    return grupos
-      .filter((grupo) => {
+    const seccionesUnicas = new Map<number, GrupoProfesor>();
+    for (const grupo of grupos) {
         const mismoMateria = !materiaId || Number(grupo.MateriaId) === materiaId;
         const grupoGrado = getGradoPlaneamientoFromGrupo(grupo);
         const mismoGrado = !grado || grupoGrado === grado;
-        return mismoMateria && mismoGrado;
-      })
+        const grupoId = Number(grupo.GrupoId || 0);
+        if (mismoMateria && mismoGrado && grupoId > 0 && !seccionesUnicas.has(grupoId)) {
+          seccionesUnicas.set(grupoId, grupo);
+        }
+    }
+    return Array.from(seccionesUnicas.values())
       .sort((a, b) => String(a.GrupoNombre).localeCompare(String(b.GrupoNombre), undefined, { numeric: true }));
   }, [grupos, planeamientoIaForm.materiaId, planeamientoIaForm.grado, selected?.MateriaId, selected?.GrupoNivel, selected?.GrupoNombre]);
 
@@ -1737,12 +1776,16 @@ export default function GestionProfePage() {
     if (!selected) return [] as GrupoProfesor[];
     const materiaId = Number(selected.MateriaId || 0);
     const grado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(selected) || "");
-    return grupos
-      .filter((grupo) => {
-        if (Number(grupo.MateriaId || 0) !== materiaId) return false;
-        const grupoGrado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(grupo) || "");
-        return !grado || grupoGrado === grado;
-      })
+    const seccionesUnicas = new Map<number, GrupoProfesor>();
+    for (const grupo of grupos) {
+      if (Number(grupo.MateriaId || 0) !== materiaId) continue;
+      const grupoGrado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(grupo) || "");
+      const grupoId = Number(grupo.GrupoId || 0);
+      if ((!grado || grupoGrado === grado) && grupoId > 0 && !seccionesUnicas.has(grupoId)) {
+        seccionesUnicas.set(grupoId, grupo);
+      }
+    }
+    return Array.from(seccionesUnicas.values())
       .sort((a, b) => String(a.GrupoNombre).localeCompare(String(b.GrupoNombre), undefined, { numeric: true }));
   }, [grupos, selected]);
 
@@ -1794,7 +1837,10 @@ export default function GestionProfePage() {
     return habilidadesIa.filter((habilidad) => {
       const mes = String(habilidad.Mes || "").trim();
 
-      if (mesesSeleccionadosIa.length > 0 && !mesesSeleccionadosIa.includes(mes)) return false;
+      if (
+        mesesSeleccionadosIa.length > 0
+        && !mesesSeleccionadosIa.some((mesSeleccionado) => habilidadCorrespondeMes(mes, mesSeleccionado))
+      ) return false;
 
       return true;
     });
@@ -4314,6 +4360,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setPlaneamientoIaFormOpen(false);
     setDocumentoApoyoIa([]);
     setPlantillaFormatoIa(null);
+    setAnalisisReferenciaIa(null);
     setActivePanel("");
     setMessage("");
     setErrorMessage("");
@@ -5682,7 +5729,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         params: {
           anioLectivoId: item.AnioLectivoId,
           periodoId: item.PeriodoId,
-          sincronizar: options.sincronizar === true ? true : false
+          sincronizar: options.sincronizar === true ? true : false,
+          _ts: Date.now()
         }
       });
       const data = response.data?.data || response.data || {};
@@ -6231,12 +6279,157 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       })
       .filter(Boolean) as GrupoProfesor[];
 
-    return encontrados.length ? encontrados : selected ? [selected] : [];
+    const gruposUnicos = Array.from(new Map(
+      encontrados.map((grupo) => [Number(grupo.GrupoId), grupo])
+    ).values());
+
+    return gruposUnicos.length ? gruposUnicos : selected ? [selected] : [];
   }
 
   function getGrupoPlaneamientoIa() {
     return getGruposPlaneamientoIa()[0] || selected;
   }
+
+  function construirPromptPlaneamientoIa() {
+    const gruposSeleccionados = getGruposPlaneamientoIa();
+    const grupoBase = gruposSeleccionados[0];
+    const materiaId = Number(selected?.MateriaId || grupoBase?.MateriaId || planeamientoIaForm.materiaId || 0);
+    const materia = materiasAsignadas.find((item) => Number(item.MateriaId) === materiaId) || selected || grupoBase;
+    const grado = getGradoPlaneamientoFromGrupo(selected)
+      || getGradoPlaneamientoFromGrupo(grupoBase)
+      || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
+    const habilidadesSeleccionadas = habilidadesIa.filter((habilidad) =>
+      planeamientoIaForm.habilidadesIds.includes(Number(habilidad.PlaneamientoHabilidadId))
+    );
+
+    if (!materiaId || !grado || !gruposSeleccionados.length || !habilidadesSeleccionadas.length) {
+      return "";
+    }
+
+    const secciones = gruposSeleccionados
+      .map((grupo) => getNombreSeccionPlaneamiento(grupo))
+      .filter(Boolean)
+      .join(", ");
+    const archivos = [
+      ...documentoApoyoIa.map((file) => `- Archivo de apoyo: ${file.name}`),
+      ...(plantillaFormatoIa && usarPlantillaComoEjemploIa ? [`- Planeamiento de referencia como ejemplo: ${plantillaFormatoIa.name}`] : []),
+      ...(plantillaFormatoIa && usarPlantillaComoMachoteIa ? [`- Planeamiento de referencia como machote Word: ${plantillaFormatoIa.name}`] : [])
+    ];
+    const habilidades = habilidadesSeleccionadas.map((habilidad, index) => (
+      `${index + 1}. ${habilidad.DescripcionHabilidad}`
+    )).join("\n");
+
+    return [
+      "Generar un planeamiento didáctico listo para revisión docente.",
+      `Nombre del planeamiento: ${planeamientoIaForm.nombre.trim() || "Proponer un nombre claro según el mes, grado y materia."}`,
+      `Materia: ${materia?.MateriaCodigo ? `${materia.MateriaCodigo} - ` : ""}${materia?.MateriaNombre || "Materia"}.`,
+      `Grado: ${grado}.`,
+      `Secciones asignadas al docente: ${secciones}. El mismo planeamiento se guardará solo en estas secciones.`,
+      `Meses: ${mesesSeleccionadosTextoIa || "según las habilidades seleccionadas"}.`,
+      `Periodicidad: ${planeamientoIaForm.periodicidad || "por definir"}.`,
+      `Fechas: ${planeamientoIaForm.fechaInicio || "sin fecha de inicio"} a ${planeamientoIaForm.fechaFin || "sin fecha de fin"}.`,
+      `Competencia general: ${planeamientoIaForm.competenciaGeneral || "por definir"}.`,
+      "Habilidades seleccionadas, que deben conservarse literalmente y en este orden:",
+      habilidades,
+      planeamientoIaForm.indicaciones.trim()
+        ? `Indicaciones obligatorias del docente (deben cumplirse sin excepción):\n${planeamientoIaForm.indicaciones.trim()}`
+        : "Indicaciones del docente: aplicar mediación contextualizada, DUA e indicadores observables.",
+      archivos.length ? `Archivos disponibles:\n${archivos.join("\n")}` : "No se adjuntaron archivos adicionales.",
+      "Las instrucciones escritas por la persona docente son obligatorias y tienen prioridad sobre ejemplos, plantillas o reglas genéricas.",
+      "Cuando se use un machote Word, conservá solo su diseño, tablas y encabezados: eliminá todo dato del plan anterior y llenalo únicamente con la información nueva.",
+      "Revisá las Estrategias de mediación del planeamiento de referencia y usalas obligatoriamente como guía de estructura, encabezados, orden y secuencia pedagógica. Redactá contenido nuevo para las habilidades actuales, sin copiar los datos anteriores.",
+      "Si el machote, ejemplo o material de referencia está en inglés, toda la salida nueva debe quedar en inglés."
+    ].join("\n\n");
+  }
+
+  async function analizarReferenciaPlaneamientoIa(file: File | null) {
+    setAnalisisReferenciaIa(null);
+    if (!file) return;
+
+    setAnalizandoReferenciaIa(true);
+    try {
+      const formData = new FormData();
+      formData.append("archivoReferencia", file);
+      const response = await api.post("/planeamiento-ia/analizar-referencia", formData, {
+        timeout: 40000
+      });
+      const data = response.data?.data || response.data || {};
+      setAnalisisReferenciaIa(data as PlaneamientoReferenciaAnalisis);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo analizar el planeamiento de referencia");
+    } finally {
+      setAnalizandoReferenciaIa(false);
+    }
+  }
+
+  function crearPromptPlaneamientoIa() {
+    const prompt = construirPromptPlaneamientoIa();
+    if (!prompt) {
+      setErrorMessage("Completá materia, grado, al menos una sección y una habilidad antes de crear el prompt");
+      return;
+    }
+    setPromptPlaneamientoIa(prompt);
+    setPromptPlaneamientoIaEditado(false);
+    setErrorMessage("");
+    setMessage("Prompt base creado. Podés editarlo o pedir ayuda a la IA para mejorarlo.");
+  }
+
+  async function mejorarPromptPlaneamientoIa() {
+    const promptBase = promptPlaneamientoIa.trim() || construirPromptPlaneamientoIa();
+    const grupoBase = getGrupoPlaneamientoIa();
+    const materiaId = Number(selected?.MateriaId || grupoBase?.MateriaId || planeamientoIaForm.materiaId || 0);
+    const grupoId = Number(grupoBase?.GrupoId || selected?.GrupoId || 0);
+
+    if (!promptBase || !grupoBase || !materiaId || !grupoId) {
+      setErrorMessage("Completá los datos requeridos y creá primero el prompt");
+      return;
+    }
+
+    setMejorandoPromptPlaneamientoIa(true);
+    setErrorMessage("");
+    try {
+      const response = await api.post("/planeamiento-ia/mejorar-prompt", {
+        prompt: promptBase,
+        grupoId,
+        materiaId,
+        anioLectivoId: grupoBase.AnioLectivoId || selected?.AnioLectivoId,
+        periodoId: grupoBase.PeriodoId || selected?.PeriodoId
+      }, { timeout: 70000 });
+      const data = response.data?.data || response.data || {};
+      const promptMejorado = String(data.prompt || "").trim();
+      if (!promptMejorado) throw new Error("La IA no devolvió un prompt mejorado");
+      setPromptPlaneamientoIa(promptMejorado);
+      setPromptPlaneamientoIaEditado(true);
+      setMessage("Prompt mejorado con IA. Revisalo antes de generar el planeamiento.");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || error?.message || "No se pudo mejorar el prompt con IA");
+    } finally {
+      setMejorandoPromptPlaneamientoIa(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!planeamientoIaFormOpen || promptPlaneamientoIaEditado) return;
+
+    const prompt = construirPromptPlaneamientoIa();
+    if (prompt && prompt !== promptPlaneamientoIa) {
+      setPromptPlaneamientoIa(prompt);
+    }
+  }, [
+    planeamientoIaFormOpen,
+    promptPlaneamientoIaEditado,
+    planeamientoIaForm,
+    selected,
+    grupos,
+    materiasAsignadas,
+    habilidadesIa,
+    documentoApoyoIa,
+    plantillaFormatoIa,
+    usarPlantillaComoEjemploIa,
+    usarPlantillaComoMachoteIa,
+    mesesSeleccionadosTextoIa,
+    promptPlaneamientoIa
+  ]);
 
   async function loadPlantillasPlaneamientoIa() {
     setLoadingPlantillasPlaneamientoIa(true);
@@ -6381,6 +6574,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     const grado = getGradoPlaneamientoFromGrupo(selected) || getGradoPlaneamientoFromGrupo(grupoSeleccionado) || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
     const materia = materiasAsignadas.find((item) => Number(item.MateriaId) === materiaId) || selected || grupoSeleccionado;
     const habilidadesIds = planeamientoIaForm.habilidadesIds;
+    const promptDocente = promptPlaneamientoIa.trim() || construirPromptPlaneamientoIa();
 
     if (!materiaId) {
       setErrorMessage("Seleccioná la materia");
@@ -6412,6 +6606,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
+    if (!promptDocente) {
+      setErrorMessage("Creá el prompt con los datos del planeamiento antes de generar");
+      return;
+    }
+
     setGeneratingPlaneamientoIa(true);
     setGeneratingPlaneamientoIaProgress(8);
     if (generatingPlaneamientoIaTimerRef.current !== null) {
@@ -6433,6 +6632,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
     try {
       const formData = new FormData();
+      formData.append("nombrePlaneamiento", planeamientoIaForm.nombre.trim());
       formData.append("materiaId", String(materiaId));
       formData.append("materiaNombre", materia?.MateriaNombre || "");
       formData.append("tipoColegio", planeamientoIaForm.tipoColegio || "Académico");
@@ -6441,11 +6641,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       formData.append("area", planeamientoIaForm.area || "");
       formData.append("tema", temaCompleto);
       formData.append("indicacionesDocente", planeamientoIaForm.indicaciones || "");
+      formData.append("promptDocente", promptDocente);
       formData.append("semanas", String(Number(planeamientoIaForm.semanas || 4)));
       if (plantillaPlaneamientoIaId) formData.append("plantillaPromptIAId", plantillaPlaneamientoIaId);
       habilidadesIds.forEach((id) => formData.append("habilidadesIds[]", String(id)));
       documentoApoyoIa.forEach((file) => formData.append("documentoApoyo", file));
-      if (plantillaFormatoIa) formData.append("plantillaFormato", plantillaFormatoIa);
+      if (plantillaFormatoIa && usarPlantillaComoEjemploIa) formData.append("documentoApoyo", plantillaFormatoIa);
+      if (plantillaFormatoIa && usarPlantillaComoMachoteIa) formData.append("plantillaFormato", plantillaFormatoIa);
 
       const generarResponse = await api.post("/planeamiento-ia/generar-planeamiento", formData, {
         timeout: 70000
@@ -6453,12 +6655,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
       const generadoData = generarResponse.data?.data || generarResponse.data || {};
       const resultado: PlaneamientoIaResultado = normalizePlaneamientoIaResultado(generadoData.resultado || generadoData);
+      if (planeamientoIaForm.nombre.trim()) resultado.nombre = planeamientoIaForm.nombre.trim();
       resultado.periodicidad = planeamientoIaForm.periodicidad;
       resultado.competenciaGeneral = planeamientoIaForm.competenciaGeneral;
       resultado.competenciasGenerales = planeamientoIaForm.competenciaGeneral ? [planeamientoIaForm.competenciaGeneral] : [];
       setUltimoPlaneamientoIa(resultado);
       setGeneratingPlaneamientoIaProgress(100);
-      setMessage("Planeamiento generado. Revisá y ajustá la propuesta antes de guardarla.");
+      setMessage(
+        resultado.controlCalidad?.puedeGuardar === false
+          ? "Planeamiento generado. La revisión automática encontró puntos que debés corregir antes de guardarlo."
+          : "Planeamiento generado y revisado automáticamente. Confirmá el contenido antes de guardarlo."
+      );
     } catch (error: any) {
       console.error("Error generando planeamiento con IA:", error);
       const isTimeout = error?.code === "ECONNABORTED" || String(error?.message || "").toLowerCase().includes("timeout");
@@ -6592,7 +6799,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     try {
       const nombreMateriaSeleccionada = selected?.MateriaNombre || grupoSeleccionado?.MateriaNombre || "Materia";
       const gradoSeleccionado = getGradoPlaneamientoFromGrupo(selected) || getGradoPlaneamientoFromGrupo(grupoSeleccionado) || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
-      const nombrePlaneamientoCorrecto = `${mesesSeleccionadosTextoIa || "Mes"} - ${gradoSeleccionado || "Grado"} - ${nombreMateriaSeleccionada}`;
+      const nombrePlaneamientoSugerido = `${mesesSeleccionadosTextoIa || "Mes"} - ${gradoSeleccionado || "Grado"} - ${nombreMateriaSeleccionada}`;
+      const nombrePlaneamientoCorrecto = String(
+        ultimoPlaneamientoIa?.nombre || planeamientoIaForm.nombre || nombrePlaneamientoSugerido
+      ).trim() || nombrePlaneamientoSugerido;
       const observacionesUsuario = String(ultimoPlaneamientoIa?.observaciones || "").trim();
       const indicadoresEditados = (Array.isArray(ultimoPlaneamientoIa?.indicadoresEvaluacion) ? ultimoPlaneamientoIa.indicadoresEvaluacion : [])
         .map((item) => String(item || "").trim())
@@ -6614,8 +6824,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         };
 
         return {
-        anioLectivoId: grupo.AnioLectivoId,
-        periodoId: grupo.PeriodoId,
+        anioLectivoId: selected?.AnioLectivoId || grupo.AnioLectivoId,
+        periodoId: selected?.PeriodoId || grupo.PeriodoId,
         grupoId: Number(grupo.GrupoId),
         materiaId,
         nombre: nombrePlaneamientoCorrecto,
@@ -6634,23 +6844,24 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
         const gruposExtras = gruposSeleccionados.filter((grupo) => Number(grupo.GrupoId) !== Number(grupoSeleccionado.GrupoId));
         if (gruposExtras.length > 0) {
-          for (const grupo of gruposExtras) {
-            await api.post("/planeamiento-ia/guardar-planeamiento", crearPayload(grupo));
-          }
+          await Promise.all(
+            gruposExtras.map((grupo) => api.post("/planeamiento-ia/guardar-planeamiento", crearPayload(grupo)))
+          );
           setMessage(`Planeamiento actualizado y copiado en ${gruposExtras.length} sección(es) adicional(es)`);
         } else {
           setMessage("Planeamiento actualizado correctamente");
         }
       } else {
-        for (const grupo of gruposSeleccionados) {
-          await api.post("/planeamiento-ia/guardar-planeamiento", crearPayload(grupo));
-        }
+        await Promise.all(
+          gruposSeleccionados.map((grupo) => api.post("/planeamiento-ia/guardar-planeamiento", crearPayload(grupo)))
+        );
         setMessage(`Planeamiento generado con IA y guardado en ${gruposSeleccionados.length} sección(es)`);
       }
       setUltimoPlaneamientoIa(null);
       setEditingPlaneamientoIaId(null);
       setDocumentoApoyoIa([]);
       setPlantillaFormatoIa(null);
+      setAnalisisReferenciaIa(null);
       setSavingPlaneamientoIaProgress(100);
       setPlaneamientoIaFormOpen(false);
 
@@ -10238,6 +10449,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           }));
                           setDocumentoApoyoIa([]);
                           setPlantillaFormatoIa(null);
+                          setAnalisisReferenciaIa(null);
+                          setUsarPlantillaComoEjemploIa(true);
+                          setUsarPlantillaComoMachoteIa(true);
+                          setPromptPlaneamientoIa("");
+                          setPromptPlaneamientoIaEditado(false);
                           setEditingPlaneamientoIaId(null);
                           setUltimoPlaneamientoIa(null);
                         }
@@ -10285,7 +10501,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       "1. Confirmá el grupo",
                       "2. Elegí habilidades",
                       "3. Agregá indicaciones opcionales",
-                      "4. Generá y revisá"
+                      "4. Construí y revisá el prompt",
+                      "5. Generá y revisá"
                     ].map((step) => (
                       <span key={step} style={{ border: "1px solid #38516f", background: "#122033", borderRadius: "999px", padding: "7px 10px", color: "#c6d7eb", fontWeight: 800, fontSize: "13px", textAlign: "center" }}>
                         {step}
@@ -10296,6 +10513,15 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <div style={{ display: "grid", gap: "8px" }}>
                     <strong style={{ color: "#e5eefb" }}>1. Contexto del planeamiento</strong>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
+                    <label style={{ color: "#e5eefb" }}>
+                      Nombre del planeamiento
+                      <input
+                        value={planeamientoIaForm.nombre}
+                        onChange={(e) => updatePlaneamientoIaField("nombre", e.target.value)}
+                        placeholder="Ejemplo: Agosto - Octavo - Matemática"
+                        style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
+                      />
+                    </label>
                     <label style={{ color: "#e5eefb" }}>
                       Materia
                       <div
@@ -10431,7 +10657,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       </div>
                     </div>
 
-                    <label style={{ color: "#e5eefb" }}>
+                    <label style={{ color: "#e5eefb", display: "none" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", marginBottom: "8px", padding: "6px 10px", borderRadius: "999px", background: "rgba(251, 146, 60, 0.18)", border: "1px solid rgba(251, 146, 60, 0.45)" }}>
                         <span style={{ fontWeight: 900, color: "#fff7ed", fontSize: "15px", letterSpacing: "0.2px" }}>Plantilla IA</span>
                         <span style={requiredBadgeStyle}>Requerido</span>
@@ -10456,32 +10682,96 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                     <label style={{ color: "#e5eefb" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                        <span>Plantilla o formato de salida</span>
+                        <span>Planeamiento de referencia</span>
                         <span style={optionalBadgeStyle}>Opcional</span>
                       </span>
                       <input
                         type="file"
-                        accept=".docx,.txt,.csv,.json,.md"
+                        accept=".docx,.txt,.csv,.json,.md,.pdf,image/*,.png,.jpg,.jpeg,.gif,.webp"
                         onChange={(e) => {
                           const file = e.target.files?.[0] || null;
-                          if (file && file.size > 10 * 1024 * 1024) {
+                          if (file && file.size > 20 * 1024 * 1024) {
                             setPlantillaFormatoIa(null);
+                            setUsarPlantillaComoEjemploIa(false);
+                            setUsarPlantillaComoMachoteIa(false);
+                            setAnalisisReferenciaIa(null);
                             e.target.value = "";
-                            setErrorMessage("La plantilla o formato de salida no puede superar 10 MB");
+                            setErrorMessage("El planeamiento de referencia no puede superar 20 MB");
                             return;
                           }
                           setPlantillaFormatoIa(file);
-                          if (file) setErrorMessage("");
+                          setUsarPlantillaComoEjemploIa(Boolean(file));
+                          setUsarPlantillaComoMachoteIa(Boolean(file && /\.docx$/i.test(file.name)));
+                          if (file) {
+                            setErrorMessage("");
+                            void analizarReferenciaPlaneamientoIa(file);
+                          } else {
+                            setAnalisisReferenciaIa(null);
+                          }
                         }}
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
                       />
+                      {plantillaFormatoIa && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "8px" }}>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#e5eefb", fontSize: "13px" }}>
+                            <input
+                              type="checkbox"
+                              checked={usarPlantillaComoEjemploIa}
+                              onChange={(e) => setUsarPlantillaComoEjemploIa(e.target.checked)}
+                            />
+                            Usar como ejemplo para la IA
+                          </label>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#e5eefb", fontSize: "13px" }}>
+                            <input
+                              type="checkbox"
+                              checked={usarPlantillaComoMachoteIa}
+                              disabled={!/\.docx$/i.test(plantillaFormatoIa.name)}
+                              onChange={(e) => setUsarPlantillaComoMachoteIa(e.target.checked)}
+                            />
+                            Usar como machote del Word
+                          </label>
+                        </div>
+                      )}
                       <small style={{ display: "block", color: "#a8b7c9", marginTop: "4px" }}>
-                        Usalo cuando querés que esta generación siga un orden, tabla o estructura específica. Para un formato permanente, guardalo como Plantilla IA en Configuración con IA.
+                        Marcá ejemplo para orientar el contenido. Marcá machote Word solo con un .docx para conservar su diseño, tablas y encabezados; sus datos anteriores se sustituyen por los del planeamiento nuevo.
                       </small>
                       {plantillaFormatoIa && (
                         <small style={{ display: "block", color: "#67e8f9", marginTop: "4px" }}>
                           Formato seleccionado: {plantillaFormatoIa.name}
                         </small>
+                      )}
+                      {analizandoReferenciaIa && (
+                        <div style={{ marginTop: "8px", padding: "10px", border: "1px solid #4b6583", background: "#10243a", color: "#dbeafe" }}>
+                          Analizando idioma, tablas y estructura de mediación...
+                        </div>
+                      )}
+                      {!analizandoReferenciaIa && analisisReferenciaIa && (
+                        <div style={{ marginTop: "8px", padding: "10px", border: "1px solid #2f6f55", background: "#102a24", color: "#dcfce7", display: "grid", gap: "7px" }}>
+                          <strong>{analisisReferenciaIa.listo ? "Archivo entendido y listo" : "Archivo recibido con observaciones"}</strong>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                            <span style={{ padding: "3px 7px", border: "1px solid #4b8c72", background: "#163c31", fontSize: "12px" }}>
+                              Idioma: {analisisReferenciaIa.idiomaNombre}
+                            </span>
+                            {analisisReferenciaIa.esDocx && (
+                              <span style={{ padding: "3px 7px", border: "1px solid #4b8c72", background: "#163c31", fontSize: "12px" }}>
+                                {analisisReferenciaIa.cantidadTablas} tabla(s) detectada(s)
+                              </span>
+                            )}
+                            {analisisReferenciaIa.estructuraEstrategias.length > 0 && (
+                              <span style={{ padding: "3px 7px", border: "1px solid #4b8c72", background: "#163c31", fontSize: "12px" }}>
+                                {analisisReferenciaIa.estructuraEstrategias.length} fase(s) de mediación
+                              </span>
+                            )}
+                          </div>
+                          {analisisReferenciaIa.estructuraEstrategias.length > 0 && (
+                            <small style={{ color: "#bbf7d0" }}>
+                              Secuencia: {analisisReferenciaIa.estructuraEstrategias.map((item) => item.toUpperCase()).join(" → ")}
+                            </small>
+                          )}
+                          {analisisReferenciaIa.advertencias.map((advertencia, index) => (
+                            <small key={`${advertencia}-${index}`} style={{ color: "#fde68a" }}>{advertencia}</small>
+                          ))}
+                        </div>
                       )}
                     </label>
                     </div>
@@ -10668,25 +10958,33 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         placeholder="Ejemplo: grupo con rezago, usar un ejemplo de la página 12 del documento, incluir adecuación curricular..."
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
                       />
+                      <small style={{ color: "#b8c7da" }}>Cuando escribás indicaciones, se aplican como requisitos obligatorios para la generación.</small>
                     </label>
 
                     <label style={{ color: "#e5eefb" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                        <span>Documento de apoyo para la IA</span>
+                        <span>Documentos e imágenes de apoyo para la IA</span>
                         <span style={optionalBadgeStyle}>Opcional</span>
                       </span>
                       <input
                         type="file"
                         multiple
-                        accept=".txt,.csv,.json,.md,.pdf,.doc,.docx"
+                        accept=".txt,.csv,.json,.md,.pdf,.doc,.docx,image/*,.png,.jpg,.jpeg,.gif,.webp"
                         onChange={(e) => {
                           const files = Array.from(e.target.files || []);
-                          const maxSize = 10 * 1024 * 1024;
+                          const maxSize = 20 * 1024 * 1024;
                           const excedido = files.find((file) => file.size > maxSize);
+                          const cantidadImagenes = files.filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(file.name)).length;
                           if (excedido) {
                             setDocumentoApoyoIa([]);
                             e.target.value = "";
-                            setErrorMessage(`El archivo ${excedido.name} supera 10 MB`);
+                            setErrorMessage(`El archivo ${excedido.name} supera 20 MB`);
+                            return;
+                          }
+                          if (cantidadImagenes > 4) {
+                            setDocumentoApoyoIa([]);
+                            e.target.value = "";
+                            setErrorMessage("Podés adjuntar hasta cuatro imágenes por planeamiento");
                             return;
                           }
                           setDocumentoApoyoIa(files);
@@ -10695,7 +10993,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
                       />
                       <small style={{ color: "#b8c7da" }}>
-                        Podés subir varios documentos y pedir páginas/ejercicios concretos (por ejemplo: página 12, ejercicio 4).
+                        Podés subir varios documentos o imágenes de hasta 20 MB y pedir páginas, ejercicios o elementos visuales concretos.
                       </small>
                       {documentoApoyoIa.length > 0 && (
                         <div style={{ marginTop: "6px", display: "grid", gap: "4px" }}>
@@ -10720,9 +11018,41 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </label>
                   </div>
 
+                  <details style={{ padding: "12px", background: "#122033", border: "1px solid #38516f", borderRadius: "6px" }}>
+                    <summary style={{ color: "#e5eefb", fontWeight: 800, cursor: "pointer" }}>
+                      5. Revisar o editar el prompt (opcional)
+                    </summary>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <small style={{ color: "#b8c7da" }}>El sistema lo construye automáticamente con tus selecciones.</small>
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        <button type="button" className="ghost-btn" onClick={crearPromptPlaneamientoIa}>
+                          Construir prompt
+                        </button>
+                        <button type="button" className="ghost-btn" onClick={mejorarPromptPlaneamientoIa} disabled={mejorandoPromptPlaneamientoIa}>
+                          {mejorandoPromptPlaneamientoIa ? "Mejorando prompt..." : "Mejorar con IA"}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      rows={10}
+                      value={promptPlaneamientoIa}
+                      onChange={(e) => {
+                        setPromptPlaneamientoIa(e.target.value);
+                        setPromptPlaneamientoIaEditado(true);
+                      }}
+                      placeholder="Construí el prompt con los datos seleccionados y ajustalo aquí antes de generar el planeamiento."
+                      style={{ marginTop: "10px", background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583", minHeight: "190px" }}
+                    />
+                    <small style={{ color: "#b8c7da" }}>
+                      Las reglas institucionales y las habilidades seleccionadas se validan en el servidor. Podés ajustar este prompt sin perder esos controles.
+                    </small>
+                  </details>
+
                   <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
                     <button type="button" className="primary-btn" onClick={generarPlaneamientoConIa} disabled={generatingPlaneamientoIa}>
-                      {generatingPlaneamientoIa ? "Generando propuesta..." : "Generar propuesta con IA"}
+                      {generatingPlaneamientoIa ? "Generando planeamiento..." : "Generar planeamiento con IA"}
                     </button>
                   </div>
                   {generatingPlaneamientoIa ? (
@@ -10753,6 +11083,46 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           Revisá y ajustá la propuesta. El sistema guardará el planeamiento únicamente cuando presionés “Guardar planeamiento”.
                         </p>
                       </div>
+
+                      {ultimoPlaneamientoIa.controlCalidad && (
+                        <div
+                          style={{
+                            padding: "12px",
+                            border: ultimoPlaneamientoIa.controlCalidad.puedeGuardar ? "1px solid #3f8f6b" : "1px solid #dc665f",
+                            background: ultimoPlaneamientoIa.controlCalidad.puedeGuardar ? "#102a24" : "#3a1f24",
+                            display: "grid",
+                            gap: "8px"
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                            <strong>
+                              {ultimoPlaneamientoIa.controlCalidad.puedeGuardar
+                                ? "Revisión automática completada"
+                                : "Hay datos que deben corregirse"}
+                            </strong>
+                            <span style={{ fontSize: "13px", fontWeight: 800 }}>
+                              Calidad: {ultimoPlaneamientoIa.controlCalidad.puntuacion ?? 0}/100
+                            </span>
+                          </div>
+                          <div style={{ display: "grid", gap: "6px" }}>
+                            {(ultimoPlaneamientoIa.controlCalidad.verificaciones || []).map((item) => (
+                              <div
+                                key={item.codigo}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "18px 1fr",
+                                  gap: "7px",
+                                  color: item.estado === "error" ? "#fecaca" : item.estado === "alerta" ? "#fde68a" : "#bbf7d0",
+                                  fontSize: "13px"
+                                }}
+                              >
+                                <span aria-hidden="true">{item.estado === "ok" ? "✓" : item.estado === "alerta" ? "!" : "×"}</span>
+                                <span><strong>{item.etiqueta}:</strong> {item.detalle}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       <label>
                         Nombre del planeamiento
@@ -10965,7 +11335,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                       <div style={{ display: "grid", gap: "8px", justifyItems: "start" }}>
                         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                          <button type="button" className="primary-btn" onClick={guardarPlaneamientoIaGenerado} disabled={savingPlaneamientoIa}>
+                          <button
+                            type="button"
+                            className="primary-btn"
+                            onClick={guardarPlaneamientoIaGenerado}
+                            disabled={savingPlaneamientoIa}
+                          >
                             {savingPlaneamientoIa ? "Guardando..." : (editingPlaneamientoIaId ? "Actualizar planeamiento" : "Guardar planeamiento")}
                           </button>
                           <button type="button" style={secondaryButtonStyle} onClick={() => { setUltimoPlaneamientoIa(null); setEditingPlaneamientoIaId(null); }} disabled={savingPlaneamientoIa}>

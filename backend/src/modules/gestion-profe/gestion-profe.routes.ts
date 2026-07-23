@@ -3692,6 +3692,7 @@ async function copiarPlaneamientosDesdeSeccionMismoGradoSiFaltan(pool: any, inpu
 router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req, res) => {
   try {
     if (!assertCanAccessProfessorModule(req, res)) return;
+    res.set("Cache-Control", "no-store");
 
     const grupoId = Number(req.params.grupoId);
     const materiaId = Number(req.params.materiaId);
