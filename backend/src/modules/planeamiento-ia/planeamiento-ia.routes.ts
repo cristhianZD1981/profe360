@@ -26,6 +26,7 @@ type ProgresoOperacion = {
 const progresoOperaciones = new Map<string, ProgresoOperacion>();
 const PROGRESO_OPERACION_TTL_MS = 30 * 60 * 1000;
 const SQL_COSTA_RICA_NOW = "CONVERT(datetime2(3), SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'Central America Standard Time')";
+const PLANEAMIENTO_MAX_REPARACIONES_AUTOMATICAS = 3;
 
 function normalizeOperacionId(value: unknown) {
   const operacionId = String(value || "").trim();
@@ -638,7 +639,7 @@ Contexto del planeamiento:
 - Mes: ${input.mes || "No indicado"}
 - Tema o énfasis: ${input.tema || "No indicado"}
 - Cantidad de semanas: ${input.semanas || 4}
-- Documento de apoyo opcional: ${input.documentoApoyoNombre || "No adjuntado"}
+- Documento de apoyo mandatorio si fue adjuntado: ${input.documentoApoyoNombre || "No adjuntado"}
 - Plantilla o formato de salida opcional: ${input.plantillaFormatoNombre || "No adjuntado"}
 
 Indicaciones, consideraciones o premisas del docente:
@@ -647,7 +648,9 @@ ${input.indicacionesDocente || "No se indicaron premisas adicionales."}
 IMPORTANTE SOBRE LAS INDICACIONES DEL DOCENTE:
 Las indicaciones del docente tienen prioridad sobre la plantilla general.
 Si las indicaciones del docente piden usar un ejemplo específico, una página o un formato tomado del Documento de apoyo, debés aplicarlo explícitamente y de forma mandatoria en la respuesta.
+Si se adjuntó Documento de apoyo, imagen o archivo adicional, su uso es obligatorio para enriquecer el apartado indicado por la persona docente; no lo trates como material opcional.
 Si el docente solicita adecuación significativa, color, resaltado o cualquier condición especial, debe reflejarse explícitamente en el JSON final.
+Si solicita adecuación curricular significativa, generá una adaptación sustantiva al nivel de competencia indicado por la persona docente, con problema, procedimiento, recurso, producto y evidencia diferenciados; no repitás las habilidades completas del grado regular como actividad reducida.
 Si el docente pide pintar o resaltar una sección en azul, devolvé colorResaltado = "azul" en el objeto correspondiente y agregá el marcador [AZUL] al inicio del texto visible.
 Si el docente indica página(s), ejercicio(s), capítulo(s) o sección(es) concretas del documento de apoyo, tomalas de forma literal y citá en el contenido generado la referencia exacta (por ejemplo: "página 12, ejercicio 4").
 Si no se aportan indicaciones y/o documento de apoyo, generá el planeamiento con los datos disponibles sin bloquear la salida.
@@ -692,7 +695,7 @@ Criterios obligatorios para construir la respuesta:
 10. Las estrategias de mediación e indicadores deben alinearse directamente con las habilidades seleccionadas.
 11. En "indicadoresEvaluacion", generá por defecto UN (1) indicador por cada habilidad seleccionada. Solo generá más de uno por habilidad si en las indicaciones del docente se solicita explícitamente. Si hay múltiples para una misma habilidad, numeralos como 1.1, 1.2, 1.3, etc.
 12. No incluyás el texto "Enfoque:" dentro de "estrategiasMediacion". El enfoque va únicamente en el campo "enfoque".
-13. Si se adjunta Documento de apoyo y las indicaciones piden usar un ejemplo o copiar literal un ejercicio de una página concreta, debés hacerlo de forma mandatoria.
+13. Si se adjunta Documento de apoyo, imagen o archivo adicional, debés usarlo de forma mandatoria para enriquecer el apartado indicado por la persona docente; si además pide un ejemplo o copiar literal un ejercicio de una página concreta, debés hacerlo de forma explícita.
 14. Si faltan Indicaciones y/o Documento de apoyo, construí el planeamiento únicamente con los datos disponibles sin bloquear la generación.
 15. En "estrategiasMediacion" no incluyás líneas que inicien con "Enfoque:".
 16. En "indicadoresEvaluacion" no iniciés ningún indicador con "Identifica y aplica".
@@ -859,7 +862,7 @@ Contexto del planeamiento:
 - Mes: ${input.mes || "No indicado"}
 - Tema o énfasis: ${input.tema || "No indicado"}
 - Cantidad de semanas: ${input.semanas || 4}
-- Documento de apoyo opcional: ${input.documentoApoyoNombre || "No adjuntado"}
+- Documento de apoyo mandatorio si fue adjuntado: ${input.documentoApoyoNombre || "No adjuntado"}
 - Plantilla o formato de salida opcional: ${input.plantillaFormatoNombre || "No adjuntado"}
 
 Indicaciones, consideraciones o premisas del docente:
@@ -871,7 +874,9 @@ ${clampPromptText(input.promptDocente || "No se aportó un prompt adicional.", 1
 IMPORTANTE SOBRE LAS INDICACIONES DEL DOCENTE:
 Las indicaciones del docente tienen prioridad sobre la plantilla general.
 Si las indicaciones del docente piden usar un ejemplo específico, una página o un formato tomado del Documento de apoyo, debés aplicarlo explícitamente en la respuesta.
+Si se adjuntó Documento de apoyo, imagen o archivo adicional, su uso es obligatorio para enriquecer el apartado indicado por la persona docente; no lo trates como material opcional.
 Si el docente solicita adecuación significativa, color, resaltado o cualquier condición especial, debe reflejarse explícitamente en el JSON final.
+Si solicita adecuación curricular significativa, generá una adaptación sustantiva al nivel de competencia indicado por la persona docente, con problema, procedimiento, recurso, producto y evidencia diferenciados; no repitás las habilidades completas del grado regular como actividad reducida.
 Si el docente pide pintar o resaltar una sección en azul, devolvé colorResaltado = "azul" en el objeto correspondiente y agregá el marcador [AZUL] al inicio del texto visible.
 Si el docente indica página(s), ejercicio(s), capítulo(s) o sección(es) concretas del documento de apoyo, tomalas de forma literal y citá en el contenido generado la referencia exacta (por ejemplo: "página 12, ejercicio 4").
 No ignorés esta sección.
@@ -1060,6 +1065,8 @@ async function auditarPlaneamientoConIa(input: {
   tema: string;
   habilidades: any[];
   indicacionesDocente: string;
+  documentoApoyoTexto?: string;
+  documentoApoyoNombre?: string;
   idiomaSalida: "es" | "en";
   estrategiasReferencia: string;
   perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
@@ -1073,6 +1080,7 @@ La referencia puede pertenecer a cualquier materia y usar cualquier estructura. 
 
 Marcá "cumple": false ante cualquiera de estas situaciones:
 - No cumple una indicación expresa del docente.
+- Ignora, omite o usa de forma decorativa un documento, imagen o archivo de apoyo adjunto cuando ese material aporta contenido, ejemplo, machote, ejercicio, formato o referencia para enriquecer el apartado indicado.
 - Conserva tema, unidad, subtema, ejemplos, lugares, personas, consignas, respuestas o contenido sustantivo concreto del plan anterior.
 - Cambia el orden, los encabezados, la lógica o la secuencia de las estrategias de mediación de la referencia.
 - Resume de forma marcada el nivel de detalle de la referencia.
@@ -1102,6 +1110,11 @@ ${serializarParaPrompt({
 
 INDICACIONES MANDATORIAS:
 ${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
+
+DOCUMENTOS/ARCHIVOS DE APOYO MANDATORIOS:
+${input.documentoApoyoTexto?.trim()
+    ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 10000)}`
+    : "No se aportaron documentos de apoyo adicionales."}
 
 PERFIL DEL DOCUMENTO DE REFERENCIA:
 ${serializarParaPrompt(perfilDocumentoParaRevision(input.perfilDocumentoReferencia) || {}, 8000)}
@@ -1136,6 +1149,8 @@ async function repararPlaneamientoConIa(input: {
   tema: string;
   habilidades: any[];
   indicacionesDocente: string;
+  documentoApoyoTexto?: string;
+  documentoApoyoNombre?: string;
   idiomaSalida: "es" | "en";
   nombrePlaneamiento: string;
   estrategiasReferencia: string;
@@ -1172,7 +1187,14 @@ async function repararPlaneamientoConIa(input: {
       contenidoActual: item.contenido
     };
   });
-  const fallasSonSoloDeEstrategias = input.fallas.length > 0 && input.fallas.every((falla) => {
+  const hayFallasDeAdecuacionSignificativa = input.fallas.some((falla) => {
+    const texto = normalizarParaBusqueda(falla);
+    return texto.includes("adecuacion")
+      || texto.includes("adaptacion")
+      || texto.includes("significativa")
+      || texto.includes("competencia");
+  });
+  const fallasSonSoloDeEstrategias = !hayFallasDeAdecuacionSignificativa && input.fallas.length > 0 && input.fallas.every((falla) => {
     const texto = normalizarParaBusqueda(falla);
     return texto.includes("estrateg")
       || texto.includes("mediacion")
@@ -1228,6 +1250,11 @@ ${serializarParaPrompt({
 INDICACIONES MANDATORIAS:
 ${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
 
+DOCUMENTOS/ARCHIVOS DE APOYO MANDATORIOS:
+${input.documentoApoyoTexto?.trim()
+      ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 10000)}`
+      : "No se aportaron documentos de apoyo adicionales."}
+
 SECUENCIA EXACTA, INCLUIDAS LAS REPETICIONES:
 ${secuenciaNumerada || "Conservá la organización narrativa de la referencia."}
 
@@ -1282,6 +1309,8 @@ REGLAS ABSOLUTAS:
 11. Nunca dejés dos encabezados consecutivos sin desarrollo entre ellos. Cada aparición debe contener al menos dos oraciones nuevas y coherentes con las habilidades actuales.
 12. Podés conservar tipos pedagógicos generales de la referencia, pero reemplazá totalmente sus nombres de actividad, consignas, ejemplos, preguntas, ejercicios, respuestas, recursos concretos y productos por otros coherentes con los datos actuales.
 13. Ignorá números internos, códigos de control e identificadores del Word. Solo son encabezados los incluidos en el perfil dinámico.
+14. Todo documento, imagen o archivo de apoyo adjunto es mandatorio: usalo para enriquecer el apartado indicado por el docente con datos, ejemplos, estructura, ejercicios o lenguaje concreto del material. No lo tratés como opcional.
+15. Si hay adecuación curricular significativa, no repitás las habilidades completas del grado regular como propósito, actividad, recurso y producto. Redactá una adaptación sustantiva al nivel de competencia indicado por la persona docente, con tarea, procedimiento, recurso, producto y evidencia diferenciados.
 
 DATOS ACTUALES:
 ${serializarParaPrompt({
@@ -1300,6 +1329,11 @@ ${serializarParaPrompt({
 
 INDICACIONES MANDATORIAS:
 ${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
+
+DOCUMENTOS/ARCHIVOS DE APOYO MANDATORIOS:
+${input.documentoApoyoTexto?.trim()
+    ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 10000)}`
+    : "No se aportaron documentos de apoyo adicionales."}
 
 FALLAS QUE DEBÉS CORREGIR:
 ${input.fallas.map((falla, index) => `${index + 1}. ${falla}`).join("\n")}
@@ -1876,6 +1910,102 @@ Forma de evaluación ajustada: ${detalle.evaluacionAjustada}`;
   return { ...detalle, textoVisible };
 }
 
+function palabrasClaveContextoAdecuacion(input: {
+  indicacionesDocente?: string;
+  materiaNombre?: string;
+  grado?: string;
+  tema?: string;
+  habilidades?: any[];
+}) {
+  const stopwords = new Set([
+    "adecuacion", "adecuaciones", "curricular", "significativa", "significativas",
+    "estudiante", "estudiantes", "persona", "docente", "actividad", "actividades",
+    "habilidad", "habilidades", "grado", "materia", "tema", "nivel", "competencia",
+    "trabajo", "producto", "recurso", "apoyo", "proposito", "evaluacion", "forma",
+    "incluir", "incluya", "solicita", "solicito", "regular", "seleccionada",
+    "seleccionadas", "numero", "numeros", "indicacion", "indicaciones"
+  ]);
+  const texto = [
+    input.indicacionesDocente,
+    input.materiaNombre,
+    input.grado,
+    input.tema,
+    ...(Array.isArray(input.habilidades) ? input.habilidades.map((habilidad) =>
+      `${habilidad?.Area || ""} ${habilidad?.NumeroHabilidad || ""} ${habilidad?.DescripcionHabilidad || habilidad || ""}`
+    ) : [])
+  ].join(" ");
+
+  return Array.from(new Set(
+    normalizarParaBusqueda(texto)
+      .split(/[^a-z0-9]+/i)
+      .map((palabra) => palabra.trim())
+      .filter((palabra) => palabra.length >= 5 && !stopwords.has(palabra))
+  )).slice(0, 80);
+}
+
+function normalizarAdecuacionSignificativaExistente(
+  raw: any,
+  textoEstrategias: string,
+  input: {
+    indicacionesDocente: string;
+    materiaNombre: string;
+    grado: string;
+    tema: string;
+    habilidades: any[];
+    usarAzul: boolean;
+  }
+) {
+  const rawObj = raw && typeof raw === "object" ? raw : {};
+  const campos = [
+    "proposito",
+    "actividadAdaptada",
+    "apoyoDocente",
+    "recursoAjustado",
+    "productoEsperado",
+    "evaluacionAjustada"
+  ];
+  const partes = [
+    rawObj.titulo,
+    rawObj.textoVisible,
+    rawObj.texto,
+    ...campos.map((campo) => rawObj[campo]),
+    textoEstrategias
+  ]
+    .map((value) => normalizeText(value))
+    .filter(Boolean);
+  const textoCompleto = partes.join("\n");
+  if (!textoCompleto.trim()) return null;
+
+  const camposDetallados = campos.filter((campo) => normalizeText(rawObj[campo]).length >= 35).length;
+  const tieneDetalleSustantivo = textoCompleto.length >= 250 || camposDetallados >= 3;
+  const textoNormalizado = normalizarParaBusqueda(textoCompleto);
+  const claves = palabrasClaveContextoAdecuacion(input);
+  const coincideConContextoActual = claves.some((clave) => textoNormalizado.includes(clave));
+  if (!tieneDetalleSustantivo || !coincideConContextoActual) return null;
+
+  const titulo = normalizeText(rawObj.titulo) || "Estrategia de mediación para adecuación significativa";
+  let textoVisible = normalizeText(rawObj.textoVisible || textoEstrategias);
+  if (!textoVisible) {
+    textoVisible = [
+      titulo,
+      ...campos
+        .map((campo) => normalizeText(rawObj[campo]))
+        .filter(Boolean)
+    ].join("\n");
+  }
+  if (input.usarAzul && !/^\[AZUL\]/i.test(textoVisible)) {
+    textoVisible = `[AZUL] ${textoVisible}`;
+  }
+
+  return {
+    ...rawObj,
+    aplica: true,
+    colorResaltado: input.usarAzul ? "azul" : normalizeText(rawObj.colorResaltado || ""),
+    titulo,
+    textoVisible
+  };
+}
+
 export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   indicacionesDocente: string;
   materiaNombre: string;
@@ -1952,6 +2082,21 @@ export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, inp
     const texto = normalizarParaBusqueda(item);
     return texto.includes("adecuacion significativa") || texto.includes("adecuacion curricular significativa");
   };
+  const bloquesAdecuacionExistentes = resultado.estrategiasMediacion.filter(esBloqueAdecuacion);
+  const adecuacionExistente = requiereAdecuacion
+    ? normalizarAdecuacionSignificativaExistente(
+        resultado.estrategiaAdecuacionSignificativa,
+        bloquesAdecuacionExistentes.join("\n\n"),
+        {
+          indicacionesDocente,
+          materiaNombre: input.materiaNombre,
+          grado: input.grado,
+          tema: input.tema,
+          habilidades: input.habilidades,
+          usarAzul: requiereAzul
+        }
+      )
+    : null;
   resultado.estrategiasMediacion = resultado.estrategiasMediacion.filter(
     (item: any) => !esBloqueAdecuacion(item)
   );
@@ -1966,7 +2111,7 @@ export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, inp
     splitLines(resultado?.aprendizajesEsperados).join("\n"),
     splitLines(resultado?.estrategiasMediacion).join("\n")
   );
-  const adecuacion = construirAdecuacionSignificativa({
+  const adecuacion = adecuacionExistente || construirAdecuacionSignificativa({
     materiaNombre: input.materiaNombre,
     grado: input.grado,
     mes: input.mes,
@@ -2877,14 +3022,14 @@ function extractDocumentoApoyoText(file?: Express.Multer.File) {
   if (isImageFile(file)) {
     return Promise.resolve({
       nombre: file?.originalname || "imagen_apoyo",
-      texto: `Imagen adjunta: ${file?.originalname || "imagen_apoyo"}. Debe analizarse como material de referencia obligatorio cuando las indicaciones del docente lo requieran.`
+      texto: `Imagen adjunta: ${file?.originalname || "imagen_apoyo"}. Debe analizarse como material de apoyo obligatorio para enriquecer el apartado indicado por la persona docente.`
     });
   }
 
   return extractUploadedText(file, {
     defaultName: "documento_apoyo",
     maxChars: 12000,
-    unsupportedMessage: "Se adjuntó el archivo {nombre}. Si el documento contiene lineamientos específicos, la persona docente debe revisar la propuesta generada y ajustar según ese material."
+    unsupportedMessage: "Se adjuntó el archivo {nombre} como apoyo obligatorio, pero el sistema no pudo extraer su contenido. Para que la IA lo use con precisión, subí el material en PDF, DOCX, TXT o imagen legible."
   });
 }
 
@@ -2906,13 +3051,22 @@ function detectarIdiomaSalida(...fuentes: Array<string | null | undefined>) {
   return ingles >= 3 && ingles > espanol ? "en" as const : "es" as const;
 }
 
-function instruccionesObligatoriasPlaneamiento(input: { idiomaSalida?: "es" | "en"; usaMachote?: boolean; cantidadImagenes?: number }) {
+function instruccionesObligatoriasPlaneamiento(input: {
+  idiomaSalida?: "es" | "en";
+  usaMachote?: boolean;
+  cantidadImagenes?: number;
+  documentoApoyoTexto?: string;
+  documentoApoyoNombre?: string;
+}) {
   const idioma = input.idiomaSalida === "en" ? "English" : "Spanish";
   const machote = input.usaMachote
     ? "El machote se utiliza únicamente para conservar diseño, tablas, encabezados y orden. Eliminá y sustituí todos sus datos variables anteriores; no reutilicés nombres, fechas, temas, habilidades, estrategias, indicadores, observaciones ni ejemplos del planeamiento previo."
     : "";
   const imagenes = input.cantidadImagenes
     ? `Hay ${input.cantidadImagenes} imagen(es) adjunta(s). Analizalas como fuente de referencia junto con las instrucciones del docente.`
+    : "";
+  const apoyo = String(input.documentoApoyoTexto || "").trim()
+    ? `Hay documento(s) de apoyo adjunto(s): ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}. Su uso es obligatorio: extraé de ese material ejemplos, estructura, lenguaje, ejercicios, recursos o criterios pertinentes para enriquecer el apartado indicado por la persona docente. No lo menciones solo como adjunto; integrá evidencia concreta en el contenido generado.`
     : "";
 
   return `
@@ -2922,6 +3076,7 @@ REGLAS DE CUMPLIMIENTO NO NEGOCIABLES:
 - Idioma obligatorio de toda la salida generada: ${idioma}. Conservá sin traducir solamente los rótulos fijos que ya pertenezcan al diseño del machote.
 ${machote}
 ${imagenes}
+${apoyo}
 `.trim();
 }
 
@@ -4129,6 +4284,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       estrategiasReferencia,
       estructuraEstrategiasReferencia,
       perfilEstrategiasReferencia,
+      perfilDocumentoReferencia,
       usuarioId: getUserId(req) || null,
       esAdmin: canMaintainAnyHabilidad(req)
     });
@@ -4199,6 +4355,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
           tema,
           habilidades: habilidades.recordset,
           indicacionesDocente,
+          documentoApoyoTexto: documentoApoyo.texto,
+          documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
           idiomaSalida,
           estrategiasReferencia,
           perfilEstrategiasReferencia,
@@ -4224,7 +4382,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     let reparadoAutomaticamente = false;
     let reparacionesAutomaticas = 0;
 
-    while (!validacion.puedeGuardar && reparacionesAutomaticas < 1) {
+    while (!validacion.puedeGuardar && reparacionesAutomaticas < PLANEAMIENTO_MAX_REPARACIONES_AUTOMATICAS) {
       const fallas = validacion.verificaciones
         .filter((item) => item.estado === "error")
         .map((item) => `${item.etiqueta}: ${item.detalle}`);
@@ -4249,6 +4407,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         tema,
         habilidades: habilidades.recordset,
         indicacionesDocente,
+        documentoApoyoTexto: documentoApoyo.texto,
+        documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
         idiomaSalida,
         nombrePlaneamiento: nombreResultado,
         estrategiasReferencia,
@@ -4270,6 +4430,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
             tema,
             habilidades: habilidades.recordset,
             indicacionesDocente,
+            documentoApoyoTexto: documentoApoyo.texto,
+            documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
             idiomaSalida,
             estrategiasReferencia,
             perfilEstrategiasReferencia,
@@ -4292,6 +4454,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       nombre: nombreResultado,
       estrategiasMediacionEstructuradas: validacion.estrategiasEstructuradas,
       documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : null,
+      documentoApoyoExtracto: documentoApoyo.texto ? documentoApoyo.texto.slice(0, 16000) : null,
       plantillaFormatoNombre: plantillaFormato.nombre || null,
       documentoReferenciaNombre: referencia.nombre || null,
       idiomaSalida,
@@ -4325,7 +4488,9 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
             Mes: habilidad.Mes,
             NumeroHabilidad: habilidad.NumeroHabilidad,
             DescripcionHabilidad: habilidad.DescripcionHabilidad
-          }))
+          })),
+          documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : null,
+          documentoApoyoExtracto: documentoApoyo.texto ? documentoApoyo.texto.slice(0, 16000) : null
         }
       },
       plantillaFormatoCacheId: plantillaFormatoDocx?.cacheId || null,
@@ -4461,6 +4626,16 @@ router.post("/revisar-planeamiento", async (req, res) => {
       ? buildPlaneamientoNombre({ mes, grado, materiaNombre })
       : nombreEntrada;
     const indicacionesDocente = normalizeText(controlAnterior.indicacionesDocente);
+    const documentoApoyoTexto = normalizeText(
+      contexto.documentoApoyoExtracto
+      || contexto.documentoApoyoTexto
+      || resultadoEntrada.documentoApoyoExtracto
+      || resultadoEntrada.documentoApoyoTexto
+    ).slice(0, 16000);
+    const documentoApoyoNombre = normalizeText(
+      contexto.documentoApoyoNombre
+      || resultadoEntrada.documentoApoyoNombre
+    );
     const idiomaSalida: "es" | "en" = controlAnterior.idiomaEsperado === "en" ? "en" : "es";
     const estrategiasReferencia = String(perfilDocumentoReferencia?.estrategiasTexto || "");
     const indicadoresEsperadosPorHabilidad = Array.isArray(controlAnterior.indicadoresEsperadosPorHabilidad)
@@ -4485,6 +4660,7 @@ router.post("/revisar-planeamiento", async (req, res) => {
         mes,
         tema,
         habilidades,
+        documentoApoyoTexto,
         estructuraEstrategiasReferencia,
         usaReferenciaEstrategias: Boolean(estrategiasReferencia.trim())
       });
@@ -4502,6 +4678,8 @@ router.post("/revisar-planeamiento", async (req, res) => {
       tema,
       habilidades,
       indicacionesDocente,
+      documentoApoyoTexto,
+      documentoApoyoNombre,
       idiomaSalida,
       estrategiasReferencia,
       perfilEstrategiasReferencia,
@@ -4524,7 +4702,7 @@ router.post("/revisar-planeamiento", async (req, res) => {
     let reparadoAutomaticamente = false;
     let reparacionesAutomaticas = 0;
 
-    while (!validacion.puedeGuardar && reparacionesAutomaticas < 1) {
+    while (!validacion.puedeGuardar && reparacionesAutomaticas < PLANEAMIENTO_MAX_REPARACIONES_AUTOMATICAS) {
       const fallas = validacion.verificaciones
         .filter((item) => item.estado === "error")
         .map((item) => `${item.etiqueta}: ${item.detalle}`);
@@ -4549,6 +4727,8 @@ router.post("/revisar-planeamiento", async (req, res) => {
         tema,
         habilidades,
         indicacionesDocente,
+        documentoApoyoTexto,
+        documentoApoyoNombre,
         idiomaSalida,
         nombrePlaneamiento,
         estrategiasReferencia,
@@ -4569,6 +4749,8 @@ router.post("/revisar-planeamiento", async (req, res) => {
         tema,
         habilidades,
         indicacionesDocente,
+        documentoApoyoTexto,
+        documentoApoyoNombre,
         idiomaSalida,
         estrategiasReferencia,
         perfilEstrategiasReferencia,
@@ -4603,7 +4785,9 @@ router.post("/revisar-planeamiento", async (req, res) => {
         grado,
         mes,
         tema,
-        habilidades
+        habilidades,
+        documentoApoyoNombre,
+        documentoApoyoExtracto: documentoApoyoTexto || null
       }
     };
 

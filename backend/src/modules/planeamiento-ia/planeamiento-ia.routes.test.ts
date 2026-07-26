@@ -84,6 +84,58 @@ test("mejorar con IA elimina la adecuacion anterior y la reemplaza por la actual
   );
 });
 
+test("conserva la adecuacion significativa especifica que ya resolvio la IA", () => {
+  const resultado = aplicarReglasObligatoriasPlaneamiento({
+    aprendizajesEsperados: [
+      "Analiza relaciones entre eventos",
+      "Aplica axiomas de probabilidad"
+    ],
+    criteriosEvaluacion: [
+      "Analisis de relaciones entre eventos",
+      "Aplicacion de axiomas de probabilidad"
+    ],
+    indicadoresEvaluacion: [
+      "1.1 Analiza relaciones entre eventos en situaciones contextualizadas",
+      "2.1 Aplica axiomas de probabilidad en problemas nuevos"
+    ],
+    estrategiasMediacion: [
+      "PRIMERA ETAPA: APRENDIZAJE DE CONOCIMIENTOS\nLa persona docente plantea una situacion de probabilidad y guia el analisis inicial.",
+      "Estrategia de mediacion para adecuacion curricular significativa\nEl estudiante con nivel de competencia de decimo resuelve un problema de proporcionalidad directa mediante tabla de valores, identifica el dato faltante y explica el procedimiento con apoyo visual."
+    ],
+    estrategiaAdecuacionSignificativa: {
+      aplica: true,
+      titulo: "Estrategia de mediacion para adecuacion curricular significativa",
+      proposito: "Ajustar la participacion del estudiante con nivel de competencia de decimo mediante una tarea matematica concreta y observable antes de abordar la probabilidad formal de duodecimo.",
+      actividadAdaptada: "Resolver un problema de proporcionalidad directa con una tabla de valores, completar un dato faltante y explicar oralmente el procedimiento seguido con una guia de tres pasos.",
+      apoyoDocente: "Modelar un ejemplo corto, verificar cada paso con preguntas guiadas y ofrecer retroalimentacion inmediata antes de que el estudiante complete un segundo caso similar.",
+      recursoAjustado: "Tabla de valores impresa, tarjetas con datos numericos sencillos, calculadora basica y organizador visual para distinguir dato conocido, dato faltante y operacion utilizada.",
+      productoEsperado: "Tabla completada, procedimiento marcado en la guia y explicacion breve del resultado obtenido para evidenciar avance en el nivel de competencia de decimo.",
+      evaluacionAjustada: "Valorar la identificacion del dato faltante, el procedimiento proporcional usado y la explicacion del resultado mediante una lista de cotejo individual.",
+      textoVisible: "Estrategia de mediacion para adecuacion curricular significativa\nNivel de competencia: decimo. Actividad adaptada: resolver un problema de proporcionalidad directa con tabla de valores, completar un dato faltante y explicar el procedimiento con apoyo visual. Producto esperado: tabla completada, guia de pasos y explicacion breve."
+    }
+  }, {
+    indicacionesDocente: "Incluir una adecuacion curricular significativa para estudiante con nivel de competencia de decimo; ajustar problemas, procedimientos y productos concretos.",
+    materiaNombre: "Matematicas",
+    grado: "Duodecimo",
+    mes: "Julio",
+    tema: "Relaciones entre eventos y axiomas de probabilidad",
+    habilidades: [
+      { DescripcionHabilidad: "Analiza relaciones entre eventos para interpretar situaciones de probabilidad." },
+      { DescripcionHabilidad: "Aplica axiomas de probabilidad para resolver problemas contextualizados." }
+    ]
+  });
+
+  const adecuacion = resultado.estrategiaAdecuacionSignificativa;
+  assert.match(adecuacion.textoVisible, /decimo/i);
+  assert.match(adecuacion.actividadAdaptada, /tabla de valores/i);
+  assert.match(adecuacion.productoEsperado, /guia de pasos|tabla completada/i);
+  assert.doesNotMatch(adecuacion.textoVisible, /pasos breves y secuenciales/i);
+  assert.equal(
+    resultado.estrategiasMediacion.filter((item: string) => /adecuaci[oÃ³]n curricular significativa/i.test(item)).length,
+    1
+  );
+});
+
 function escapeXml(value: string) {
   return value
     .replace(/&/g, "&amp;")
