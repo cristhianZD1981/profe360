@@ -14,6 +14,80 @@ const planeamientoUpload = upload.any();
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
 
+type EstadoProgresoOperacion = "procesando" | "completado" | "error";
+
+type ProgresoOperacion = {
+  porcentaje: number;
+  etapa: string;
+  estado: EstadoProgresoOperacion;
+  actualizadoEn: number;
+};
+
+const progresoOperaciones = new Map<string, ProgresoOperacion>();
+const PROGRESO_OPERACION_TTL_MS = 30 * 60 * 1000;
+const SQL_COSTA_RICA_NOW = "CONVERT(datetime2(3), SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'Central America Standard Time')";
+
+function normalizeOperacionId(value: unknown) {
+  const operacionId = String(value || "").trim();
+  return /^[a-zA-Z0-9_-]{8,120}$/.test(operacionId) ? operacionId : "";
+}
+
+function limpiarProgresosExpirados() {
+  const limite = Date.now() - PROGRESO_OPERACION_TTL_MS;
+  for (const [operacionId, progreso] of progresoOperaciones.entries()) {
+    if (progreso.actualizadoEn < limite) progresoOperaciones.delete(operacionId);
+  }
+}
+
+function actualizarProgresoOperacion(
+  operacionId: string,
+  porcentaje: number,
+  etapa: string,
+  estado: EstadoProgresoOperacion = "procesando"
+) {
+  if (!operacionId) return;
+  limpiarProgresosExpirados();
+  const anterior = progresoOperaciones.get(operacionId);
+  const porcentajeNormalizado = Math.max(
+    anterior?.porcentaje || 0,
+    Math.min(100, Math.max(0, Math.round(porcentaje)))
+  );
+  progresoOperaciones.set(operacionId, {
+    porcentaje: porcentajeNormalizado,
+    etapa,
+    estado,
+    actualizadoEn: Date.now()
+  });
+}
+
+function marcarErrorProgreso(operacionId: string, etapa: string) {
+  if (!operacionId) return;
+  const anterior = progresoOperaciones.get(operacionId);
+  actualizarProgresoOperacion(operacionId, anterior?.porcentaje || 0, etapa, "error");
+}
+
+function crearProgresoGuardado(body: any) {
+  const total = Math.min(50, Math.max(1, Number(body?.totalGuardados) || 1));
+  const indice = Math.min(total - 1, Math.max(0, Number(body?.indiceGuardado) || 0));
+  const inicio = 5 + ((indice / total) * 90);
+  const fin = 5 + (((indice + 1) / total) * 90);
+  const porcentaje = (avance: number) => Math.round(inicio + ((fin - inicio) * Math.min(1, Math.max(0, avance))));
+  const sufijo = total > 1 ? ` (${indice + 1}/${total})` : "";
+  return { total, indice, porcentaje, sufijo };
+}
+
+router.get("/progreso/:operacionId", (req, res) => {
+  limpiarProgresosExpirados();
+  const operacionId = normalizeOperacionId(req.params.operacionId);
+  if (!operacionId) return badRequest(res, "El identificador de la operación no es válido");
+
+  return ok(res, progresoOperaciones.get(operacionId) || {
+    porcentaje: 0,
+    etapa: "Esperando que inicie la operación",
+    estado: "procesando"
+  });
+});
+
 type AuthUser = {
   userId?: number;
   usuarioId?: number;
@@ -52,12 +126,44 @@ type ImagenApoyoIA = {
 type PerfilEstrategiasReferencia = {
   encabezados: string[];
   cantidadParrafos: number;
+  cantidadCaracteres: number;
   cantidadActividadesNumeradas: number;
   cantidadPreguntas: number;
   usaTemasNumerados: boolean;
   usaActividadesNumeradas: boolean;
   nivelDetalle: "breve" | "medio" | "amplio";
   descripcion: string;
+};
+
+type TemplateContentRole = "aprendizajes" | "criterios" | "estrategias" | "indicadores";
+
+type ColumnaReferencia = {
+  indice: number;
+  encabezado: string;
+  rol: TemplateContentRole | null;
+};
+
+type CampoVariableReferencia = {
+  etiqueta: string;
+  valorAnterior: string;
+};
+
+type PerfilDocumentoReferencia = {
+  esDocx: boolean;
+  columnas: ColumnaReferencia[];
+  camposVariables: CampoVariableReferencia[];
+  estrategiasTexto: string;
+  encabezadosEstrategias: string[];
+  valoresContenidoAnterior: string[];
+  cantidadSeccionesContenido: number;
+  descripcion: string;
+};
+
+type AuditoriaSemanticaPlaneamiento = {
+  disponible: boolean;
+  cumple: boolean;
+  incumplimientos: string[];
+  fortalezas: string[];
 };
 
 const plantillaFormatoDocxCache = new Map<string, PlantillaFormatoDocxGuardada>();
@@ -369,6 +475,7 @@ function buildFallbackPlaneamiento(input: {
   estrategiasReferencia?: string;
   estructuraEstrategiasReferencia?: string[];
   perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
+  perfilDocumentoReferencia?: PerfilDocumentoReferencia;
 }) {
   const permiteMultiplesIndicadores = permiteMultiplesIndicadoresPorHabilidad(input.indicacionesDocente || "");
   const habilidadesSeleccionadas = input.habilidades.map((h) => {
@@ -488,6 +595,7 @@ function buildPrompt(input: {
   estrategiasReferencia?: string;
   estructuraEstrategiasReferencia?: string[];
   perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
+  perfilDocumentoReferencia?: PerfilDocumentoReferencia;
 }) {
   const habilidadesText = input.habilidades.map((h, index) => (
     `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Número ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
@@ -561,11 +669,13 @@ ${input.estrategiasReferencia || "No se identificó una sección de estrategias 
 
 ${instruccionesObligatoriasPlaneamiento(input)}
 
+${instruccionPerfilDocumentoReferencia(input.perfilDocumentoReferencia)}
+
 INSTRUCCIÓN PRIORITARIA SOBRE FORMATO:
 Si se aportó una plantilla o formato de salida, usalo como referencia principal para el orden, nombres de secciones, tablas, encabezados y nivel de detalle del planeamiento. El documento de apoyo es solo contexto; no reemplaza el formato de salida. Mantené siempre JSON válido para que el sistema pueda guardar y exportar el planeamiento.
 
 INSTRUCCIÓN PRIORITARIA SOBRE ESTRATEGIAS DE MEDIACIÓN:
-Si se adjuntó un planeamiento de referencia, analizá su sección de Estrategias de mediación y reproducí obligatoriamente su estructura, encabezados, orden, secuencia pedagógica, nivel de detalle y forma de organizar los momentos. Usá contenido nuevo, alineado con las habilidades actuales; nunca copies datos sustantivos del plan anterior. La secuencia obligatoria identificada es: ${(input.estructuraEstrategiasReferencia || []).join(" → ") || "la que aparece en el documento de referencia"}. No la sustituyás por una estructura genérica de Momentos.
+Si se adjuntó un planeamiento de referencia, analizá su sección de Estrategias de mediación y reproducí obligatoriamente su estructura, encabezados, orden, secuencia pedagógica, nivel de detalle y forma de organizar los momentos. Conservá los tipos pedagógicos generales, pero redactá de nuevo los nombres de actividades, consignas, preguntas, ejercicios, ejemplos, recursos concretos y productos para las habilidades actuales. Nunca copies contenido sustantivo del plan anterior. La secuencia obligatoria identificada es: ${(input.estructuraEstrategiasReferencia || []).join(" → ") || "la que aparece en el documento de referencia"}. No la sustituyás por una estructura genérica de Momentos ni interpretés números internos o códigos del Word como encabezados.
 
 ${reglasEstructuraPredeterminada}
 
@@ -606,6 +716,9 @@ Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
     "1: ...",
     "2: ..."
   ],
+  "criteriosEvaluacion": [
+    "Criterio directamente relacionado con cada aprendizaje o habilidad..."
+  ],
   "estrategiasMediacion": [
     ${ejemploEstrategias}
   ],
@@ -645,6 +758,14 @@ Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
     "queNoFunciono": "",
     "quePuedoMejorar": ""
   },
+  "camposReferencia": {
+    ${input.perfilDocumentoReferencia?.camposVariables?.some((campo) => !esCampoMetadataFijo(campo.etiqueta))
+      ? input.perfilDocumentoReferencia.camposVariables
+          .filter((campo) => !esCampoMetadataFijo(campo.etiqueta))
+          .map((campo) => `${JSON.stringify(campo.etiqueta)}: "Valor nuevo correspondiente al planeamiento actual"`)
+          .join(",\n    ")
+      : ""}
+  },
   "observaciones": "Observaciones editables del docente"
 }`;
 }
@@ -675,6 +796,7 @@ async function buildPromptDesdeBD(pool: any, input: {
   estrategiasReferencia?: string;
   estructuraEstrategiasReferencia?: string[];
   perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
+  perfilDocumentoReferencia?: PerfilDocumentoReferencia;
 }) {
   await ensurePlantillaPromptIAVisibilityColumns(pool);
 
@@ -763,18 +885,20 @@ Documento de apoyo aportado por la persona docente:
 ${clampPromptText(input.documentoApoyoTexto || "No se aportó documento de apoyo adicional.", 8000)}
 
 Plantilla o formato de salida aportado por la persona docente:
-${clampPromptText(input.plantillaFormatoTexto || "No se aportó una plantilla de formato adicional.", 10000)}
+${clampPromptText(input.plantillaFormatoTexto || "No se aportó una plantilla de formato adicional.", 30000)}
 
 Estrategias de mediación identificadas en el planeamiento de referencia:
-${clampPromptText(input.estrategiasReferencia || "No se identificó una sección de estrategias en el archivo de referencia.", 8000)}
+${clampPromptText(input.estrategiasReferencia || "No se identificó una sección de estrategias en el archivo de referencia.", 25000)}
 
 ${instruccionesObligatoriasPlaneamiento(input)}
+
+${instruccionPerfilDocumentoReferencia(input.perfilDocumentoReferencia)}
 
 INSTRUCCIÓN PRIORITARIA SOBRE FORMATO:
 Si se aportó una plantilla o formato de salida, usalo como referencia principal para el orden, nombres de secciones, tablas, encabezados y nivel de detalle del planeamiento. El documento de apoyo es solo contexto; no reemplaza el formato de salida. Si también hay una plantilla IA seleccionada, combiná ambas: la Plantilla IA define las reglas permanentes y este archivo define el formato específico de esta generación. Mantené siempre JSON válido para que el sistema pueda guardar y exportar el planeamiento.
 
 INSTRUCCIÓN PRIORITARIA SOBRE ESTRATEGIAS DE MEDIACIÓN:
-Si se adjuntó un planeamiento de referencia, analizá su sección de Estrategias de mediación y reproducí obligatoriamente su estructura, encabezados, orden, secuencia pedagógica, nivel de detalle y forma de organizar los momentos. Usá contenido nuevo, alineado con las habilidades actuales; nunca copies datos sustantivos del plan anterior. La secuencia obligatoria identificada es: ${(input.estructuraEstrategiasReferencia || []).join(" → ") || "la que aparece en el documento de referencia"}. No la sustituyás por una estructura genérica de Momentos.
+Si se adjuntó un planeamiento de referencia, analizá su sección de Estrategias de mediación y reproducí obligatoriamente su estructura, encabezados, orden, secuencia pedagógica, nivel de detalle y forma de organizar los momentos. Conservá los tipos pedagógicos generales, pero redactá de nuevo los nombres de actividades, consignas, preguntas, ejercicios, ejemplos, recursos concretos y productos para las habilidades actuales. Nunca copies contenido sustantivo del plan anterior. La secuencia obligatoria identificada es: ${(input.estructuraEstrategiasReferencia || []).join(" → ") || "la que aparece en el documento de referencia"}. No la sustituyás por una estructura genérica de Momentos ni interpretés números internos o códigos del Word como encabezados.
 
 ${reglaDinamicaEstrategias}
 
@@ -793,6 +917,10 @@ ${clampPromptText(row.EstructuraSalida, 10000)}
 Formato de respuesta:
 ${clampPromptText(row.FormatoRespuesta, 8000)}
 
+CAMPOS JSON ADICIONALES OBLIGATORIOS:
+- "criteriosEvaluacion": arreglo de criterios nuevos, separado de "indicadoresEvaluacion".
+- "camposReferencia": objeto cuyas claves son exactamente los rótulos variables del machote y cuyos valores corresponden al planeamiento nuevo.
+
 REGLA FINAL DE PRECEDENCIA:
 ${usaReferenciaEstrategias
     ? "El perfil dinámico del planeamiento de referencia prevalece sobre cualquier regla anterior de la Plantilla IA que exija Momentos, etapas o una secuencia fija diferente. La salida será rechazada si usa Momento 1–4 cuando esos rótulos no existen en la referencia."
@@ -801,8 +929,8 @@ ${usaReferenciaEstrategias
 Devolvé SOLO JSON válido, sin markdown.
 `;
 
-  const promptFinal = prompt.length > 60000
-    ? `${prompt.slice(0, 60000)}\n\n[Prompt recortado automáticamente por límite global]`
+  const promptFinal = prompt.length > 100000
+    ? `${prompt.slice(0, 85000)}\n\n[Contenido intermedio recortado automáticamente por límite global]\n\n${prompt.slice(-15000)}`
     : prompt;
 
   return {
@@ -811,13 +939,22 @@ Devolvé SOLO JSON válido, sin markdown.
   };
 }
 
-async function callOpenAiIfConfigured(prompt: string, imagenes: ImagenApoyoIA[] = []) {
+async function callOpenAiIfConfigured(
+  prompt: string,
+  imagenes: ImagenApoyoIA[] = [],
+  options: { maxOutputTokens?: number } = {}
+) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
-  const timeoutMs = Number(process.env.OPENAI_PLANEAMIENTO_TIMEOUT_MS || 45000);
+  const timeoutMs = Number(process.env.OPENAI_PLANEAMIENTO_TIMEOUT_MS || 180000);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 45000);
+  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 180000);
   const model = process.env.OPENAI_PLANEAMIENTO_MODEL || "gpt-4.1-mini";
+  const maxOutputTokens = Number(
+    options.maxOutputTokens
+    ?? process.env.OPENAI_PLANEAMIENTO_MAX_OUTPUT_TOKENS
+    ?? 16000
+  );
   const body: Record<string, any> = {
     model,
     input: imagenes.length
@@ -833,6 +970,9 @@ async function callOpenAiIfConfigured(prompt: string, imagenes: ImagenApoyoIA[] 
         }]
       : prompt
   };
+  if (Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) {
+    body.max_output_tokens = Math.floor(maxOutputTokens);
+  }
   if (!isGpt5FamilyModel(model)) {
     body.temperature = 0.35;
   }
@@ -875,6 +1015,312 @@ async function callOpenAiIfConfigured(prompt: string, imagenes: ImagenApoyoIA[] 
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function serializarParaPrompt(value: any, maxLength = 30000) {
+  const text = JSON.stringify(value, null, 2);
+  return text.length <= maxLength
+    ? text
+    : `${text.slice(0, maxLength)}\n[Contenido recortado por límite técnico]`;
+}
+
+function normalizarAuditoriaSemantica(value: any): AuditoriaSemanticaPlaneamiento {
+  if (!value || typeof value !== "object" || typeof value.cumple !== "boolean") {
+    return {
+      disponible: false,
+      cumple: false,
+      incumplimientos: ["La respuesta de la revisión semántica no tuvo el formato esperado."],
+      fortalezas: []
+    };
+  }
+
+  return {
+    disponible: true,
+    cumple: value.cumple,
+    incumplimientos: splitLines(value.incumplimientos).slice(0, 12),
+    fortalezas: splitLines(value.fortalezas).slice(0, 12)
+  };
+}
+
+export function perfilDocumentoParaRevision(perfil?: PerfilDocumentoReferencia) {
+  if (!perfil) return undefined;
+  return {
+    ...perfil,
+    camposVariables: perfil.camposVariables.filter(
+      (campo) => !esCampoMetadataFijo(campo.etiqueta)
+    )
+  };
+}
+
+async function auditarPlaneamientoConIa(input: {
+  resultado: any;
+  materiaNombre: string;
+  grado: string;
+  mes: string;
+  tema: string;
+  habilidades: any[];
+  indicacionesDocente: string;
+  idiomaSalida: "es" | "en";
+  estrategiasReferencia: string;
+  perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
+  perfilDocumentoReferencia?: PerfilDocumentoReferencia;
+}): Promise<AuditoriaSemanticaPlaneamiento> {
+  const prompt = `
+Actuá como revisor independiente de un planeamiento didáctico. No generés ni reescribás el documento.
+Compará el RESULTADO contra los DATOS ACTUALES, las INDICACIONES MANDATORIAS y el PERFIL DINÁMICO extraído del planeamiento de referencia.
+
+La referencia puede pertenecer a cualquier materia y usar cualquier estructura. No impongás momentos, fases, metodologías ni encabezados que no estén en su perfil.
+
+Marcá "cumple": false ante cualquiera de estas situaciones:
+- No cumple una indicación expresa del docente.
+- Conserva tema, unidad, subtema, ejemplos, lugares, personas, consignas, respuestas o contenido sustantivo concreto del plan anterior.
+- Cambia el orden, los encabezados, la lógica o la secuencia de las estrategias de mediación de la referencia.
+- Resume de forma marcada el nivel de detalle de la referencia.
+- Mezcla criterios de evaluación con indicadores o deja vacía una columna semántica de la referencia.
+- Usa datos incompatibles con materia, grado, mes, tema o habilidades actuales.
+- No completa con información nueva los campos variables detectados en el machote.
+- Usa un idioma distinto al del documento de referencia.
+
+No marqués como incumplimiento el uso de tipos pedagógicos generales que forman parte de la lógica de la referencia, como trabajo individual o grupal, preguntas, discusión, plenaria, consulta de fuentes, organizadores gráficos, producción escrita, cierre o retroalimentación. Es correcto conservar esa lógica siempre que las consignas, casos, ejemplos, recursos concretos, preguntas y productos se hayan redactado nuevamente para las habilidades actuales.
+Los únicos rótulos que pueden conservarse literalmente son los incluidos en "encabezadosEstrategias". Cualquier número interno, código de control o identificador del Word carece de valor pedagógico y debe ignorarse.
+
+No evalués como campos variables Dirección Regional de Educación, Centro educativo, nombre de la persona docente, asignatura, año escolar, curso lectivo, grado, mes, período ni periodicidad. Esos datos los completa el servidor al exportar el Word y no deben aparecer como incumplimientos.
+
+DATOS ACTUALES:
+${serializarParaPrompt({
+    materia: input.materiaNombre,
+    grado: input.grado,
+    mes: input.mes,
+    tema: input.tema,
+    idioma: input.idiomaSalida,
+    habilidades: input.habilidades.map((habilidad) => ({
+      area: habilidad?.Area,
+      numero: habilidad?.NumeroHabilidad,
+      descripcion: habilidad?.DescripcionHabilidad
+    }))
+  }, 12000)}
+
+INDICACIONES MANDATORIAS:
+${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
+
+PERFIL DEL DOCUMENTO DE REFERENCIA:
+${serializarParaPrompt(perfilDocumentoParaRevision(input.perfilDocumentoReferencia) || {}, 8000)}
+
+PERFIL DE ESTRATEGIAS:
+${serializarParaPrompt(input.perfilEstrategiasReferencia || {}, 8000)}
+
+EXTRACTO DE ESTRATEGIAS DE REFERENCIA:
+${String(input.estrategiasReferencia || "").slice(0, 14000)}
+
+RESULTADO A REVISAR:
+${serializarParaPrompt(input.resultado, 24000)}
+
+Devolvé SOLO JSON válido:
+{
+  "cumple": true,
+  "incumplimientos": [],
+  "fortalezas": ["..."]
+}
+`.trim();
+
+  const response = await callOpenAiIfConfigured(prompt, [], { maxOutputTokens: 1400 });
+  return normalizarAuditoriaSemantica(response);
+}
+
+async function repararPlaneamientoConIa(input: {
+  resultado: any;
+  fallas: string[];
+  materiaNombre: string;
+  grado: string;
+  mes: string;
+  tema: string;
+  habilidades: any[];
+  indicacionesDocente: string;
+  idiomaSalida: "es" | "en";
+  nombrePlaneamiento: string;
+  estrategiasReferencia: string;
+  perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
+  perfilDocumentoReferencia?: PerfilDocumentoReferencia;
+  imagenes?: ImagenApoyoIA[];
+}) {
+  const encabezadosEsperados = (
+    input.perfilDocumentoReferencia?.encabezadosEstrategias?.length
+      ? input.perfilDocumentoReferencia.encabezadosEstrategias
+      : input.perfilEstrategiasReferencia?.encabezados
+  ) || [];
+  const estrategiasDiagnosticadas = estructurarEstrategiasMediacion(
+    input.resultado?.estrategiasMediacion,
+    encabezadosEsperados
+  );
+  const totalesEncabezados = encabezadosEsperados.reduce((mapa, encabezado) => {
+    const clave = normalizarParaBusqueda(encabezado);
+    mapa.set(clave, (mapa.get(clave) || 0) + 1);
+    return mapa;
+  }, new Map<string, number>());
+  const aparicionesEncabezados = new Map<string, number>();
+  const diagnosticoEstrategias = estrategiasDiagnosticadas.map((item, index) => {
+    const clave = normalizarParaBusqueda(item.fase);
+    const aparicion = (aparicionesEncabezados.get(clave) || 0) + 1;
+    aparicionesEncabezados.set(clave, aparicion);
+    const total = totalesEncabezados.get(clave) || 1;
+    return {
+      posicion: index + 1,
+      encabezado: item.fase,
+      aparicion,
+      totalApariciones: total,
+      estado: item.contenido.trim().length >= 20 ? "completo" : "incompleto",
+      contenidoActual: item.contenido
+    };
+  });
+  const fallasSonSoloDeEstrategias = input.fallas.length > 0 && input.fallas.every((falla) => {
+    const texto = normalizarParaBusqueda(falla);
+    return texto.includes("estrateg")
+      || texto.includes("mediacion")
+      || texto.includes("nivel de detalle")
+      || texto.includes("parrafo")
+      || texto.includes("intervencion")
+      || texto.includes("pregunta")
+      || texto.includes("dua");
+  });
+
+  if (fallasSonSoloDeEstrategias) {
+    const parrafosReferencia = Math.max(1, Number(input.perfilEstrategiasReferencia?.cantidadParrafos || 0));
+    const caracteresReferencia = Math.max(1, Number(input.perfilEstrategiasReferencia?.cantidadCaracteres || 0));
+    const minimoParrafos = Math.max(encabezadosEsperados.length * 3, Math.ceil(parrafosReferencia * 0.75));
+    const minimoCaracteres = Math.max(1200, Math.ceil(caracteresReferencia * 0.6));
+    const secuenciaNumerada = encabezadosEsperados.map(
+      (encabezado, index) => `${index + 1}. ${encabezado}`
+    ).join("\n");
+
+    const promptEstrategias = `
+Reescribí ÚNICAMENTE las Estrategias de mediación del planeamiento actual.
+No devolvás ni modifiqués ninguna otra sección.
+
+OBJETIVO:
+- Corregir todas las fallas indicadas.
+- Conservar la estructura, lógica, secuencia, amplitud y profundidad del documento de referencia.
+- Sustituir completamente sus contenidos anteriores por contenidos nuevos, coherentes con la materia, grado, tema y habilidades actuales.
+
+REGLAS OBLIGATORIAS:
+1. Conservá cada encabezado en el orden exacto indicado. Si se repite, incluí y desarrollá cada aparición por separado.
+2. Nunca coloqués dos encabezados consecutivos sin varios párrafos sustantivos entre ellos.
+3. Incluí intervenciones diferenciadas de mediación docente, trabajo del estudiantado, trabajo independiente o colaborativo, discusión, preguntas, cierre, apoyos DUA, recursos y evidencia, siguiendo únicamente el patrón que realmente exista en la referencia.
+4. No resumás. La salida debe contener al menos ${minimoParrafos} párrafos útiles y aproximadamente ${minimoCaracteres} caracteres o más.
+5. Distribuí la profundidad entre todos los bloques; ningún encabezado puede quedar vacío o con una descripción mínima.
+6. Conservá los tipos pedagógicos generales de la referencia, pero no copiés sus nombres de actividad, consignas, temas, ejemplos, personas, lugares, preguntas, ejercicios, respuestas ni productos concretos.
+7. Usá literalmente solo los encabezados incluidos en la SECUENCIA EXACTA. Ignorá números internos, códigos de control y cualquier rótulo que no aparezca allí.
+8. Usá el idioma ${input.idiomaSalida === "en" ? "inglés" : "español"}.
+9. Devolvé solamente JSON válido con la clave "estrategiasMediacion", como arreglo de párrafos. Cada encabezado también debe ocupar un elemento propio del arreglo.
+
+DATOS ACTUALES:
+${serializarParaPrompt({
+      materia: input.materiaNombre,
+      grado: input.grado,
+      mes: input.mes,
+      tema: input.tema,
+      habilidades: input.habilidades.map((habilidad) => ({
+        area: habilidad?.Area,
+        numero: habilidad?.NumeroHabilidad,
+        descripcion: habilidad?.DescripcionHabilidad
+      }))
+    }, 14000)}
+
+INDICACIONES MANDATORIAS:
+${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
+
+SECUENCIA EXACTA, INCLUIDAS LAS REPETICIONES:
+${secuenciaNumerada || "Conservá la organización narrativa de la referencia."}
+
+FALLAS DETECTADAS:
+${input.fallas.map((falla, index) => `${index + 1}. ${falla}`).join("\n")}
+
+DIAGNÓSTICO POR APARICIÓN:
+${serializarParaPrompt(diagnosticoEstrategias, 18000)}
+
+ESTRATEGIAS DE REFERENCIA:
+${String(input.estrategiasReferencia || "").slice(0, 24000)}
+
+ESTRATEGIAS ACTUALES QUE SE DEBEN REEMPLAZAR:
+${serializarParaPrompt(splitLines(input.resultado?.estrategiasMediacion), 28000)}
+
+FORMATO EXACTO:
+{
+  "estrategiasMediacion": [
+    "Encabezado 1",
+    "Primer párrafo desarrollado...",
+    "Segundo párrafo desarrollado...",
+    "Encabezado 2",
+    "..."
+  ]
+}
+`.trim();
+
+    const reparacionEstrategias = await callOpenAiIfConfigured(promptEstrategias, input.imagenes || []);
+    const estrategiasReparadas = splitLines(reparacionEstrategias?.estrategiasMediacion);
+    if (estrategiasReparadas.length) {
+      return {
+        ...input.resultado,
+        estrategiasMediacion: estrategiasReparadas
+      };
+    }
+  }
+
+  const prompt = `
+Corregí integralmente el planeamiento JSON adjunto. Devolvé el objeto completo corregido, no un resumen.
+
+REGLAS ABSOLUTAS:
+1. Las indicaciones del docente son mandatorias.
+2. El planeamiento de referencia define dinámicamente la estructura, secuencia, encabezados y nivel de detalle. No agregués una estructura fija de otra materia.
+3. Usá la referencia solo como estructura y lógica. Eliminá sus datos sustantivos anteriores y reemplazalos por los datos actuales.
+4. Conservá separados aprendizajes, criterios de evaluación e indicadores de evaluación.
+5. Llená "camposReferencia" con una clave exacta para cada campo variable detectado y con valores nuevos.
+6. Conservá exactamente el nombre solicitado.
+7. La salida debe estar en el idioma indicado.
+8. Devolvé exclusivamente JSON válido.
+9. No intentés completar Dirección Regional, Centro educativo, nombre docente, asignatura, año escolar, curso lectivo, grado, mes, período ni periodicidad dentro de "camposReferencia"; el servidor los completa.
+10. En "estrategiasMediacion", cada aparición de cada encabezado debe conservarse en el orden exacto y tener contenido pedagógico sustantivo inmediatamente después. Si un encabezado se repite, completá cada aparición por separado.
+11. Nunca dejés dos encabezados consecutivos sin desarrollo entre ellos. Cada aparición debe contener al menos dos oraciones nuevas y coherentes con las habilidades actuales.
+12. Podés conservar tipos pedagógicos generales de la referencia, pero reemplazá totalmente sus nombres de actividad, consignas, ejemplos, preguntas, ejercicios, respuestas, recursos concretos y productos por otros coherentes con los datos actuales.
+13. Ignorá números internos, códigos de control e identificadores del Word. Solo son encabezados los incluidos en el perfil dinámico.
+
+DATOS ACTUALES:
+${serializarParaPrompt({
+    nombre: input.nombrePlaneamiento,
+    materia: input.materiaNombre,
+    grado: input.grado,
+    mes: input.mes,
+    tema: input.tema,
+    idioma: input.idiomaSalida,
+    habilidades: input.habilidades.map((habilidad) => ({
+      area: habilidad?.Area,
+      numero: habilidad?.NumeroHabilidad,
+      descripcion: habilidad?.DescripcionHabilidad
+    }))
+  }, 12000)}
+
+INDICACIONES MANDATORIAS:
+${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
+
+FALLAS QUE DEBÉS CORREGIR:
+${input.fallas.map((falla, index) => `${index + 1}. ${falla}`).join("\n")}
+
+DIAGNÓSTICO DE CADA APARICIÓN DE LAS ESTRATEGIAS:
+${serializarParaPrompt(diagnosticoEstrategias, 16000)}
+
+PERFIL DINÁMICO DEL DOCUMENTO:
+${serializarParaPrompt(perfilDocumentoParaRevision(input.perfilDocumentoReferencia) || {}, 12000)}
+
+PERFIL DE ESTRATEGIAS:
+${serializarParaPrompt(input.perfilEstrategiasReferencia || {}, 8000)}
+
+ESTRATEGIAS DE REFERENCIA:
+${String(input.estrategiasReferencia || "").slice(0, 22000)}
+
+PLANEAMIENTO A CORREGIR:
+${serializarParaPrompt(input.resultado, 36000)}
+`.trim();
+
+  return callOpenAiIfConfigured(prompt, input.imagenes || []);
 }
 
 async function callOpenAiTextIfConfigured(prompt: string) {
@@ -941,6 +1387,28 @@ function normalizarParaBusqueda(value: any) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+function normalizarParaBusquedaConMapa(value: any) {
+  const original = repararMojibakeTexto(value);
+  let texto = "";
+  const indicesOriginales: number[] = [];
+  let indiceOriginal = 0;
+
+  for (const caracter of original) {
+    const normalizado = caracter
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    for (const caracterNormalizado of normalizado) {
+      texto += caracterNormalizado;
+      indicesOriginales.push(indiceOriginal);
+    }
+    indiceOriginal += caracter.length;
+  }
+  indicesOriginales.push(original.length);
+
+  return { original, texto, indicesOriginales };
 }
 
 function normalizarPeriodicidadSeleccionada(value: any) {
@@ -1348,27 +1816,67 @@ function pideColorAzul(indicacionesDocente: string) {
   return texto.includes("azul") || texto.includes("pintamela") || texto.includes("pintarla") || texto.includes("resaltala") || texto.includes("resaltar");
 }
 
-function construirTextoAdecuacionSignificativa(input: {
+export function construirAdecuacionSignificativa(input: {
   materiaNombre: string;
   grado: string;
   mes: string;
   tema: string;
   habilidades: any[];
   usarAzul: boolean;
+  idioma?: "es" | "en";
 }) {
-  const habilidadBase = input.habilidades?.[0]?.DescripcionHabilidad || input.tema || "la habilidad específica seleccionada";
+  const habilidades = (Array.isArray(input.habilidades) ? input.habilidades : [])
+    .map((habilidad) => String(habilidad?.DescripcionHabilidad || habilidad || "").trim())
+    .filter(Boolean);
+  const habilidadesTexto = (habilidades.join("; ") || input.tema || "las habilidades seleccionadas").slice(0, 1200);
   const prefijo = input.usarAzul ? "[AZUL] " : "";
+  const contexto = [input.materiaNombre, input.grado, input.mes, input.tema].filter(Boolean).join(" - ");
+  const idioma = input.idioma || "es";
 
-  return `${prefijo}Estrategia de mediación para adecuación significativa:
-Propósito de la adaptación: Favorecer la participación del estudiante con adecuación significativa mediante una actividad ajustada, concreta y vinculada con ${habilidadBase}, respetando su ritmo de aprendizaje y priorizando evidencias observables.
-Actividad adaptada: El estudiante trabajará con material visual y manipulativo, como tarjetas, recta numérica ampliada, ejemplos resueltos y una guía paso a paso. A partir de situaciones cotidianas sencillas, identificará, representará o comparará números racionales según la habilidad seleccionada, usando menos ejercicios, instrucciones breves y apoyo gráfico.
-Apoyo docente: La persona docente brindará modelaje inicial, instrucciones cortas, acompañamiento individual, preguntas guiadas y verificación constante de comprensión antes, durante y después de la actividad.
-Material o recurso ajustado: Recta numérica ampliada, tarjetas con números racionales en diferentes representaciones, colores para diferenciar fracciones y decimales, guía simplificada, ejemplos resueltos y espacio amplio para responder.
-Producto esperado: El estudiante elaborará una representación sencilla, clasificación o resolución guiada relacionada con números racionales, mostrando el procedimiento mediante dibujos, marcas en la recta numérica, selección de opciones o explicación oral breve.
-Forma de evaluación ajustada: Se valorará el desempeño mediante observación directa, revisión del producto adaptado, explicación oral breve y cumplimiento de pasos esenciales, priorizando el avance individual y la comprensión funcional de la habilidad.`;
+  if (idioma === "en") {
+    const detalle = {
+      aplica: true,
+      colorResaltado: input.usarAzul ? "azul" : "",
+      titulo: "Mediation strategy for significant curricular accommodation",
+      proposito: `Support active participation through an adjusted activity directly aligned with: ${habilidadesTexto}.`,
+      actividadAdaptada: `Present a central task related to ${habilidadesTexto} in short, sequential steps, with fewer items, guided examples and alternative ways to respond orally, graphically, practically or in writing.`,
+      apoyoDocente: "Provide initial modeling, brief instructions, individual support, guided questions, frequent comprehension checks and formative feedback.",
+      recursoAjustado: `Use visual supports, graphic organizers, concrete or digital resources and examples specifically related to ${habilidadesTexto}, selected according to the subject and classroom context.`,
+      productoEsperado: `Produce brief and observable evidence that demonstrates progress in ${habilidadesTexto}, using the response format that best fits the student's needs.`,
+      evaluacionAjustada: "Assess through direct observation, review of the adapted product, brief explanation and completion of essential steps, prioritizing individual progress."
+    };
+    const textoVisible = `${prefijo}${detalle.titulo}:
+Purpose of the adaptation: ${detalle.proposito}
+Adapted activity: ${detalle.actividadAdaptada}
+Teacher support: ${detalle.apoyoDocente}
+Adjusted material or resource: ${detalle.recursoAjustado}
+Expected product: ${detalle.productoEsperado}
+Adjusted assessment: ${detalle.evaluacionAjustada}`;
+    return { ...detalle, textoVisible };
+  }
+
+  const detalle = {
+    aplica: true,
+    colorResaltado: input.usarAzul ? "azul" : "",
+    titulo: "Estrategia de mediación para adecuación significativa",
+    proposito: `Favorecer la participación activa mediante una actividad ajustada y vinculada directamente con: ${habilidadesTexto}.`,
+    actividadAdaptada: `Presentar una tarea central relacionada con ${habilidadesTexto} en pasos breves y secuenciales, con menor cantidad de ejercicios, ejemplos guiados y alternativas para responder de forma oral, gráfica, práctica o escrita.`,
+    apoyoDocente: "Brindar modelaje inicial, instrucciones breves, acompañamiento individual, preguntas guiadas, verificación frecuente de comprensión y retroalimentación formativa.",
+    recursoAjustado: `Utilizar apoyos visuales, organizadores gráficos, recursos concretos o digitales y ejemplos relacionados específicamente con ${habilidadesTexto}, seleccionados según la asignatura y el contexto ${contexto || "del grupo"}.`,
+    productoEsperado: `Elaborar una evidencia breve y observable que demuestre avance en ${habilidadesTexto}, mediante el formato de respuesta que mejor se ajuste a las necesidades del estudiante.`,
+    evaluacionAjustada: "Valorar mediante observación directa, revisión del producto adaptado, explicación breve y cumplimiento de pasos esenciales, priorizando el progreso individual."
+  };
+  const textoVisible = `${prefijo}${detalle.titulo}:
+Propósito de la adaptación: ${detalle.proposito}
+Actividad adaptada: ${detalle.actividadAdaptada}
+Apoyo docente: ${detalle.apoyoDocente}
+Material o recurso ajustado: ${detalle.recursoAjustado}
+Producto esperado: ${detalle.productoEsperado}
+Forma de evaluación ajustada: ${detalle.evaluacionAjustada}`;
+  return { ...detalle, textoVisible };
 }
 
-function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
+export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   indicacionesDocente: string;
   materiaNombre: string;
   grado: string;
@@ -1384,19 +1892,20 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   const requiereAdecuacion = pideAdecuacionSignificativa(indicacionesDocente);
   const requiereAzul = pideColorAzul(indicacionesDocente);
   const permitirMultiples = permiteMultiplesIndicadoresPorHabilidad(indicacionesDocente);
+  resultado.mes = normalizeText(input.mes);
+  resultado.grado = normalizeText(input.grado);
+  resultado.materiaNombre = normalizeText(input.materiaNombre);
+  resultado.MateriaNombre = resultado.materiaNombre;
 
   if (!Array.isArray(resultado.estrategiasMediacion)) {
     resultado.estrategiasMediacion = splitLines(resultado.estrategiasMediacion);
   }
   const estrategiasLimpias = limpiarEstrategiasMediacion(resultado.estrategiasMediacion);
-  const tieneEstructuraReferencia = (input.estructuraEstrategiasReferencia || []).length > 0;
   if (input.usaReferenciaEstrategias) {
-    resultado.estrategiasMediacion = tieneEstructuraReferencia
-      ? aplicarEstructuraEstrategiasReferencia(
-          estrategiasLimpias,
-          input.estructuraEstrategiasReferencia || []
-        )
-      : estrategiasLimpias;
+    // La estructura de una referencia puede repetir rótulos o usar una secuencia
+    // propia. No la rearmamos aquí: la IA la genera y la validación comprueba
+    // el orden exacto sin introducir una estructura pedagógica ajena.
+    resultado.estrategiasMediacion = estrategiasLimpias;
   } else {
     resultado.estrategiasMediacion = asegurarMomentosEspecificos(
         asegurarMomento1Primero(estrategiasLimpias, {
@@ -1422,43 +1931,52 @@ function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, input: {
   });
 
   resultado.aprendizajesEsperados = corregirErroresOrtograficosLista(splitLines(resultado.aprendizajesEsperados));
+  resultado.criteriosEvaluacion = corregirErroresOrtograficosLista(
+    splitLines(resultado.criteriosEvaluacion).length
+      ? splitLines(resultado.criteriosEvaluacion)
+      : input.habilidades.map((habilidad) => String(habilidad?.DescripcionHabilidad || "").trim()).filter(Boolean)
+  );
   resultado.indicadoresEvaluacion = corregirErroresOrtograficosLista(splitLines(resultado.indicadoresEvaluacion));
   resultado.estrategiasMediacion = corregirErroresOrtograficosLista(splitLines(resultado.estrategiasMediacion));
+  resultado.camposReferencia = resultado.camposReferencia && typeof resultado.camposReferencia === "object"
+    ? Object.fromEntries(
+        Object.entries(resultado.camposReferencia)
+          .map(([key, value]) => [String(key || "").trim(), String(value || "").trim()])
+          .filter(([key]) => key && !esCampoMetadataFijo(key))
+      )
+    : {};
 
   resultado.observaciones = "";
 
-  if (!requiereAdecuacion) return resultado;
-
-  const yaTieneAdecuacion = resultado.estrategiasMediacion.some((item: any) => {
+  const esBloqueAdecuacion = (item: any) => {
     const texto = normalizarParaBusqueda(item);
     return texto.includes("adecuacion significativa") || texto.includes("adecuacion curricular significativa");
-  });
+  };
+  resultado.estrategiasMediacion = resultado.estrategiasMediacion.filter(
+    (item: any) => !esBloqueAdecuacion(item)
+  );
 
-  const textoVisible = construirTextoAdecuacionSignificativa({
+  if (!requiereAdecuacion) {
+    delete resultado.estrategiaAdecuacionSignificativa;
+    return resultado;
+  }
+
+  const idiomaAdecuacion = detectarIdiomaSalida(
+    resultado?.enfoque,
+    splitLines(resultado?.aprendizajesEsperados).join("\n"),
+    splitLines(resultado?.estrategiasMediacion).join("\n")
+  );
+  const adecuacion = construirAdecuacionSignificativa({
     materiaNombre: input.materiaNombre,
     grado: input.grado,
     mes: input.mes,
     tema: input.tema,
     habilidades: input.habilidades,
-    usarAzul: requiereAzul
+    usarAzul: requiereAzul,
+    idioma: idiomaAdecuacion
   });
-
-  if (!yaTieneAdecuacion) {
-    resultado.estrategiasMediacion.push(textoVisible);
-  }
-
-  resultado.estrategiaAdecuacionSignificativa = {
-    aplica: true,
-    colorResaltado: requiereAzul ? "azul" : "",
-    titulo: "Estrategia de mediación para adecuación significativa",
-    proposito: "Favorecer la participación del estudiante con adecuación significativa mediante una actividad ajustada, concreta y vinculada con la habilidad seleccionada.",
-    actividadAdaptada: "Trabajo con material visual y manipulativo, recta numérica ampliada, tarjetas, ejemplos resueltos y guía paso a paso.",
-    apoyoDocente: "Modelaje inicial, instrucciones cortas, acompañamiento individual, preguntas guiadas y verificación constante de comprensión.",
-    recursoAjustado: "Recta numérica ampliada, tarjetas con números racionales, colores, guía simplificada, ejemplos resueltos y espacio amplio para responder.",
-    productoEsperado: "Representación sencilla, clasificación o resolución guiada relacionada con la habilidad seleccionada, mediante dibujos, marcas, selección de opciones o explicación oral breve.",
-    evaluacionAjustada: "Observación directa, revisión del producto adaptado, explicación oral breve y valoración del cumplimiento de pasos esenciales.",
-    textoVisible
-  };
+  resultado.estrategiasMediacion.push(adecuacion.textoVisible);
+  resultado.estrategiaAdecuacionSignificativa = adecuacion;
 
   const observaciones = String(resultado.observaciones || "").trim();
   const nota = `Indicaciones dadas a la IA: ${indicacionesDocente}`;
@@ -2456,6 +2974,206 @@ function extractPlantillaFormatoText(file?: Express.Multer.File) {
   });
 }
 
+export function limpiarEncabezadoEstrategiaReferencia(value: string) {
+  let contenido = String(value || "").replace(/\s+/g, " ").trim();
+  if (!contenido) return "";
+
+  const prefijoCodigo = contenido.match(/^(?:\d[\d\s._/-]{5,})\s+(.+)$/u);
+  if (prefijoCodigo?.[1]) contenido = prefijoCodigo[1].trim();
+
+  const letras = (contenido.match(/\p{L}/gu) || []).length;
+  const digitos = (contenido.match(/\d/g) || []).length;
+  if (
+    letras < 2
+    || /^\d[\d\s._/-]*$/u.test(contenido)
+    || /\d{6,}/.test(contenido)
+    || digitos > Math.max(4, Math.floor(contenido.length * 0.35))
+  ) return "";
+
+  return contenido;
+}
+
+function esParrafoEncabezadoReferencia(paragraphXml: string, texto: string) {
+  const contenido = limpiarEncabezadoEstrategiaReferencia(texto);
+  if (!contenido || contenido.length > 220) return false;
+  const cantidadPalabras = contenido.split(/\s+/).filter(Boolean).length;
+  if (cantidadPalabras > 16) return false;
+
+  const runs = getDirectXmlElements(paragraphXml, "w:r");
+  if (!runs.length) return false;
+  let caracteresTotales = 0;
+  let caracteresNegrita = 0;
+  for (const run of runs) {
+    const runText = xmlWordToText(run).trim();
+    if (!runText) continue;
+    caracteresTotales += runText.length;
+    if (/<w:b(?:\s[^>]*)?\/?>/i.test(run) && !/<w:b[^>]*w:val=["'](?:0|false|off)["']/i.test(run)) {
+      caracteresNegrita += runText.length;
+    }
+  }
+
+  const esEstiloTitulo = /<w:pStyle[^>]*w:val=["'][^"']*(?:heading|titulo|title)[^"']*["']/i.test(paragraphXml);
+  const proporcionNegrita = caracteresTotales ? caracteresNegrita / caracteresTotales : 0;
+  return esEstiloTitulo || proporcionNegrita >= 0.7;
+}
+
+function extraerParrafosCeldaReferencia(cellXml: string) {
+  return getDirectXmlElements(cellXml, "w:p")
+    .map((paragraphXml) => {
+      const texto = xmlWordToText(paragraphXml).trim();
+      return {
+        texto,
+        esEncabezado: esParrafoEncabezadoReferencia(paragraphXml, texto)
+      };
+    })
+    .filter((item) => item.texto);
+}
+
+function extraerCampoVariableReferencia(cellXml: string): CampoVariableReferencia | null {
+  const texto = xmlWordToText(cellXml).replace(/\r/g, "").trim();
+  if (!texto || texto.length > 1800) return null;
+  const primeraLinea = texto.split(/\n+/).map((linea) => linea.trim()).find(Boolean) || "";
+  const match = primeraLinea.match(/^([^:]{2,120}):\s*(.*)$/);
+  if (!match) return null;
+
+  const etiqueta = String(match[1] || "").trim();
+  const valorAnterior = String(match[2] || "").trim();
+  const etiquetaNormalizada = normalizarParaBusqueda(etiqueta);
+  if (
+    !etiqueta
+    || /^\d/.test(etiqueta)
+    || detectTemplateContentRole(cellXml)
+    || etiquetaNormalizada.includes("reflexiones docentes")
+    || etiquetaNormalizada === "observaciones"
+  ) return null;
+
+  return { etiqueta, valorAnterior };
+}
+
+export async function analizarReferenciaDocxSemantica(file?: Express.Multer.File): Promise<PerfilDocumentoReferencia> {
+  const vacio: PerfilDocumentoReferencia = {
+    esDocx: false,
+    columnas: [],
+    camposVariables: [],
+    estrategiasTexto: "",
+    encabezadosEstrategias: [],
+    valoresContenidoAnterior: [],
+    cantidadSeccionesContenido: 0,
+    descripcion: "No se adjuntó un DOCX utilizable como referencia."
+  };
+  if (!file?.buffer || !/\.docx$/i.test(file.originalname || "")) return vacio;
+
+  try {
+    const zip = await JSZip.loadAsync(file.buffer);
+    const documentXml = await zip.file("word/document.xml")?.async("string");
+    if (!documentXml) return { ...vacio, esDocx: true, descripcion: "El DOCX no contiene word/document.xml." };
+
+    const columnas: ColumnaReferencia[] = [];
+    const camposVariables: CampoVariableReferencia[] = [];
+    const estrategiasPartes: string[] = [];
+    const encabezadosEstrategias: string[] = [];
+    const valoresContenidoAnterior: string[] = [];
+    let cantidadSeccionesContenido = 0;
+
+    for (const tableXml of getDirectXmlElements(documentXml, "w:tbl")) {
+      const rows = getDirectXmlElements(tableXml, "w:tr");
+      let rolesActivos: Array<TemplateContentRole | null> | null = null;
+
+      for (const rowXml of rows) {
+        const cells = getDirectXmlElements(rowXml, "w:tc");
+        const roles = cells.map(detectTemplateContentRole);
+        const rolesReconocidos = roles.filter(Boolean).length;
+        const esCabeceraContenido = rolesReconocidos >= 2 && roles.includes("estrategias");
+        const rowText = normalizarParaBusqueda(xmlWordToText(rowXml));
+        const terminaContenido = rowText.includes("reflexiones docentes")
+          || rowText.includes("teacher reflections")
+          || rowText.startsWith("observaciones")
+          || rowText.startsWith("observations");
+
+        if (esCabeceraContenido) {
+          rolesActivos = roles;
+          cantidadSeccionesContenido += 1;
+          cells.forEach((cellXml, indice) => {
+            const encabezado = xmlWordToText(cellXml).trim();
+            columnas.push({ indice, encabezado, rol: roles[indice] || null });
+          });
+          continue;
+        }
+
+        if (terminaContenido) {
+          rolesActivos = null;
+          continue;
+        }
+
+        if (rolesActivos) {
+          cells.forEach((cellXml, indice) => {
+            const rol = rolesActivos?.[indice] || null;
+            const texto = xmlWordToText(cellXml).trim();
+            if (!texto) return;
+            valoresContenidoAnterior.push(texto);
+            if (rol !== "estrategias") return;
+
+            const parrafos = extraerParrafosCeldaReferencia(cellXml);
+            if (parrafos.length) {
+              estrategiasPartes.push(parrafos.map((item) => item.texto).join("\n"));
+              for (const parrafo of parrafos) {
+                if (parrafo.esEncabezado) {
+                  const encabezadoLimpio = limpiarEncabezadoEstrategiaReferencia(parrafo.texto);
+                  if (encabezadoLimpio) encabezadosEstrategias.push(encabezadoLimpio);
+                }
+              }
+            } else {
+              estrategiasPartes.push(texto);
+            }
+          });
+          continue;
+        }
+
+        for (const cellXml of cells) {
+          const campo = extraerCampoVariableReferencia(cellXml);
+          if (campo) camposVariables.push(campo);
+        }
+      }
+    }
+
+    const columnasUnicas = Array.from(new Map(
+      columnas.map((columna) => [`${columna.indice}|${normalizarParaBusqueda(columna.encabezado)}`, columna])
+    ).values());
+    const camposUnicos = Array.from(new Map(
+      camposVariables.map((campo) => [normalizarParaBusqueda(campo.etiqueta), campo])
+    ).values());
+    const encabezadosSecuencia = encabezadosEstrategias
+      .filter((encabezado, index, lista) => (
+        index === 0
+        || normalizarParaBusqueda(encabezado) !== normalizarParaBusqueda(lista[index - 1])
+      ));
+    const estrategiasTexto = estrategiasPartes.filter(Boolean).join("\n\n").trim();
+    const descripcion = [
+      `${cantidadSeccionesContenido} sección(es) principal(es) de contenido.`,
+      columnasUnicas.length
+        ? `Columnas detectadas: ${columnasUnicas.map((columna) => columna.encabezado).join(" | ")}.`
+        : "No se detectaron columnas semánticas.",
+      encabezadosSecuencia.length
+        ? `Secuencia pedagógica detectada por formato: ${encabezadosSecuencia.join(" → ")}.`
+        : "La referencia organiza las estrategias de forma narrativa, sin encabezados tipográficos inequívocos."
+    ].join(" ");
+
+    return {
+      esDocx: true,
+      columnas: columnasUnicas,
+      camposVariables: camposUnicos,
+      estrategiasTexto,
+      encabezadosEstrategias: encabezadosSecuencia,
+      valoresContenidoAnterior,
+      cantidadSeccionesContenido,
+      descripcion
+    };
+  } catch (error) {
+    console.warn("No se pudo analizar semánticamente el DOCX de referencia:", error);
+    return { ...vacio, esDocx: true, descripcion: "No se pudo analizar semánticamente el DOCX." };
+  }
+}
+
 function buildPlaneamientoNombre(input: { mes?: any; grado?: any; materiaNombre?: any }) {
   const mes = normalizeText(input.mes) || "Mes";
   const grado = normalizeText(input.grado) || "Grado";
@@ -2477,7 +3195,7 @@ export function extraerEstrategiasMediacionReferencia(...fuentes: Array<string |
 }
 
 function extraerEncabezadoEstrategiaReferencia(linea: string) {
-  const text = String(linea || "").trim();
+  const text = limpiarEncabezadoEstrategiaReferencia(linea);
   if (!text || text.length > 140) return "";
   const patterns = [
     /^(tema\s+n?[.°º]?\s*\d+)\s*\.?\s*$/i,
@@ -2494,7 +3212,10 @@ function extraerEncabezadoEstrategiaReferencia(linea: string) {
   return "";
 }
 
-export function construirPerfilEstrategiasReferencia(texto: string): PerfilEstrategiasReferencia {
+export function construirPerfilEstrategiasReferencia(
+  texto: string,
+  encabezadosDocumento: string[] = []
+): PerfilEstrategiasReferencia {
   const lineas = String(texto || "")
     .replace(/\r/g, "")
     .split(/\n+/)
@@ -2502,12 +3223,23 @@ export function construirPerfilEstrategiasReferencia(texto: string): PerfilEstra
     .filter(Boolean);
   const vistos = new Set<string>();
   const encabezados: string[] = [];
-  for (const linea of lineas) {
-    const encabezado = extraerEncabezadoEstrategiaReferencia(linea);
+  for (const encabezadoDocumento of encabezadosDocumento) {
+    const encabezado = limpiarEncabezadoEstrategiaReferencia(encabezadoDocumento);
     const key = normalizarParaBusqueda(encabezado);
-    if (key && !vistos.has(key)) {
+    const anterior = encabezados.length ? normalizarParaBusqueda(encabezados[encabezados.length - 1]) : "";
+    if (key && key !== anterior) {
       vistos.add(key);
       encabezados.push(encabezado);
+    }
+  }
+  if (!encabezados.length) {
+    for (const linea of lineas) {
+      const encabezado = extraerEncabezadoEstrategiaReferencia(linea);
+      const key = normalizarParaBusqueda(encabezado);
+      if (key && !vistos.has(key)) {
+        vistos.add(key);
+        encabezados.push(encabezado);
+      }
     }
   }
 
@@ -2517,9 +3249,10 @@ export function construirPerfilEstrategiasReferencia(texto: string): PerfilEstra
   const cantidadActividadesNumeradas = new Set(actividades).size;
   const cantidadPreguntas = lineas.filter((linea) => /[?¿]/.test(linea)).length;
   const cantidadParrafos = lineas.length;
-  const nivelDetalle = cantidadParrafos >= 35 || String(texto || "").length >= 12000
+  const cantidadCaracteres = String(texto || "").length;
+  const nivelDetalle = cantidadParrafos >= 35 || cantidadCaracteres >= 12000
     ? "amplio"
-    : cantidadParrafos >= 15 || String(texto || "").length >= 5000
+    : cantidadParrafos >= 15 || cantidadCaracteres >= 5000
       ? "medio"
       : "breve";
   const usaTemasNumerados = lineas.some((linea) => /^tema\s+n?[.°º]?\s*\d+/i.test(linea));
@@ -2535,6 +3268,7 @@ export function construirPerfilEstrategiasReferencia(texto: string): PerfilEstra
   return {
     encabezados,
     cantidadParrafos,
+    cantidadCaracteres,
     cantidadActividadesNumeradas,
     cantidadPreguntas,
     usaTemasNumerados,
@@ -2559,6 +3293,8 @@ No se adjuntó una referencia utilizable para Estrategias de mediación. Aplicá
   }
 
   const perfil = input.perfilEstrategiasReferencia || construirPerfilEstrategiasReferencia(input.estrategiasReferencia || "");
+  const minimoParrafos = Math.max(perfil.encabezados.length * 3, Math.ceil(perfil.cantidadParrafos * 0.75));
+  const minimoCaracteres = Math.max(1200, Math.ceil(perfil.cantidadCaracteres * 0.6));
   return `
 REGLA DINÁMICA Y PRIORITARIA PARA ESTRATEGIAS DE MEDIACIÓN:
 - El planeamiento adjunto es la autoridad para la lógica, jerarquía, secuencia, cantidad aproximada de bloques y nivel de detalle.
@@ -2568,6 +3304,27 @@ REGLA DINÁMICA Y PRIORITARIA PARA ESTRATEGIAS DE MEDIACIÓN:
 - No copies temas, autores, obras, ejemplos, preguntas ni actividades anteriores. Conservá el patrón pedagógico y redactá contenido completamente nuevo con las habilidades, materia, grado, meses e indicaciones actuales.
 - Si la referencia usa actividades numeradas, generá actividades numeradas con una densidad y profundidad semejantes, ajustadas al alcance solicitado.
 - Cada actividad nueva debe conservar la lógica observable de la referencia: propósito, acción docente, acción del estudiantado, recurso o dinámica, evidencia/producto y forma de retroalimentación cuando corresponda.
+- No resumás una referencia amplia. Desarrollá al menos ${minimoParrafos} párrafos útiles y aproximadamente ${minimoCaracteres} caracteres en Estrategias de mediación, distribuidos entre todos sus bloques.
+`.trim();
+}
+
+function instruccionPerfilDocumentoReferencia(perfil?: PerfilDocumentoReferencia) {
+  if (!perfil?.esDocx) {
+    return "No existe un perfil semántico DOCX; conservá la estructura observable del archivo de referencia aportado.";
+  }
+
+  const campos = perfil.camposVariables
+    .filter((campo) => !esCampoMetadataFijo(campo.etiqueta))
+    .map((campo) => campo.etiqueta);
+  return `
+PERFIL SEMÁNTICO OBLIGATORIO DEL DOCUMENTO DE REFERENCIA:
+- ${perfil.descripcion}
+- Roles de columnas: ${perfil.columnas.map((columna) => `${columna.encabezado} = ${columna.rol || "columna adicional"}`).join(" | ") || "No detectados"}.
+- Campos variables que deben sustituirse: ${campos.join(" | ") || "No se detectaron campos rotulados adicionales"}.
+- La estructura nace de este documento específico. No apliqués fases, momentos, apartados ni secuencias predeterminadas de otra materia.
+- "Criterios de Evaluación" y "Indicadores" son columnas distintas. Nunca coloqués los indicadores numerados dentro de Criterios.
+- En "camposReferencia" devolvé una propiedad para cada campo variable detectado, usando exactamente su rótulo y un valor nuevo coherente con los datos actuales.
+- Todo dato sustantivo anterior del machote debe desaparecer, salvo que también forme parte explícita de las habilidades, tema o indicaciones actuales.
 `.trim();
 }
 
@@ -2646,24 +3403,41 @@ function estructurarEstrategiasMediacion(estrategias: any, estructuraReferencia:
   const estructura = (Array.isArray(estructuraReferencia) ? estructuraReferencia : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
-  const bloquesNormalizados = estructura.length
-    ? aplicarEstructuraEstrategiasReferencia(bloques, estructura)
-    : bloques;
-
   if (estructura.length) {
-    return estructura.map((fase, index): EstrategiaMediacionEstructurada => {
-      const bloque = String(bloquesNormalizados[index] || "").trim();
-      const lineas = bloque.split(/\r?\n/);
-      const primera = normalizarParaBusqueda(lineas[0] || "");
+    const textoCompleto = bloques.join("\n\n");
+    const {
+      original: textoOriginal,
+      texto: textoNormalizado,
+      indicesOriginales
+    } = normalizarParaBusquedaConMapa(textoCompleto);
+    let cursor = 0;
+    const posiciones = estructura.map((fase) => {
       const faseNormalizada = normalizarParaBusqueda(fase);
-      const contenido = primera.startsWith(faseNormalizada)
-        ? lineas.slice(1).join("\n").trim()
-        : bloque;
+      const inicio = textoNormalizado.indexOf(faseNormalizada, cursor);
+      if (inicio < 0) return { inicio: -1, finTitulo: -1 };
+      const finTitulo = inicio + faseNormalizada.length;
+      cursor = finTitulo;
+      return { inicio, finTitulo };
+    });
+
+    return estructura.map((fase, index): EstrategiaMediacionEstructurada => {
+      const posicion = posiciones[index];
+      if (posicion.inicio < 0) return { fase, contenido: "" };
+      const siguiente = posiciones.slice(index + 1).find((item) => item.inicio >= 0);
+      const inicioOriginal = indicesOriginales[Math.min(posicion.finTitulo, indicesOriginales.length - 1)]
+        ?? textoOriginal.length;
+      const finOriginal = siguiente
+        ? (indicesOriginales[Math.min(siguiente.inicio, indicesOriginales.length - 1)] ?? textoOriginal.length)
+        : textoOriginal.length;
+      const contenido = textoOriginal
+        .slice(inicioOriginal, finOriginal)
+        .replace(/^[\s:.\-–—]+/, "")
+        .trim();
       return { fase, contenido };
     });
   }
 
-  return bloquesNormalizados.map((bloque, index): EstrategiaMediacionEstructurada => {
+  return bloques.map((bloque, index): EstrategiaMediacionEstructurada => {
     const texto = String(bloque || "").trim();
     const lineas = texto.split(/\r?\n/);
     const encabezadoMomento = lineas[0]?.match(/^momento\s+\d+\s*:[^.]*\.?\s*/i)?.[0]?.trim();
@@ -2680,12 +3454,18 @@ function obtenerTextoResultadoPlaneamiento(resultado: any) {
     resultado?.enfoque,
     resultado?.competenciaGeneral,
     ...(splitLines(resultado?.aprendizajesEsperados)),
+    ...(splitLines(resultado?.criteriosEvaluacion)),
     ...(splitLines(resultado?.estrategiasMediacion)),
     ...(splitLines(resultado?.indicadoresEvaluacion)),
     ...(splitLines(resultado?.trabajoCotidiano)),
     ...(splitLines(resultado?.tareas)),
     ...(splitLines(resultado?.evaluacionSugerida)),
-    ...(splitLines(resultado?.recursos))
+    ...(splitLines(resultado?.recursos)),
+    ...(
+      resultado?.camposReferencia && typeof resultado.camposReferencia === "object"
+        ? Object.values(resultado.camposReferencia).map((value) => String(value || ""))
+        : []
+    )
   ].filter(Boolean).join("\n");
 }
 
@@ -2703,7 +3483,69 @@ function palabrasClaveIndicaciones(indicaciones: string) {
   )).slice(0, 10);
 }
 
-function validarPlaneamientoGenerado(resultado: any, input: {
+function esCampoMetadataFijo(etiqueta: string) {
+  const text = normalizarParaBusqueda(etiqueta);
+  return [
+    "direccion regional de educacion",
+    "regional education directorate",
+    "centro educativo",
+    "institucion educativa",
+    "educational center",
+    "nombre de la persona docente",
+    "nombre del docente",
+    "nombre y apellidos del o la docente",
+    "teacher name",
+    "asignatura",
+    "materia",
+    "subarea",
+    "modulo",
+    "subject",
+    "ano escolar",
+    "anos escolar",
+    "curso lectivo",
+    "academic course",
+    "academic year",
+    "school year",
+    "grado",
+    "nivel educativo",
+    "grade level",
+    "mes",
+    "month",
+    "periodo lectivo",
+    "periodo academico",
+    "academic period",
+    "school term",
+    "periodicidad",
+    "periodicity",
+    "frequency"
+  ].some((alias) => text.startsWith(alias));
+}
+
+export function validarOrdenEncabezadosEstrategias(texto: string, encabezados: string[]) {
+  const normalized = normalizarParaBusqueda(texto);
+  let cursor = -1;
+  const faltantes: string[] = [];
+  const fueraDeOrden: string[] = [];
+
+  for (const encabezado of encabezados) {
+    const token = normalizarParaBusqueda(encabezado);
+    if (!token) continue;
+    const posicion = normalized.indexOf(token, cursor + 1);
+    if (posicion < 0) {
+      faltantes.push(encabezado);
+      continue;
+    }
+    cursor = posicion;
+  }
+
+  return {
+    cumple: faltantes.length === 0 && fueraDeOrden.length === 0,
+    faltantes,
+    fueraDeOrden
+  };
+}
+
+export function validarPlaneamientoGenerado(resultado: any, input: {
   nombreSolicitado?: string;
   idiomaEsperado?: "es" | "en";
   estructuraEstrategias?: string[];
@@ -2711,6 +3553,9 @@ function validarPlaneamientoGenerado(resultado: any, input: {
   habilidades?: any[];
   indicadoresEsperadosPorHabilidad?: number[];
   perfilEstrategias?: PerfilEstrategiasReferencia;
+  perfilDocumentoReferencia?: PerfilDocumentoReferencia;
+  auditoriaSemantica?: AuditoriaSemanticaPlaneamiento;
+  referenciaObligatoria?: boolean;
 }) {
   const verificaciones: ValidacionPlaneamientoItem[] = [];
   const textoCompleto = obtenerTextoResultadoPlaneamiento(resultado);
@@ -2722,6 +3567,7 @@ function validarPlaneamientoGenerado(resultado: any, input: {
   );
 
   const aprendizajes = splitLines(resultado?.aprendizajesEsperados);
+  const criterios = splitLines(resultado?.criteriosEvaluacion);
   const indicadores = splitLines(resultado?.indicadoresEvaluacion);
   if (aprendizajes.length && indicadores.length) {
     verificaciones.push({
@@ -2736,6 +3582,29 @@ function validarPlaneamientoGenerado(resultado: any, input: {
       etiqueta: "Contenido pedagógico",
       estado: "error",
       detalle: "Faltan aprendizajes esperados o indicadores de evaluación."
+    });
+  }
+
+  const perfilDocumento = input.perfilDocumentoReferencia;
+  const rolesReferencia = new Set(
+    (perfilDocumento?.columnas || []).map((columna) => columna.rol).filter(Boolean)
+  );
+  if (rolesReferencia.has("criterios")) {
+    verificaciones.push({
+      codigo: "criterios_referencia",
+      etiqueta: "Criterios de evaluación",
+      estado: criterios.length ? "ok" : "error",
+      detalle: criterios.length
+        ? `${criterios.length} criterio(s) preparado(s) para su columna específica.`
+        : "La referencia contiene una columna de Criterios de Evaluación y quedó vacía."
+    });
+  }
+  if (rolesReferencia.has("indicadores") && !indicadores.length) {
+    verificaciones.push({
+      codigo: "indicadores_referencia",
+      etiqueta: "Columna de indicadores",
+      estado: "error",
+      detalle: "La referencia contiene una columna de Indicadores y quedó vacía."
     });
   }
 
@@ -2766,9 +3635,20 @@ function validarPlaneamientoGenerado(resultado: any, input: {
   }
 
   if (estructura.length) {
-    const fasesVacias = estrategiasEstructuradas
-      .filter((item) => item.contenido.trim().length < 20)
-      .map((item) => item.fase);
+    const totalesPorFase = estructura.reduce((mapa, fase) => {
+      const clave = normalizarParaBusqueda(fase);
+      mapa.set(clave, (mapa.get(clave) || 0) + 1);
+      return mapa;
+    }, new Map<string, number>());
+    const aparicionesPorFase = new Map<string, number>();
+    const fasesVacias = estrategiasEstructuradas.flatMap((item) => {
+      const clave = normalizarParaBusqueda(item.fase);
+      const aparicion = (aparicionesPorFase.get(clave) || 0) + 1;
+      aparicionesPorFase.set(clave, aparicion);
+      if (item.contenido.trim().length >= 20) return [];
+      const total = totalesPorFase.get(clave) || 1;
+      return [total > 1 ? `${item.fase} (aparición ${aparicion} de ${total})` : item.fase];
+    });
     verificaciones.push({
       codigo: "estructura_estrategias",
       etiqueta: "Estrategias de mediación",
@@ -2805,15 +3685,58 @@ function validarPlaneamientoGenerado(resultado: any, input: {
       : 0;
     const incumpleMomentos = !referenciaUsaMomentos && resultadoUsaMomentos;
     const incumpleActividades = minimoActividades > 0 && actividadesGeneradas < minimoActividades;
+    const validacionOrden = validarOrdenEncabezadosEstrategias(
+      estrategiasTexto,
+      perfilEstrategias.encabezados
+    );
+    const minimoCaracteres = perfilEstrategias.cantidadCaracteres
+      ? Math.max(400, Math.floor(perfilEstrategias.cantidadCaracteres * 0.5))
+      : 0;
+    const parrafosGenerados = splitLines(resultado?.estrategiasMediacion).length;
+    const minimoParrafos = perfilEstrategias.cantidadParrafos
+      ? Math.max(
+          perfilEstrategias.encabezados.length * 3,
+          Math.ceil(perfilEstrategias.cantidadParrafos * 0.7)
+        )
+      : 0;
+    const incumpleCaracteres = minimoCaracteres > 0 && estrategiasTexto.length < minimoCaracteres;
+    const incumpleParrafos = minimoParrafos > 0 && parrafosGenerados < minimoParrafos;
+    const incumpleProfundidad = incumpleCaracteres || incumpleParrafos;
     verificaciones.push({
       codigo: "fidelidad_referencia",
       etiqueta: "Fidelidad al planeamiento de referencia",
-      estado: incumpleMomentos || incumpleActividades ? "error" : "ok",
+      estado: incumpleMomentos || incumpleActividades || !validacionOrden.cumple || incumpleProfundidad ? "error" : "ok",
       detalle: incumpleMomentos
         ? "La referencia no usa Momentos 1–4, pero esa estructura apareció en el resultado."
         : incumpleActividades
           ? `La referencia desarrolla ${perfilEstrategias.cantidadActividadesNumeradas} actividades numeradas; el resultado debe incluir al menos ${minimoActividades} con profundidad semejante.`
-          : `Se respetó el patrón dinámico de la referencia (${perfilEstrategias.nivelDetalle}, ${actividadesGeneradas || "sin"} actividades numeradas).`
+          : !validacionOrden.cumple
+            ? `No se respetó la secuencia de la referencia. Faltantes: ${validacionOrden.faltantes.join(", ") || "ninguno"}. Fuera de orden: ${validacionOrden.fueraDeOrden.join(", ") || "ninguno"}.`
+            : incumpleProfundidad
+              ? `Las estrategias tienen ${parrafosGenerados} párrafos y ${estrategiasTexto.length} caracteres; deben alcanzar al menos ${minimoParrafos} párrafos y ${minimoCaracteres} caracteres para conservar la profundidad de la referencia.`
+              : `Se respetó el patrón dinámico de la referencia (${perfilEstrategias.nivelDetalle}, ${actividadesGeneradas || "sin"} actividades numeradas).`
+    });
+  }
+
+  if (perfilDocumento?.esDocx) {
+    const camposEsperados = perfilDocumento.camposVariables
+      .filter((campo) => !esCampoMetadataFijo(campo.etiqueta));
+    const camposResultado = resultado?.camposReferencia && typeof resultado.camposReferencia === "object"
+      ? resultado.camposReferencia
+      : {};
+    const faltantes = camposEsperados.filter((campo) => {
+      const value = Object.entries(camposResultado).find(
+        ([key]) => normalizarParaBusqueda(key) === normalizarParaBusqueda(campo.etiqueta)
+      )?.[1];
+      return !String(value || "").trim();
+    });
+    verificaciones.push({
+      codigo: "campos_machote",
+      etiqueta: "Limpieza y llenado del machote",
+      estado: faltantes.length ? "error" : "ok",
+      detalle: faltantes.length
+        ? `Faltan valores nuevos para: ${faltantes.map((campo) => campo.etiqueta).join(", ")}.`
+        : "Todos los campos variables detectados tienen un valor nuevo."
     });
   }
 
@@ -2849,10 +3772,26 @@ function validarPlaneamientoGenerado(resultado: any, input: {
     verificaciones.push({
       codigo: "indicaciones",
       etiqueta: "Indicaciones del docente",
-      estado: proporcion >= 0.4 ? "ok" : "alerta",
-      detalle: proporcion >= 0.4
+      estado: proporcion >= 0.4 || input.auditoriaSemantica?.cumple ? "ok" : "error",
+      detalle: proporcion >= 0.4 || input.auditoriaSemantica?.cumple
         ? "Las indicaciones obligatorias tienen evidencia en el resultado."
-        : "Las indicaciones se enviaron como obligatorias, pero conviene confirmar visualmente su cumplimiento."
+        : "No existe evidencia suficiente de que se cumplieron las indicaciones obligatorias del docente."
+    });
+  }
+
+  if (input.referenciaObligatoria || input.auditoriaSemantica) {
+    const auditoria = input.auditoriaSemantica;
+    verificaciones.push({
+      codigo: "auditoria_semantica",
+      etiqueta: "Revisión semántica final",
+      estado: auditoria?.disponible && auditoria.cumple ? "ok" : "error",
+      detalle: auditoria?.disponible
+        ? (
+          auditoria.cumple
+            ? "La revisión independiente confirmó referencia, coherencia e indicaciones."
+            : `Incumplimientos: ${auditoria.incumplimientos.join(" | ") || "la revisión semántica rechazó el resultado"}`
+        )
+        : "No fue posible completar la revisión independiente; el planeamiento no puede guardarse todavía."
     });
   }
 
@@ -2883,7 +3822,10 @@ function revalidarResultadoPlaneamiento(resultado: any, nombreActual: string) {
     indicadoresEsperadosPorHabilidad: Array.isArray(controlAnterior.indicadoresEsperadosPorHabilidad)
       ? controlAnterior.indicadoresEsperadosPorHabilidad
       : undefined,
-    perfilEstrategias: controlAnterior.perfilEstrategias || resultado?.perfilEstrategiasReferencia
+    perfilEstrategias: controlAnterior.perfilEstrategias || resultado?.perfilEstrategiasReferencia,
+    perfilDocumentoReferencia: controlAnterior.perfilDocumentoReferencia || resultado?.perfilDocumentoReferencia,
+    auditoriaSemantica: controlAnterior.auditoriaSemantica || undefined,
+    referenciaObligatoria: Boolean(controlAnterior.referenciaObligatoria)
   });
 
   resultado.estrategiasMediacionEstructuradas = validacion.estrategiasEstructuradas;
@@ -2941,8 +3883,13 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
 
     const contenido = await extractPlantillaFormatoText(file);
     const formato = await analizarFormatoDocx(file);
-    const estrategiasReferencia = extraerEstrategiasMediacionReferencia(contenido.texto);
-    const perfilEstrategias = construirPerfilEstrategiasReferencia(estrategiasReferencia);
+    const perfilDocumento = await analizarReferenciaDocxSemantica(file);
+    const estrategiasReferencia = perfilDocumento.estrategiasTexto
+      || extraerEstrategiasMediacionReferencia(contenido.texto);
+    const perfilEstrategias = construirPerfilEstrategiasReferencia(
+      estrategiasReferencia,
+      perfilDocumento.encabezadosEstrategias
+    );
     const estructuraEstrategias = perfilEstrategias.encabezados;
     const idioma = detectarIdiomaSalida(contenido.texto);
     const advertencias: string[] = [];
@@ -2950,8 +3897,8 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
     if (!contenido.texto.trim()) {
       advertencias.push("No se pudo extraer texto del archivo; revisá que no esté protegido o compuesto únicamente por imágenes.");
     }
-    if (!estructuraEstrategias.length) {
-      advertencias.push("No se identificaron encabezados claros en las Estrategias de mediación. La IA usará el contenido como guía general.");
+    if (!estrategiasReferencia.trim()) {
+      advertencias.push("No se identificó contenido en la columna de Estrategias de mediación.");
     }
     if (formato.esDocx && !formato.cantidadTablas) {
       advertencias.push("El Word no contiene tablas detectables; se conservarán sus encabezados y orden cuando sea posible.");
@@ -2969,6 +3916,7 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
       seccionesPlaneamientoDetectadas: formato.seccionesPlaneamientoDetectadas,
       estructuraEstrategias,
       perfilEstrategias,
+      perfilDocumento,
       usaComoEjemplo: true,
       puedeUsarseComoMachote: formato.esDocx,
       advertencias,
@@ -2981,9 +3929,14 @@ router.post("/analizar-referencia", planeamientoUpload, async (req, res) => {
 });
 
 router.post("/mejorar-prompt", async (req, res) => {
+  const operacionId = normalizeOperacionId(req.body?.operacionId);
+  actualizarProgresoOperacion(operacionId, 3, "Recibiendo el prompt");
   try {
     const institucionId = getInstitutionId(req, res);
-    if (institucionId === null) return;
+    if (institucionId === null) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la institución");
+      return;
+    }
 
     const prompt = normalizeText(req.body?.prompt);
     const grupoId = toOptionalInt(req.body?.grupoId);
@@ -2991,9 +3944,16 @@ router.post("/mejorar-prompt", async (req, res) => {
     const anioLectivoId = toOptionalInt(req.body?.anioLectivoId);
     const periodoId = toOptionalInt(req.body?.periodoId);
 
-    if (prompt.length < 20) return badRequest(res, "Construí o escribí primero el prompt que querés mejorar");
-    if (prompt.length > 12000) return badRequest(res, "El prompt no puede superar 12000 caracteres");
+    if (prompt.length < 20) {
+      marcarErrorProgreso(operacionId, "El prompt está incompleto");
+      return badRequest(res, "Construí o escribí primero el prompt que querés mejorar");
+    }
+    if (prompt.length > 12000) {
+      marcarErrorProgreso(operacionId, "El prompt supera el tamaño permitido");
+      return badRequest(res, "El prompt no puede superar 12000 caracteres");
+    }
 
+    actualizarProgresoOperacion(operacionId, 12, "Validando materia, sección y período");
     const pool = await getPool();
     const asignacion = await ensurePlaneamientoAsignacion(req, res, pool, {
       grupoId,
@@ -3001,8 +3961,13 @@ router.post("/mejorar-prompt", async (req, res) => {
       anioLectivoId,
       periodoId
     });
-    if (asignacion === false) return;
+    if (asignacion === false) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la asignación docente");
+      return;
+    }
 
+    actualizarProgresoOperacion(operacionId, 30, "Preparando las instrucciones para la IA");
+    actualizarProgresoOperacion(operacionId, 40, "La IA está mejorando el prompt");
     const mejorado = await callOpenAiTextIfConfigured(`
 Sos un asistente pedagógico que mejora prompts para crear planeamientos didácticos del MEP de Costa Rica.
 Mejorá el siguiente prompt de trabajo para que sea claro, concreto, aplicable al aula y útil para generar un planeamiento de alta calidad.
@@ -3015,31 +3980,41 @@ ${prompt}
 `);
 
     if (!mejorado) {
+      marcarErrorProgreso(operacionId, "La IA no devolvió un prompt mejorado");
       return res.status(503).json({ ok: false, message: "No se pudo mejorar el prompt con IA. Podés editarlo manualmente o intentar de nuevo." });
     }
 
+    actualizarProgresoOperacion(operacionId, 90, "Validando el prompt mejorado");
+    actualizarProgresoOperacion(operacionId, 100, "Prompt mejorado", "completado");
     return ok(res, { prompt: mejorado }, "Prompt mejorado con IA");
   } catch (error) {
     console.error("Error mejorando prompt de planeamiento:", error);
+    marcarErrorProgreso(operacionId, "No se pudo mejorar el prompt");
     return res.status(500).json({ ok: false, message: "No se pudo mejorar el prompt con IA" });
   }
 });
 
 router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
+  const operacionId = normalizeOperacionId(req.body?.operacionId);
+  actualizarProgresoOperacion(operacionId, 2, "Recibiendo datos y archivos");
   try {
     const t0 = Date.now();
     const institucionId = getInstitutionId(req, res);
-    if (institucionId === null) return;
+    if (institucionId === null) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la institución");
+      return;
+    }
 
     const materiaId = toOptionalInt(req.body.materiaId);
     const materiaNombre = normalizeText(req.body.materiaNombre);
     const tipoColegio = normalizeText(req.body.tipoColegio);
     const grado = normalizeText(req.body.grado);
-    const mes = normalizeText(req.body.mes);
+    let mes = normalizeText(req.body.mes);
     const tema = normalizeText(req.body.tema);
     const nombrePlaneamiento = normalizeText(req.body.nombrePlaneamiento);
     const indicacionesDocente = normalizeText(req.body.indicacionesDocente);
     const promptDocente = normalizeText(req.body.promptDocente);
+    const referenciaObligatoria = String(req.body.referenciaObligatoria || "").toLowerCase() === "true";
     const anioLectivoId = toOptionalInt(req.body.anioLectivoId);
     const periodoId = toOptionalInt(req.body.periodoId);
     const grupoId = toOptionalInt(req.body.grupoId);
@@ -3050,13 +4025,21 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       .map(Number)
       .filter((n: number) => Number.isInteger(n) && n > 0);
 
-    if (!habilidadesIds.length) return badRequest(res, "Debés seleccionar al menos una habilidad");
+    if (!habilidadesIds.length) {
+      marcarErrorProgreso(operacionId, "No se seleccionaron habilidades");
+      return badRequest(res, "Debés seleccionar al menos una habilidad");
+    }
 
+    actualizarProgresoOperacion(operacionId, 8, "Validando asignación docente");
     const pool = await getPool();
     const asignacion = await ensurePlaneamientoAsignacion(req, res, pool, { grupoId, materiaId, anioLectivoId, periodoId });
-    if (asignacion === false) return;
+    if (asignacion === false) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la asignación docente");
+      return;
+    }
     console.log(`[planeamiento-ia] generar-planeamiento: validación/asignación en ${Date.now() - t0}ms`);
 
+    actualizarProgresoOperacion(operacionId, 15, "Cargando habilidades seleccionadas");
     const ids = habilidadesIds.join(",");
     const habilidades = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -3080,20 +4063,50 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
           AND h.Activo = 1
       `);
 
-    if (!habilidades.recordset.length) return badRequest(res, "No se encontraron las habilidades seleccionadas");
+    if (!habilidades.recordset.length) {
+      marcarErrorProgreso(operacionId, "No se encontraron las habilidades seleccionadas");
+      return badRequest(res, "No se encontraron las habilidades seleccionadas");
+    }
+    if (!mes) {
+      mes = Array.from(new Set(
+        habilidades.recordset
+          .map((habilidad: any) => normalizeText(habilidad?.Mes))
+          .filter(Boolean)
+      )).join(", ");
+    }
     console.log(`[planeamiento-ia] generar-planeamiento: carga de habilidades en ${Date.now() - t0}ms`);
 
+    actualizarProgresoOperacion(operacionId, 24, "Analizando el planeamiento de referencia");
     const effectiveMateria = materiaNombre || habilidades.recordset[0]?.MateriaNombre || "Materia";
     const documentoApoyoFiles = getUploadedFiles(req, "documentoApoyo");
     const documentoApoyo = await extractDocumentosApoyoText(documentoApoyoFiles);
     const plantillaFormatoFile = getUploadedFile(req, "plantillaFormato");
-    const plantillaFormato = await extractPlantillaFormatoText(plantillaFormatoFile);
+    const referenciaFile = getUploadedFile(req, "archivoReferencia") || plantillaFormatoFile;
+    if (referenciaObligatoria && !referenciaFile) {
+      marcarErrorProgreso(operacionId, "Falta el planeamiento de referencia");
+      return badRequest(res, "Debés adjuntar un planeamiento de referencia antes de generar");
+    }
+
+    const referencia = await extractPlantillaFormatoText(referenciaFile);
+    const perfilDocumentoReferencia = await analizarReferenciaDocxSemantica(referenciaFile);
+    const plantillaFormato = plantillaFormatoFile === referenciaFile
+      ? referencia
+      : await extractPlantillaFormatoText(plantillaFormatoFile);
     const plantillaFormatoDocx = cachePlantillaFormatoDocx(plantillaFormatoFile);
-    const idiomaSalida = detectarIdiomaSalida(plantillaFormato.texto, documentoApoyo.texto);
-    const estrategiasReferencia = extraerEstrategiasMediacionReferencia(plantillaFormato.texto, documentoApoyo.texto);
-    const perfilEstrategiasReferencia = construirPerfilEstrategiasReferencia(estrategiasReferencia);
+    const idiomaSalida = detectarIdiomaSalida(referencia.texto, plantillaFormato.texto, documentoApoyo.texto);
+    const estrategiasReferencia = perfilDocumentoReferencia.estrategiasTexto
+      || extraerEstrategiasMediacionReferencia(referencia.texto, plantillaFormato.texto, documentoApoyo.texto);
+    if (referenciaObligatoria && !estrategiasReferencia.trim()) {
+      marcarErrorProgreso(operacionId, "No se identificaron las estrategias de mediación");
+      return badRequest(res, "No se pudo identificar la sección de Estrategias de mediación en el planeamiento de referencia");
+    }
+    const perfilEstrategiasReferencia = construirPerfilEstrategiasReferencia(
+      estrategiasReferencia,
+      perfilDocumentoReferencia.encabezadosEstrategias
+    );
     const estructuraEstrategiasReferencia = perfilEstrategiasReferencia.encabezados;
     const usaReferenciaEstrategias = Boolean(estrategiasReferencia.trim());
+    actualizarProgresoOperacion(operacionId, 35, "Construyendo el prompt del planeamiento");
     const promptData = await buildPromptDesdeBD(pool, {
       materiaNombre: effectiveMateria,
       tipoColegio,
@@ -3104,8 +4117,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       habilidades: habilidades.recordset,
       documentoApoyoTexto: documentoApoyo.texto,
       documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
-      plantillaFormatoTexto: plantillaFormato.texto,
-      plantillaFormatoNombre: plantillaFormato.nombre || undefined,
+      plantillaFormatoTexto: referencia.texto || plantillaFormato.texto,
+      plantillaFormatoNombre: referencia.nombre || plantillaFormato.nombre || undefined,
       plantillaPromptIAId,
       indicacionesDocente,
       promptDocente,
@@ -3121,10 +4134,13 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     });
     console.log(`[planeamiento-ia] generar-planeamiento: prompt construido en ${Date.now() - t0}ms`);
     const prompt = promptData.prompt;
+    actualizarProgresoOperacion(operacionId, 45, "La IA está generando el planeamiento");
     const aiResult = await callOpenAiIfConfigured(prompt, documentoApoyo.imagenes);
     console.log(`[planeamiento-ia] generar-planeamiento: IA en ${Date.now() - t0}ms`);
+    actualizarProgresoOperacion(operacionId, 60, "Procesando la respuesta de la IA");
     const permitirFallback = String(process.env.OPENAI_PLANEAMIENTO_ALLOW_FALLBACK || "").toLowerCase() === "true";
-    if (!aiResult && !permitirFallback) {
+    if (!aiResult && (!permitirFallback || referenciaObligatoria)) {
+      marcarErrorProgreso(operacionId, "El modelo de IA no respondió correctamente");
       return res.status(503).json({
         ok: false,
         message: "El modelo de IA no respondió correctamente. No se generó un planeamiento alternativo para evitar presentar contenido que no provenga del modelo."
@@ -3140,24 +4156,13 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       habilidades: habilidades.recordset,
       documentoApoyoTexto: documentoApoyo.texto,
       documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : undefined,
-      plantillaFormatoTexto: plantillaFormato.texto,
-      plantillaFormatoNombre: plantillaFormato.nombre || undefined,
+      plantillaFormatoTexto: referencia.texto || plantillaFormato.texto,
+      plantillaFormatoNombre: referencia.nombre || plantillaFormato.nombre || undefined,
       indicacionesDocente,
       estrategiasReferencia,
       estructuraEstrategiasReferencia,
-      perfilEstrategiasReferencia
-    });
-
-    const resultadoBase = aplicarReglasObligatoriasPlaneamiento(resultadoBaseSinReglas, {
-      indicacionesDocente,
-      materiaNombre: effectiveMateria,
-      grado,
-      mes,
-      tema,
-      habilidades: habilidades.recordset,
-      documentoApoyoTexto: documentoApoyo.texto,
-      estructuraEstrategiasReferencia,
-      usaReferenciaEstrategias
+      perfilEstrategiasReferencia,
+      perfilDocumentoReferencia
     });
 
     const nombreResultado = nombrePlaneamiento || buildPlaneamientoNombre({ mes, grado, materiaNombre: effectiveMateria });
@@ -3165,16 +4170,122 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       indicacionesDocente,
       habilidades.recordset.length
     );
-    resultadoBase.nombre = nombreResultado;
-    const validacion = validarPlaneamientoGenerado(resultadoBase, {
+
+    const prepararResultado = (value: any) => {
+      const preparado = aplicarReglasObligatoriasPlaneamiento(value, {
+        indicacionesDocente,
+        materiaNombre: effectiveMateria,
+        grado,
+        mes,
+        tema,
+        habilidades: habilidades.recordset,
+        documentoApoyoTexto: documentoApoyo.texto,
+        estructuraEstrategiasReferencia,
+        usaReferenciaEstrategias
+      });
+      preparado.nombre = nombreResultado;
+      return preparado;
+    };
+
+    let resultadoBase = prepararResultado(resultadoBaseSinReglas);
+    const debeAuditar = referenciaObligatoria || Boolean(referenciaFile) || Boolean(indicacionesDocente);
+    actualizarProgresoOperacion(operacionId, 66, "Revisando estructura, contenido e indicaciones");
+    let auditoriaSemantica = debeAuditar
+      ? await auditarPlaneamientoConIa({
+          resultado: resultadoBase,
+          materiaNombre: effectiveMateria,
+          grado,
+          mes,
+          tema,
+          habilidades: habilidades.recordset,
+          indicacionesDocente,
+          idiomaSalida,
+          estrategiasReferencia,
+          perfilEstrategiasReferencia,
+          perfilDocumentoReferencia
+        })
+      : undefined;
+    console.log(`[planeamiento-ia] generar-planeamiento: auditoría inicial en ${Date.now() - t0}ms`);
+    actualizarProgresoOperacion(operacionId, 70, "Evaluando la calidad del planeamiento");
+
+    const crearValidacion = () => validarPlaneamientoGenerado(resultadoBase, {
       nombreSolicitado: nombrePlaneamiento,
       idiomaEsperado: idiomaSalida,
       estructuraEstrategias: estructuraEstrategiasReferencia,
       indicacionesDocente,
       habilidades: habilidades.recordset,
       indicadoresEsperadosPorHabilidad,
-      perfilEstrategias: usaReferenciaEstrategias ? perfilEstrategiasReferencia : undefined
+      perfilEstrategias: usaReferenciaEstrategias ? perfilEstrategiasReferencia : undefined,
+      perfilDocumentoReferencia,
+      auditoriaSemantica,
+      referenciaObligatoria
     });
+    let validacion = crearValidacion();
+    let reparadoAutomaticamente = false;
+    let reparacionesAutomaticas = 0;
+
+    while (!validacion.puedeGuardar && reparacionesAutomaticas < 1) {
+      const fallas = validacion.verificaciones
+        .filter((item) => item.estado === "error")
+        .map((item) => `${item.etiqueta}: ${item.detalle}`);
+      const soloFalloAuditoriaNoDisponible = fallas.length === 1
+        && !auditoriaSemantica?.disponible
+        && validacion.verificaciones.some(
+          (item) => item.codigo === "auditoria_semantica" && item.estado === "error"
+        );
+      if (!fallas.length || soloFalloAuditoriaNoDisponible) break;
+
+      actualizarProgresoOperacion(
+        operacionId,
+        74,
+        "Corrigiendo integralmente el planeamiento"
+      );
+      const reparado = await repararPlaneamientoConIa({
+        resultado: resultadoBase,
+        fallas,
+        materiaNombre: effectiveMateria,
+        grado,
+        mes,
+        tema,
+        habilidades: habilidades.recordset,
+        indicacionesDocente,
+        idiomaSalida,
+        nombrePlaneamiento: nombreResultado,
+        estrategiasReferencia,
+        perfilEstrategiasReferencia,
+        perfilDocumentoReferencia,
+        imagenes: documentoApoyo.imagenes
+      });
+      if (!reparado) break;
+
+      resultadoBase = prepararResultado(reparado);
+      reparadoAutomaticamente = true;
+      reparacionesAutomaticas += 1;
+      auditoriaSemantica = debeAuditar
+        ? await auditarPlaneamientoConIa({
+            resultado: resultadoBase,
+            materiaNombre: effectiveMateria,
+            grado,
+            mes,
+            tema,
+            habilidades: habilidades.recordset,
+            indicacionesDocente,
+            idiomaSalida,
+            estrategiasReferencia,
+            perfilEstrategiasReferencia,
+            perfilDocumentoReferencia
+          })
+        : undefined;
+      validacion = crearValidacion();
+      actualizarProgresoOperacion(
+        operacionId,
+        82,
+        "Verificando las correcciones aplicadas"
+      );
+    }
+    if (reparacionesAutomaticas) {
+      console.log(`[planeamiento-ia] generar-planeamiento: ${reparacionesAutomaticas} reparación(es) y auditoría final en ${Date.now() - t0}ms`);
+    }
 
     const resultado = {
       ...resultadoBase,
@@ -3182,9 +4293,11 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       estrategiasMediacionEstructuradas: validacion.estrategiasEstructuradas,
       documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : null,
       plantillaFormatoNombre: plantillaFormato.nombre || null,
+      documentoReferenciaNombre: referencia.nombre || null,
       idiomaSalida,
       estructuraEstrategiasReferencia,
       perfilEstrategiasReferencia,
+      perfilDocumentoReferencia,
       usaReferenciaEstrategias,
       controlCalidad: {
         valido: validacion.valido,
@@ -3195,8 +4308,25 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         idiomaEsperado: idiomaSalida,
         estructuraEstrategias: estructuraEstrategiasReferencia,
         perfilEstrategias: usaReferenciaEstrategias ? perfilEstrategiasReferencia : null,
+        perfilDocumentoReferencia,
         indicacionesDocente: indicacionesDocente || null,
-        indicadoresEsperadosPorHabilidad
+        indicadoresEsperadosPorHabilidad,
+        referenciaObligatoria,
+        auditoriaSemantica: auditoriaSemantica || null,
+        reparadoAutomaticamente,
+        intentosRevision: 1 + reparacionesAutomaticas,
+        contextoGeneracion: {
+          materiaNombre: effectiveMateria,
+          grado,
+          mes,
+          tema,
+          habilidades: habilidades.recordset.map((habilidad: any) => ({
+            Area: habilidad.Area,
+            Mes: habilidad.Mes,
+            NumeroHabilidad: habilidad.NumeroHabilidad,
+            DescripcionHabilidad: habilidad.DescripcionHabilidad
+          }))
+        }
       },
       plantillaFormatoCacheId: plantillaFormatoDocx?.cacheId || null,
       plantillaFormatoDocx: plantillaFormatoDocx
@@ -3208,6 +4338,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         : null
     };
 
+    actualizarProgresoOperacion(operacionId, 86, "Guardando el historial de generación");
     await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("usuarioId", sql.Int, getAuth(req).usuarioId || null)
@@ -3242,7 +4373,8 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         habilidadesIds,
         plantillaPromptIAId: promptData.plantillaPromptIAId,
         documentoApoyoNombre: documentoApoyo.nombres.length ? documentoApoyo.nombres.join(", ") : null,
-        plantillaFormatoNombre: plantillaFormato.nombre || null
+        plantillaFormatoNombre: plantillaFormato.nombre || null,
+        documentoReferenciaNombre: referencia.nombre || null
       }))
       .input("promptGenerado", sql.NVarChar(sql.MAX), prompt)
       .input("respuestaIA", sql.NVarChar(sql.MAX), JSON.stringify(resultado))
@@ -3254,23 +4386,272 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
       `);
     console.log(`[planeamiento-ia] generar-planeamiento: historial guardado en ${Date.now() - t0}ms`);
 
+    actualizarProgresoOperacion(
+      operacionId,
+      validacion.puedeGuardar ? 100 : 88,
+      validacion.puedeGuardar
+        ? "Planeamiento generado y validado"
+        : "La IA debe completar ajustes adicionales",
+      validacion.puedeGuardar ? "completado" : "procesando"
+    );
     ok(res, { resultado, habilidades: habilidades.recordset, generadoConIA: !!aiResult }, "Planeamiento generado correctamente");
   } catch (error) {
     console.error("Error generando planeamiento con IA:", error);
+    marcarErrorProgreso(operacionId, "No se pudo generar el planeamiento");
     res.status(500).json({ ok: false, message: "No se pudo generar el planeamiento" });
   }
 });
 
-router.post("/guardar-planeamiento", async (req, res) => {
+router.post("/revisar-planeamiento", async (req, res) => {
+  const operacionId = normalizeOperacionId(req.body?.operacionId);
+  actualizarProgresoOperacion(operacionId, 89, "Preparando la revisión automática");
   try {
     const institucionId = getInstitutionId(req, res);
-    if (institucionId === null) return;
+    if (institucionId === null) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la institución");
+      return;
+    }
+
+    const resultadoEntrada = req.body?.resultado;
+    if (!resultadoEntrada || typeof resultadoEntrada !== "object") {
+      marcarErrorProgreso(operacionId, "No se recibió el planeamiento para revisar");
+      return badRequest(res, "No se recibió el planeamiento que se debe revisar");
+    }
+
+    const controlAnterior = resultadoEntrada.controlCalidad && typeof resultadoEntrada.controlCalidad === "object"
+      ? resultadoEntrada.controlCalidad
+      : {};
+    const contexto = controlAnterior.contextoGeneracion && typeof controlAnterior.contextoGeneracion === "object"
+      ? controlAnterior.contextoGeneracion
+      : {};
+    const perfilDocumentoReferencia = controlAnterior.perfilDocumentoReferencia
+      || resultadoEntrada.perfilDocumentoReferencia;
+    const perfilEstrategiasGuardado = controlAnterior.perfilEstrategias
+      || resultadoEntrada.perfilEstrategiasReferencia;
+    const perfilEstrategiasReferencia = perfilDocumentoReferencia?.estrategiasTexto
+      ? construirPerfilEstrategiasReferencia(
+          perfilDocumentoReferencia.estrategiasTexto,
+          perfilDocumentoReferencia.encabezadosEstrategias || []
+        )
+      : perfilEstrategiasGuardado;
+    const estructuraEstrategiasReferencia = perfilEstrategiasReferencia?.encabezados?.length
+      ? perfilEstrategiasReferencia.encabezados
+      : Array.isArray(controlAnterior.estructuraEstrategias)
+        ? controlAnterior.estructuraEstrategias
+        : Array.isArray(resultadoEntrada.estructuraEstrategiasReferencia)
+          ? resultadoEntrada.estructuraEstrategiasReferencia
+          : [];
+    const habilidades = Array.isArray(contexto.habilidades) && contexto.habilidades.length
+      ? contexto.habilidades
+      : splitLines(resultadoEntrada.aprendizajesEsperados).map((descripcion) => ({
+          DescripcionHabilidad: descripcion
+        }));
+    const materiaNombre = normalizeText(req.body?.materiaNombre || contexto.materiaNombre || resultadoEntrada.materiaNombre);
+    const grado = normalizeText(req.body?.grado || contexto.grado || resultadoEntrada.grado);
+    const mesesHabilidades = Array.from(new Set(
+      habilidades.map((habilidad: any) => normalizeText(habilidad?.Mes)).filter(Boolean)
+    ));
+    const mes = normalizeText(req.body?.mes || contexto.mes || resultadoEntrada.mes)
+      || mesesHabilidades.join(", ");
+    const tema = normalizeText(req.body?.tema || contexto.tema || resultadoEntrada.tema);
+    const nombreEntrada = normalizeText(req.body?.nombre || resultadoEntrada.nombre);
+    const nombreUsaMarcadores = /^(?:mes|month)\b/i.test(nombreEntrada)
+      || /-\s*(?:grado|grade|materia|subject)\b/i.test(nombreEntrada);
+    const nombrePlaneamiento = !nombreEntrada || nombreUsaMarcadores
+      ? buildPlaneamientoNombre({ mes, grado, materiaNombre })
+      : nombreEntrada;
+    const indicacionesDocente = normalizeText(controlAnterior.indicacionesDocente);
+    const idiomaSalida: "es" | "en" = controlAnterior.idiomaEsperado === "en" ? "en" : "es";
+    const estrategiasReferencia = String(perfilDocumentoReferencia?.estrategiasTexto || "");
+    const indicadoresEsperadosPorHabilidad = Array.isArray(controlAnterior.indicadoresEsperadosPorHabilidad)
+      ? controlAnterior.indicadoresEsperadosPorHabilidad
+      : cantidadesIndicadoresSolicitadas(indicacionesDocente, habilidades.length);
+    const referenciaObligatoria = Boolean(
+      controlAnterior.referenciaObligatoria
+      || perfilDocumentoReferencia?.esDocx
+      || estrategiasReferencia
+    );
+
+    if (referenciaObligatoria && !estrategiasReferencia.trim()) {
+      marcarErrorProgreso(operacionId, "No está disponible el contenido de referencia");
+      return badRequest(res, "No se conserva el contenido de la referencia necesario para volver a revisar el planeamiento");
+    }
+
+    const prepararResultado = (value: any) => {
+      const preparado = aplicarReglasObligatoriasPlaneamiento(value, {
+        indicacionesDocente,
+        materiaNombre,
+        grado,
+        mes,
+        tema,
+        habilidades,
+        estructuraEstrategiasReferencia,
+        usaReferenciaEstrategias: Boolean(estrategiasReferencia.trim())
+      });
+      preparado.nombre = nombrePlaneamiento;
+      return preparado;
+    };
+
+    let resultado = prepararResultado(resultadoEntrada);
+    actualizarProgresoOperacion(operacionId, 91, "Auditando nuevamente el planeamiento");
+    let auditoriaSemantica = await auditarPlaneamientoConIa({
+      resultado,
+      materiaNombre,
+      grado,
+      mes,
+      tema,
+      habilidades,
+      indicacionesDocente,
+      idiomaSalida,
+      estrategiasReferencia,
+      perfilEstrategiasReferencia,
+      perfilDocumentoReferencia
+    });
+
+    const validar = () => validarPlaneamientoGenerado(resultado, {
+      nombreSolicitado: nombrePlaneamiento,
+      idiomaEsperado: idiomaSalida,
+      estructuraEstrategias: estructuraEstrategiasReferencia,
+      indicacionesDocente,
+      habilidades,
+      indicadoresEsperadosPorHabilidad,
+      perfilEstrategias: perfilEstrategiasReferencia,
+      perfilDocumentoReferencia,
+      auditoriaSemantica,
+      referenciaObligatoria
+    });
+    let validacion = validar();
+    let reparadoAutomaticamente = false;
+    let reparacionesAutomaticas = 0;
+
+    while (!validacion.puedeGuardar && reparacionesAutomaticas < 1) {
+      const fallas = validacion.verificaciones
+        .filter((item) => item.estado === "error")
+        .map((item) => `${item.etiqueta}: ${item.detalle}`);
+      const soloFalloAuditoriaNoDisponible = fallas.length === 1
+        && !auditoriaSemantica.disponible
+        && validacion.verificaciones.some(
+          (item) => item.codigo === "auditoria_semantica" && item.estado === "error"
+        );
+      if (!fallas.length || soloFalloAuditoriaNoDisponible) break;
+
+      actualizarProgresoOperacion(
+        operacionId,
+        94,
+        "Aplicando la mejora integral"
+      );
+      const reparado = await repararPlaneamientoConIa({
+        resultado,
+        fallas,
+        materiaNombre,
+        grado,
+        mes,
+        tema,
+        habilidades,
+        indicacionesDocente,
+        idiomaSalida,
+        nombrePlaneamiento,
+        estrategiasReferencia,
+        perfilEstrategiasReferencia,
+        perfilDocumentoReferencia
+      });
+
+      if (!reparado) break;
+
+      resultado = prepararResultado(reparado);
+      reparadoAutomaticamente = true;
+      reparacionesAutomaticas += 1;
+      auditoriaSemantica = await auditarPlaneamientoConIa({
+        resultado,
+        materiaNombre,
+        grado,
+        mes,
+        tema,
+        habilidades,
+        indicacionesDocente,
+        idiomaSalida,
+        estrategiasReferencia,
+        perfilEstrategiasReferencia,
+        perfilDocumentoReferencia
+      });
+      validacion = validar();
+      actualizarProgresoOperacion(
+        operacionId,
+        97,
+        "Comprobando las mejoras"
+      );
+    }
+
+    resultado.estrategiasMediacionEstructuradas = validacion.estrategiasEstructuradas;
+    resultado.estructuraEstrategiasReferencia = estructuraEstrategiasReferencia;
+    resultado.perfilEstrategiasReferencia = perfilEstrategiasReferencia;
+    resultado.controlCalidad = {
+      ...controlAnterior,
+      valido: validacion.valido,
+      puedeGuardar: validacion.puedeGuardar,
+      puntuacion: validacion.puntuacion,
+      verificaciones: validacion.verificaciones,
+      nombreSolicitado: nombrePlaneamiento,
+      estructuraEstrategias: estructuraEstrategiasReferencia,
+      perfilEstrategias: perfilEstrategiasReferencia,
+      auditoriaSemantica,
+      reparadoAutomaticamente,
+      intentosRevision: Number(controlAnterior.intentosRevision || 0) + 1 + reparacionesAutomaticas,
+      contextoGeneracion: {
+        ...contexto,
+        materiaNombre,
+        grado,
+        mes,
+        tema,
+        habilidades
+      }
+    };
+
+    actualizarProgresoOperacion(
+      operacionId,
+      validacion.puedeGuardar ? 100 : 98,
+      validacion.puedeGuardar
+        ? "Planeamiento corregido y listo para guardar"
+        : "La revisión aún encontró datos pendientes",
+      validacion.puedeGuardar ? "completado" : "procesando"
+    );
+    return ok(
+      res,
+      { resultado },
+      validacion.puedeGuardar
+        ? "Planeamiento revisado y listo para guardar"
+        : "La revisión todavía encontró datos pendientes"
+    );
+  } catch (error) {
+    console.error("Error revisando planeamiento con IA:", error);
+    marcarErrorProgreso(operacionId, "No se pudo completar la revisión automática");
+    return res.status(500).json({ ok: false, message: "No se pudo revisar nuevamente el planeamiento" });
+  }
+});
+
+router.post("/guardar-planeamiento", async (req, res) => {
+  const operacionId = normalizeOperacionId(req.body?.operacionId);
+  const progresoGuardado = crearProgresoGuardado(req.body);
+  actualizarProgresoOperacion(
+    operacionId,
+    progresoGuardado.porcentaje(0),
+    `Validando el planeamiento${progresoGuardado.sufijo}`
+  );
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la institución");
+      return;
+    }
 
     const anioLectivoId = toRequiredInt(req.body.anioLectivoId, "anioLectivoId", res);
     const periodoId = toRequiredInt(req.body.periodoId, "periodoId", res);
     const grupoId = toRequiredInt(req.body.grupoId, "grupoId", res);
     const materiaId = toRequiredInt(req.body.materiaId, "materiaId", res);
-    if ([anioLectivoId, periodoId, grupoId, materiaId].some((v) => v === null)) return;
+    if ([anioLectivoId, periodoId, grupoId, materiaId].some((v) => v === null)) {
+      marcarErrorProgreso(operacionId, "Faltan datos requeridos para guardar");
+      return;
+    }
 
     const resultado = normalizarSeleccionesPlaneamientoResultado(
       hydratePlantillaFormatoDocx(req.body.resultado || {})
@@ -3280,6 +4661,11 @@ router.post("/guardar-planeamiento", async (req, res) => {
     const observaciones = normalizeNullableText(req.body.observaciones || "");
     const usuarioId = getAuth(req).usuarioId || getAuth(req).userId || null;
 
+    actualizarProgresoOperacion(
+      operacionId,
+      progresoGuardado.porcentaje(0.2),
+      `Comprobando materia y asignación${progresoGuardado.sufijo}`
+    );
     const pool = await getPool();
     const materiaNombreOficial = await getMateriaNombreOficial(pool, institucionId, materiaId);
     const nombreSolicitado = normalizeText(req.body.nombre || resultado.nombre);
@@ -3298,12 +4684,21 @@ router.post("/guardar-planeamiento", async (req, res) => {
         .filter((item) => item.estado === "error")
         .map((item) => item.detalle)
         .join(" ");
+      marcarErrorProgreso(operacionId, "El planeamiento no superó la validación final");
       return badRequest(res, `Revisá el planeamiento antes de guardarlo. ${detalle}`.trim());
     }
 
     const asignacion = await ensurePlaneamientoAsignacion(req, res, pool, { grupoId, materiaId, anioLectivoId, periodoId });
-    if (asignacion === false) return;
+    if (asignacion === false) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la asignación docente");
+      return;
+    }
 
+    actualizarProgresoOperacion(
+      operacionId,
+      progresoGuardado.porcentaje(0.45),
+      `Iniciando el guardado${progresoGuardado.sufijo}`
+    );
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
@@ -3326,27 +4721,51 @@ router.post("/guardar-planeamiento", async (req, res) => {
             (InstitucionId, AnioLectivoId, PeriodoId, GrupoId, MateriaId, UsuarioId, Nombre, FechaInicio, FechaFin, Observaciones, ResultadoIAJson, Activo, CreatedAt)
           OUTPUT INSERTED.PlaneamientoId
           VALUES
-            (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, @fechaInicio, @fechaFin, @observaciones, @resultadoIAJson, 1, SYSDATETIME())
+            (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, @fechaInicio, @fechaFin, @observaciones, @resultadoIAJson, 1, ${SQL_COSTA_RICA_NOW})
         `);
 
       const planeamientoId = planeamientoResult.recordset[0].PlaneamientoId;
-      const indicadores = splitLines(resultado.indicadoresEvaluacion);
+      actualizarProgresoOperacion(
+        operacionId,
+        progresoGuardado.porcentaje(0.7),
+        `Guardando indicadores${progresoGuardado.sufijo}`
+      );
+      const indicadores = splitLines(resultado.indicadoresEvaluacion)
+        .map((indicador) => normalizeText(indicador))
+        .filter(Boolean);
 
-      for (const indicador of indicadores) {
-        const text = normalizeText(indicador);
-        if (!text) continue;
+      if (indicadores.length) {
         await new sql.Request(transaction)
           .input("planeamientoId", sql.Int, planeamientoId)
-          .input("descripcion", sql.NVarChar(sql.MAX), text)
+          .input("indicadoresJson", sql.NVarChar(sql.MAX), JSON.stringify(indicadores))
           .query(`
             INSERT INTO dbo.PlaneamientoIndicador
               (PlaneamientoId, Descripcion, NivelDesempenoId, Activo, CreatedAt)
-            VALUES
-              (@planeamientoId, @descripcion, NULL, 1, SYSDATETIME())
+            SELECT
+              @planeamientoId,
+              j.Descripcion,
+              NULL,
+              1,
+              ${SQL_COSTA_RICA_NOW}
+            FROM OPENJSON(@indicadoresJson)
+            WITH (Descripcion NVARCHAR(MAX) '$') j
+            WHERE NULLIF(LTRIM(RTRIM(j.Descripcion)), N'') IS NOT NULL
           `);
       }
 
+      actualizarProgresoOperacion(
+        operacionId,
+        progresoGuardado.porcentaje(0.9),
+        `Confirmando cambios${progresoGuardado.sufijo}`
+      );
       await transaction.commit();
+      const esUltimo = progresoGuardado.indice + 1 >= progresoGuardado.total;
+      actualizarProgresoOperacion(
+        operacionId,
+        esUltimo ? 100 : progresoGuardado.porcentaje(1),
+        esUltimo ? "Planeamiento guardado" : `Sección guardada${progresoGuardado.sufijo}`,
+        esUltimo ? "completado" : "procesando"
+      );
       created(res, { planeamientoId }, "Planeamiento guardado correctamente");
     } catch (error) {
       await transaction.rollback();
@@ -3354,6 +4773,7 @@ router.post("/guardar-planeamiento", async (req, res) => {
     }
   } catch (error) {
     console.error("Error guardando planeamiento generado:", error);
+    marcarErrorProgreso(operacionId, "No se pudo guardar el planeamiento");
     res.status(500).json({ ok: false, message: "No se pudo guardar el planeamiento generado" });
   }
 });
@@ -3578,8 +4998,6 @@ type TemplateParagraphSpec = {
   bold?: boolean;
 };
 
-type TemplateContentRole = "aprendizajes" | "estrategias" | "indicadores";
-
 function getDirectXmlElements(xml: string, tagName: string) {
   const escapedTagName = escapeXmlTagName(tagName);
   const openingMatcher = new RegExp(`<${escapedTagName}(?:\\s[^>]*?)?>`, "g");
@@ -3734,6 +5152,29 @@ function replacePeriodicityTemplateField(cellXml: string, periodicity: string, m
   return replaceCellBodyPreservingFormatting(cellXml, specs);
 }
 
+function replaceSchoolGradeTemplateField(cellXml: string, grade: string, periodicity: string, months: string) {
+  const lines = getCellParagraphTexts(cellXml);
+  const source = lines.length ? lines : [xmlWordToText(cellXml).trim()];
+  const periodicityNormalized = normalizarPeriodicidadSeleccionada(periodicity);
+  const specs = source.map((line, index) => {
+    if (index === 0) {
+      const colonIndex = line.indexOf(":");
+      const label = colonIndex >= 0 ? line.slice(0, colonIndex + 1) : line;
+      return { text: `${label}${grade ? ` ${grade}` : ""}`.trim() };
+    }
+
+    const normalized = normalizarParaBusqueda(line);
+    if (normalized.includes("mensual") || normalized.includes("monthly")) {
+      const marked = line.replace(/\(\s*[xX]?\s*\)/, `(${periodicityNormalized === "mes" ? "X" : " "})`);
+      const colonIndex = marked.indexOf(":");
+      const label = colonIndex >= 0 ? marked.slice(0, colonIndex + 1) : marked;
+      return { text: `${label}${months ? ` ${months}` : ""}`.trim() };
+    }
+    return { text: markTemplateOptions(line, periodicity || months) };
+  });
+  return replaceCellBodyPreservingFormatting(cellXml, specs);
+}
+
 function replaceMetadataTemplateCell(cellXml: string, values: {
   direccionRegional: string;
   centroEducativo: string;
@@ -3744,6 +5185,7 @@ function replaceMetadataTemplateCell(cellXml: string, values: {
   periodoTexto: string;
   periodicidad: string;
   meses: string;
+  camposReferencia?: Record<string, string>;
 }) {
   const text = normalizarParaBusqueda(xmlWordToText(cellXml));
   const startsWithAny = (aliases: string[]) => aliases.some((alias) => text.startsWith(alias));
@@ -3754,20 +5196,26 @@ function replaceMetadataTemplateCell(cellXml: string, values: {
   if (startsWithAny(["centro educativo", "institucion educativa", "school", "educational center"])) {
     return replaceSimpleTemplateField(cellXml, values.centroEducativo);
   }
-  if (startsWithAny(["nombre de la persona docente", "nombre del docente", "docente", "teacher name", "name of the teacher"])) {
+  if (startsWithAny(["nombre de la persona docente", "nombre del docente", "nombre y apellidos del o la docente", "docente", "teacher name", "name of the teacher"])) {
     return replaceSimpleTemplateField(cellXml, values.docente);
   }
   if (startsWithAny(["asignatura", "materia", "subarea", "modulo", "subject", "sub-area"])) {
     return replaceSimpleTemplateField(cellXml, values.materia);
   }
-  if (startsWithAny(["anos escolar", "ano escolar", "school year"])) {
+  if (startsWithAny(["anos escolar", "ano escolar"])) {
+    return replaceSchoolGradeTemplateField(cellXml, values.cursoLectivo, values.periodicidad, values.meses);
+  }
+  if (startsWithAny(["curso lectivo", "academic course", "academic year", "school year"])) {
     return replaceSimpleTemplateField(cellXml, values.anioEscolar);
   }
-  if (startsWithAny(["curso lectivo", "academic course", "grade level"])) {
+  if (startsWithAny(["grade level"])) {
     return replaceSimpleTemplateField(cellXml, values.cursoLectivo);
   }
   if (startsWithAny(["grado:", "nivel educativo:", "grade:"])) {
     return replaceSimpleTemplateField(cellXml, values.cursoLectivo);
+  }
+  if (startsWithAny(["mes:", "month:"])) {
+    return replaceSimpleTemplateField(cellXml, values.meses);
   }
   if (startsWithAny(["periodo lectivo", "periodo academico", "academic period", "school term"])) {
     return replacePeriodTemplateField(cellXml, values.periodoTexto);
@@ -3775,10 +5223,21 @@ function replaceMetadataTemplateCell(cellXml: string, values: {
   if (startsWithAny(["periodicidad", "periodicity", "frequency"])) {
     return replacePeriodicityTemplateField(cellXml, values.periodicidad, values.meses);
   }
+
+  const primeraLinea = xmlWordToText(cellXml).split(/\n+/).map((linea) => linea.trim()).find(Boolean) || "";
+  const etiqueta = primeraLinea.match(/^([^:]{2,120}):/)?.[1]?.trim() || "";
+  const etiquetaNormalizada = normalizarParaBusqueda(etiqueta);
+  const camposReferencia = values.camposReferencia || {};
+  const campoDinamico = Object.entries(camposReferencia).find(
+    ([nombre]) => normalizarParaBusqueda(nombre) === etiquetaNormalizada
+  );
+  if (campoDinamico) {
+    return replaceSimpleTemplateField(cellXml, campoDinamico[1]);
+  }
   return cellXml;
 }
 
-function detectTemplateContentRole(cellXml: string): TemplateContentRole | null {
+export function detectTemplateContentRole(cellXml: string): TemplateContentRole | null {
   const text = normalizarParaBusqueda(xmlWordToText(cellXml));
   if (
     text.includes("aprendizaje esperado")
@@ -3809,17 +5268,26 @@ function detectTemplateContentRole(cellXml: string): TemplateContentRole | null 
     || text.includes("learning activities")
   ) return "estrategias";
   if (
-    text.includes("indicadores de evaluacion")
+    text === "indicadores"
+    || text === "indicador"
+    || text === "indicators"
+    || text === "indicator"
+    || text.includes("indicadores de evaluacion")
     || text.includes("indicador de evaluacion")
     || text.includes("indicadores del aprendizaje esperado")
-    || text.includes("criterios de evaluacion")
-    || text.includes("criterios de logro")
     || text.includes("evidencias de aprendizaje")
     || text.includes("evaluation indicator")
     || text.includes("assessment indicator")
+  ) return "indicadores";
+  if (
+    text.includes("criterios de evaluacion")
+    || text.includes("criterio de evaluacion")
+    || text.includes("criterios de logro")
+    || text.includes("criterio de logro")
     || text.includes("assessment criteria")
     || text.includes("success criteria")
-  ) return "indicadores";
+    || text.includes("evaluation criteria")
+  ) return "criterios";
   return null;
 }
 
@@ -3833,12 +5301,23 @@ function countTemplateContentSections(documentXml: string) {
   }, 0);
 }
 
-function buildStrategyParagraphSpecs(items: any[]) {
+function buildStrategyParagraphSpecs(items: any[], referenceHeadings: string[] = []) {
   const headingPattern = /^(tema\s+n?[.°º]?\s*\d+|actividades?\s+de\s+(?:inicio|desarrollo|cierre)|actividad\s+n?[.°º]?\s*\d+|avances?\s+en\s+monograf[ií]a(?:\s+y\s+lectura\s+diaria)?|monograf[ií]a|lectura\s+diaria|focalizaci[oó]n|exploraci[oó]n|contrastaci[oó]n|aplicaci[oó]n|problematizaci[oó]n|inicio|desarrollo|cierre|introduction|exploration|application|mediation\s+phase)\b\s*[:.\-]?\s*(.*)$/i;
+  const referenceHeadingMap = new Map(
+    (Array.isArray(referenceHeadings) ? referenceHeadings : [])
+      .map((heading) => [normalizarParaBusqueda(heading), String(heading || "").trim()] as const)
+      .filter(([normalized, heading]) => normalized && heading)
+  );
   const specs: TemplateParagraphSpec[] = [];
 
   for (const item of Array.isArray(items) ? items : []) {
     for (const line of String(item || "").split(/\r?\n+/).map((part) => part.trim()).filter(Boolean)) {
+      const normalizedLine = normalizarParaBusqueda(line);
+      const exactReferenceHeading = referenceHeadingMap.get(normalizedLine);
+      if (exactReferenceHeading) {
+        specs.push({ text: line, bold: true });
+        continue;
+      }
       const match = line.match(headingPattern);
       if (match) {
         specs.push({ text: String(match[1] || "").trim(), bold: true });
@@ -3928,8 +5407,10 @@ function renderSemanticTemplateTable(tableXml: string, input: {
   metadata: Parameters<typeof replaceMetadataTemplateCell>[1];
   competenciaGeneral: string;
   aprendizajes: string[];
+  criterios: string[];
   estrategias: string[];
   indicadores: string[];
+  encabezadosEstrategias: string[];
   reflexiones: any;
   observaciones: string;
 }) {
@@ -3970,8 +5451,16 @@ function renderSemanticTemplateTable(tableXml: string, input: {
       if (role === "aprendizajes") {
         return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(input.aprendizajes));
       }
+      if (role === "criterios") {
+        return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(
+          input.criterios.length ? input.criterios : input.aprendizajes
+        ));
+      }
       if (role === "estrategias") {
-        return replaceCellBodyPreservingFormatting(next, buildStrategyParagraphSpecs(input.estrategias));
+        return replaceCellBodyPreservingFormatting(next, buildStrategyParagraphSpecs(
+          input.estrategias,
+          input.encabezadosEstrategias
+        ));
       }
       return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(input.indicadores));
     });
@@ -4018,14 +5507,21 @@ export async function renderPlaneamientoEnPlantillaDocx(input: {
     cursoLectivo: input.cursoLectivo,
     periodoTexto: input.periodoTexto,
     periodicidad: input.contenido.periodicidad,
-    meses: input.resultado?.mes || input.resultado?.Mes || ""
+    meses: input.resultado?.mes || input.resultado?.Mes || "",
+    camposReferencia: input.resultado?.camposReferencia && typeof input.resultado.camposReferencia === "object"
+      ? input.resultado.camposReferencia
+      : {}
   };
   xml = replaceDirectXmlElements(xml, "w:tbl", (tableXml) => renderSemanticTemplateTable(tableXml, {
     metadata,
     competenciaGeneral: input.contenido.competenciaGeneral || "",
     aprendizajes: input.contenido.aprendizajes,
+    criterios: input.contenido.criterios,
     estrategias: input.contenido.estrategias,
     indicadores: input.contenido.indicadores,
+    encabezadosEstrategias: Array.isArray(input.resultado?.estructuraEstrategiasReferencia)
+      ? input.resultado.estructuraEstrategiasReferencia
+      : [],
     reflexiones: input.contenido.reflexiones,
     observaciones: input.contenido.observaciones || input.row.Observaciones || ""
   }));
@@ -4047,6 +5543,7 @@ function tableRow(values: { text: string; bold?: boolean; width?: number }[]) {
 
 function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[]) {
   const aprendizajes = splitLines(resultado?.aprendizajesEsperados).map(limpiarPrefijoAprendizaje).filter(Boolean);
+  const criterios = splitLines(resultado?.criteriosEvaluacion).map(limpiarPrefijoAprendizaje).filter(Boolean);
   const estrategiasBase = splitLines(resultado?.estrategiasMediacion);
   const estrategiaAdecuacion = resultado?.estrategiaAdecuacionSignificativa;
   const textoAdecuacionVisible = estrategiaAdecuacion?.aplica && estrategiaAdecuacion?.textoVisible
@@ -4062,11 +5559,7 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
     || resultado?.perfilEstrategiasReferencia
   );
   const estrategiasLimpias = usaReferenciaEstrategias
-    ? (
-      estructuraReferencia.length
-        ? aplicarEstructuraEstrategiasReferencia(estrategiasSinFormato, estructuraReferencia)
-        : estrategiasSinFormato
-    )
+    ? estrategiasSinFormato
     : asegurarMomento1Primero(estrategiasSinFormato, {
       habilidades: aprendizajes,
       tema: resultado?.nombre
@@ -4107,6 +5600,7 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
     periodicidad: String(resultado?.periodicidad || ""),
     competenciaGeneral: String(resultado?.competenciaGeneral || ""),
     aprendizajes: aprendizajes.length ? aprendizajes : semanas.map((s: any) => limpiarPrefijoAprendizaje(s?.habilidadBase || s?.proposito || "")).filter(Boolean),
+    criterios: criterios.length ? criterios : aprendizajes,
     estrategias: estrategias.length ? estrategias : estrategiasFromWeeks,
     indicadores: indicadores.length ? indicadores : indicadoresFromWeeks.map(limpiarPrefijoIndicador).filter(Boolean),
     competenciasGenerales,
@@ -4122,12 +5616,25 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
 
 
 router.put("/planeamientos/:id/resultado", async (req, res) => {
+  const operacionId = normalizeOperacionId(req.body?.operacionId);
+  const progresoGuardado = crearProgresoGuardado(req.body);
+  actualizarProgresoOperacion(
+    operacionId,
+    progresoGuardado.porcentaje(0),
+    `Validando la actualización${progresoGuardado.sufijo}`
+  );
   try {
     const institucionId = getInstitutionId(req, res);
-    if (institucionId === null) return;
+    if (institucionId === null) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la institución");
+      return;
+    }
 
     const planeamientoId = toRequiredInt(req.params.id, "planeamientoId", res);
-    if (planeamientoId === null) return;
+    if (planeamientoId === null) {
+      marcarErrorProgreso(operacionId, "El planeamiento indicado no es válido");
+      return;
+    }
 
     const resultado = normalizarSeleccionesPlaneamientoResultado(
       hydratePlantillaFormatoDocx(req.body.resultado || {})
@@ -4136,6 +5643,11 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
     const fechaFin = normalizeNullableText(req.body.fechaFin);
     const observaciones = normalizeNullableText(req.body.observaciones || "");
 
+    actualizarProgresoOperacion(
+      operacionId,
+      progresoGuardado.porcentaje(0.2),
+      `Comprobando permisos y asignación${progresoGuardado.sufijo}`
+    );
     const pool = await getPool();
     const lookup = await pool.request()
       .input("planeamientoId", sql.Int, planeamientoId)
@@ -4154,10 +5666,12 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
       `);
 
     if (!lookup.recordset[0]) {
+      marcarErrorProgreso(operacionId, "No hay permisos para editar el planeamiento");
       return res.status(403).json({ ok: false, message: "No tenés permisos para editar este planeamiento" });
     }
     const planeamientoRow = lookup.recordset[0];
     if (Number(planeamientoRow.InstitucionId) !== Number(institucionId)) {
+      marcarErrorProgreso(operacionId, "No hay permisos para editar el planeamiento");
       return res.status(403).json({ ok: false, message: "No tenés permisos para editar este planeamiento" });
     }
 
@@ -4167,7 +5681,10 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
     const materiaId = Number(planeamientoRow.MateriaId);
 
     const asignacion = await ensurePlaneamientoAsignacion(req, res, pool, { grupoId, materiaId, anioLectivoId, periodoId });
-    if (asignacion === false) return;
+    if (asignacion === false) {
+      marcarErrorProgreso(operacionId, "No se pudo validar la asignación docente");
+      return;
+    }
 
     const materiaNombreOficial = await getMateriaNombreOficial(pool, institucionId, materiaId);
     const nombreSolicitado = normalizeText(req.body.nombre || resultado.nombre);
@@ -4186,9 +5703,15 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
         .filter((item) => item.estado === "error")
         .map((item) => item.detalle)
         .join(" ");
+      marcarErrorProgreso(operacionId, "El planeamiento no superó la validación final");
       return badRequest(res, `Revisá el planeamiento antes de guardarlo. ${detalle}`.trim());
     }
 
+    actualizarProgresoOperacion(
+      operacionId,
+      progresoGuardado.porcentaje(0.45),
+      `Actualizando el planeamiento${progresoGuardado.sufijo}`
+    );
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
@@ -4209,7 +5732,7 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
               FechaFin = @fechaFin,
               Observaciones = @observaciones,
               ResultadoIAJson = @resultadoIAJson,
-              UpdatedAt = SYSDATETIME()
+              UpdatedAt = ${SQL_COSTA_RICA_NOW}
           WHERE PlaneamientoId = @planeamientoId
         `);
 
@@ -4217,27 +5740,51 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
         .input("planeamientoId", sql.Int, planeamientoId)
         .query(`
           UPDATE dbo.PlaneamientoIndicador
-          SET Activo = 0, UpdatedAt = SYSDATETIME()
+          SET Activo = 0, UpdatedAt = ${SQL_COSTA_RICA_NOW}
           WHERE PlaneamientoId = @planeamientoId
         `);
 
-      const indicadores = splitLines(resultado.indicadoresEvaluacion);
+      actualizarProgresoOperacion(
+        operacionId,
+        progresoGuardado.porcentaje(0.7),
+        `Actualizando indicadores${progresoGuardado.sufijo}`
+      );
+      const indicadores = splitLines(resultado.indicadoresEvaluacion)
+        .map((indicador) => normalizeText(indicador))
+        .filter(Boolean);
 
-      for (const indicador of indicadores) {
-        const text = normalizeText(indicador);
-        if (!text) continue;
+      if (indicadores.length) {
         await new sql.Request(transaction)
           .input("planeamientoId", sql.Int, planeamientoId)
-          .input("descripcion", sql.NVarChar(sql.MAX), text)
+          .input("indicadoresJson", sql.NVarChar(sql.MAX), JSON.stringify(indicadores))
           .query(`
             INSERT INTO dbo.PlaneamientoIndicador
               (PlaneamientoId, Descripcion, NivelDesempenoId, Activo, CreatedAt)
-            VALUES
-              (@planeamientoId, @descripcion, NULL, 1, SYSDATETIME())
+            SELECT
+              @planeamientoId,
+              j.Descripcion,
+              NULL,
+              1,
+              ${SQL_COSTA_RICA_NOW}
+            FROM OPENJSON(@indicadoresJson)
+            WITH (Descripcion NVARCHAR(MAX) '$') j
+            WHERE NULLIF(LTRIM(RTRIM(j.Descripcion)), N'') IS NOT NULL
           `);
       }
 
+      actualizarProgresoOperacion(
+        operacionId,
+        progresoGuardado.porcentaje(0.9),
+        `Confirmando cambios${progresoGuardado.sufijo}`
+      );
       await transaction.commit();
+      const esUltimo = progresoGuardado.indice + 1 >= progresoGuardado.total;
+      actualizarProgresoOperacion(
+        operacionId,
+        esUltimo ? 100 : progresoGuardado.porcentaje(1),
+        esUltimo ? "Planeamiento actualizado" : `Sección actualizada${progresoGuardado.sufijo}`,
+        esUltimo ? "completado" : "procesando"
+      );
       ok(res, { planeamientoId }, "Planeamiento actualizado correctamente");
     } catch (error) {
       await transaction.rollback();
@@ -4245,6 +5792,7 @@ router.put("/planeamientos/:id/resultado", async (req, res) => {
     }
   } catch (error) {
     console.error("Error actualizando planeamiento generado con IA:", error);
+    marcarErrorProgreso(operacionId, "No se pudo actualizar el planeamiento");
     res.status(500).json({ ok: false, message: "No se pudo actualizar el planeamiento generado" });
   }
 });

@@ -92,6 +92,465 @@ function safeExcelFileNamePart(value: any) {
     .toLowerCase() || "seccion";
 }
 
+const HORARIO_DIAS = [
+  { diaSemana: 2, nombre: "Lunes" },
+  { diaSemana: 3, nombre: "Martes" },
+  { diaSemana: 4, nombre: "Miércoles" },
+  { diaSemana: 5, nombre: "Jueves" },
+  { diaSemana: 6, nombre: "Viernes" }
+];
+
+function getHorarioBloqueLabel(bloque: any) {
+  const nombre = String(bloque?.Nombre || "").trim();
+  const inicio = String(bloque?.HoraInicio || "").trim();
+  const fin = String(bloque?.HoraFin || "").trim();
+  return inicio && fin ? `${nombre} (${inicio}-${fin})` : nombre;
+}
+
+function getHorarioBloqueNoLectivo(nombre: any) {
+  const normalized = String(nombre || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (normalized.includes("almuerzo")) return "ALMUERZO";
+  if (normalized.includes("recreo") || normalized.includes("descanso")) return "RECREO";
+  return "";
+}
+
+async function buildHorarioProfesorData(
+  pool: any,
+  institucionId: number,
+  usuarioId: number,
+  puedeVerTodos: boolean,
+  anioLectivoIdSolicitado: number | null,
+  profesorIdSolicitado: number | null
+) {
+  const profesorId = puedeVerTodos ? profesorIdSolicitado : usuarioId;
+  const filtroProfesor = profesorId ? "AND u.UsuarioId = @profesorId" : "";
+
+  const anioResult = await timedQuery("reportes.horario-profesor.anio", () => pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anioLectivoIdSolicitado)
+    .query(`
+      SELECT TOP 1
+        al.AnioLectivoId,
+        al.Nombre AS AnioNombre
+      FROM dbo.AnioLectivo al
+      WHERE al.InstitucionId = @institucionId
+        AND (@anioLectivoId IS NULL OR al.AnioLectivoId = @anioLectivoId)
+      ORDER BY
+        CASE WHEN @anioLectivoId IS NOT NULL THEN 0 ELSE ISNULL(al.Activo, 0) END DESC,
+        al.FechaInicio DESC,
+        al.AnioLectivoId DESC
+    `));
+
+  const anio = anioResult.recordset[0];
+  if (!anio) return null;
+  const anioLectivoId = Number(anio.AnioLectivoId);
+
+  const horarioCandidatosSql = `
+    WITH HorariosPorPeriodo AS (
+      SELECT
+        hd.UsuarioId AS ProfesorId,
+        gm.PeriodoId,
+        p.Nombre AS PeriodoNombre,
+        ISNULL(p.NumeroOrden, 0) AS NumeroOrden,
+        COUNT(DISTINCT hg.HorarioGrupoId) AS TotalLecciones
+      FROM dbo.HorarioDocente hd
+      INNER JOIN dbo.HorarioGrupo hg
+        ON hg.HorarioGrupoId = hd.HorarioGrupoId
+       AND hg.Activo = 1
+      INNER JOIN dbo.GrupoMateria gm
+        ON gm.GrupoMateriaId = hg.GrupoMateriaId
+       AND gm.Activo = 1
+      INNER JOIN dbo.Grupo g
+        ON g.GrupoId = gm.GrupoId
+       AND g.InstitucionId = @institucionId
+       AND g.AnioLectivoId = @anioLectivoId
+       AND g.Activo = 1
+      INNER JOIN dbo.Periodo p
+        ON p.PeriodoId = gm.PeriodoId
+       AND p.AnioLectivoId = @anioLectivoId
+      WHERE hd.Activo = 1
+        AND (@profesorId IS NULL OR hd.UsuarioId = @profesorId)
+      GROUP BY hd.UsuarioId, gm.PeriodoId, p.Nombre, p.NumeroOrden
+    ),
+    PeriodoElegido AS (
+      SELECT
+        ProfesorId,
+        PeriodoId,
+        PeriodoNombre,
+        NumeroOrden,
+        TotalLecciones,
+        ROW_NUMBER() OVER (
+          PARTITION BY ProfesorId
+          ORDER BY TotalLecciones DESC, NumeroOrden DESC, PeriodoId DESC
+        ) AS Posicion
+      FROM HorariosPorPeriodo
+    )
+  `;
+
+  const [bloquesResult, profesoresResult, periodosElegidosResult, entradasResult] = await Promise.all([
+    timedQuery("reportes.horario-profesor.bloques", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT
+          bh.BloqueHorarioId,
+          bh.Nombre,
+          CONVERT(varchar(5), bh.HoraInicio, 108) AS HoraInicio,
+          CONVERT(varchar(5), bh.HoraFin, 108) AS HoraFin,
+          bh.OrdenVisual
+        FROM dbo.BloqueHorario bh
+        WHERE bh.InstitucionId = @institucionId
+        ORDER BY bh.OrdenVisual, bh.HoraInicio, bh.BloqueHorarioId
+      `)),
+    timedQuery("reportes.horario-profesor.profesores", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("profesorId", sql.Int, profesorId)
+      .query(`
+        SELECT DISTINCT
+          u.UsuarioId AS ProfesorId,
+          u.Correo,
+          u.Nombre,
+          u.PrimerApellido,
+          u.SegundoApellido
+        FROM dbo.Usuario u
+        WHERE u.InstitucionId = @institucionId
+          AND u.Activo = 1
+          ${filtroProfesor}
+          AND EXISTS (
+            SELECT 1
+            FROM dbo.UsuarioRol ur
+            INNER JOIN dbo.Rol r ON r.RolId = ur.RolId
+            WHERE ur.UsuarioId = u.UsuarioId
+              AND ur.Activo = 1
+              AND r.Nombre IN (N'PROFESOR', N'PROFESOR_GUIA')
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM dbo.HorarioDocente hd
+            INNER JOIN dbo.HorarioGrupo hg
+              ON hg.HorarioGrupoId = hd.HorarioGrupoId
+             AND hg.Activo = 1
+            INNER JOIN dbo.GrupoMateria gm
+              ON gm.GrupoMateriaId = hg.GrupoMateriaId
+             AND gm.Activo = 1
+            INNER JOIN dbo.Grupo g
+              ON g.GrupoId = gm.GrupoId
+             AND g.InstitucionId = @institucionId
+             AND g.AnioLectivoId = @anioLectivoId
+             AND g.Activo = 1
+            WHERE hd.UsuarioId = u.UsuarioId
+              AND hd.Activo = 1
+          )
+        ORDER BY u.PrimerApellido, u.SegundoApellido, u.Nombre, u.UsuarioId
+      `)),
+    timedQuery("reportes.horario-profesor.periodos-elegidos", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("profesorId", sql.Int, profesorId)
+      .query(`
+        ${horarioCandidatosSql}
+        SELECT
+          ProfesorId,
+          PeriodoId,
+          PeriodoNombre,
+          TotalLecciones
+        FROM PeriodoElegido
+        WHERE Posicion = 1
+      `)),
+    timedQuery("reportes.horario-profesor.entradas", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("profesorId", sql.Int, profesorId)
+      .query(`
+        ${horarioCandidatosSql}
+        SELECT DISTINCT
+          hd.UsuarioId AS ProfesorId,
+          pe.PeriodoId,
+          pe.PeriodoNombre,
+          hg.HorarioGrupoId,
+          hg.BloqueHorarioId,
+          hg.DiaSemana,
+          gm.GrupoId,
+          g.Nombre AS GrupoNombre,
+          gm.MateriaId,
+          m.Nombre AS MateriaNombre,
+          m.Codigo AS MateriaCodigo
+        FROM PeriodoElegido pe
+        INNER JOIN dbo.HorarioDocente hd
+          ON hd.UsuarioId = pe.ProfesorId
+         AND hd.Activo = 1
+        INNER JOIN dbo.HorarioGrupo hg
+          ON hg.HorarioGrupoId = hd.HorarioGrupoId
+         AND hg.Activo = 1
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoMateriaId = hg.GrupoMateriaId
+         AND gm.PeriodoId = pe.PeriodoId
+         AND gm.Activo = 1
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+         AND g.InstitucionId = @institucionId
+         AND g.AnioLectivoId = @anioLectivoId
+         AND g.Activo = 1
+        INNER JOIN dbo.Materia m
+          ON m.MateriaId = gm.MateriaId
+         AND m.Activa = 1
+        INNER JOIN dbo.Usuario u
+          ON u.UsuarioId = hd.UsuarioId
+         AND u.InstitucionId = @institucionId
+         AND u.Activo = 1
+        WHERE pe.Posicion = 1
+        ORDER BY hd.UsuarioId, hg.DiaSemana, hg.BloqueHorarioId, g.Nombre, m.Nombre
+      `))
+  ]);
+
+  const entradasPorProfesor = new Map<number, any[]>();
+  for (const entrada of entradasResult.recordset || []) {
+    const id = Number(entrada.ProfesorId || 0);
+    if (!entradasPorProfesor.has(id)) entradasPorProfesor.set(id, []);
+    entradasPorProfesor.get(id)!.push(entrada);
+  }
+
+  const periodoPorProfesor = new Map<number, any>();
+  for (const item of periodosElegidosResult.recordset || []) {
+    periodoPorProfesor.set(Number(item.ProfesorId), item);
+  }
+
+  const profesores = (profesoresResult.recordset || []).map((item: any) => ({
+    profesorId: Number(item.ProfesorId),
+    correo: String(item.Correo || ""),
+    nombre: [item.PrimerApellido, item.SegundoApellido, item.Nombre]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim(),
+    periodoId: Number(periodoPorProfesor.get(Number(item.ProfesorId))?.PeriodoId || 0) || null,
+    periodoNombre: String(periodoPorProfesor.get(Number(item.ProfesorId))?.PeriodoNombre || ""),
+    totalLecciones: Number(periodoPorProfesor.get(Number(item.ProfesorId))?.TotalLecciones || 0),
+    entradas: entradasPorProfesor.get(Number(item.ProfesorId)) || []
+  }));
+
+  return {
+    anioLectivoId,
+    anioNombre: String(anio.AnioNombre || ""),
+    bloques: bloquesResult.recordset || [],
+    profesores
+  };
+}
+
+async function buildHorarioSeccionData(
+  pool: any,
+  institucionId: number,
+  anioLectivoIdSolicitado: number | null,
+  grupoIdSolicitado: number | null
+) {
+  const anioResult = await timedQuery("reportes.horario-seccion.anio", () => pool.request()
+    .input("institucionId", sql.Int, institucionId)
+    .input("anioLectivoId", sql.Int, anioLectivoIdSolicitado)
+    .query(`
+      SELECT TOP 1
+        al.AnioLectivoId,
+        al.Nombre AS AnioNombre
+      FROM dbo.AnioLectivo al
+      WHERE al.InstitucionId = @institucionId
+        AND (@anioLectivoId IS NULL OR al.AnioLectivoId = @anioLectivoId)
+      ORDER BY
+        CASE WHEN @anioLectivoId IS NOT NULL THEN 0 ELSE ISNULL(al.Activo, 0) END DESC,
+        al.FechaInicio DESC,
+        al.AnioLectivoId DESC
+    `));
+
+  const anio = anioResult.recordset[0];
+  if (!anio) return null;
+  const anioLectivoId = Number(anio.AnioLectivoId);
+
+  const horarioCandidatosSql = `
+    WITH HorariosPorPeriodo AS (
+      SELECT
+        gm.GrupoId,
+        gm.PeriodoId,
+        p.Nombre AS PeriodoNombre,
+        ISNULL(p.NumeroOrden, 0) AS NumeroOrden,
+        COUNT(DISTINCT hg.HorarioGrupoId) AS TotalLecciones
+      FROM dbo.HorarioGrupo hg
+      INNER JOIN dbo.GrupoMateria gm
+        ON gm.GrupoMateriaId = hg.GrupoMateriaId
+       AND gm.Activo = 1
+      INNER JOIN dbo.Grupo g
+        ON g.GrupoId = gm.GrupoId
+       AND g.InstitucionId = @institucionId
+       AND g.AnioLectivoId = @anioLectivoId
+       AND g.Activo = 1
+      INNER JOIN dbo.Periodo p
+        ON p.PeriodoId = gm.PeriodoId
+       AND p.AnioLectivoId = @anioLectivoId
+      WHERE hg.Activo = 1
+        AND (@grupoId IS NULL OR gm.GrupoId = @grupoId)
+      GROUP BY gm.GrupoId, gm.PeriodoId, p.Nombre, p.NumeroOrden
+    ),
+    PeriodoElegido AS (
+      SELECT
+        GrupoId,
+        PeriodoId,
+        PeriodoNombre,
+        NumeroOrden,
+        TotalLecciones,
+        ROW_NUMBER() OVER (
+          PARTITION BY GrupoId
+          ORDER BY TotalLecciones DESC, NumeroOrden DESC, PeriodoId DESC
+        ) AS Posicion
+      FROM HorariosPorPeriodo
+    )
+  `;
+
+  const [bloquesResult, seccionesResult, periodosElegidosResult, entradasResult] = await Promise.all([
+    timedQuery("reportes.horario-seccion.bloques", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT
+          bh.BloqueHorarioId,
+          bh.Nombre,
+          CONVERT(varchar(5), bh.HoraInicio, 108) AS HoraInicio,
+          CONVERT(varchar(5), bh.HoraFin, 108) AS HoraFin,
+          bh.OrdenVisual
+        FROM dbo.BloqueHorario bh
+        WHERE bh.InstitucionId = @institucionId
+        ORDER BY bh.OrdenVisual, bh.HoraInicio, bh.BloqueHorarioId
+      `)),
+    timedQuery("reportes.horario-seccion.secciones", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("grupoId", sql.Int, grupoIdSolicitado)
+      .query(`
+        SELECT
+          g.GrupoId,
+          g.Nombre AS GrupoNombre
+        FROM dbo.Grupo g
+        WHERE g.InstitucionId = @institucionId
+          AND g.AnioLectivoId = @anioLectivoId
+          AND g.Activo = 1
+          AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
+          AND EXISTS (
+            SELECT 1
+            FROM dbo.GrupoMateria gm
+            INNER JOIN dbo.HorarioGrupo hg
+              ON hg.GrupoMateriaId = gm.GrupoMateriaId
+             AND hg.Activo = 1
+            WHERE gm.GrupoId = g.GrupoId
+              AND gm.Activo = 1
+          )
+        ${SQL_ORDER_BY_SECCION}
+      `)),
+    timedQuery("reportes.horario-seccion.periodos-elegidos", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("grupoId", sql.Int, grupoIdSolicitado)
+      .query(`
+        ${horarioCandidatosSql}
+        SELECT
+          GrupoId,
+          PeriodoId,
+          PeriodoNombre,
+          TotalLecciones
+        FROM PeriodoElegido
+        WHERE Posicion = 1
+      `)),
+    timedQuery("reportes.horario-seccion.entradas", () => pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("grupoId", sql.Int, grupoIdSolicitado)
+      .query(`
+        ${horarioCandidatosSql}
+        SELECT DISTINCT
+          gm.GrupoId,
+          g.Nombre AS GrupoNombre,
+          pe.PeriodoId,
+          pe.PeriodoNombre,
+          hg.HorarioGrupoId,
+          hg.BloqueHorarioId,
+          hg.DiaSemana,
+          gm.MateriaId,
+          m.Nombre AS MateriaNombre,
+          m.Codigo AS MateriaCodigo,
+          hd.UsuarioId AS ProfesorId,
+          u.Correo AS ProfesorCorreo,
+          LTRIM(RTRIM(CONCAT(ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N''), N' ', ISNULL(u.Nombre, N'')))) AS ProfesorNombre
+        FROM PeriodoElegido pe
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoId = pe.GrupoId
+         AND gm.PeriodoId = pe.PeriodoId
+         AND gm.Activo = 1
+        INNER JOIN dbo.HorarioGrupo hg
+          ON hg.GrupoMateriaId = gm.GrupoMateriaId
+         AND hg.Activo = 1
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+         AND g.InstitucionId = @institucionId
+         AND g.AnioLectivoId = @anioLectivoId
+         AND g.Activo = 1
+        INNER JOIN dbo.Materia m
+          ON m.MateriaId = gm.MateriaId
+         AND m.Activa = 1
+        LEFT JOIN dbo.HorarioDocente hd
+          ON hd.HorarioGrupoId = hg.HorarioGrupoId
+         AND hd.Activo = 1
+        LEFT JOIN dbo.Usuario u
+          ON u.UsuarioId = hd.UsuarioId
+         AND u.InstitucionId = @institucionId
+         AND u.Activo = 1
+        WHERE pe.Posicion = 1
+        ORDER BY gm.GrupoId, hg.DiaSemana, hg.BloqueHorarioId, m.Nombre, ProfesorNombre
+      `))
+  ]);
+
+  const entradasPorSeccion = new Map<number, any[]>();
+  for (const entrada of entradasResult.recordset || []) {
+    const id = Number(entrada.GrupoId || 0);
+    if (!entradasPorSeccion.has(id)) entradasPorSeccion.set(id, []);
+    entradasPorSeccion.get(id)!.push(entrada);
+  }
+
+  const periodoPorSeccion = new Map<number, any>();
+  for (const item of periodosElegidosResult.recordset || []) {
+    periodoPorSeccion.set(Number(item.GrupoId), item);
+  }
+
+  const secciones = (seccionesResult.recordset || []).map((item: any) => ({
+    grupoId: Number(item.GrupoId),
+    nombre: String(item.GrupoNombre || ""),
+    periodoId: Number(periodoPorSeccion.get(Number(item.GrupoId))?.PeriodoId || 0) || null,
+    periodoNombre: String(periodoPorSeccion.get(Number(item.GrupoId))?.PeriodoNombre || ""),
+    totalLecciones: Number(periodoPorSeccion.get(Number(item.GrupoId))?.TotalLecciones || 0),
+    entradas: entradasPorSeccion.get(Number(item.GrupoId)) || []
+  }));
+
+  return {
+    anioLectivoId,
+    anioNombre: String(anio.AnioNombre || ""),
+    bloques: bloquesResult.recordset || [],
+    secciones
+  };
+}
+
+function getUniqueWorksheetName(value: string, usedNames: Set<string>) {
+  const base = String(value || "Profesor")
+    .replace(/[\\/*?:[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 31) || "Profesor";
+  let candidate = base;
+  let suffix = 2;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const suffixText = ` ${suffix}`;
+    candidate = `${base.slice(0, Math.max(1, 31 - suffixText.length))}${suffixText}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
 async function buildReporteSeccionData(pool: any, institucionId: number, grupoId: number) {
   const grupoResult = await timedQuery("reportes.gestion-profe.secciones.grupo", () => pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -2040,6 +2499,452 @@ router.get("/gestion-filtros", async (req, res) => {
   } catch (error) {
     console.error("Error cargando filtros de reportes:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los filtros de reportes" });
+  }
+});
+
+router.get("/horario-profesor", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const usuarioId = getUserId(req);
+    const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
+    const profesorId = req.query.profesorId ? Number(req.query.profesorId) : null;
+
+    if (!institucionId) return badRequest(res, "No se pudo determinar la institución");
+    if (anioLectivoId !== null && (!Number.isInteger(anioLectivoId) || anioLectivoId <= 0)) {
+      return badRequest(res, "El año lectivo seleccionado no es válido");
+    }
+    if (profesorId !== null && (!Number.isInteger(profesorId) || profesorId <= 0)) {
+      return badRequest(res, "El profesor seleccionado no es válido");
+    }
+
+    const reporte = await buildHorarioProfesorData(
+      pool,
+      institucionId,
+      usuarioId,
+      isAdminReportUser(req),
+      anioLectivoId,
+      profesorId
+    );
+
+    if (!reporte) {
+      return badRequest(res, "No hay un año lectivo disponible para esta institución");
+    }
+
+    if (profesorId && !reporte.profesores.length) {
+      return res.status(404).json({ ok: false, message: "El profesor seleccionado no existe o no está disponible" });
+    }
+
+    return ok(res, reporte);
+  } catch (error) {
+    console.error("Error consultando horario de profesores:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar el horario de profesores" });
+  }
+});
+
+router.get("/horario-profesor/excel", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const usuarioId = getUserId(req);
+    const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
+    const profesorId = req.query.profesorId ? Number(req.query.profesorId) : null;
+
+    if (!institucionId) return badRequest(res, "No se pudo determinar la institución");
+    if (anioLectivoId !== null && (!Number.isInteger(anioLectivoId) || anioLectivoId <= 0)) {
+      return badRequest(res, "El año lectivo seleccionado no es válido");
+    }
+    if (profesorId !== null && (!Number.isInteger(profesorId) || profesorId <= 0)) {
+      return badRequest(res, "El profesor seleccionado no es válido");
+    }
+
+    const reporte = await buildHorarioProfesorData(
+      pool,
+      institucionId,
+      usuarioId,
+      isAdminReportUser(req),
+      anioLectivoId,
+      profesorId
+    );
+
+    if (!reporte) {
+      return badRequest(res, "No hay un año lectivo disponible para esta institución");
+    }
+    if (!reporte.profesores.length) {
+      return badRequest(res, "No hay profesores disponibles para exportar");
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Profe360";
+    workbook.created = new Date();
+    workbook.modified = new Date();
+    workbook.title = "Horario de profesores";
+    workbook.subject = `Horarios ${reporte.anioNombre}`;
+    workbook.company = "Profe360";
+
+    const usedSheetNames = new Set<string>();
+    const bloques = [...reporte.bloques].sort((a: any, b: any) =>
+      Number(a.OrdenVisual || 0) - Number(b.OrdenVisual || 0)
+      || Number(a.BloqueHorarioId || 0) - Number(b.BloqueHorarioId || 0)
+    );
+
+    for (const profesor of reporte.profesores) {
+      const worksheet = workbook.addWorksheet(getUniqueWorksheetName(profesor.nombre, usedSheetNames), {
+        views: [{ state: "frozen", ySplit: 4, xSplit: 1 }]
+      });
+      worksheet.pageSetup = {
+        orientation: "landscape",
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        paperSize: 9,
+        horizontalCentered: true,
+        margins: {
+          left: 0.25,
+          right: 0.25,
+          top: 0.35,
+          bottom: 0.35,
+          header: 0.2,
+          footer: 0.2
+        }
+      };
+      worksheet.columns = [
+        { width: 25 },
+        { width: 27 },
+        { width: 27 },
+        { width: 27 },
+        { width: 27 },
+        { width: 27 }
+      ];
+
+      worksheet.mergeCells("A1:F1");
+      worksheet.getCell("A1").value = "Horario del profesor";
+      worksheet.getCell("A1").font = { bold: true, size: 17, color: { argb: "FF0F172A" } };
+      worksheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+      worksheet.getRow(1).height = 25;
+
+      worksheet.mergeCells("A2:F2");
+      worksheet.getCell("A2").value = profesor.nombre || profesor.correo;
+      worksheet.getCell("A2").font = { bold: true, size: 14, color: { argb: "FF1E3A8A" } };
+      worksheet.getCell("A2").alignment = { horizontal: "center", vertical: "middle" };
+
+      worksheet.mergeCells("A3:F3");
+      worksheet.getCell("A3").value = [reporte.anioNombre, profesor.periodoNombre].filter(Boolean).join(" - ");
+      worksheet.getCell("A3").font = { bold: true, size: 11, color: { argb: "FF475569" } };
+      worksheet.getCell("A3").alignment = { horizontal: "center", vertical: "middle" };
+
+      const headerRow = worksheet.getRow(4);
+      headerRow.values = ["Lección", ...HORARIO_DIAS.map((dia) => dia.nombre)];
+      headerRow.height = 22;
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FF0F172A" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCE6F2" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF94A3B8" } },
+          left: { style: "thin", color: { argb: "FF94A3B8" } },
+          bottom: { style: "thin", color: { argb: "FF94A3B8" } },
+          right: { style: "thin", color: { argb: "FF94A3B8" } }
+        };
+      });
+
+      let rowNumber = 5;
+      for (const bloque of bloques) {
+        const tipoNoLectivo = getHorarioBloqueNoLectivo(bloque.Nombre);
+        const label = getHorarioBloqueLabel(bloque);
+        if (tipoNoLectivo) {
+          worksheet.mergeCells(rowNumber, 1, rowNumber, 6);
+          const cell = worksheet.getCell(rowNumber, 1);
+          cell.value = label;
+          cell.font = {
+            bold: true,
+            color: { argb: tipoNoLectivo === "ALMUERZO" ? "FF166534" : "FF92400E" }
+          };
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: tipoNoLectivo === "ALMUERZO" ? "FFD1FAE5" : "FFFEF3C7" }
+          };
+          cell.alignment = { horizontal: "center", vertical: "middle" };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FF94A3B8" } },
+            left: { style: "thin", color: { argb: "FF94A3B8" } },
+            bottom: { style: "thin", color: { argb: "FF94A3B8" } },
+            right: { style: "thin", color: { argb: "FF94A3B8" } }
+          };
+          worksheet.getRow(rowNumber).height = 21;
+          rowNumber += 1;
+          continue;
+        }
+
+        const row = worksheet.getRow(rowNumber);
+        row.getCell(1).value = label;
+        row.getCell(1).font = { bold: true, color: { argb: "FF0F172A" } };
+        row.getCell(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+
+        HORARIO_DIAS.forEach((dia, dayIndex) => {
+          const entradas = profesor.entradas.filter((entrada: any) =>
+            Number(entrada.BloqueHorarioId) === Number(bloque.BloqueHorarioId)
+            && Number(entrada.DiaSemana) === dia.diaSemana
+          );
+          const textos = Array.from(new Set(entradas.map((entrada: any) =>
+            `${String(entrada.GrupoNombre || "").trim()} ${String(entrada.MateriaNombre || "").trim()}`.trim()
+          ).filter(Boolean)));
+          const cell = row.getCell(dayIndex + 2);
+          cell.value = textos.length ? textos.join("\n") : "Libre";
+          cell.font = {
+            bold: true,
+            color: { argb: textos.length ? "FF1E3A8A" : "FF475569" }
+          };
+          cell.fill = textos.length
+            ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF6FF" } }
+            : { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+          cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        });
+
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFCBD5E1" } },
+            left: { style: "thin", color: { argb: "FFCBD5E1" } },
+            bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+            right: { style: "thin", color: { argb: "FFCBD5E1" } }
+          };
+        });
+        row.height = 34;
+        rowNumber += 1;
+      }
+
+      worksheet.autoFilter = {
+        from: { row: 4, column: 1 },
+        to: { row: 4, column: 6 }
+      };
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const profesorNombre = reporte.profesores.length === 1 ? reporte.profesores[0].nombre : "todos-los-profesores";
+    const fileName = `horario-profesor-${safeExcelFileNamePart(profesorNombre)}-${safeExcelFileNamePart(reporte.anioNombre)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error("Error exportando horario de profesores:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo exportar el horario de profesores" });
+  }
+});
+
+router.get("/horario-seccion", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
+    const grupoId = req.query.grupoId ? Number(req.query.grupoId) : null;
+
+    if (!institucionId) return badRequest(res, "No se pudo determinar la instituciÃ³n");
+    if (anioLectivoId !== null && (!Number.isInteger(anioLectivoId) || anioLectivoId <= 0)) {
+      return badRequest(res, "El aÃ±o lectivo seleccionado no es vÃ¡lido");
+    }
+    if (grupoId !== null && (!Number.isInteger(grupoId) || grupoId <= 0)) {
+      return badRequest(res, "La secciÃ³n seleccionada no es vÃ¡lida");
+    }
+
+    const reporte = await buildHorarioSeccionData(pool, institucionId, anioLectivoId, grupoId);
+
+    if (!reporte) {
+      return badRequest(res, "No hay un aÃ±o lectivo disponible para esta instituciÃ³n");
+    }
+
+    if (grupoId && !reporte.secciones.length) {
+      return res.status(404).json({ ok: false, message: "La secciÃ³n seleccionada no existe o no tiene horario disponible" });
+    }
+
+    return ok(res, reporte);
+  } catch (error) {
+    console.error("Error consultando horario de secciones:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar el horario de secciones" });
+  }
+});
+
+router.get("/horario-seccion/excel", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
+    const grupoId = req.query.grupoId ? Number(req.query.grupoId) : null;
+
+    if (!institucionId) return badRequest(res, "No se pudo determinar la instituciÃ³n");
+    if (anioLectivoId !== null && (!Number.isInteger(anioLectivoId) || anioLectivoId <= 0)) {
+      return badRequest(res, "El aÃ±o lectivo seleccionado no es vÃ¡lido");
+    }
+    if (grupoId !== null && (!Number.isInteger(grupoId) || grupoId <= 0)) {
+      return badRequest(res, "La secciÃ³n seleccionada no es vÃ¡lida");
+    }
+
+    const reporte = await buildHorarioSeccionData(pool, institucionId, anioLectivoId, grupoId);
+
+    if (!reporte) {
+      return badRequest(res, "No hay un aÃ±o lectivo disponible para esta instituciÃ³n");
+    }
+    if (!reporte.secciones.length) {
+      return badRequest(res, "No hay secciones disponibles para exportar");
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Profe360";
+    workbook.created = new Date();
+    workbook.modified = new Date();
+    workbook.title = "Horario de secciones";
+    workbook.subject = `Horarios ${reporte.anioNombre}`;
+    workbook.company = "Profe360";
+
+    const usedSheetNames = new Set<string>();
+    const bloques = [...reporte.bloques].sort((a: any, b: any) =>
+      Number(a.OrdenVisual || 0) - Number(b.OrdenVisual || 0)
+      || Number(a.BloqueHorarioId || 0) - Number(b.BloqueHorarioId || 0)
+    );
+
+    for (const seccion of reporte.secciones) {
+      const worksheet = workbook.addWorksheet(getUniqueWorksheetName(seccion.nombre, usedSheetNames), {
+        views: [{ state: "frozen", ySplit: 4, xSplit: 1 }]
+      });
+      worksheet.pageSetup = {
+        orientation: "landscape",
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        paperSize: 9,
+        horizontalCentered: true,
+        margins: {
+          left: 0.25,
+          right: 0.25,
+          top: 0.35,
+          bottom: 0.35,
+          header: 0.2,
+          footer: 0.2
+        }
+      };
+      worksheet.columns = [
+        { width: 25 },
+        { width: 32 },
+        { width: 32 },
+        { width: 32 },
+        { width: 32 },
+        { width: 32 }
+      ];
+
+      worksheet.mergeCells("A1:F1");
+      worksheet.getCell("A1").value = "Horario de secciÃ³n";
+      worksheet.getCell("A1").font = { bold: true, size: 17, color: { argb: "FF0F172A" } };
+      worksheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+      worksheet.getRow(1).height = 25;
+
+      worksheet.mergeCells("A2:F2");
+      worksheet.getCell("A2").value = seccion.nombre;
+      worksheet.getCell("A2").font = { bold: true, size: 14, color: { argb: "FF1E3A8A" } };
+      worksheet.getCell("A2").alignment = { horizontal: "center", vertical: "middle" };
+
+      worksheet.mergeCells("A3:F3");
+      worksheet.getCell("A3").value = [reporte.anioNombre, seccion.periodoNombre].filter(Boolean).join(" - ");
+      worksheet.getCell("A3").font = { bold: true, size: 11, color: { argb: "FF475569" } };
+      worksheet.getCell("A3").alignment = { horizontal: "center", vertical: "middle" };
+
+      const headerRow = worksheet.getRow(4);
+      headerRow.values = ["LecciÃ³n", ...HORARIO_DIAS.map((dia) => dia.nombre)];
+      headerRow.height = 22;
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FF0F172A" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCE6F2" } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin", color: { argb: "FF94A3B8" } },
+          left: { style: "thin", color: { argb: "FF94A3B8" } },
+          bottom: { style: "thin", color: { argb: "FF94A3B8" } },
+          right: { style: "thin", color: { argb: "FF94A3B8" } }
+        };
+      });
+
+      let rowNumber = 5;
+      for (const bloque of bloques) {
+        const tipoNoLectivo = getHorarioBloqueNoLectivo(bloque.Nombre);
+        const label = getHorarioBloqueLabel(bloque);
+        if (tipoNoLectivo) {
+          worksheet.mergeCells(rowNumber, 1, rowNumber, 6);
+          const cell = worksheet.getCell(rowNumber, 1);
+          cell.value = label;
+          cell.font = {
+            bold: true,
+            color: { argb: tipoNoLectivo === "ALMUERZO" ? "FF166534" : "FF92400E" }
+          };
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: tipoNoLectivo === "ALMUERZO" ? "FFD1FAE5" : "FFFEF3C7" }
+          };
+          cell.alignment = { horizontal: "center", vertical: "middle" };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FF94A3B8" } },
+            left: { style: "thin", color: { argb: "FF94A3B8" } },
+            bottom: { style: "thin", color: { argb: "FF94A3B8" } },
+            right: { style: "thin", color: { argb: "FF94A3B8" } }
+          };
+          worksheet.getRow(rowNumber).height = 21;
+          rowNumber += 1;
+          continue;
+        }
+
+        const row = worksheet.getRow(rowNumber);
+        row.getCell(1).value = label;
+        row.getCell(1).font = { bold: true, color: { argb: "FF0F172A" } };
+        row.getCell(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+
+        HORARIO_DIAS.forEach((dia, dayIndex) => {
+          const entradas = seccion.entradas.filter((entrada: any) =>
+            Number(entrada.BloqueHorarioId) === Number(bloque.BloqueHorarioId)
+            && Number(entrada.DiaSemana) === dia.diaSemana
+          );
+          const textos = Array.from(new Set(entradas.map((entrada: any) => {
+            const profesor = String(entrada.ProfesorNombre || entrada.ProfesorCorreo || "Sin profesor").trim();
+            const materia = String(entrada.MateriaNombre || "").trim();
+            return [profesor, materia].filter(Boolean).join("\n");
+          }).filter(Boolean)));
+          const cell = row.getCell(dayIndex + 2);
+          cell.value = textos.length ? textos.join("\n\n") : "Libre";
+          cell.font = {
+            bold: true,
+            color: { argb: textos.length ? "FF1E3A8A" : "FF475569" }
+          };
+          cell.fill = textos.length
+            ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF6FF" } }
+            : { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+          cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        });
+
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFCBD5E1" } },
+            left: { style: "thin", color: { argb: "FFCBD5E1" } },
+            bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+            right: { style: "thin", color: { argb: "FFCBD5E1" } }
+          };
+        });
+        row.height = 48;
+        rowNumber += 1;
+      }
+
+      worksheet.autoFilter = {
+        from: { row: 4, column: 1 },
+        to: { row: 4, column: 6 }
+      };
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const seccionNombre = reporte.secciones.length === 1 ? reporte.secciones[0].nombre : "todas-las-secciones";
+    const fileName = `horario-seccion-${safeExcelFileNamePart(seccionNombre)}-${safeExcelFileNamePart(reporte.anioNombre)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error("Error exportando horario de secciones:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo exportar el horario de secciones" });
   }
 });
 

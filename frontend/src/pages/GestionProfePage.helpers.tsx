@@ -6,7 +6,9 @@ export type GrupoProfesor = {
   UsuarioId: number;
   InstitucionId: number;
   GrupoId: number;
+  GrupoClaseId?: number | null;
   GrupoNombre: string;
+  SeccionesOrigen?: string | null;
   GrupoNivel?: string | null;
   GrupoJornada?: string | null;
   MateriaId: number;
@@ -198,6 +200,46 @@ export type PlaneamientoControlCalidad = {
   estructuraEstrategias?: string[];
   indicacionesDocente?: string | null;
   indicadoresEsperadosPorHabilidad?: number[];
+  referenciaObligatoria?: boolean;
+  reparadoAutomaticamente?: boolean;
+  intentosRevision?: number;
+  auditoriaSemantica?: {
+    disponible: boolean;
+    cumple: boolean;
+    incumplimientos: string[];
+    fortalezas: string[];
+  } | null;
+  perfilDocumentoReferencia?: PlaneamientoPerfilDocumentoReferencia;
+  contextoGeneracion?: {
+    materiaNombre?: string;
+    grado?: string;
+    mes?: string;
+    tema?: string;
+    habilidades?: Array<{
+      Area?: string;
+      Mes?: string;
+      NumeroHabilidad?: string | number;
+      DescripcionHabilidad?: string;
+    }>;
+  };
+};
+
+export type PlaneamientoPerfilDocumentoReferencia = {
+  esDocx: boolean;
+  columnas: Array<{
+    indice: number;
+    encabezado: string;
+    rol: "aprendizajes" | "criterios" | "estrategias" | "indicadores" | null;
+  }>;
+  camposVariables: Array<{
+    etiqueta: string;
+    valorAnterior: string;
+  }>;
+  estrategiasTexto: string;
+  encabezadosEstrategias: string[];
+  valoresContenidoAnterior: string[];
+  cantidadSeccionesContenido: number;
+  descripcion: string;
 };
 
 export type PlaneamientoReferenciaAnalisis = {
@@ -210,6 +252,7 @@ export type PlaneamientoReferenciaAnalisis = {
   perfilEstrategias?: {
     encabezados: string[];
     cantidadParrafos: number;
+    cantidadCaracteres: number;
     cantidadActividadesNumeradas: number;
     cantidadPreguntas: number;
     usaTemasNumerados: boolean;
@@ -217,6 +260,7 @@ export type PlaneamientoReferenciaAnalisis = {
     nivelDetalle: "breve" | "medio" | "amplio";
     descripcion: string;
   };
+  perfilDocumento?: PlaneamientoPerfilDocumentoReferencia;
   usaComoEjemplo: boolean;
   puedeUsarseComoMachote: boolean;
   advertencias: string[];
@@ -225,12 +269,20 @@ export type PlaneamientoReferenciaAnalisis = {
 
 export type PlaneamientoIaResultado = {
   nombre?: string;
+  mes?: string;
+  grado?: string;
+  materiaNombre?: string;
+  MateriaNombre?: string;
   enfoque?: string;
   advertencia?: string;
   periodicidad?: string;
   competenciaGeneral?: string;
   competenciasGenerales?: string[];
   aprendizajesEsperados?: string[];
+  criteriosEvaluacion?: string[];
+  camposReferencia?: Record<string, string>;
+  documentoReferenciaNombre?: string | null;
+  perfilDocumentoReferencia?: PlaneamientoPerfilDocumentoReferencia;
   estrategiasMediacion?: string[] | string;
   estrategiasMediacionEstructuradas?: Array<{
     fase: string;
@@ -297,6 +349,14 @@ export function normalizePlaneamientoIaResultado(input: any): PlaneamientoIaResu
     periodicidad: toTextValue(data.periodicidad),
     competenciaGeneral: toTextValue(data.competenciaGeneral),
     aprendizajesEsperados: toTextList(data.aprendizajesEsperados),
+    criteriosEvaluacion: toTextList(data.criteriosEvaluacion),
+    camposReferencia: data.camposReferencia && typeof data.camposReferencia === "object"
+      ? Object.fromEntries(
+          Object.entries(data.camposReferencia)
+            .map(([key, value]) => [String(key || "").trim(), toTextValue(value)])
+            .filter(([key]) => key)
+        )
+      : {},
     estrategiasMediacion: toTextValue(data.estrategiasMediacion),
     estrategiasMediacionEstructuradas: Array.isArray(data.estrategiasMediacionEstructuradas)
       ? data.estrategiasMediacionEstructuradas.map((item: any) => ({
@@ -1114,6 +1174,7 @@ export function deduplicarGruposProfesor(items: GrupoProfesor[]) {
 
   for (const item of items || []) {
     const key = [
+      item.GrupoClaseId || 0,
       item.GrupoId,
       item.MateriaId,
       item.AnioLectivoId,

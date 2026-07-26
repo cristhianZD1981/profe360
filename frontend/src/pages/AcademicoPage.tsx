@@ -162,6 +162,15 @@ type Especialidad = {
   Activo: boolean;
 };
 
+type SubEspecialidad = {
+  SubEspecialidadId: number;
+  InstitucionId?: number;
+  EspecialidadId: number;
+  EspecialidadDescripcion?: string | null;
+  Descripcion: string;
+  Activo: boolean;
+};
+
 type TipoEstudiante = {
   TipoEstudianteId: number;
   InstitucionId?: number;
@@ -512,6 +521,11 @@ const initialEspecialidadForm = {
   permiteMultiplesPorSeccion: false
 };
 
+const initialSubEspecialidadForm = {
+  especialidadId: "",
+  descripcion: ""
+};
+
 const initialTipoEstudianteForm = {
   descripcion: ""
 };
@@ -808,6 +822,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [adecuaciones, setAdecuaciones] = useState<AdecuacionItem[]>([]);
   const [especialidadesCatalogo, setEspecialidadesCatalogo] = useState<Especialidad[]>([]);
   const [especialidades, setEspecialidades] = useState<Especialidad[]>([]);
+  const [subEspecialidades, setSubEspecialidades] = useState<SubEspecialidad[]>([]);
   const [rutasTransporteCatalogo, setRutasTransporteCatalogo] = useState<RutaTransporte[]>([]);
   const [rutasTransporte, setRutasTransporte] = useState<RutaTransporte[]>([]);
   const [materiasCatalogo, setMateriasCatalogo] = useState<Materia[]>([]);
@@ -835,6 +850,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [tipoAdecuacionForm, setTipoAdecuacionForm] = useState(initialTipoAdecuacionForm);
   const [adecuacionForm, setAdecuacionForm] = useState(initialAdecuacionForm);
   const [especialidadForm, setEspecialidadForm] = useState(initialEspecialidadForm);
+  const [subEspecialidadForm, setSubEspecialidadForm] = useState(initialSubEspecialidadForm);
   const [rutaTransporteForm, setRutaTransporteForm] = useState(initialRutaTransporteForm);
   const [materiaForm, setMateriaForm] = useState(initialMateriaForm);
   const [asignacionForm, setAsignacionForm] = useState(initialAsignacionForm);
@@ -859,6 +875,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [editingTipoAdecuacionId, setEditingTipoAdecuacionId] = useState<number | null>(null);
   const [editingAdecuacionId, setEditingAdecuacionId] = useState<number | null>(null);
   const [editingEspecialidadId, setEditingEspecialidadId] = useState<number | null>(null);
+  const [editingSubEspecialidadId, setEditingSubEspecialidadId] = useState<number | null>(null);
   const [editingRutaTransporteId, setEditingRutaTransporteId] = useState<number | null>(null);
   const [editingMateriaId, setEditingMateriaId] = useState<number | null>(null);
   const [editingAsignacionId, setEditingAsignacionId] = useState<number | null>(null);
@@ -900,6 +917,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [tipoAdecuacionSearch, setTipoAdecuacionSearch] = useState("");
   const [adecuacionSearch, setAdecuacionSearch] = useState("");
   const [especialidadSearch, setEspecialidadSearch] = useState("");
+  const [subEspecialidadSearch, setSubEspecialidadSearch] = useState("");
   const [rutaTransporteSearch, setRutaTransporteSearch] = useState("");
   const [materiaSearch, setMateriaSearch] = useState("");
   const [asignacionSearch, setAsignacionSearch] = useState("");
@@ -918,6 +936,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [incluirTiposAdecuacionInactivos, setIncluirTiposAdecuacionInactivos] = useState(false);
   const [incluirAdecuacionesInactivas, setIncluirAdecuacionesInactivas] = useState(false);
   const [incluirEspecialidadesInactivas, setIncluirEspecialidadesInactivas] = useState(false);
+  const [incluirSubEspecialidadesInactivas, setIncluirSubEspecialidadesInactivas] = useState(false);
   const [incluirRutasTransporteInactivas, setIncluirRutasTransporteInactivas] = useState(false);
   const [incluirMateriasInactivas, setIncluirMateriasInactivas] = useState(false);
   const [incluirAsignacionesInactivas, setIncluirAsignacionesInactivas] = useState(false);
@@ -937,6 +956,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [loadingTipoAdecuacion, setLoadingTipoAdecuacion] = useState(false);
   const [loadingAdecuacion, setLoadingAdecuacion] = useState(false);
   const [loadingEspecialidad, setLoadingEspecialidad] = useState(false);
+  const [loadingSubEspecialidad, setLoadingSubEspecialidad] = useState(false);
   const [loadingRutaTransporte, setLoadingRutaTransporte] = useState(false);
   const [loadingMateria, setLoadingMateria] = useState(false);
   const [loadingAsignacion, setLoadingAsignacion] = useState(false);
@@ -1018,6 +1038,11 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const especialidadesActivas = useMemo(
     () => especialidadesCatalogo.filter((e) => e.Activo),
     [especialidadesCatalogo]
+  );
+
+  const especialidadesDisponiblesSubEspecialidad = useMemo(
+    () => especialidades.filter((e) => e.Activo),
+    [especialidades]
   );
 
   const estudiantesMatriculaFiltrados = useMemo(() => {
@@ -1115,6 +1140,13 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
       params: { q: query, incluirInactivas }
     });
     setEspecialidades(response.data?.data || []);
+  }
+
+  async function loadSubEspecialidades(query = "", incluirInactivas = incluirSubEspecialidadesInactivas) {
+    const response = await api.get("/academico/subespecialidades", {
+      params: { q: query, incluirInactivas }
+    });
+    setSubEspecialidades(response.data?.data || []);
   }
 
   async function loadTiposEstudiante(query = "", incluirInactivos = incluirTiposEstudianteInactivos) {
@@ -1364,7 +1396,10 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           await Promise.all([loadTiposAdecuacion(tipoAdecuacionSearch, incluirTiposAdecuacionInactivos), loadAdecuaciones(adecuacionSearch, incluirAdecuacionesInactivas)]);
           break;
         case "especialidades":
-          await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
+          await Promise.all([
+            loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas),
+            loadSubEspecialidades(subEspecialidadSearch, incluirSubEspecialidadesInactivas)
+          ]);
           break;
         case "rutasTransporte":
           await loadRutasTransporte(rutaTransporteSearch, incluirRutasTransporteInactivas);
@@ -1572,6 +1607,11 @@ function resetMatriculaForm() {
     setEspecialidadForm(initialEspecialidadForm);
     setEditingEspecialidadId(null);
     closeSection("especialidades");
+  }
+
+  function resetSubEspecialidadForm() {
+    setSubEspecialidadForm(initialSubEspecialidadForm);
+    setEditingSubEspecialidadId(null);
   }
 
   function resetRutaTransporteForm() {
@@ -2309,6 +2349,45 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleSubEspecialidadSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoadingSubEspecialidad(true);
+    clearMessages();
+
+    try {
+      const payload = {
+        especialidadId: subEspecialidadForm.especialidadId ? Number(subEspecialidadForm.especialidadId) : null,
+        descripcion: subEspecialidadForm.descripcion
+      };
+
+      if (!payload.especialidadId) {
+        setErrorMessage("Debe seleccionar una especialidad");
+        return;
+      }
+
+      if (!payload.descripcion.trim()) {
+        setErrorMessage("La descripción de la sub especialidad es obligatoria");
+        return;
+      }
+
+      if (editingSubEspecialidadId !== null) {
+        await api.put(`/academico/subespecialidades/${editingSubEspecialidadId}`, payload);
+        setMessage("Sub especialidad actualizada correctamente");
+      } else {
+        await api.post("/academico/subespecialidades", payload);
+        setMessage("Sub especialidad creada correctamente");
+      }
+
+      resetSubEspecialidadForm();
+      await loadSubEspecialidades(subEspecialidadSearch, incluirSubEspecialidadesInactivas);
+    } catch (error: any) {
+      console.error("Error guardando sub especialidad:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la sub especialidad");
+    } finally {
+      setLoadingSubEspecialidad(false);
+    }
+  }
+
   async function handleTipoEstudianteSubmit(e: FormEvent) {
     e.preventDefault();
     setLoadingTipoEstudiante(true);
@@ -2936,6 +3015,16 @@ function resetMatriculaForm() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function handleEditSubEspecialidad(item: SubEspecialidad) {
+    setTab("especialidades");
+    clearMessages();
+    setEditingSubEspecialidadId(item.SubEspecialidadId);
+    setSubEspecialidadForm({
+      especialidadId: item.EspecialidadId ? String(item.EspecialidadId) : "",
+      descripcion: item.Descripcion || ""
+    });
+  }
+
   function handleEditTipoEstudiante(item: TipoEstudiante) {
     setTab("tiposEstudiante");
     openSection("tiposEstudiante");
@@ -3214,6 +3303,21 @@ function resetMatriculaForm() {
     }
   }
 
+  async function handleDeleteSubEspecialidad(id: number) {
+    const confirmado = window.confirm("¿Deseás eliminar esta sub especialidad?");
+    if (!confirmado) return;
+    clearMessages();
+
+    try {
+      await api.delete(`/academico/subespecialidades/${id}`);
+      setMessage("Sub especialidad eliminada correctamente");
+      if (editingSubEspecialidadId === id) resetSubEspecialidadForm();
+      await loadSubEspecialidades(subEspecialidadSearch, incluirSubEspecialidadesInactivas);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la sub especialidad");
+    }
+  }
+
   async function handleDeleteTipoEstudiante(id: number) {
     const confirmado = window.confirm("¿Deseás eliminar este tipo de estudiante?");
     if (!confirmado) return;
@@ -3312,6 +3416,17 @@ function resetMatriculaForm() {
       await Promise.all([loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas), loadCatalogos()]);
     } catch (error: any) {
       setErrorMessage(error?.response?.data?.message || "No se pudo reactivar la especialidad");
+    }
+  }
+
+  async function handleReactivateSubEspecialidad(id: number) {
+    clearMessages();
+    try {
+      await api.patch(`/academico/subespecialidades/${id}/reactivar`);
+      setMessage("Sub especialidad reactivada correctamente");
+      await loadSubEspecialidades(subEspecialidadSearch, incluirSubEspecialidadesInactivas);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo reactivar la sub especialidad");
     }
   }
 
@@ -3516,6 +3631,11 @@ function resetMatriculaForm() {
   async function handleEspecialidadSearch(e: FormEvent) {
     e.preventDefault();
     await loadEspecialidades(especialidadSearch, incluirEspecialidadesInactivas);
+  }
+
+  async function handleSubEspecialidadSearch(e: FormEvent) {
+    e.preventDefault();
+    await loadSubEspecialidades(subEspecialidadSearch, incluirSubEspecialidadesInactivas);
   }
 
   async function handleTipoEstudianteSearch(e: FormEvent) {
@@ -5402,48 +5522,128 @@ function resetMatriculaForm() {
               )}
             </section>
 
-            <section className="card" style={{ marginBottom: 0 }}>
-              <h3>Listado de especialidades</h3>
-              <form onSubmit={handleEspecialidadSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
-                <input placeholder="Buscar por descripción" value={especialidadSearch} onChange={(e) => setEspecialidadSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
-                <button className="primary-btn" type="submit">Buscar</button>
-                <button type="button" onClick={() => { setEspecialidadSearch(""); loadEspecialidades("", incluirEspecialidadesInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
-                  Limpiar
-                </button>
-              </form>
-              <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
-                <input type="checkbox" checked={incluirEspecialidadesInactivas} onChange={(e) => setIncluirEspecialidadesInactivas(e.target.checked)} />
-                Incluir especialidades inactivas
-              </label>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>ID</th><th>Descripción</th><th>Varias por sección</th><th>Estado</th><th>Acciones</th></tr>
-                  </thead>
-                  <tbody>
-                    {especialidades.map((item) => (
-                      <tr key={item.EspecialidadId}>
-                        <td>{item.EspecialidadId}</td>
-                        <td>{item.Descripcion}</td>
-                        <td>{item.PermiteMultiplesPorSeccion ? "Sí" : "No"}</td>
-                        <td>{item.Activo ? "Activo" : "Inactivo"}</td>
-                        <td>
-                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                            <button type="button" onClick={() => handleEditEspecialidad(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
-                            {item.Activo ? (
-                              <button type="button" onClick={() => handleDeleteEspecialidad(item.EspecialidadId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
-                            ) : (
-                              <button type="button" onClick={() => handleReactivateEspecialidad(item.EspecialidadId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {!especialidades.length && <tr><td colSpan={5} style={{ textAlign: "center", padding: "16px" }}>No hay especialidades registradas</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+            <div className="stack">
+              <section className="card" style={{ marginBottom: 0 }}>
+                <h3>Listado de especialidades</h3>
+                <form onSubmit={handleEspecialidadSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
+                  <input placeholder="Buscar por descripción" value={especialidadSearch} onChange={(e) => setEspecialidadSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                  <button className="primary-btn" type="submit">Buscar</button>
+                  <button type="button" onClick={() => { setEspecialidadSearch(""); loadEspecialidades("", incluirEspecialidadesInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Limpiar
+                  </button>
+                </form>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                  <input type="checkbox" checked={incluirEspecialidadesInactivas} onChange={(e) => setIncluirEspecialidadesInactivas(e.target.checked)} />
+                  Incluir especialidades inactivas
+                </label>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>ID</th><th>Descripción</th><th>Varias por sección</th><th>Estado</th><th>Acciones</th></tr>
+                    </thead>
+                    <tbody>
+                      {especialidades.map((item) => (
+                        <tr key={item.EspecialidadId}>
+                          <td>{item.EspecialidadId}</td>
+                          <td>{item.Descripcion}</td>
+                          <td>{item.PermiteMultiplesPorSeccion ? "Sí" : "No"}</td>
+                          <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                          <td>
+                            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                              <button type="button" onClick={() => handleEditEspecialidad(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                              {item.Activo ? (
+                                <button type="button" onClick={() => handleDeleteEspecialidad(item.EspecialidadId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                              ) : (
+                                <button type="button" onClick={() => handleReactivateEspecialidad(item.EspecialidadId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!especialidades.length && <tr><td colSpan={5} style={{ textAlign: "center", padding: "16px" }}>No hay especialidades registradas</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="card" style={{ marginBottom: 0 }}>
+                <h3>Sub especialidades</h3>
+                <form className="form" onSubmit={handleSubEspecialidadSubmit}>
+                  <label>
+                    Especialidad
+                    <select
+                      value={subEspecialidadForm.especialidadId}
+                      onChange={(e) => setSubEspecialidadForm({ ...subEspecialidadForm, especialidadId: e.target.value })}
+                      required
+                    >
+                      <option value="">Seleccione una especialidad</option>
+                      {especialidadesDisponiblesSubEspecialidad.map((item) => (
+                        <option key={item.EspecialidadId} value={item.EspecialidadId}>
+                          {item.Descripcion}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Sub especialidad
+                    <input
+                      value={subEspecialidadForm.descripcion}
+                      onChange={(e) => setSubEspecialidadForm({ ...subEspecialidadForm, descripcion: e.target.value })}
+                      placeholder="Ejemplo: Redes, Ejecutivo, Cocina"
+                      required
+                    />
+                  </label>
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <button className="primary-btn" disabled={loadingSubEspecialidad}>
+                      {loadingSubEspecialidad ? (editingSubEspecialidadId !== null ? "Actualizando..." : "Guardando...") : (editingSubEspecialidadId !== null ? "Actualizar" : "Guardar")}
+                    </button>
+                    <button type="button" onClick={resetSubEspecialidadForm} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+
+                <form onSubmit={handleSubEspecialidadSearch} style={{ display: "flex", gap: "10px", margin: "18px 0 12px", flexWrap: "wrap" }}>
+                  <input placeholder="Buscar por especialidad o sub especialidad" value={subEspecialidadSearch} onChange={(e) => setSubEspecialidadSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                  <button className="primary-btn" type="submit">Buscar</button>
+                  <button type="button" onClick={() => { setSubEspecialidadSearch(""); loadSubEspecialidades("", incluirSubEspecialidadesInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
+                    Limpiar
+                  </button>
+                </form>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                  <input type="checkbox" checked={incluirSubEspecialidadesInactivas} onChange={(e) => setIncluirSubEspecialidadesInactivas(e.target.checked)} />
+                  Incluir sub especialidades inactivas
+                </label>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>ID</th><th>Especialidad</th><th>Sub especialidad</th><th>Estado</th><th>Acciones</th></tr>
+                    </thead>
+                    <tbody>
+                      {subEspecialidades.map((item) => (
+                        <tr key={item.SubEspecialidadId}>
+                          <td>{item.SubEspecialidadId}</td>
+                          <td>{item.EspecialidadDescripcion || ""}</td>
+                          <td>{item.Descripcion}</td>
+                          <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                          <td>
+                            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                              <button type="button" onClick={() => handleEditSubEspecialidad(item)} style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Editar</button>
+                              {item.Activo ? (
+                                <button type="button" onClick={() => handleDeleteSubEspecialidad(item.SubEspecialidadId)} style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Eliminar</button>
+                              ) : (
+                                <button type="button" onClick={() => handleReactivateSubEspecialidad(item.SubEspecialidadId)} style={{ border: "1px solid #bbf7d0", background: "#ecfdf3", color: "#166534", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Reactivar</button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!subEspecialidades.length && <tr><td colSpan={5} style={{ textAlign: "center", padding: "16px" }}>No hay sub especialidades registradas</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
           </div>
         )}
 

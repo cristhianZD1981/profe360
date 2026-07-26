@@ -295,39 +295,34 @@ async function getHorarioPorProfesor(params: {
         u.Nombre AS DocenteNombre,
         u.PrimerApellido AS DocentePrimerApellido,
         u.SegundoApellido AS DocenteSegundoApellido
-      FROM dbo.AsignacionDocente ad
+      FROM dbo.HorarioDocente hd
       INNER JOIN dbo.Usuario u
-        ON u.UsuarioId = ad.UsuarioId
-      INNER JOIN dbo.Grupo g
-        ON g.GrupoId = ad.GrupoId
-       AND g.Activo = 1
-      INNER JOIN dbo.Materia m
-        ON m.MateriaId = ad.MateriaId
-       AND m.Activa = 1
-      INNER JOIN dbo.GrupoMateria gm
-        ON gm.GrupoId = ad.GrupoId
-       AND gm.MateriaId = ad.MateriaId
-       AND gm.Activo = 1
-       AND (
-         gm.PeriodoId = ad.PeriodoId
-         OR gm.PeriodoId IS NULL
-         OR ad.PeriodoId IS NULL
-       )
+        ON u.UsuarioId = hd.UsuarioId
+       AND u.InstitucionId = @institucionId
+       AND u.Activo = 1
       INNER JOIN dbo.HorarioGrupo hg
-        ON hg.GrupoMateriaId = gm.GrupoMateriaId
+        ON hg.HorarioGrupoId = hd.HorarioGrupoId
        AND hg.Activo = 1
+      INNER JOIN dbo.GrupoMateria gm
+        ON gm.GrupoMateriaId = hg.GrupoMateriaId
+       AND gm.Activo = 1
+      INNER JOIN dbo.Grupo g
+        ON g.GrupoId = gm.GrupoId
+       AND g.Activo = 1
+       AND g.InstitucionId = @institucionId
+      INNER JOIN dbo.Materia m
+        ON m.MateriaId = gm.MateriaId
+       AND m.Activa = 1
       INNER JOIN dbo.BloqueHorario bh
         ON bh.BloqueHorarioId = hg.BloqueHorarioId
       LEFT JOIN dbo.Periodo p
         ON p.PeriodoId = gm.PeriodoId
       LEFT JOIN dbo.AnioLectivo a
         ON a.AnioLectivoId = g.AnioLectivoId
-      WHERE ad.InstitucionId = @institucionId
-        AND ad.UsuarioId = @usuarioId
-        AND ad.Activo = 1
-        AND ad.TipoAsignacion = N'PROFESOR_MATERIA'
-        AND (@anioLectivoId IS NULL OR ad.AnioLectivoId = @anioLectivoId)
-        AND (@periodoId IS NULL OR ad.PeriodoId = @periodoId OR ad.PeriodoId IS NULL)
+      WHERE hd.UsuarioId = @usuarioId
+        AND hd.Activo = 1
+        AND (@anioLectivoId IS NULL OR g.AnioLectivoId = @anioLectivoId)
+        AND (@periodoId IS NULL OR gm.PeriodoId = @periodoId)
       ORDER BY bh.OrdenVisual ASC, hg.DiaSemana ASC, g.Nombre ASC
     `);
 

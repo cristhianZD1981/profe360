@@ -37,6 +37,11 @@ function isValidNonNegativeId(value: any) {
   return Number.isInteger(n) && n >= 0;
 }
 
+function isValidPositiveId(value: any) {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0;
+}
+
 async function hasMateriaEspecialColumn(pool: any) {
   const result = await pool.request().query(`
     SELECT CAST(
@@ -896,6 +901,28 @@ async function ensureBoletaConductaConfigTable(pool: any) {
 
     IF COL_LENGTH('dbo.BoletaConductaConfig', 'AnioLectivo') IS NULL
       ALTER TABLE dbo.BoletaConductaConfig ADD AnioLectivo NVARCHAR(10) NULL;
+  `);
+}
+
+async function ensureSubEspecialidadTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.SubEspecialidad', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.SubEspecialidad (
+        SubEspecialidadId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        InstitucionId INT NOT NULL,
+        EspecialidadId INT NOT NULL,
+        Descripcion NVARCHAR(200) NOT NULL,
+        Activo BIT NOT NULL CONSTRAINT DF_SubEspecialidad_Activo DEFAULT(1),
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_SubEspecialidad_CreatedAt DEFAULT(SYSDATETIME()),
+        UpdatedAt DATETIME2 NULL,
+        CONSTRAINT FK_SubEspecialidad_Institucion FOREIGN KEY (InstitucionId) REFERENCES dbo.Institucion(InstitucionId),
+        CONSTRAINT FK_SubEspecialidad_Especialidad FOREIGN KEY (EspecialidadId) REFERENCES dbo.Especialidad(EspecialidadId)
+      );
+
+      CREATE INDEX IX_SubEspecialidad_InstitucionEspecialidad
+        ON dbo.SubEspecialidad (InstitucionId, EspecialidadId, Activo, Descripcion);
+    END
   `);
 }
 
@@ -1773,6 +1800,302 @@ router.patch("/especialidades/:id/reactivar", async (req, res) => {
   } catch (error) {
     console.error("Error al reactivar especialidad:", error);
     return res.status(500).json({ ok: false, message: "Error interno al reactivar especialidad" });
+  }
+});
+
+/* =========================================================
+   SUB ESPECIALIDADES
+   ========================================================= */
+router.get("/subespecialidades", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const q = String(req.query.q || "").trim();
+    const especialidadId = req.query.especialidadId ? Number(req.query.especialidadId) : null;
+    const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
+
+    if (especialidadId !== null && !isValidPositiveId(especialidadId)) {
+      return badRequest(res, "Id de especialidad invÃ¡lido");
+    }
+
+    const pool = await getPool();
+    await ensureSubEspecialidadTable(pool);
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("q", sql.NVarChar, `%${q}%`)
+      .input("especialidadId", sql.Int, especialidadId)
+      .input("incluirInactivas", sql.Bit, incluirInactivas)
+      .query(`
+        SELECT
+          se.SubEspecialidadId,
+          se.InstitucionId,
+          se.EspecialidadId,
+          e.Descripcion AS EspecialidadDescripcion,
+          se.Descripcion,
+          se.Activo,
+          se.CreatedAt,
+          se.UpdatedAt
+        FROM dbo.SubEspecialidad se
+        INNER JOIN dbo.Especialidad e
+          ON e.EspecialidadId = se.EspecialidadId
+          AND e.InstitucionId = se.InstitucionId
+        WHERE se.InstitucionId = @institucionId
+          AND (@incluirInactivas = 1 OR se.Activo = 1)
+          AND (@especialidadId IS NULL OR se.EspecialidadId = @especialidadId)
+          AND (
+            @q = '%%'
+            OR se.Descripcion LIKE @q
+            OR e.Descripcion LIKE @q
+          )
+        ORDER BY e.Descripcion, se.Descripcion
+      `);
+
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error al listar sub especialidades:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al listar sub especialidades" });
+  }
+});
+
+router.post("/subespecialidades", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const especialidadId = Number(req.body?.especialidadId);
+    const descripcion = String(req.body?.descripcion || "").trim();
+
+    if (!isValidPositiveId(especialidadId)) {
+      return badRequest(res, "La especialidad es obligatoria");
+    }
+
+    if (!descripcion) {
+      return badRequest(res, "La descripciÃ³n de la sub especialidad es obligatoria");
+    }
+
+    const pool = await getPool();
+    await ensureSubEspecialidadTable(pool);
+
+    const especialidad = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("especialidadId", sql.Int, especialidadId)
+      .query(`
+        SELECT TOP 1 EspecialidadId
+        FROM dbo.Especialidad
+        WHERE InstitucionId = @institucionId
+          AND EspecialidadId = @especialidadId
+          AND Activo = 1
+      `);
+
+    if (!especialidad.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Especialidad no encontrada o inactiva" });
+    }
+
+    const duplicada = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("especialidadId", sql.Int, especialidadId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 SubEspecialidadId, Activo
+        FROM dbo.SubEspecialidad
+        WHERE InstitucionId = @institucionId
+          AND EspecialidadId = @especialidadId
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+
+    if (duplicada.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe una sub especialidad con esa descripciÃ³n para la especialidad seleccionada" });
+    }
+
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("especialidadId", sql.Int, especialidadId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        INSERT INTO dbo.SubEspecialidad
+        (
+          InstitucionId,
+          EspecialidadId,
+          Descripcion,
+          Activo,
+          CreatedAt
+        )
+        OUTPUT INSERTED.*
+        VALUES
+        (
+          @institucionId,
+          @especialidadId,
+          @descripcion,
+          1,
+          SYSDATETIME()
+        )
+      `);
+
+    return created(res, result.recordset[0], "Sub especialidad creada correctamente");
+  } catch (error) {
+    console.error("Error al crear sub especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al crear sub especialidad" });
+  }
+});
+
+router.put("/subespecialidades/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    const especialidadId = Number(req.body?.especialidadId);
+    const descripcion = String(req.body?.descripcion || "").trim();
+
+    if (!isValidNonNegativeId(id)) {
+      return badRequest(res, "Id invÃ¡lido");
+    }
+
+    if (!isValidPositiveId(especialidadId)) {
+      return badRequest(res, "La especialidad es obligatoria");
+    }
+
+    if (!descripcion) {
+      return badRequest(res, "La descripciÃ³n de la sub especialidad es obligatoria");
+    }
+
+    const pool = await getPool();
+    await ensureSubEspecialidadTable(pool);
+
+    const especialidad = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("especialidadId", sql.Int, especialidadId)
+      .query(`
+        SELECT TOP 1 EspecialidadId
+        FROM dbo.Especialidad
+        WHERE InstitucionId = @institucionId
+          AND EspecialidadId = @especialidadId
+          AND Activo = 1
+      `);
+
+    if (!especialidad.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Especialidad no encontrada o inactiva" });
+    }
+
+    const duplicada = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("especialidadId", sql.Int, especialidadId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        SELECT TOP 1 SubEspecialidadId
+        FROM dbo.SubEspecialidad
+        WHERE InstitucionId = @institucionId
+          AND EspecialidadId = @especialidadId
+          AND SubEspecialidadId <> @id
+          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+      `);
+
+    if (duplicada.recordset.length) {
+      return res.status(409).json({ ok: false, message: "Ya existe otra sub especialidad con esa descripciÃ³n para la especialidad seleccionada" });
+    }
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("especialidadId", sql.Int, especialidadId)
+      .input("descripcion", sql.NVarChar, descripcion)
+      .query(`
+        UPDATE dbo.SubEspecialidad
+        SET
+          EspecialidadId = @especialidadId,
+          Descripcion = @descripcion,
+          UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        WHERE SubEspecialidadId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Sub especialidad no encontrada" });
+    }
+
+    return ok(res, result.recordset[0], "Sub especialidad actualizada correctamente");
+  } catch (error) {
+    console.error("Error al actualizar sub especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al actualizar sub especialidad" });
+  }
+});
+
+router.delete("/subespecialidades/:id", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) {
+      return badRequest(res, "Id invÃ¡lido");
+    }
+
+    const pool = await getPool();
+    await ensureSubEspecialidadTable(pool);
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE dbo.SubEspecialidad
+        SET Activo = 0, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.SubEspecialidadId
+        WHERE SubEspecialidadId = @id
+          AND InstitucionId = @institucionId
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Sub especialidad no encontrada" });
+    }
+
+    return ok(res, { SubEspecialidadId: id }, "Sub especialidad desactivada correctamente");
+  } catch (error) {
+    console.error("Error al desactivar sub especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al desactivar sub especialidad" });
+  }
+});
+
+router.patch("/subespecialidades/:id/reactivar", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+
+    const id = Number(req.params.id);
+    if (!isValidNonNegativeId(id)) {
+      return badRequest(res, "Id invÃ¡lido");
+    }
+
+    const pool = await getPool();
+    await ensureSubEspecialidadTable(pool);
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        UPDATE se
+        SET se.Activo = 1, se.UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.*
+        FROM dbo.SubEspecialidad se
+        INNER JOIN dbo.Especialidad e
+          ON e.EspecialidadId = se.EspecialidadId
+          AND e.InstitucionId = se.InstitucionId
+        WHERE se.SubEspecialidadId = @id
+          AND se.InstitucionId = @institucionId
+          AND e.Activo = 1
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ ok: false, message: "Sub especialidad no encontrada o especialidad inactiva" });
+    }
+
+    return ok(res, result.recordset[0], "Sub especialidad reactivada correctamente");
+  } catch (error) {
+    console.error("Error al reactivar sub especialidad:", error);
+    return res.status(500).json({ ok: false, message: "Error interno al reactivar sub especialidad" });
   }
 });
 

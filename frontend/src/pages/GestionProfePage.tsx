@@ -103,6 +103,21 @@ import {
   stickyTableHeaderStyle,
 } from "./GestionProfePage.helpers";
 
+function getGrupoClaseParams(item?: GrupoProfesor | null) {
+  return item?.GrupoClaseId ? { grupoClaseId: Number(item.GrupoClaseId) } : {};
+}
+
+function getGrupoProfesorKey(item?: GrupoProfesor | null) {
+  if (!item) return "";
+  return [
+    item.GrupoClaseId || 0,
+    item.GrupoId,
+    item.MateriaId,
+    item.AnioLectivoId,
+    item.PeriodoId
+  ].join("|");
+}
+
 function normalizeAdecuacionText(value?: string | null) {
   return String(value || "")
     .normalize("NFD")
@@ -197,6 +212,16 @@ function dedupeApoyoEducativoEstudiantes(items: ApoyoEducativoResumenItem[]) {
 
 const MIS_GRUPOS_TODOS_KEY = "__TODOS__";
 
+function getGrupoHorarioPredeterminado(items: GrupoProfesor[]) {
+  return [...(items || [])].sort((a, b) => {
+    const anio = Number(b?.AnioLectivoId || 0) - Number(a?.AnioLectivoId || 0);
+    if (anio !== 0) return anio;
+    const periodo = Number(b?.PeriodoId || 0) - Number(a?.PeriodoId || 0);
+    if (periodo !== 0) return periodo;
+    return compararGruposProfesor(a, b);
+  })[0] || null;
+}
+
 function getMisGruposPeriodoLabel(periodoNombre: string, periodoId?: number | string | null) {
   const texto = String(periodoNombre || "").trim();
   const porNumero = texto.match(/(\d+)/);
@@ -284,9 +309,13 @@ export default function GestionProfePage() {
   const [loadingHabilidadesIa, setLoadingHabilidadesIa] = useState(false);
   const [generatingPlaneamientoIa, setGeneratingPlaneamientoIa] = useState(false);
   const [generatingPlaneamientoIaProgress, setGeneratingPlaneamientoIaProgress] = useState(0);
+  const [generatingPlaneamientoIaEtapa, setGeneratingPlaneamientoIaEtapa] = useState("");
   const generatingPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [savingPlaneamientoIa, setSavingPlaneamientoIa] = useState(false);
+  const [revisandoPlaneamientoIa, setRevisandoPlaneamientoIa] = useState(false);
+  const [revisionPlaneamientoIaPendiente, setRevisionPlaneamientoIaPendiente] = useState(true);
   const [savingPlaneamientoIaProgress, setSavingPlaneamientoIaProgress] = useState(0);
+  const [savingPlaneamientoIaEtapa, setSavingPlaneamientoIaEtapa] = useState("");
   const savingPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [deletingPlaneamientoId, setDeletingPlaneamientoId] = useState<number | null>(null);
   const [deletingPlaneamientoProgress, setDeletingPlaneamientoProgress] = useState(0);
@@ -298,8 +327,12 @@ export default function GestionProfePage() {
   const [usarPlantillaComoEjemploIa, setUsarPlantillaComoEjemploIa] = useState(true);
   const [usarPlantillaComoMachoteIa, setUsarPlantillaComoMachoteIa] = useState(true);
   const [promptPlaneamientoIa, setPromptPlaneamientoIa] = useState("");
-  const [promptPlaneamientoIaEditado, setPromptPlaneamientoIaEditado] = useState(false);
+  const [promptPlaneamientoIaConstruido, setPromptPlaneamientoIaConstruido] = useState(false);
+  const [promptPlaneamientoIaMejorado, setPromptPlaneamientoIaMejorado] = useState(false);
   const [mejorandoPromptPlaneamientoIa, setMejorandoPromptPlaneamientoIa] = useState(false);
+  const [mejorandoPromptPlaneamientoIaProgress, setMejorandoPromptPlaneamientoIaProgress] = useState(0);
+  const [mejorandoPromptPlaneamientoIaEtapa, setMejorandoPromptPlaneamientoIaEtapa] = useState("");
+  const mejorandoPromptPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [analizandoReferenciaIa, setAnalizandoReferenciaIa] = useState(false);
   const [analisisReferenciaIa, setAnalisisReferenciaIa] = useState<PlaneamientoReferenciaAnalisis | null>(null);
   const [plantillasPlaneamientoIa, setPlantillasPlaneamientoIa] = useState<PlantillaPromptIA[]>([]);
@@ -527,6 +560,10 @@ export default function GestionProfePage() {
   const gruposOrdenados = useMemo(() => {
     return [...grupos].sort(compararGruposProfesor);
   }, [grupos]);
+  const grupoHorarioPredeterminado = useMemo(
+    () => getGrupoHorarioPredeterminado(gruposOrdenados),
+    [gruposOrdenados]
+  );
 
   const periodosDisponiblesMisGrupos = useMemo(() => {
     const periodosMap = new Map<string, { id: string; label: string; nombre: string; orden: number }>();
@@ -1845,6 +1882,50 @@ export default function GestionProfePage() {
       return true;
     });
   }, [habilidadesIa, mesesSeleccionadosIa]);
+
+  const firmaDatosPromptPlaneamientoIa = useMemo(() => JSON.stringify({
+    nombre: planeamientoIaForm.nombre,
+    materiaId: planeamientoIaForm.materiaId,
+    grado: planeamientoIaForm.grado,
+    grupoIds: planeamientoIaForm.grupoIds,
+    mes: planeamientoIaForm.mes,
+    periodicidad: planeamientoIaForm.periodicidad,
+    fechaInicio: planeamientoIaForm.fechaInicio,
+    fechaFin: planeamientoIaForm.fechaFin,
+    competenciaGeneral: planeamientoIaForm.competenciaGeneral,
+    habilidadesIds: planeamientoIaForm.habilidadesIds,
+    indicaciones: planeamientoIaForm.indicaciones,
+    tema: planeamientoIaForm.tema,
+    area: planeamientoIaForm.area,
+    materiaSeleccionadaId: selected?.MateriaId || null,
+    grupoSeleccionadoId: selected?.GrupoId || null,
+    archivosApoyo: documentoApoyoIa.map((file) => `${file.name}:${file.size}:${file.lastModified}`),
+    referencia: plantillaFormatoIa
+      ? `${plantillaFormatoIa.name}:${plantillaFormatoIa.size}:${plantillaFormatoIa.lastModified}`
+      : "",
+    usarComoEjemplo: usarPlantillaComoEjemploIa,
+    usarComoMachote: usarPlantillaComoMachoteIa
+  }), [
+    planeamientoIaForm.nombre,
+    planeamientoIaForm.materiaId,
+    planeamientoIaForm.grado,
+    planeamientoIaForm.grupoIds,
+    planeamientoIaForm.mes,
+    planeamientoIaForm.periodicidad,
+    planeamientoIaForm.fechaInicio,
+    planeamientoIaForm.fechaFin,
+    planeamientoIaForm.competenciaGeneral,
+    planeamientoIaForm.habilidadesIds,
+    planeamientoIaForm.indicaciones,
+    planeamientoIaForm.tema,
+    planeamientoIaForm.area,
+    selected?.MateriaId,
+    selected?.GrupoId,
+    documentoApoyoIa,
+    plantillaFormatoIa,
+    usarPlantillaComoEjemploIa,
+    usarPlantillaComoMachoteIa
+  ]);
 
   useEffect(() => {
     if (activePanel !== "planeamientos") return;
@@ -4021,7 +4102,13 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         }
       });
       const data = response.data?.data || response.data || [];
-      setGrupos(Array.isArray(data) ? deduplicarGruposProfesor(data).sort(compararGruposProfesor) : []);
+      const gruposCargados = Array.isArray(data)
+        ? deduplicarGruposProfesor(data).sort(compararGruposProfesor)
+        : [];
+      setGrupos(gruposCargados);
+      if (horarioVisible && gruposCargados[0]) {
+        await loadMiHorario(getGrupoHorarioPredeterminado(gruposCargados));
+      }
     } catch (error: any) {
       console.error("Error cargando Gestión del Profe:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudieron cargar los grupos asignados");
@@ -4378,7 +4465,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}`, {
         params: {
           anioLectivoId: item.AnioLectivoId,
-          periodoId: item.PeriodoId
+          periodoId: item.PeriodoId,
+          ...getGrupoClaseParams(item)
         }
       });
       const data = response.data?.data || response.data || null;
@@ -4399,7 +4487,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setTimeout(() => {
       detalleGrupoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 120);
-  }, [loadingDetalle, selected?.AsignacionDocenteId, detalle, activePanel]);
+  }, [loadingDetalle, selected?.AsignacionDocenteId, selected?.GrupoClaseId, detalle, activePanel]);
 
 
   async function loadNivelesDesempeno() {
@@ -4446,7 +4534,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             grupoId: item.GrupoId,
             materiaId: item.MateriaId,
             anioLectivoId: item.AnioLectivoId,
-            periodoId: item.PeriodoId
+            periodoId: item.PeriodoId,
+            ...getGrupoClaseParams(item)
           }
         })
       ]);
@@ -4489,7 +4578,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setErrorMessage("");
 
     try {
-      const gruposDestino = mostrarSelectorCambioPlantilla
+      const gruposDestino = selected.GrupoClaseId || mostrarSelectorCambioPlantilla
         ? [selected]
         : seccionesMismoGradoMateriaSeleccionado.filter((g) => Number(g.MateriaId) === Number(selected.MateriaId));
 
@@ -4510,6 +4599,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
             materiaId: grupo.MateriaId,
             anioLectivoId: grupo.AnioLectivoId,
             periodoId: grupo.PeriodoId,
+            ...getGrupoClaseParams(grupo),
             plantillaId: eval360PlantillaId || null,
             nombre: "Evaluación " + grupo.GrupoNombre + " - " + grupo.MateriaNombre + " - " + grupo.PeriodoNombre
           });
@@ -4570,6 +4660,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           materiaId: item.MateriaId,
           anioLectivoId: item.AnioLectivoId,
           periodoId: item.PeriodoId,
+          ...getGrupoClaseParams(item),
           incluirAsistencia: options.incluirAsistencia ? 1 : undefined,
           incluirEnvios: options.incluirEnvios ? 1 : undefined,
           sincronizar: options.sincronizar ? 1 : undefined,
@@ -4579,6 +4670,14 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const dataRaw = unwrapApiData(response) || null;
       const data = (() => {
         if (!dataRaw) return dataRaw;
+        const estudiantesPermitidos = item.GrupoClaseId
+          ? new Set((detalle?.estudiantes || []).map((row: any) => Number(row.EstudianteId)))
+          : null;
+        const filtrarPorEstudiante = (rows: any) => {
+          const list = Array.isArray(rows) ? rows : [];
+          if (!estudiantesPermitidos) return list;
+          return list.filter((row: any) => estudiantesPermitidos.has(Number(row.EstudianteId)));
+        };
         const detalles = Array.isArray(dataRaw.detalles) ? dataRaw.detalles : [];
         const actividades = Array.isArray(dataRaw.actividades) ? dataRaw.actividades : [];
         const examDetalleIds = new Set(
@@ -4608,17 +4707,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         return {
           ...dataRaw,
           plantillas: Array.isArray(dataRaw.plantillas) ? dataRaw.plantillas : [],
-          estudiantes: Array.isArray(dataRaw.estudiantes) ? dataRaw.estudiantes : [],
+          estudiantes: filtrarPorEstudiante(dataRaw.estudiantes),
           planeamientos: Array.isArray(dataRaw.planeamientos) ? dataRaw.planeamientos : [],
           detalles,
           indicadores: Array.isArray(dataRaw.indicadores) ? dataRaw.indicadores : [],
-          seguimientos: Array.isArray(dataRaw.seguimientos) ? dataRaw.seguimientos : [],
+          seguimientos: filtrarPorEstudiante(dataRaw.seguimientos),
           actividades: actividadesAjustadas,
           actividadIndicadores: Array.isArray(dataRaw.actividadIndicadores) ? dataRaw.actividadIndicadores : [],
-          notasActividades: Array.isArray(dataRaw.notasActividades) ? dataRaw.notasActividades : [],
-          asistenciaRegistros: Array.isArray(dataRaw.asistenciaRegistros) ? dataRaw.asistenciaRegistros : [],
-          componenteAjustesManuales: Array.isArray(dataRaw.componenteAjustesManuales) ? dataRaw.componenteAjustesManuales : [],
-          mensajesSeguimiento: Array.isArray(dataRaw.mensajesSeguimiento) ? dataRaw.mensajesSeguimiento : []
+          notasActividades: filtrarPorEstudiante(dataRaw.notasActividades),
+          asistenciaRegistros: filtrarPorEstudiante(dataRaw.asistenciaRegistros),
+          componenteAjustesManuales: filtrarPorEstudiante(dataRaw.componenteAjustesManuales),
+          mensajesSeguimiento: filtrarPorEstudiante(dataRaw.mensajesSeguimiento)
         };
       })();
       setSeguimientoContexto(data);
@@ -5869,6 +5968,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
           nombre: parsed?.nombre || planeamiento.Nombre || "Planeamiento didáctico",
           observaciones: parsed?.observaciones || planeamiento.Observaciones || ""
         }));
+        setRevisionPlaneamientoIaPendiente(true);
         setPlaneamientoIaForm((prev) => ({
           ...prev,
           periodicidad: String(parsed?.periodicidad || prev.periodicidad || ""),
@@ -6142,6 +6242,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     if ((field === "materiaId" || field === "grado") && selected) {
       return;
     }
+    if (ultimoPlaneamientoIa) setRevisionPlaneamientoIaPendiente(true);
 
     setPlaneamientoIaForm((prev) => {
       const next: PlaneamientoIaForm = { ...prev, [field]: value };
@@ -6337,7 +6438,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       archivos.length ? `Archivos disponibles:\n${archivos.join("\n")}` : "No se adjuntaron archivos adicionales.",
       "Las instrucciones escritas por la persona docente son obligatorias y tienen prioridad sobre ejemplos, plantillas o reglas genéricas.",
       "Cuando se use un machote Word, conservá solo su diseño, tablas y encabezados: eliminá todo dato del plan anterior y llenalo únicamente con la información nueva.",
-      "Revisá las Estrategias de mediación del planeamiento de referencia y usalas obligatoriamente como guía de estructura, encabezados, orden y secuencia pedagógica. Redactá contenido nuevo para las habilidades actuales, sin copiar los datos anteriores.",
+      "Revisá las Estrategias de mediación del planeamiento de referencia y usalas obligatoriamente como guía de estructura, encabezados, orden y secuencia pedagógica. Conservá sus tipos pedagógicos generales, pero redactá nuevamente los nombres de actividades, consignas, preguntas, ejercicios, ejemplos, recursos concretos y productos para las habilidades actuales. No copiés contenido sustantivo anterior ni interpretés números internos del Word como encabezados.",
       "Si el machote, ejemplo o material de referencia está en inglés, toda la salida nueva debe quedar en inglés."
     ].join("\n\n");
   }
@@ -6369,26 +6470,82 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
     setPromptPlaneamientoIa(prompt);
-    setPromptPlaneamientoIaEditado(false);
+    setPromptPlaneamientoIaConstruido(true);
+    setPromptPlaneamientoIaMejorado(false);
     setErrorMessage("");
-    setMessage("Prompt base creado. Podés editarlo o pedir ayuda a la IA para mejorarlo.");
+    setMessage("Prompt construido. Podés mejorarlo con IA o generar el planeamiento.");
+  }
+
+  function crearOperacionIdPlaneamientoIa(prefijo: string) {
+    const identificador = typeof window.crypto?.randomUUID === "function"
+      ? window.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    return `${prefijo}-${identificador}`;
+  }
+
+  function detenerMonitoreoProgresoPlaneamientoIa(timerRef: React.MutableRefObject<number | null>) {
+    if (timerRef.current !== null) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  function iniciarMonitoreoProgresoPlaneamientoIa(
+    operacionId: string,
+    setPorcentaje: React.Dispatch<React.SetStateAction<number>>,
+    setEtapa: React.Dispatch<React.SetStateAction<string>>,
+    timerRef: React.MutableRefObject<number | null>
+  ) {
+    detenerMonitoreoProgresoPlaneamientoIa(timerRef);
+    let consultando = false;
+
+    const consultar = async () => {
+      if (consultando) return;
+      consultando = true;
+      try {
+        const response = await api.get(`/planeamiento-ia/progreso/${encodeURIComponent(operacionId)}`, {
+          timeout: 10000
+        });
+        const data = response.data?.data || response.data || {};
+        const porcentaje = Math.min(100, Math.max(0, Number(data.porcentaje || 0)));
+        setPorcentaje(porcentaje);
+        if (data.etapa) setEtapa(String(data.etapa));
+      } catch {
+        // La solicitud principal continúa; un fallo transitorio del sondeo no debe cancelarla.
+      } finally {
+        consultando = false;
+      }
+    };
+
+    void consultar();
+    timerRef.current = window.setInterval(() => void consultar(), 500);
   }
 
   async function mejorarPromptPlaneamientoIa() {
-    const promptBase = promptPlaneamientoIa.trim() || construirPromptPlaneamientoIa();
+    const promptBase = promptPlaneamientoIa.trim();
     const grupoBase = getGrupoPlaneamientoIa();
     const materiaId = Number(selected?.MateriaId || grupoBase?.MateriaId || planeamientoIaForm.materiaId || 0);
     const grupoId = Number(grupoBase?.GrupoId || selected?.GrupoId || 0);
 
-    if (!promptBase || !grupoBase || !materiaId || !grupoId) {
-      setErrorMessage("Completá los datos requeridos y creá primero el prompt");
+    if (!promptPlaneamientoIaConstruido || !promptBase || !grupoBase || !materiaId || !grupoId) {
+      setErrorMessage("Construí primero el prompt con los datos del planeamiento");
       return;
     }
 
+    const operacionId = crearOperacionIdPlaneamientoIa("mejorar-prompt");
     setMejorandoPromptPlaneamientoIa(true);
+    setMejorandoPromptPlaneamientoIaProgress(0);
+    setMejorandoPromptPlaneamientoIaEtapa("Preparando la solicitud");
+    iniciarMonitoreoProgresoPlaneamientoIa(
+      operacionId,
+      setMejorandoPromptPlaneamientoIaProgress,
+      setMejorandoPromptPlaneamientoIaEtapa,
+      mejorandoPromptPlaneamientoIaTimerRef
+    );
     setErrorMessage("");
     try {
       const response = await api.post("/planeamiento-ia/mejorar-prompt", {
+        operacionId,
         prompt: promptBase,
         grupoId,
         materiaId,
@@ -6399,36 +6556,28 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const promptMejorado = String(data.prompt || "").trim();
       if (!promptMejorado) throw new Error("La IA no devolvió un prompt mejorado");
       setPromptPlaneamientoIa(promptMejorado);
-      setPromptPlaneamientoIaEditado(true);
-      setMessage("Prompt mejorado con IA. Revisalo antes de generar el planeamiento.");
+      setPromptPlaneamientoIaConstruido(true);
+      setPromptPlaneamientoIaMejorado(true);
+      setMejorandoPromptPlaneamientoIaProgress(100);
+      setMejorandoPromptPlaneamientoIaEtapa("Prompt mejorado");
+      setMessage("Prompt mejorado con IA. Ya podés generar el planeamiento.");
     } catch (error: any) {
+      setMejorandoPromptPlaneamientoIaEtapa("No se pudo completar la mejora");
       setErrorMessage(error?.response?.data?.message || error?.message || "No se pudo mejorar el prompt con IA");
     } finally {
+      detenerMonitoreoProgresoPlaneamientoIa(mejorandoPromptPlaneamientoIaTimerRef);
       setMejorandoPromptPlaneamientoIa(false);
     }
   }
 
   useEffect(() => {
-    if (!planeamientoIaFormOpen || promptPlaneamientoIaEditado) return;
-
-    const prompt = construirPromptPlaneamientoIa();
-    if (prompt && prompt !== promptPlaneamientoIa) {
-      setPromptPlaneamientoIa(prompt);
-    }
+    if (!planeamientoIaFormOpen) return;
+    setPromptPlaneamientoIa("");
+    setPromptPlaneamientoIaConstruido(false);
+    setPromptPlaneamientoIaMejorado(false);
   }, [
     planeamientoIaFormOpen,
-    promptPlaneamientoIaEditado,
-    planeamientoIaForm,
-    selected,
-    grupos,
-    materiasAsignadas,
-    habilidadesIa,
-    documentoApoyoIa,
-    plantillaFormatoIa,
-    usarPlantillaComoEjemploIa,
-    usarPlantillaComoMachoteIa,
-    mesesSeleccionadosTextoIa,
-    promptPlaneamientoIa
+    firmaDatosPromptPlaneamientoIa
   ]);
 
   async function loadPlantillasPlaneamientoIa() {
@@ -6574,7 +6723,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     const grado = getGradoPlaneamientoFromGrupo(selected) || getGradoPlaneamientoFromGrupo(grupoSeleccionado) || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
     const materia = materiasAsignadas.find((item) => Number(item.MateriaId) === materiaId) || selected || grupoSeleccionado;
     const habilidadesIds = planeamientoIaForm.habilidadesIds;
-    const promptDocente = promptPlaneamientoIa.trim() || construirPromptPlaneamientoIa();
+    const promptDocente = promptPlaneamientoIaConstruido ? promptPlaneamientoIa.trim() : "";
 
     if (!materiaId) {
       setErrorMessage("Seleccioná la materia");
@@ -6596,6 +6745,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       return;
     }
 
+    if (!plantillaFormatoIa) {
+      setErrorMessage("Adjuntá el planeamiento de referencia que definirá la estructura de esta generación");
+      return;
+    }
+
     if (!planeamientoIaForm.periodicidad) {
       setErrorMessage("Seleccioná la periodicidad del planeamiento");
       return;
@@ -6607,22 +6761,23 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
 
     if (!promptDocente) {
-      setErrorMessage("Creá el prompt con los datos del planeamiento antes de generar");
+      setErrorMessage("Construí primero el prompt con los datos del planeamiento");
       return;
     }
 
+    const operacionId = crearOperacionIdPlaneamientoIa("generar-planeamiento");
     setGeneratingPlaneamientoIa(true);
-    setGeneratingPlaneamientoIaProgress(8);
-    if (generatingPlaneamientoIaTimerRef.current !== null) {
-      window.clearInterval(generatingPlaneamientoIaTimerRef.current);
-      generatingPlaneamientoIaTimerRef.current = null;
-    }
-    generatingPlaneamientoIaTimerRef.current = window.setInterval(() => {
-      setGeneratingPlaneamientoIaProgress((prev) => (prev >= 92 ? 92 : prev + 6));
-    }, 300);
+    setGeneratingPlaneamientoIaProgress(0);
+    setGeneratingPlaneamientoIaEtapa("Preparando datos y archivos");
+    iniciarMonitoreoProgresoPlaneamientoIa(
+      operacionId,
+      setGeneratingPlaneamientoIaProgress,
+      setGeneratingPlaneamientoIaEtapa,
+      generatingPlaneamientoIaTimerRef
+    );
     setMessage("");
     setErrorMessage("");
-    setUltimoPlaneamientoIa(null);
+    if (ultimoPlaneamientoIa) setRevisionPlaneamientoIaPendiente(true);
 
     const temaCompleto = [
       planeamientoIaForm.tema ? `Tema o énfasis: ${planeamientoIaForm.tema}` : "",
@@ -6632,6 +6787,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
     try {
       const formData = new FormData();
+      formData.append("operacionId", operacionId);
       formData.append("nombrePlaneamiento", planeamientoIaForm.nombre.trim());
       formData.append("materiaId", String(materiaId));
       formData.append("materiaNombre", materia?.MateriaNombre || "");
@@ -6642,48 +6798,62 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       formData.append("tema", temaCompleto);
       formData.append("indicacionesDocente", planeamientoIaForm.indicaciones || "");
       formData.append("promptDocente", promptDocente);
+      formData.append("referenciaObligatoria", "true");
       formData.append("semanas", String(Number(planeamientoIaForm.semanas || 4)));
       if (plantillaPlaneamientoIaId) formData.append("plantillaPromptIAId", plantillaPlaneamientoIaId);
       habilidadesIds.forEach((id) => formData.append("habilidadesIds[]", String(id)));
       documentoApoyoIa.forEach((file) => formData.append("documentoApoyo", file));
+      formData.append("archivoReferencia", plantillaFormatoIa);
       if (plantillaFormatoIa && usarPlantillaComoEjemploIa) formData.append("documentoApoyo", plantillaFormatoIa);
       if (plantillaFormatoIa && usarPlantillaComoMachoteIa) formData.append("plantillaFormato", plantillaFormatoIa);
 
       const generarResponse = await api.post("/planeamiento-ia/generar-planeamiento", formData, {
-        timeout: 70000
+        timeout: 300000
       });
 
       const generadoData = generarResponse.data?.data || generarResponse.data || {};
-      const resultado: PlaneamientoIaResultado = normalizePlaneamientoIaResultado(generadoData.resultado || generadoData);
+      let resultado: PlaneamientoIaResultado = normalizePlaneamientoIaResultado(generadoData.resultado || generadoData);
       if (planeamientoIaForm.nombre.trim()) resultado.nombre = planeamientoIaForm.nombre.trim();
       resultado.periodicidad = planeamientoIaForm.periodicidad;
       resultado.competenciaGeneral = planeamientoIaForm.competenciaGeneral;
       resultado.competenciasGenerales = planeamientoIaForm.competenciaGeneral ? [planeamientoIaForm.competenciaGeneral] : [];
+
+      const revisionesInternas = Number(resultado.controlCalidad?.intentosRevision || 1) > 1 ? 1 : 0;
+
+      if (resultado.controlCalidad?.puedeGuardar !== true) {
+        const pendientes = (resultado.controlCalidad?.verificaciones || [])
+          .filter((item) => item.estado === "error")
+          .map((item) => item.detalle)
+          .join(" ");
+        throw new Error(`La IA no pudo completar la validación automática. ${pendientes}`.trim());
+      }
+
       setUltimoPlaneamientoIa(resultado);
+      setRevisionPlaneamientoIaPendiente(false);
       setGeneratingPlaneamientoIaProgress(100);
+      setGeneratingPlaneamientoIaEtapa("Planeamiento generado y validado");
       setMessage(
-        resultado.controlCalidad?.puedeGuardar === false
-          ? "Planeamiento generado. La revisión automática encontró puntos que debés corregir antes de guardarlo."
-          : "Planeamiento generado y revisado automáticamente. Confirmá el contenido antes de guardarlo."
+        revisionesInternas > 0
+          ? "Planeamiento generado, mejorado y validado automáticamente. Ya está listo para guardar."
+          : "Planeamiento generado y validado automáticamente. Ya está listo para guardar."
       );
     } catch (error: any) {
       console.error("Error generando planeamiento con IA:", error);
+      setGeneratingPlaneamientoIaEtapa("No se pudo completar la generación");
       const isTimeout = error?.code === "ECONNABORTED" || String(error?.message || "").toLowerCase().includes("timeout");
       setErrorMessage(
         isTimeout
-          ? "La generación con IA tardó demasiado. Probá con menos habilidades o una plantilla más corta."
-          : (error?.response?.data?.message || "No se pudo generar el planeamiento con IA")
+          ? "La generación y revisión del planeamiento tardaron demasiado. Intentá nuevamente."
+          : (error?.response?.data?.message || error?.message || "No se pudo generar el planeamiento con IA")
       );
     } finally {
-      if (generatingPlaneamientoIaTimerRef.current !== null) {
-        window.clearInterval(generatingPlaneamientoIaTimerRef.current);
-        generatingPlaneamientoIaTimerRef.current = null;
-      }
+      detenerMonitoreoProgresoPlaneamientoIa(generatingPlaneamientoIaTimerRef);
       setGeneratingPlaneamientoIa(false);
     }
   }
 
   function updateResultadoIaField(field: keyof PlaneamientoIaResultado, value: string) {
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
       [field]: value
@@ -6691,6 +6861,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function updateResultadoIaArray(field: keyof PlaneamientoIaResultado, value: string) {
+    setRevisionPlaneamientoIaPendiente(true);
     const lines = value.split(/\r?\n+/).map((line) => line.trim()).filter(Boolean);
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
@@ -6698,7 +6869,19 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }));
   }
 
+  function updateResultadoIaCampoReferencia(field: string, value: string) {
+    setRevisionPlaneamientoIaPendiente(true);
+    setUltimoPlaneamientoIa((prev) => ({
+      ...(prev || {}),
+      camposReferencia: {
+        ...(prev?.camposReferencia || {}),
+        [field]: value
+      }
+    }));
+  }
+
   function updateResultadoIaIndicador(index: number, value: string) {
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => {
       const current = Array.isArray(prev?.indicadoresEvaluacion) ? [...prev!.indicadoresEvaluacion] : [];
       while (current.length <= index) current.push("");
@@ -6711,6 +6894,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function addResultadoIaIndicador() {
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
       indicadoresEvaluacion: [...(Array.isArray(prev?.indicadoresEvaluacion) ? prev!.indicadoresEvaluacion : []), ""]
@@ -6718,6 +6902,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function removeResultadoIaIndicador(index: number) {
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => {
       const current = Array.isArray(prev?.indicadoresEvaluacion) ? [...prev!.indicadoresEvaluacion] : [];
       const next = current.filter((_, i) => i !== index);
@@ -6730,6 +6915,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   function moveResultadoIaIndicador(fromIndex: number, toIndex: number) {
     if (fromIndex === toIndex) return;
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => {
       const current = Array.isArray(prev?.indicadoresEvaluacion) ? [...prev!.indicadoresEvaluacion] : [];
       if (fromIndex < 0 || toIndex < 0 || fromIndex >= current.length || toIndex >= current.length) return prev || {};
@@ -6743,6 +6929,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function updateResultadoIaReflexion(field: "queFunciono" | "queNoFunciono" | "quePuedoMejorar", value: string) {
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
       reflexionesDocentes: {
@@ -6753,6 +6940,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   function updateResultadoIaAdecuacion(field: string, value: string) {
+    setRevisionPlaneamientoIaPendiente(true);
     setUltimoPlaneamientoIa((prev) => ({
       ...(prev || {}),
       estrategiaAdecuacionSignificativa: {
@@ -6761,6 +6949,84 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         [field]: value
       }
     }));
+  }
+
+  async function solicitarRevisionPlaneamientoIa(
+    resultadoEntrada: PlaneamientoIaResultado,
+    operacionId?: string
+  ): Promise<PlaneamientoIaResultado> {
+    const gruposSeleccionados = getGruposPlaneamientoIa();
+    const grupoSeleccionado = gruposSeleccionados[0];
+    const materiaId = Number(selected?.MateriaId || grupoSeleccionado?.MateriaId || planeamientoIaForm.materiaId || 0);
+    if (!grupoSeleccionado || !materiaId) {
+      throw new Error("Seleccioná grupo y materia antes de revisar el planeamiento");
+    }
+
+    const materiaNombre = selected?.MateriaNombre || grupoSeleccionado?.MateriaNombre || "Materia";
+    const grado = getGradoPlaneamientoFromGrupo(selected)
+      || getGradoPlaneamientoFromGrupo(grupoSeleccionado)
+      || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
+    const nombreSugerido = `${mesesSeleccionadosTextoIa || "Mes"} - ${grado || "Grado"} - ${materiaNombre}`;
+    const nombre = String(resultadoEntrada.nombre || planeamientoIaForm.nombre || nombreSugerido).trim()
+      || nombreSugerido;
+    const resultadoParaRevision: PlaneamientoIaResultado = {
+      ...resultadoEntrada,
+      nombre,
+      mes: mesesSeleccionadosTextoIa || "",
+      grado,
+      periodicidad: planeamientoIaForm.periodicidad,
+      competenciaGeneral: planeamientoIaForm.competenciaGeneral,
+      competenciasGenerales: planeamientoIaForm.competenciaGeneral
+        ? [planeamientoIaForm.competenciaGeneral]
+        : [],
+      materiaNombre,
+      MateriaNombre: materiaNombre
+    } as PlaneamientoIaResultado;
+
+    const response = await api.post("/planeamiento-ia/revisar-planeamiento", {
+      operacionId,
+      resultado: resultadoParaRevision,
+      nombre,
+      materiaNombre,
+      grado,
+      mes: mesesSeleccionadosTextoIa || "",
+      tema: planeamientoIaForm.tema || ""
+    }, {
+      timeout: 300000
+    });
+    const data = response.data?.data || response.data || {};
+    return normalizePlaneamientoIaResultado(data.resultado || data);
+  }
+
+  async function revisarPlaneamientoIaGenerado(mostrarMensaje = true): Promise<PlaneamientoIaResultado | null> {
+    if (!ultimoPlaneamientoIa) return null;
+
+    setRevisandoPlaneamientoIa(true);
+    setErrorMessage("");
+    if (mostrarMensaje) setMessage("");
+
+    try {
+      const revisado = await solicitarRevisionPlaneamientoIa(ultimoPlaneamientoIa);
+      setUltimoPlaneamientoIa(revisado);
+      setRevisionPlaneamientoIaPendiente(false);
+
+      if (revisado.controlCalidad?.puedeGuardar) {
+        if (mostrarMensaje) setMessage("Revisión completada. El planeamiento está listo para guardar.");
+      } else {
+        const pendientes = (revisado.controlCalidad?.verificaciones || [])
+          .filter((item) => item.estado === "error")
+          .map((item) => item.detalle)
+          .join(" ");
+        setErrorMessage(`La IA todavía no completó todos los ajustes. Podés volver a presionar “Mejorar con IA”. ${pendientes}`.trim());
+      }
+      return revisado;
+    } catch (error: any) {
+      console.error("Error revisando planeamiento generado:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo revisar nuevamente el planeamiento");
+      return null;
+    } finally {
+      setRevisandoPlaneamientoIa(false);
+    }
   }
 
   async function guardarPlaneamientoIaGenerado() {
@@ -6783,34 +7049,44 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setErrorMessage("Seleccioná una competencia general antes de guardar");
       return;
     }
-
-    setSavingPlaneamientoIa(true);
-    setSavingPlaneamientoIaProgress(8);
-    if (savingPlaneamientoIaTimerRef.current !== null) {
-      window.clearInterval(savingPlaneamientoIaTimerRef.current);
-      savingPlaneamientoIaTimerRef.current = null;
+    if (
+      revisionPlaneamientoIaPendiente
+      || ultimoPlaneamientoIa.controlCalidad?.puedeGuardar !== true
+    ) {
+      setErrorMessage("Usá “Mejorar planeamiento con IA” para corregir y validar todos los ajustes antes de guardar");
+      return;
     }
-    savingPlaneamientoIaTimerRef.current = window.setInterval(() => {
-      setSavingPlaneamientoIaProgress((prev) => (prev >= 92 ? 92 : prev + 6));
-    }, 320);
+
+    const operacionId = crearOperacionIdPlaneamientoIa("guardar-planeamiento");
+    setSavingPlaneamientoIa(true);
+    setSavingPlaneamientoIaProgress(0);
+    setSavingPlaneamientoIaEtapa("Preparando el guardado");
+    iniciarMonitoreoProgresoPlaneamientoIa(
+      operacionId,
+      setSavingPlaneamientoIaProgress,
+      setSavingPlaneamientoIaEtapa,
+      savingPlaneamientoIaTimerRef
+    );
     setMessage("");
     setErrorMessage("");
 
     try {
+      const resultadoRevisado = ultimoPlaneamientoIa;
+
       const nombreMateriaSeleccionada = selected?.MateriaNombre || grupoSeleccionado?.MateriaNombre || "Materia";
       const gradoSeleccionado = getGradoPlaneamientoFromGrupo(selected) || getGradoPlaneamientoFromGrupo(grupoSeleccionado) || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
       const nombrePlaneamientoSugerido = `${mesesSeleccionadosTextoIa || "Mes"} - ${gradoSeleccionado || "Grado"} - ${nombreMateriaSeleccionada}`;
       const nombrePlaneamientoCorrecto = String(
-        ultimoPlaneamientoIa?.nombre || planeamientoIaForm.nombre || nombrePlaneamientoSugerido
+        resultadoRevisado?.nombre || planeamientoIaForm.nombre || nombrePlaneamientoSugerido
       ).trim() || nombrePlaneamientoSugerido;
-      const observacionesUsuario = String(ultimoPlaneamientoIa?.observaciones || "").trim();
-      const indicadoresEditados = (Array.isArray(ultimoPlaneamientoIa?.indicadoresEvaluacion) ? ultimoPlaneamientoIa.indicadoresEvaluacion : [])
+      const observacionesUsuario = String(resultadoRevisado?.observaciones || "").trim();
+      const indicadoresEditados = (Array.isArray(resultadoRevisado?.indicadoresEvaluacion) ? resultadoRevisado.indicadoresEvaluacion : [])
         .map((item) => String(item || "").trim())
         .filter(Boolean);
 
-      const crearPayload = (grupo: GrupoProfesor) => {
+      const crearPayload = (grupo: GrupoProfesor, indiceGuardado: number, totalGuardados: number) => {
         const resultadoNormalizado = {
-          ...(ultimoPlaneamientoIa || {}),
+          ...resultadoRevisado,
           indicadoresEvaluacion: indicadoresEditados,
           observaciones: observacionesUsuario,
           nombre: nombrePlaneamientoCorrecto,
@@ -6824,6 +7100,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         };
 
         return {
+        operacionId,
+        indiceGuardado,
+        totalGuardados,
         anioLectivoId: selected?.AnioLectivoId || grupo.AnioLectivoId,
         periodoId: selected?.PeriodoId || grupo.PeriodoId,
         grupoId: Number(grupo.GrupoId),
@@ -6840,21 +7119,31 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       };
 
       if (editingPlaneamientoIaId) {
-        await api.put(`/planeamiento-ia/planeamientos/${editingPlaneamientoIaId}/resultado`, crearPayload(grupoSeleccionado));
-
         const gruposExtras = gruposSeleccionados.filter((grupo) => Number(grupo.GrupoId) !== Number(grupoSeleccionado.GrupoId));
+        const totalGuardados = 1 + gruposExtras.length;
+        await api.put(
+          `/planeamiento-ia/planeamientos/${editingPlaneamientoIaId}/resultado`,
+          crearPayload(grupoSeleccionado, 0, totalGuardados)
+        );
+
         if (gruposExtras.length > 0) {
-          await Promise.all(
-            gruposExtras.map((grupo) => api.post("/planeamiento-ia/guardar-planeamiento", crearPayload(grupo)))
-          );
+          for (let index = 0; index < gruposExtras.length; index += 1) {
+            await api.post(
+              "/planeamiento-ia/guardar-planeamiento",
+              crearPayload(gruposExtras[index], index + 1, totalGuardados)
+            );
+          }
           setMessage(`Planeamiento actualizado y copiado en ${gruposExtras.length} sección(es) adicional(es)`);
         } else {
           setMessage("Planeamiento actualizado correctamente");
         }
       } else {
-        await Promise.all(
-          gruposSeleccionados.map((grupo) => api.post("/planeamiento-ia/guardar-planeamiento", crearPayload(grupo)))
-        );
+        for (let index = 0; index < gruposSeleccionados.length; index += 1) {
+          await api.post(
+            "/planeamiento-ia/guardar-planeamiento",
+            crearPayload(gruposSeleccionados[index], index, gruposSeleccionados.length)
+          );
+        }
         setMessage(`Planeamiento generado con IA y guardado en ${gruposSeleccionados.length} sección(es)`);
       }
       setUltimoPlaneamientoIa(null);
@@ -6863,6 +7152,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       setPlantillaFormatoIa(null);
       setAnalisisReferenciaIa(null);
       setSavingPlaneamientoIaProgress(100);
+      setSavingPlaneamientoIaEtapa("Planeamiento guardado");
       setPlaneamientoIaFormOpen(false);
 
       if (selected && gruposSeleccionados.some((grupo) => Number(grupo.GrupoId) === Number(selected.GrupoId)) && Number(selected.MateriaId) === materiaId) {
@@ -6873,13 +7163,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       }
     } catch (error: any) {
       console.error("Error guardando planeamiento generado:", error);
+      setSavingPlaneamientoIaEtapa("No se pudo completar el guardado");
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar el planeamiento generado");
-      setSavingPlaneamientoIaProgress(0);
     } finally {
-      if (savingPlaneamientoIaTimerRef.current !== null) {
-        window.clearInterval(savingPlaneamientoIaTimerRef.current);
-        savingPlaneamientoIaTimerRef.current = null;
-      }
+      detenerMonitoreoProgresoPlaneamientoIa(savingPlaneamientoIaTimerRef);
       setSavingPlaneamientoIa(false);
     }
   }
@@ -6887,7 +7174,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   async function loadAsistencia(item = selected, fecha = asistenciaFecha) {
     if (!item) return;
-    const reqKey = `${item.GrupoId}|${item.MateriaId}|${item.AnioLectivoId}|${item.PeriodoId}|${fecha}`;
+    const reqKey = `${getGrupoProfesorKey(item)}|${fecha}`;
     if (asistenciaInFlightKeyRef.current === reqKey) return;
     asistenciaInFlightKeyRef.current = reqKey;
     setLoadingAsistencia(true);
@@ -6898,6 +7185,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         params: {
           anioLectivoId: item.AnioLectivoId,
           periodoId: item.PeriodoId,
+          ...getGrupoClaseParams(item),
           fecha
         }
       });
@@ -6934,7 +7222,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   async function loadBitacora(item = selected) {
     if (!item) return;
-    const reqKey = `${item.GrupoId}|${item.MateriaId}|${item.AnioLectivoId}|${item.PeriodoId}`;
+    const reqKey = getGrupoProfesorKey(item);
     if (bitacoraInFlightKeyRef.current === reqKey) return;
     bitacoraInFlightKeyRef.current = reqKey;
     setLoadingBitacora(true);
@@ -6942,7 +7230,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}/bitacora`, {
         params: {
           anioLectivoId: item.AnioLectivoId,
-          periodoId: item.PeriodoId
+          periodoId: item.PeriodoId,
+          ...getGrupoClaseParams(item)
         }
       });
       const rows = Array.isArray(response.data?.data) ? response.data.data : [];
@@ -7071,6 +7360,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/bitacora`, {
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
+        ...getGrupoClaseParams(selected),
         temasDesarrollados: bitacoraForm.temasDesarrollados,
         observaciones: bitacoraForm.observaciones,
         hechosRelevantes: bitacoraForm.hechosRelevantes
@@ -7120,7 +7410,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     ).filter(Boolean) as any[];
 
     let registrosGuardar = registros;
-    if (registrosGuardar.length === 0 && !asistenciaYaCalificada) {
+    if (!asistenciaYaCalificada) {
       registrosGuardar = detalle.estudiantes.flatMap((estudiante) =>
         leccionesUsar.map((leccion) => {
           const key = asistenciaDraftKey(estudiante.EstudianteId, leccion.HorarioGrupoId);
@@ -7169,6 +7459,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const response = await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/asistencia`, {
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
+        ...getGrupoClaseParams(selected),
         fecha: asistenciaFecha,
         registros: registrosGuardar.map((item) => ({
           estudianteId: item.estudianteId,
@@ -7271,6 +7562,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const response = await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/notas`, {
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
+        ...getGrupoClaseParams(selected),
         notas
       });
 
@@ -7346,7 +7638,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }, [activePanel, selected?.GrupoId, selected?.MateriaId, selected?.PeriodoId, selected?.AnioLectivoId]);
 
   async function loadMiHorario(item = selected) {
-    const itemHorario = item || selected || gruposOrdenados[0];
+    const itemHorario = item || selected || grupoHorarioPredeterminado;
 
     if (!itemHorario) {
       setHorarioBloques([]);
@@ -7365,6 +7657,12 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const params: Record<string, any> = {};
       if (itemHorario?.AnioLectivoId) params.anioLectivoId = itemHorario.AnioLectivoId;
       if (itemHorario?.PeriodoId) params.periodoId = itemHorario.PeriodoId;
+      const profesorHorarioId = itemHorario?.UsuarioId
+        || (isGestionAdminRole && adminModoCarga === "PROFESOR" ? adminProfesorId : "");
+      if (profesorHorarioId) params.profesorId = profesorHorarioId;
+      if (itemHorario?.InstitucionId || adminInstitucionId) {
+        params.institucionId = itemHorario?.InstitucionId || adminInstitucionId;
+      }
       params._ts = Date.now();
 
       const response = await api.get("/gestion-profe/mi-horario", {
@@ -7389,15 +7687,19 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
   useEffect(() => {
     if (!horarioVisible) return;
-    const itemHorario = selected || gruposOrdenados[0];
+    const itemHorario = selected || grupoHorarioPredeterminado;
     if (!itemHorario) return;
     void loadMiHorario(itemHorario);
   }, [
     horarioVisible,
+    selected?.UsuarioId,
     selected?.AnioLectivoId,
     selected?.PeriodoId,
-    gruposOrdenados[0]?.AnioLectivoId,
-    gruposOrdenados[0]?.PeriodoId
+    grupoHorarioPredeterminado?.UsuarioId,
+    grupoHorarioPredeterminado?.AnioLectivoId,
+    grupoHorarioPredeterminado?.PeriodoId,
+    adminProfesorId,
+    adminInstitucionId
   ]);
 
   const horarioDias = [
@@ -7618,7 +7920,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     ? `${selected.GrupoNombre} - ${selected.MateriaNombre}`
     : "Seleccione un grupo y materia";
 
-  const horarioReferencia = selected || gruposOrdenados[0] || null;
+  const horarioReferencia = selected || grupoHorarioPredeterminado || null;
   const horarioContextoGrupos = useMemo(() => {
     if (!horarioReferencia) return [] as GrupoProfesor[];
     return gruposOrdenados.filter((item) =>
@@ -7649,6 +7951,49 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       totalPendientes: horarioPendientes.length
     };
   }, [horarioContextoGrupos, horarioEntradas, horarioPendientes]);
+
+  const gruposParaPromptPlaneamientoIa = getGruposPlaneamientoIa();
+  const grupoBaseParaPromptPlaneamientoIa = gruposParaPromptPlaneamientoIa[0];
+  const materiaParaPromptPlaneamientoIa = Number(
+    selected?.MateriaId
+      || grupoBaseParaPromptPlaneamientoIa?.MateriaId
+      || planeamientoIaForm.materiaId
+      || 0
+  );
+  const gradoParaPromptPlaneamientoIa = getGradoPlaneamientoFromGrupo(selected)
+    || getGradoPlaneamientoFromGrupo(grupoBaseParaPromptPlaneamientoIa)
+    || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
+  const faltantesPromptPlaneamientoIa = [
+    !materiaParaPromptPlaneamientoIa ? "materia" : "",
+    !gradoParaPromptPlaneamientoIa ? "grado" : "",
+    !gruposParaPromptPlaneamientoIa.length ? "sección" : "",
+    !mesesSeleccionadosIa.length ? "mes o meses" : "",
+    !planeamientoIaForm.periodicidad ? "periodicidad" : "",
+    !planeamientoIaForm.competenciaGeneral ? "competencia general" : "",
+    !planeamientoIaForm.habilidadesIds.length ? "habilidades" : "",
+    !plantillaFormatoIa ? "planeamiento de referencia" : ""
+  ].filter(Boolean);
+  const datosPromptPlaneamientoIaCompletos = faltantesPromptPlaneamientoIa.length === 0
+    && !loadingHabilidadesIa
+    && !analizandoReferenciaIa;
+  const promptPlaneamientoIaListo = promptPlaneamientoIaConstruido && Boolean(promptPlaneamientoIa.trim());
+  const puedeConstruirPromptPlaneamientoIa = datosPromptPlaneamientoIaCompletos
+    && !ultimoPlaneamientoIa
+    && !generatingPlaneamientoIa
+    && !mejorandoPromptPlaneamientoIa;
+  const puedeMejorarPromptPlaneamientoIa = promptPlaneamientoIaListo
+    && !ultimoPlaneamientoIa
+    && !generatingPlaneamientoIa
+    && !mejorandoPromptPlaneamientoIa;
+  const puedeGenerarPlaneamientoIa = promptPlaneamientoIaListo
+    && !ultimoPlaneamientoIa
+    && !generatingPlaneamientoIa
+    && !mejorandoPromptPlaneamientoIa;
+  const planeamientoIaListoParaGuardar = Boolean(
+    ultimoPlaneamientoIa
+    && ultimoPlaneamientoIa.controlCalidad?.puedeGuardar === true
+    && !revisionPlaneamientoIaPendiente
+  );
 
   return (
     <div className="stack">
@@ -7695,7 +8040,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
               {horarioVisible ? "Ocultar horario" : "Ver horario"}
             </button>
             {horarioVisible && (
-              <button type="button" style={secondaryButtonStyle} onClick={() => loadMiHorario(selected || gruposOrdenados[0])} disabled={loadingHorario}>
+              <button type="button" style={secondaryButtonStyle} onClick={() => loadMiHorario(selected || grupoHorarioPredeterminado)} disabled={loadingHorario}>
                 {loadingHorario ? "Actualizando..." : "Actualizar horario"}
               </button>
             )}
@@ -8034,7 +8379,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "12px" }}>
             {gruposFiltradosPorPeriodo.map((item) => {
-              const isSelected = selected?.AsignacionDocenteId === item.AsignacionDocenteId;
+              const itemKey = getGrupoProfesorKey(item);
+              const isSelected = getGrupoProfesorKey(selected) === itemKey;
               const tienePlantilla = !!item.EvaluacionPlantillaNombre;
               const tieneCalificaciones = Boolean(Number(item.TieneCalificacionesEvaluacion || 0));
               const puedeCambiarPlantilla = tienePlantilla && !tieneCalificaciones;
@@ -8048,10 +8394,10 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 { bg: "linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)", borde: "#fdba74" },
                 { bg: "linear-gradient(135deg, #fdf4ff 0%, #f5d0fe 100%)", borde: "#e9d5ff" }
               ];
-              const fondo = paletaFondos[Math.abs(Number(item.AsignacionDocenteId || 0)) % paletaFondos.length];
+              const fondo = paletaFondos[Math.abs(Number(item.GrupoClaseId || item.AsignacionDocenteId || 0)) % paletaFondos.length];
               return (
                 <button
-                  key={item.AsignacionDocenteId}
+                  key={itemKey}
                   type="button"
                   onClick={() => loadDetalle(item)}
                   disabled={loadingDetalle}
@@ -8068,6 +8414,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   }}
                 >
                   <strong>{item.GrupoNombre}</strong>
+                  {item.SeccionesOrigen ? <span>Secciones: {item.SeccionesOrigen}</span> : null}
                   <span>{item.MateriaCodigo ? `${item.MateriaCodigo} - ` : ""}{item.MateriaNombre}</span>
                   <span style={{ opacity: 0.75 }}>{item.AnioNombre} / {item.PeriodoNombre}</span>
                   {cursoCerradoTarjeta ? (
@@ -9196,7 +9543,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       Horario semanal generado según los grupos y materias asignadas al profesor.
                     </p>
                   </div>
-                  <button type="button" style={secondaryButtonStyle} onClick={() => loadMiHorario(selected || gruposOrdenados[0])} disabled={loadingHorario}>
+                  <button type="button" style={secondaryButtonStyle} onClick={() => loadMiHorario(selected || grupoHorarioPredeterminado)} disabled={loadingHorario}>
                     {loadingHorario ? "Actualizando..." : "Actualizar horario"}
                   </button>
                 </div>
@@ -10453,7 +10800,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           setUsarPlantillaComoEjemploIa(true);
                           setUsarPlantillaComoMachoteIa(true);
                           setPromptPlaneamientoIa("");
-                          setPromptPlaneamientoIaEditado(false);
+                          setPromptPlaneamientoIaConstruido(false);
+                          setPromptPlaneamientoIaMejorado(false);
                           setEditingPlaneamientoIaId(null);
                           setUltimoPlaneamientoIa(null);
                         }
@@ -10467,11 +10815,11 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                 <div style={{ ...helperDarkBoxStyle, display: "grid", gap: "8px" }}>
                   <strong>Paso a paso</strong>
-                  <div>1. Hacé clic en `Agregar planeamiento con IA` para abrir el formulario.</div>
-                  <div>2. Completá contexto, habilidades e indicaciones (si aplica) y generá el borrador.</div>
-                  <div>3. Revisá el resultado, ajustá lo necesario y guardá el planeamiento.</div>
-                  <div>4. En la sección de indicadores, generá y validá los niveles (inicial, intermedio y avanzado).</div>
-                  <div>5. Confirmá que los indicadores queden activos para usarlos luego en Evaluaciones y Reportes.</div>
+                  <div>1. Completá los datos requeridos y adjuntá el planeamiento de referencia.</div>
+                  <div>2. Presioná “Construir prompt”.</div>
+                  <div>3. Podés usar “Mejorar prompt con IA” para fortalecer las instrucciones.</div>
+                  <div>4. Presioná “Generar planeamiento”. Podés mejorarlo o generarlo nuevamente cuando lo necesités.</div>
+                  <div>5. Cuando el resultado esté correcto, guardalo y continuá con sus indicadores.</div>
                 </div>
 
 
@@ -10498,15 +10846,29 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "8px" }}>
                     {[
-                      "1. Confirmá el grupo",
-                      "2. Elegí habilidades",
-                      "3. Agregá indicaciones opcionales",
-                      "4. Construí y revisá el prompt",
-                      "5. Generá y revisá"
+                      { label: "1. Completar datos", ready: datosPromptPlaneamientoIaCompletos, optional: false },
+                      { label: "2. Construir prompt", ready: promptPlaneamientoIaListo, optional: false },
+                      { label: "3. Mejorar prompt", ready: promptPlaneamientoIaMejorado, optional: true },
+                      { label: "4. Generar planeamiento", ready: Boolean(ultimoPlaneamientoIa), optional: false }
                     ].map((step) => (
-                      <span key={step} style={{ border: "1px solid #38516f", background: "#122033", borderRadius: "999px", padding: "7px 10px", color: "#c6d7eb", fontWeight: 800, fontSize: "13px", textAlign: "center" }}>
-                        {step}
-                      </span>
+                      <div
+                        key={step.label}
+                        style={{
+                          border: step.ready ? "1px solid #22c55e" : "1px solid #38516f",
+                          background: step.ready ? "#123c2d" : "#122033",
+                          borderRadius: "6px",
+                          padding: "8px 10px",
+                          color: step.ready ? "#dcfce7" : "#c6d7eb",
+                          fontWeight: 800,
+                          fontSize: "13px",
+                          textAlign: "center"
+                        }}
+                      >
+                        <span style={{ display: "block" }}>{step.label}</span>
+                        <small style={{ color: step.ready ? "#86efac" : "#9fb3ca" }}>
+                          {step.ready ? "Listo" : (step.optional ? "Opcional" : "Pendiente")}
+                        </small>
+                      </div>
                     ))}
                   </div>
 
@@ -11033,46 +11395,121 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                     </label>
                   </div>
 
-                  <details style={{ padding: "12px", background: "#122033", border: "1px solid #38516f", borderRadius: "6px" }}>
-                    <summary style={{ color: "#e5eefb", fontWeight: 800, cursor: "pointer" }}>
-                      5. Revisar o editar el prompt (opcional)
-                    </summary>
-                    <div style={{ display: "flex", gap: "10px", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                        <small style={{ color: "#b8c7da" }}>El sistema lo construye automáticamente con tus selecciones.</small>
-                      </div>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        <button type="button" className="ghost-btn" onClick={crearPromptPlaneamientoIa}>
-                          Construir prompt
-                        </button>
-                        <button type="button" className="ghost-btn" onClick={mejorarPromptPlaneamientoIa} disabled={mejorandoPromptPlaneamientoIa}>
-                          {mejorandoPromptPlaneamientoIa ? "Mejorando prompt..." : "Mejorar con IA"}
-                        </button>
-                      </div>
+                  <div style={{ padding: "14px", background: "#122033", border: "1px solid #38516f", borderRadius: "6px", display: "grid", gap: "12px" }}>
+                    <div>
+                      <strong style={{ color: "#e5eefb" }}>5. Preparar y generar</strong>
+                      <p style={{ margin: "4px 0 0", color: "#b8c7da" }}>
+                        Seguí los botones de izquierda a derecha. Mejorar el prompt con IA es recomendado, pero no obligatorio.
+                      </p>
                     </div>
-                    <textarea
-                      rows={10}
-                      value={promptPlaneamientoIa}
-                      onChange={(e) => {
-                        setPromptPlaneamientoIa(e.target.value);
-                        setPromptPlaneamientoIaEditado(true);
-                      }}
-                      placeholder="Construí el prompt con los datos seleccionados y ajustalo aquí antes de generar el planeamiento."
-                      style={{ marginTop: "10px", background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583", minHeight: "190px" }}
-                    />
-                    <small style={{ color: "#b8c7da" }}>
-                      Las reglas institucionales y las habilidades seleccionadas se validan en el servidor. Podés ajustar este prompt sin perder esos controles.
-                    </small>
-                  </details>
 
-                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-                    <button type="button" className="primary-btn" onClick={generarPlaneamientoConIa} disabled={generatingPlaneamientoIa}>
-                      {generatingPlaneamientoIa ? "Generando planeamiento..." : "Generar planeamiento con IA"}
-                    </button>
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: "6px",
+                        border: datosPromptPlaneamientoIaCompletos ? "1px solid #2f6f55" : "1px solid #a16207",
+                        background: datosPromptPlaneamientoIaCompletos ? "#102a24" : "#3b2a12",
+                        color: datosPromptPlaneamientoIaCompletos ? "#dcfce7" : "#fef3c7"
+                      }}
+                    >
+                      {ultimoPlaneamientoIa
+                        ? "El planeamiento ya fue generado. Continuá con las acciones que aparecen debajo del resultado."
+                        : !datosPromptPlaneamientoIaCompletos
+                        ? `Antes de construir el prompt completá: ${faltantesPromptPlaneamientoIa.join(", ")}.`
+                        : !promptPlaneamientoIaListo
+                          ? "Datos completos. El siguiente paso es construir el prompt."
+                          : promptPlaneamientoIaMejorado
+                            ? "Prompt mejorado y listo. Podés volver a mejorarlo o generar el planeamiento."
+                            : "Prompt construido y listo. Podés mejorarlo con IA o generar el planeamiento."}
+                    </div>
+
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className={promptPlaneamientoIaListo ? "ghost-btn" : "primary-btn"}
+                        onClick={crearPromptPlaneamientoIa}
+                        disabled={!puedeConstruirPromptPlaneamientoIa}
+                        title={ultimoPlaneamientoIa ? "Usá las acciones debajo del resultado" : (datosPromptPlaneamientoIaCompletos ? "Construir el prompt con los datos actuales" : "Completá primero los datos requeridos")}
+                      >
+                        1. Construir prompt
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-btn"
+                        onClick={mejorarPromptPlaneamientoIa}
+                        disabled={!puedeMejorarPromptPlaneamientoIa}
+                        title={ultimoPlaneamientoIa ? "Usá las acciones debajo del resultado" : (promptPlaneamientoIaListo ? "Mejorar las instrucciones antes de generar" : "Construí primero el prompt")}
+                      >
+                        {mejorandoPromptPlaneamientoIa ? "Mejorando prompt..." : "2. Mejorar prompt con IA"}
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        onClick={generarPlaneamientoConIa}
+                        disabled={!puedeGenerarPlaneamientoIa}
+                        title={ultimoPlaneamientoIa ? "Usá “Generar nuevamente” debajo del resultado" : (promptPlaneamientoIaListo ? "Generar el planeamiento con el prompt actual" : "Construí primero el prompt")}
+                      >
+                        {generatingPlaneamientoIa
+                          ? "Generando planeamiento..."
+                          : "3. Generar planeamiento"}
+                      </button>
+                    </div>
+
+                    {mejorandoPromptPlaneamientoIa ? (
+                      <div style={{ width: "420px", maxWidth: "100%", display: "grid", gap: "5px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", color: "#dbeafe", fontSize: "0.86rem" }}>
+                          <span>{mejorandoPromptPlaneamientoIaEtapa || "Mejorando prompt con IA"}</span>
+                          <strong>{Math.round(mejorandoPromptPlaneamientoIaProgress)}%</strong>
+                        </div>
+                        <div
+                          role="progressbar"
+                          aria-label="Avance de mejora del prompt con IA"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={Math.round(mejorandoPromptPlaneamientoIaProgress)}
+                          style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}
+                        >
+                          <div style={{ width: `${mejorandoPromptPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {promptPlaneamientoIaListo ? (
+                      <label style={{ color: "#e5eefb" }}>
+                        Prompt que se enviará
+                        <textarea
+                          rows={10}
+                          value={promptPlaneamientoIa}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setPromptPlaneamientoIa(value);
+                            setPromptPlaneamientoIaConstruido(Boolean(value.trim()));
+                            setPromptPlaneamientoIaMejorado(false);
+                          }}
+                          style={{ marginTop: "6px", background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583", minHeight: "190px" }}
+                        />
+                        <small style={{ color: "#b8c7da" }}>
+                          Podés editarlo. Si cambiás los datos del formulario, deberás construirlo nuevamente.
+                        </small>
+                      </label>
+                    ) : null}
                   </div>
                   {generatingPlaneamientoIa ? (
-                    <div style={{ width: "320px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
-                      <div style={{ width: `${generatingPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                    <div style={{ width: "520px", maxWidth: "100%", display: "grid", gap: "5px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", color: "#dbeafe", fontSize: "0.86rem" }}>
+                        <span>{generatingPlaneamientoIaEtapa || "Generando planeamiento con IA"}</span>
+                        <strong>{Math.round(generatingPlaneamientoIaProgress)}%</strong>
+                      </div>
+                      <div
+                        role="progressbar"
+                        aria-label="Avance de generación del planeamiento con IA"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round(generatingPlaneamientoIaProgress)}
+                        style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}
+                      >
+                        <div style={{ width: `${generatingPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #2563eb 0%, #22d3ee 100%)", transition: "width 240ms ease" }} />
+                      </div>
                     </div>
                   ) : null}
 
@@ -11086,7 +11523,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         border: errorMessage ? "1px solid #fecaca" : "1px solid #bbf7d0"
                       }}
                     >
-                      {generatingPlaneamientoIa ? "Generando la propuesta. Esto puede tardar unos segundos si adjuntaste una plantilla." : (errorMessage || message)}
+                      {generatingPlaneamientoIa
+                        ? `${generatingPlaneamientoIaEtapa || "Generando la propuesta"} (${Math.round(generatingPlaneamientoIaProgress)}%).`
+                        : (errorMessage || message)}
                     </div>
                   )}
 
@@ -11095,7 +11534,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       <div>
                         <strong>Revisión del planeamiento generado</strong>
                         <p style={{ margin: "4px 0 0", color: "#b8c7da" }}>
-                          Revisá y ajustá la propuesta. El sistema guardará el planeamiento únicamente cuando presionés “Guardar planeamiento”.
+                          La IA compara la propuesta con el documento de referencia y completa los ajustes necesarios antes de guardarla.
                         </p>
                       </div>
 
@@ -11103,23 +11542,28 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         <div
                           style={{
                             padding: "12px",
-                            border: ultimoPlaneamientoIa.controlCalidad.puedeGuardar ? "1px solid #3f8f6b" : "1px solid #dc665f",
-                            background: ultimoPlaneamientoIa.controlCalidad.puedeGuardar ? "#102a24" : "#3a1f24",
+                            border: planeamientoIaListoParaGuardar ? "1px solid #3f8f6b" : "1px solid #dc665f",
+                            background: planeamientoIaListoParaGuardar ? "#102a24" : "#3a1f24",
                             display: "grid",
                             gap: "8px"
                           }}
                         >
                           <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                             <strong>
-                              {ultimoPlaneamientoIa.controlCalidad.puedeGuardar
-                                ? "Revisión automática completada"
-                                : "Hay datos que deben corregirse"}
+                              {planeamientoIaListoParaGuardar
+                                ? "Mejorado con IA. Listo para guardar"
+                                : "La IA debe completar ajustes"}
                             </strong>
                             <span style={{ fontSize: "13px", fontWeight: 800 }}>
                               Calidad: {ultimoPlaneamientoIa.controlCalidad.puntuacion ?? 0}/100
                             </span>
                           </div>
                           <div style={{ display: "grid", gap: "6px" }}>
+                            {ultimoPlaneamientoIa.controlCalidad.reparadoAutomaticamente && (
+                              <small style={{ color: "#bfdbfe" }}>
+                                El sistema detectó diferencias y corrigió automáticamente la primera propuesta.
+                              </small>
+                            )}
                             {(ultimoPlaneamientoIa.controlCalidad.verificaciones || []).map((item) => (
                               <div
                                 key={item.codigo}
@@ -11193,6 +11637,33 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                           onChange={(e) => updateResultadoIaArray("aprendizajesEsperados", e.target.value)}
                         />
                       </label>
+
+                      <label>
+                        Criterios de evaluación
+                        <textarea
+                          rows={4}
+                          value={(ultimoPlaneamientoIa.criteriosEvaluacion || []).join("\n")}
+                          onChange={(e) => updateResultadoIaArray("criteriosEvaluacion", e.target.value)}
+                        />
+                      </label>
+
+                      {Object.keys(ultimoPlaneamientoIa.camposReferencia || {}).length > 0 && (
+                        <div style={{ display: "grid", gap: "10px" }}>
+                          <strong>Datos nuevos para el machote</strong>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "10px" }}>
+                            {Object.entries(ultimoPlaneamientoIa.camposReferencia || {}).map(([campo, valor]) => (
+                              <label key={campo}>
+                                {campo}
+                                <textarea
+                                  rows={2}
+                                  value={valor || ""}
+                                  onChange={(e) => updateResultadoIaCampoReferencia(campo, e.target.value)}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       <label>
                         Estrategias de mediación
@@ -11349,22 +11820,70 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       </label>
 
                       <div style={{ display: "grid", gap: "8px", justifyItems: "start" }}>
+                        <div
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: "6px",
+                            border: planeamientoIaListoParaGuardar ? "1px solid #2f6f55" : "1px solid #a16207",
+                            background: planeamientoIaListoParaGuardar ? "#102a24" : "#3b2a12",
+                            color: planeamientoIaListoParaGuardar ? "#dcfce7" : "#fef3c7"
+                          }}
+                        >
+                          {planeamientoIaListoParaGuardar
+                            ? "Mejorado con IA. Ya podés guardar el planeamiento."
+                            : "Primero presioná “Mejorar planeamiento con IA”. Guardar se habilitará cuando todos los ajustes estén corregidos."}
+                        </div>
                         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className={planeamientoIaListoParaGuardar ? "ghost-btn" : "primary-btn"}
+                            onClick={() => { void revisarPlaneamientoIaGenerado(true); }}
+                            disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa}
+                          >
+                            {revisandoPlaneamientoIa
+                              ? "Mejorando planeamiento..."
+                              : (planeamientoIaListoParaGuardar ? "Mejorar nuevamente con IA" : "Mejorar planeamiento con IA")}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-btn"
+                            onClick={() => { void generarPlaneamientoConIa(); }}
+                            disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa || !promptPlaneamientoIaListo}
+                            title="Generar una nueva versión y validarla automáticamente"
+                          >
+                            {generatingPlaneamientoIa ? "Generando nuevamente..." : "Generar nuevamente"}
+                          </button>
                           <button
                             type="button"
                             className="primary-btn"
                             onClick={guardarPlaneamientoIaGenerado}
-                            disabled={savingPlaneamientoIa}
+                            disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa || !planeamientoIaListoParaGuardar}
+                            title={planeamientoIaListoParaGuardar ? "Guardar el planeamiento validado" : "Mejorá primero el planeamiento con IA"}
                           >
-                            {savingPlaneamientoIa ? "Guardando..." : (editingPlaneamientoIaId ? "Actualizar planeamiento" : "Guardar planeamiento")}
+                            {savingPlaneamientoIa
+                              ? (revisandoPlaneamientoIa ? "Revisando antes de guardar..." : "Guardando...")
+                              : (editingPlaneamientoIaId ? "Actualizar planeamiento" : "Guardar planeamiento")}
                           </button>
-                          <button type="button" style={secondaryButtonStyle} onClick={() => { setUltimoPlaneamientoIa(null); setEditingPlaneamientoIaId(null); }} disabled={savingPlaneamientoIa}>
+                          <button type="button" style={secondaryButtonStyle} onClick={() => { setUltimoPlaneamientoIa(null); setEditingPlaneamientoIaId(null); }} disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa}>
                             Descartar
                           </button>
                         </div>
                         {savingPlaneamientoIa ? (
-                          <div style={{ width: "300px", maxWidth: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}>
-                            <div style={{ width: `${savingPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #22d3ee 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                          <div style={{ width: "460px", maxWidth: "100%", display: "grid", gap: "5px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", color: "#dbeafe", fontSize: "0.86rem" }}>
+                              <span>{savingPlaneamientoIaEtapa || "Guardando planeamiento"}</span>
+                              <strong>{Math.round(savingPlaneamientoIaProgress)}%</strong>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label="Avance del guardado del planeamiento"
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(savingPlaneamientoIaProgress)}
+                              style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}
+                            >
+                              <div style={{ width: `${savingPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #22d3ee 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                            </div>
                           </div>
                         ) : null}
                       </div>

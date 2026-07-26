@@ -62,6 +62,11 @@ const items: MenuItem[] = [
     allowedRoles: GESTION_PROFE_ROLES
   },
   {
+    label: "Grupos de clase",
+    path: "/grupos-clase",
+    allowedRoles: ADMINISTRATIVO_ROLES
+  },
+  {
     label: "Parametrizaciones",
     path: "/parametrizaciones",
     allowedRoles: PARAMETRIZACIONES_ROLES

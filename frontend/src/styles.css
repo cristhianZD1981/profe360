@@ -2344,3 +2344,40 @@ div[style*="background:#f8fafc"] textarea {
     grid-template-columns: 1fr;
   }
 }
+
+/* Grupos de clase usa superficies claras dentro del tema oscuro global. */
+.grupos-clase-page,
+.grupos-clase-page label,
+.grupos-clase-page strong,
+.grupos-clase-page span,
+.grupos-clase-page small,
+.grupos-clase-page p,
+.grupos-clase-page table,
+.grupos-clase-page table th,
+.grupos-clase-page table td,
+.grupos-clase-page table th *,
+.grupos-clase-page table td * {
+  color: #0f172a !important;
+}
+
+.grupos-clase-page input,
+.grupos-clase-page select,
+.grupos-clase-page textarea {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #64748b !important;
+}
+
+.grupos-clase-page input::placeholder,
+.grupos-clase-page textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.grupos-clase-page input[type="checkbox"] {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #2563eb;
+}

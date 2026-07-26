@@ -25,6 +25,7 @@ import AssistantAdminPage from "./pages/AssistantAdminPage";
 import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
 import SuperAdminConsecutivosPage from "./pages/SuperAdminConsecutivosPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
+import GruposClasePage from "./pages/GruposClasePage";
 
 const ADMINISTRATIVO_ROLES = [
   "SUPER_ADMIN",
@@ -206,6 +207,14 @@ export default function App() {
                 allowedRoles={["SUPER_ADMIN"]}
               >
                 <SeguimientoNotasPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="grupos-clase"
+            element={
+              <ProtectedRoute allowedRoles={ADMINISTRATIVO_ROLES}>
+                <GruposClasePage />
               </ProtectedRoute>
             }
           />

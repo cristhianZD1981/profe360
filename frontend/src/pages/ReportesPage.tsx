@@ -10,7 +10,9 @@ type TipoReporte =
   | "SECCIONES"
   | "ESTUDIANTES"
   | "PROMEDIOS_ACADEMICOS"
-  | "CIERRE_CURSOS";
+  | "CIERRE_CURSOS"
+  | "HORARIO_PROFESOR"
+  | "HORARIO_SECCION";
 
 type VistaAsistencia = "ALUMNO" | "SECCION" | "PROFESOR";
 
@@ -102,6 +104,80 @@ type CierreCursoReporteRow = {
   advertencias?: string[];
 };
 
+type HorarioBloqueReporte = {
+  BloqueHorarioId: number;
+  Nombre: string;
+  HoraInicio?: string | null;
+  HoraFin?: string | null;
+  OrdenVisual: number;
+};
+
+type HorarioEntradaReporte = {
+  ProfesorId: number;
+  ProfesorNombre?: string | null;
+  ProfesorCorreo?: string | null;
+  HorarioGrupoId: number;
+  BloqueHorarioId: number;
+  DiaSemana: number;
+  GrupoId: number;
+  GrupoNombre: string;
+  MateriaId: number;
+  MateriaNombre: string;
+  MateriaCodigo?: string | null;
+};
+
+type HorarioProfesorReporte = {
+  profesorId: number;
+  nombre: string;
+  correo: string;
+  periodoId?: number | null;
+  periodoNombre?: string;
+  totalLecciones?: number;
+  entradas: HorarioEntradaReporte[];
+};
+
+type HorarioSeccionReporte = {
+  grupoId: number;
+  nombre: string;
+  periodoId?: number | null;
+  periodoNombre?: string;
+  totalLecciones?: number;
+  entradas: HorarioEntradaReporte[];
+};
+
+type HorarioReporteData = {
+  anioLectivoId: number;
+  anioNombre: string;
+  bloques: HorarioBloqueReporte[];
+  profesores?: HorarioProfesorReporte[];
+  secciones?: HorarioSeccionReporte[];
+};
+
+const HORARIO_DIAS = [
+  { key: 2, label: "Lunes" },
+  { key: 3, label: "Martes" },
+  { key: 4, label: "Miércoles" },
+  { key: 5, label: "Jueves" },
+  { key: 6, label: "Viernes" }
+];
+
+function getHorarioBloqueLabel(bloque: HorarioBloqueReporte) {
+  const nombre = String(bloque.Nombre || "").trim();
+  const inicio = String(bloque.HoraInicio || "").trim();
+  const fin = String(bloque.HoraFin || "").trim();
+  return inicio && fin ? `${nombre} (${inicio}-${fin})` : nombre;
+}
+
+function getHorarioBloqueNoLectivo(nombre?: string | null) {
+  const normalized = String(nombre || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (normalized.includes("almuerzo")) return "ALMUERZO";
+  if (normalized.includes("recreo") || normalized.includes("descanso")) return "RECREO";
+  return "";
+}
+
 function descargarBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -146,6 +222,25 @@ function getVistaActual(pathname: string): "menu" | "consultas" | "certificacion
 function getGradoFromGrupoNombre(value: any) {
   const match = String(value || "").trim().match(/^(\d+)/);
   return match ? Number(match[1]) : NaN;
+}
+
+function getSeccionNumeroFromGrupoNombre(value: any) {
+  const match = String(value || "").trim().match(/^\d+\s*-\s*(\d+)/);
+  return match ? Number(match[1]) : NaN;
+}
+
+function sortSeccionesMenorMayor<T extends { GrupoNombre?: any }>(items: T[]) {
+  return [...items].sort((a, b) => {
+    const gradoA = getGradoFromGrupoNombre(a.GrupoNombre);
+    const gradoB = getGradoFromGrupoNombre(b.GrupoNombre);
+    if (Number.isFinite(gradoA) && Number.isFinite(gradoB) && gradoA !== gradoB) return gradoA - gradoB;
+    if (Number.isFinite(gradoA) !== Number.isFinite(gradoB)) return Number.isFinite(gradoA) ? -1 : 1;
+    const seccionA = getSeccionNumeroFromGrupoNombre(a.GrupoNombre);
+    const seccionB = getSeccionNumeroFromGrupoNombre(b.GrupoNombre);
+    if (Number.isFinite(seccionA) && Number.isFinite(seccionB) && seccionA !== seccionB) return seccionA - seccionB;
+    if (Number.isFinite(seccionA) !== Number.isFinite(seccionB)) return Number.isFinite(seccionA) ? -1 : 1;
+    return String(a.GrupoNombre || "").localeCompare(String(b.GrupoNombre || ""), "es", { numeric: true });
+  });
 }
 
 const chooserButtonBase: React.CSSProperties = {
@@ -208,6 +303,7 @@ export default function ReportesPage() {
   const [boletasRows, setBoletasRows] = useState<BoletaReporteRow[]>([]);
   const [promediosResumen, setPromediosResumen] = useState<PromediosResumen | null>(null);
   const [cierreCursosRows, setCierreCursosRows] = useState<CierreCursoReporteRow[]>([]);
+  const [horarioReporte, setHorarioReporte] = useState<HorarioReporteData | null>(null);
   const [reabriendoCierreId, setReabriendoCierreId] = useState<number | null>(null);
   const [seccionReporteTitulo, setSeccionReporteTitulo] = useState<string>("");
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
@@ -248,9 +344,10 @@ export default function ReportesPage() {
       const data = r.data?.data || {};
       const anios = Array.isArray(data.aniosLectivos) ? data.aniosLectivos : [];
       const periodosData = Array.isArray(data.periodos) ? data.periodos : [];
+      const seccionesData = Array.isArray(data.secciones) ? sortSeccionesMenorMayor(data.secciones) : [];
       setAniosLectivos(anios);
       setPeriodos(periodosData);
-      setSecciones(Array.isArray(data.secciones) ? data.secciones : []);
+      setSecciones(seccionesData);
       setAlumnos(Array.isArray(data.alumnos) ? data.alumnos : []);
       setProfesores(Array.isArray(data.profesores) ? data.profesores : []);
       setTiposEstudiante(Array.isArray(data.tiposEstudiante) ? data.tiposEstudiante : []);
@@ -331,6 +428,7 @@ export default function ReportesPage() {
     setAsistenciaRows([]);
     setBoletasRows([]);
     setCierreCursosRows([]);
+    setHorarioReporte(null);
     setPromediosResumen(null);
     setSeccionReporteTitulo("");
     setExpandedRows({});
@@ -405,7 +503,6 @@ export default function ReportesPage() {
       window.alert("Solo Dirección o Administración puede consultar cursos cerrados.");
       return;
     }
-
     setLoading(true);
     setProgressPct(8);
     const progressTimer = window.setInterval(() => {
@@ -415,6 +512,38 @@ export default function ReportesPage() {
       });
     }, 250);
     try {
+      if (tipo === "HORARIO_PROFESOR") {
+        const response = await api.get("/reportes/horario-profesor", {
+          params: {
+            profesorId: profesorIdReporte || undefined
+          }
+        });
+        setHorarioReporte(response.data?.data || null);
+        setFilas([]);
+        setAsistenciaRows([]);
+        setBoletasRows([]);
+        setCierreCursosRows([]);
+        setPromediosResumen(null);
+        setExpandedRows({});
+        return;
+      }
+
+      if (tipo === "HORARIO_SECCION") {
+        const response = await api.get("/reportes/horario-seccion", {
+          params: {
+            grupoId: grupoId || undefined
+          }
+        });
+        setHorarioReporte(response.data?.data || null);
+        setFilas([]);
+        setAsistenciaRows([]);
+        setBoletasRows([]);
+        setCierreCursosRows([]);
+        setPromediosResumen(null);
+        setExpandedRows({});
+        return;
+      }
+
       if (tipo === "ASISTENCIA") {
         const response = await api.get("/reportes/gestion-profe", {
           params: {
@@ -433,6 +562,7 @@ export default function ReportesPage() {
         setFilas([]);
         setBoletasRows([]);
         setCierreCursosRows([]);
+        setHorarioReporte(null);
         return;
       }
 
@@ -454,6 +584,7 @@ export default function ReportesPage() {
         setExpandedRows({});
         setFilas([]);
         setCierreCursosRows([]);
+        setHorarioReporte(null);
         return;
       }
 
@@ -470,6 +601,7 @@ export default function ReportesPage() {
         setAsistenciaRows([]);
         setBoletasRows([]);
         setCierreCursosRows([]);
+        setHorarioReporte(null);
         setExpandedRows({});
         return;
       }
@@ -491,6 +623,7 @@ export default function ReportesPage() {
         setAsistenciaRows([]);
         setBoletasRows([]);
         setCierreCursosRows([]);
+        setHorarioReporte(null);
         setExpandedRows({});
         return;
       }
@@ -509,6 +642,7 @@ export default function ReportesPage() {
         setSeccionReporteTitulo("");
         setAsistenciaRows([]);
         setBoletasRows([]);
+        setHorarioReporte(null);
         setExpandedRows({});
         return;
       }
@@ -529,6 +663,7 @@ export default function ReportesPage() {
         setAsistenciaRows([]);
         setBoletasRows([]);
         setCierreCursosRows([]);
+        setHorarioReporte(null);
         setExpandedRows({});
         return;
       }
@@ -547,6 +682,7 @@ export default function ReportesPage() {
       setAsistenciaRows([]);
       setBoletasRows([]);
       setCierreCursosRows([]);
+      setHorarioReporte(null);
     } catch (error: any) {
       window.alert(error?.response?.data?.message || "No se pudo consultar el reporte.");
     } finally {
@@ -674,6 +810,42 @@ export default function ReportesPage() {
   }
 
   async function exportarExcel() {
+    if (tipo === "HORARIO_PROFESOR") {
+      try {
+        const response = await api.get("/reportes/horario-profesor/excel", {
+          params: {
+            profesorId: profesorIdReporte || undefined
+          },
+          responseType: "blob"
+        });
+        const contentType = String(response.headers?.["content-type"] || response.data?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        const fileName = getAttachmentFileName(response.headers?.["content-disposition"], "horario-profesores.xlsx");
+        const blob = response.data instanceof Blob ? response.data : new Blob([response.data], { type: contentType });
+        descargarBlob(blob, fileName);
+      } catch (error: any) {
+        window.alert(error?.response?.data?.message || "No se pudo exportar el horario de profesores en Excel.");
+      }
+      return;
+    }
+
+    if (tipo === "HORARIO_SECCION") {
+      try {
+        const response = await api.get("/reportes/horario-seccion/excel", {
+          params: {
+            grupoId: grupoId || undefined
+          },
+          responseType: "blob"
+        });
+        const contentType = String(response.headers?.["content-type"] || response.data?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        const fileName = getAttachmentFileName(response.headers?.["content-disposition"], "horario-secciones.xlsx");
+        const blob = response.data instanceof Blob ? response.data : new Blob([response.data], { type: contentType });
+        descargarBlob(blob, fileName);
+      } catch (error: any) {
+        window.alert(error?.response?.data?.message || "No se pudo exportar el horario de secciones en Excel.");
+      }
+      return;
+    }
+
     if (tipo === "SECCIONES") {
       const seccion = String(seccionReporteTitulo || secciones.find((item) => String(item.GrupoId) === String(grupoId))?.GrupoNombre || "").trim();
       try {
@@ -861,12 +1033,239 @@ export default function ReportesPage() {
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
+  function renderHorarioProfesorReporte() {
+    if (!horarioReporte?.profesores?.length) {
+      return (
+        <div style={{ padding: 18, textAlign: "center", border: "1px dashed #94a3b8", borderRadius: 8, color: "#475569", background: "#ffffff" }}>
+          No hay horarios cargados. Elegí los filtros y presioná Consultar.
+        </div>
+      );
+    }
+
+    const bloques = [...horarioReporte.bloques].sort((a, b) =>
+      Number(a.OrdenVisual || 0) - Number(b.OrdenVisual || 0)
+      || Number(a.BloqueHorarioId || 0) - Number(b.BloqueHorarioId || 0)
+    );
+
+    return (
+      <div style={{ display: "grid", gap: 22 }}>
+        {horarioReporte.profesores.map((profesor) => (
+          <section key={profesor.profesorId} style={{ border: "1px solid #94a3b8", borderRadius: 8, overflow: "hidden", background: "#ffffff" }}>
+            <div style={{ padding: "12px 14px", background: "#102738", color: "#f8fafc", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <strong style={{ display: "block", fontSize: 17 }}>{profesor.nombre || profesor.correo}</strong>
+                {profesor.correo ? <span style={{ color: "#ffffff", fontSize: 13, fontWeight: 700 }}>{profesor.correo}</span> : null}
+              </div>
+              <span style={{ color: "#ffffff", fontWeight: 900 }}>
+                {[horarioReporte.anioNombre, profesor.periodoNombre].filter(Boolean).join(" / ")}
+              </span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 1050, tableLayout: "fixed", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff" }}>
+                <colgroup>
+                  <col style={{ width: 175 }} />
+                  {HORARIO_DIAS.map((dia) => <col key={`${profesor.profesorId}-col-${dia.key}`} />)}
+                </colgroup>
+                <thead>
+                  <tr style={{ background: "#cbd5e1" }}>
+                    <th style={{ padding: "10px 7px", border: "1px solid #94a3b8", textAlign: "center", fontWeight: 900, color: "#0f172a", fontSize: 15 }}>Lección</th>
+                    {HORARIO_DIAS.map((dia) => (
+                      <th key={`${profesor.profesorId}-head-${dia.key}`} style={{ padding: "10px 7px", border: "1px solid #94a3b8", textAlign: "center", fontWeight: 900, color: "#0f172a", fontSize: 15 }}>
+                        {dia.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {bloques.map((bloque) => {
+                    const tipoNoLectivo = getHorarioBloqueNoLectivo(bloque.Nombre);
+                    if (tipoNoLectivo) {
+                      const almuerzo = tipoNoLectivo === "ALMUERZO";
+                      return (
+                        <tr key={`${profesor.profesorId}-bloque-${bloque.BloqueHorarioId}`}>
+                          <td
+                            colSpan={6}
+                            style={{
+                              padding: "8px 10px",
+                              border: "1px solid #94a3b8",
+                              textAlign: "center",
+                              background: almuerzo ? "#d1fae5" : "#fef3c7",
+                              color: almuerzo ? "#166534" : "#92400e",
+                              fontWeight: 900
+                            }}
+                          >
+                            {getHorarioBloqueLabel(bloque)}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr key={`${profesor.profesorId}-bloque-${bloque.BloqueHorarioId}`}>
+                        <td style={{ padding: "9px 7px", border: "1px solid #cbd5e1", textAlign: "center", fontWeight: 900, color: "#1e293b" }}>
+                          {getHorarioBloqueLabel(bloque)}
+                        </td>
+                        {HORARIO_DIAS.map((dia) => {
+                          const entradas = profesor.entradas.filter((entrada) =>
+                            Number(entrada.BloqueHorarioId) === Number(bloque.BloqueHorarioId)
+                            && Number(entrada.DiaSemana) === dia.key
+                          );
+                          const textos = Array.from(new Set(entradas.map((entrada) =>
+                            `${String(entrada.GrupoNombre || "").trim()} ${String(entrada.MateriaNombre || "").trim()}`.trim()
+                          ).filter(Boolean)));
+                          return (
+                            <td key={`${profesor.profesorId}-${bloque.BloqueHorarioId}-${dia.key}`} style={{ padding: 5, border: "1px solid #64748b", textAlign: "center", verticalAlign: "middle", background: "#ffffff" }}>
+                              {textos.length ? (
+                                <div style={{ display: "grid", gap: 5 }}>
+                                  {textos.map((texto) => (
+                                    <div key={texto} style={{ minHeight: 34, display: "flex", alignItems: "center", justifyContent: "center", padding: "6px 7px", border: "1px solid #2563eb", borderRadius: 6, background: "#ffffff", color: "#0f172a", fontWeight: 900 }}>
+                                      {texto}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span style={{ color: "#111827", fontWeight: 900 }}>Libre</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))}
+      </div>
+    );
+  }
+
+  function renderHorarioSeccionReporte() {
+    if (!horarioReporte?.secciones?.length) {
+      return (
+        <div style={{ padding: 18, textAlign: "center", border: "1px dashed #94a3b8", borderRadius: 8, color: "#475569", background: "#ffffff" }}>
+          No hay horarios cargados. Elegí los filtros y presioná Consultar.
+        </div>
+      );
+    }
+
+    const bloques = [...horarioReporte.bloques].sort((a, b) =>
+      Number(a.OrdenVisual || 0) - Number(b.OrdenVisual || 0)
+      || Number(a.BloqueHorarioId || 0) - Number(b.BloqueHorarioId || 0)
+    );
+
+    return (
+      <div style={{ display: "grid", gap: 22 }}>
+        {horarioReporte.secciones.map((seccion) => (
+          <section key={seccion.grupoId} style={{ border: "1px solid #94a3b8", borderRadius: 8, overflow: "hidden", background: "#ffffff" }}>
+            <div style={{ padding: "12px 14px", background: "#102738", color: "#f8fafc", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <strong style={{ display: "block", fontSize: 17 }}>Sección {seccion.nombre}</strong>
+                <span style={{ color: "#ffffff", fontSize: 13, fontWeight: 700 }}>Profesor y materia por día y lección</span>
+              </div>
+              <span style={{ color: "#ffffff", fontWeight: 900 }}>
+                {[horarioReporte.anioNombre, seccion.periodoNombre].filter(Boolean).join(" / ")}
+              </span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 1050, tableLayout: "fixed", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff" }}>
+                <colgroup>
+                  <col style={{ width: 175 }} />
+                  {HORARIO_DIAS.map((dia) => <col key={`${seccion.grupoId}-col-${dia.key}`} />)}
+                </colgroup>
+                <thead>
+                  <tr style={{ background: "#cbd5e1" }}>
+                    <th style={{ padding: "10px 7px", border: "1px solid #94a3b8", textAlign: "center", fontWeight: 900, color: "#0f172a", fontSize: 15 }}>Lección</th>
+                    {HORARIO_DIAS.map((dia) => (
+                      <th key={`${seccion.grupoId}-head-${dia.key}`} style={{ padding: "10px 7px", border: "1px solid #94a3b8", textAlign: "center", fontWeight: 900, color: "#0f172a", fontSize: 15 }}>
+                        {dia.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {bloques.map((bloque) => {
+                    const tipoNoLectivo = getHorarioBloqueNoLectivo(bloque.Nombre);
+                    if (tipoNoLectivo) {
+                      const almuerzo = tipoNoLectivo === "ALMUERZO";
+                      return (
+                        <tr key={`${seccion.grupoId}-bloque-${bloque.BloqueHorarioId}`}>
+                          <td
+                            colSpan={6}
+                            style={{
+                              padding: "8px 10px",
+                              border: "1px solid #94a3b8",
+                              textAlign: "center",
+                              background: almuerzo ? "#d1fae5" : "#fef3c7",
+                              color: almuerzo ? "#166534" : "#92400e",
+                              fontWeight: 900
+                            }}
+                          >
+                            {getHorarioBloqueLabel(bloque)}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <tr key={`${seccion.grupoId}-bloque-${bloque.BloqueHorarioId}`}>
+                        <td style={{ padding: "9px 7px", border: "1px solid #cbd5e1", textAlign: "center", fontWeight: 900, color: "#1e293b" }}>
+                          {getHorarioBloqueLabel(bloque)}
+                        </td>
+                        {HORARIO_DIAS.map((dia) => {
+                          const entradas = seccion.entradas.filter((entrada) =>
+                            Number(entrada.BloqueHorarioId) === Number(bloque.BloqueHorarioId)
+                            && Number(entrada.DiaSemana) === dia.key
+                          );
+                          const textos = Array.from(new Set(entradas.map((entrada) => {
+                            const profesor = String(entrada.ProfesorNombre || entrada.ProfesorCorreo || "Sin profesor").trim();
+                            const materia = String(entrada.MateriaNombre || "").trim();
+                            return `${profesor}\n${materia}`.trim();
+                          }).filter(Boolean)));
+                          return (
+                            <td key={`${seccion.grupoId}-${bloque.BloqueHorarioId}-${dia.key}`} style={{ padding: 5, border: "1px solid #64748b", textAlign: "center", verticalAlign: "middle", background: "#ffffff" }}>
+                              {textos.length ? (
+                                <div style={{ display: "grid", gap: 5 }}>
+                                  {textos.map((texto) => {
+                                    const [profesor, ...materiaParts] = texto.split("\n");
+                                    const materia = materiaParts.join(" ");
+                                    return (
+                                      <div key={texto} style={{ minHeight: 44, display: "grid", alignItems: "center", justifyContent: "center", gap: 3, padding: "6px 7px", border: "1px solid #2563eb", borderRadius: 6, background: "#ffffff", color: "#0f172a" }}>
+                                        <strong style={{ fontSize: 12, color: "#0f172a", fontWeight: 900 }}>{profesor}</strong>
+                                        {materia ? <span style={{ fontSize: 12, color: "#111827", fontWeight: 900 }}>{materia}</span> : null}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <span style={{ color: "#111827", fontWeight: 900 }}>Libre</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))}
+      </div>
+    );
+  }
+
   const hayDatosReporte = tipo === "ASISTENCIA"
     ? asistenciaRows.length > 0
     : tipo === "BOLETAS"
       ? boletasRows.length > 0
       : tipo === "CIERRE_CURSOS"
         ? cierreCursosRows.length > 0
+        : tipo === "HORARIO_PROFESOR"
+          ? Boolean(horarioReporte?.profesores?.length)
+          : tipo === "HORARIO_SECCION"
+            ? Boolean(horarioReporte?.secciones?.length)
       : filas.length > 0;
 
   return (
@@ -934,6 +1333,7 @@ export default function ReportesPage() {
                   setAsistenciaRows([]);
                   setBoletasRows([]);
                   setCierreCursosRows([]);
+                  setHorarioReporte(null);
                   setPromediosResumen(null);
                   setSeccionReporteTitulo("");
                   setExpandedRows({});
@@ -953,10 +1353,30 @@ export default function ReportesPage() {
                 <option value="SECCIONES">Secciones</option>
                 <option value="ESTUDIANTES">Estudiante</option>
                 <option value="PROMEDIOS_ACADEMICOS">Promedios Académicos</option>
+                <option value="HORARIO_PROFESOR">Horario profesor</option>
+                <option value="HORARIO_SECCION">Horario sección</option>
                 {puedeAdministrarCierres ? <option value="CIERRE_CURSOS">Cursos Cerrados</option> : null}
               </select>
             </label>
-            {tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
+            {tipo === "HORARIO_PROFESOR" ? (
+              <label>Profesor
+                <select value={profesorIdReporte} onChange={(e) => { setProfesorIdReporte(e.target.value); setHorarioReporte(null); }}>
+                  <option value="">Todos los profesores</option>
+                  {profesoresFiltrados.map((prof) => (
+                    <option key={prof.ProfesorId} value={prof.ProfesorId}>
+                      {prof.nombreCompleto || prof.Correo || `Profesor ${prof.ProfesorId}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : tipo === "HORARIO_SECCION" ? (
+              <label>Sección
+                <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setHorarioReporte(null); }}>
+                  <option value="">Todas las secciones</option>
+                  {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
+                </select>
+              </label>
+            ) : tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
               <>
                 <label>Ver reporte por
                   <select
@@ -1198,7 +1618,11 @@ export default function ReportesPage() {
               </p>
             </div>
           ) : null}
-          {tipo === "ASISTENCIA" ? (
+          {tipo === "HORARIO_PROFESOR" ? (
+            renderHorarioProfesorReporte()
+          ) : tipo === "HORARIO_SECCION" ? (
+            renderHorarioSeccionReporte()
+          ) : tipo === "ASISTENCIA" ? (
             <div className="table-wrap">
               <table>
                 <thead>
