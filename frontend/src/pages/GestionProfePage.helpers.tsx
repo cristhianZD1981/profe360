@@ -739,6 +739,10 @@ export type HorarioEntrada = {
   MateriaId: number;
   MateriaNombre: string;
   MateriaCodigo?: string | null;
+  AnioLectivoId?: number | null;
+  AnioNombre?: string | null;
+  PeriodoId?: number | null;
+  PeriodoNombre?: string | null;
 };
 
 export type EstadoAsistencia = "PRESENTE" | "AUSENTE_JUSTIFICADA" | "AUSENTE_INJUSTIFICADA" | "TARDIA_MENOR_10" | "TARDIA_MAYOR_10";

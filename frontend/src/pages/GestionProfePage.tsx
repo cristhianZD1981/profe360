@@ -118,6 +118,24 @@ function getGrupoProfesorKey(item?: GrupoProfesor | null) {
   ].join("|");
 }
 
+function getHorarioGrupoMateriaKey(item?: any) {
+  if (!item) return "";
+  return [
+    Number(item.GrupoId || 0),
+    Number(item.MateriaId || 0)
+  ].join("|");
+}
+
+function getHorarioAsignacionKey(item?: any) {
+  if (!item) return "";
+  return [
+    Number(item.GrupoId || 0),
+    Number(item.MateriaId || 0),
+    Number(item.AnioLectivoId || 0),
+    Number(item.PeriodoId || 0)
+  ].join("|");
+}
+
 function normalizeAdecuacionText(value?: string | null) {
   return String(value || "")
     .normalize("NFD")
@@ -7781,10 +7799,17 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }
 
   async function seleccionarMateriaDesdeHorario(entrada: HorarioEntrada) {
-    const grupoMateria = grupos.find((grupo) =>
+    const candidatos = grupos.filter((grupo) =>
       Number(grupo.GrupoId) === Number(entrada.GrupoId) &&
       Number(grupo.MateriaId) === Number(entrada.MateriaId)
     );
+    const contextoHorario = selected || grupoHorarioPredeterminado;
+    const entradaAnioLectivoId = Number(entrada.AnioLectivoId || contextoHorario?.AnioLectivoId || 0);
+    const entradaPeriodoId = Number(entrada.PeriodoId || contextoHorario?.PeriodoId || 0);
+    const grupoMateria = candidatos.find((grupo) =>
+      (!entradaAnioLectivoId || Number(grupo.AnioLectivoId) === entradaAnioLectivoId) &&
+      (!entradaPeriodoId || Number(grupo.PeriodoId) === entradaPeriodoId)
+    ) || (!entradaAnioLectivoId && !entradaPeriodoId ? candidatos[0] : null);
 
     if (!grupoMateria) {
       setErrorMessage("No se encontró esa sección y materia dentro de Mis grupos.");
@@ -7930,19 +7955,31 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
   }, [gruposOrdenados, horarioReferencia]);
 
   const horarioEntradasKeys = useMemo(() => {
-    return new Set(
-      horarioEntradas.map((item) => `${Number(item.GrupoId)}|${Number(item.MateriaId)}`)
-    );
+    const keys = new Set<string>();
+    horarioEntradas.forEach((item) => {
+      if (item.AnioLectivoId && item.PeriodoId) {
+        keys.add(getHorarioAsignacionKey(item));
+      } else {
+        keys.add(getHorarioGrupoMateriaKey(item));
+      }
+    });
+    return keys;
   }, [horarioEntradas]);
 
   const horarioPendientes = useMemo(() => {
-    return horarioContextoGrupos.filter((item) => !horarioEntradasKeys.has(`${Number(item.GrupoId)}|${Number(item.MateriaId)}`));
+    return horarioContextoGrupos.filter((item) => (
+      !horarioEntradasKeys.has(getHorarioAsignacionKey(item)) &&
+      !horarioEntradasKeys.has(getHorarioGrupoMateriaKey(item))
+    ));
   }, [horarioContextoGrupos, horarioEntradasKeys]);
 
   const horarioResumen = useMemo(() => {
-    const gruposConHorario = new Set(
-      horarioEntradas.map((item) => `${Number(item.GrupoId)}|${Number(item.MateriaId)}`)
-    );
+    const gruposConHorario = new Set<string>();
+    horarioEntradas.forEach((item) => {
+      gruposConHorario.add(item.AnioLectivoId && item.PeriodoId
+        ? getHorarioAsignacionKey(item)
+        : getHorarioGrupoMateriaKey(item));
+    });
 
     return {
       totalAsignacionesPeriodo: horarioContextoGrupos.length,

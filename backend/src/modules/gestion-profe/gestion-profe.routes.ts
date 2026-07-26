@@ -2291,34 +2291,76 @@ router.get("/mi-horario", async (req, res) => {
       .input("periodoId", sql.Int, periodoId);
 
     const entradas = await request.query(`
-      SELECT DISTINCT
-        hg.HorarioGrupoId,
-        hg.BloqueHorarioId,
-        hg.DiaSemana,
-        gm.GrupoId,
-        g.Nombre AS GrupoNombre,
-        gm.MateriaId,
-        m.Nombre AS MateriaNombre,
-        m.Codigo AS MateriaCodigo
-      FROM dbo.HorarioDocente hd
-      INNER JOIN dbo.HorarioGrupo hg
-        ON hg.HorarioGrupoId = hd.HorarioGrupoId
-       AND hg.Activo = 1
-      INNER JOIN dbo.GrupoMateria gm
-        ON gm.GrupoMateriaId = hg.GrupoMateriaId
-       AND gm.Activo = 1
-       AND gm.PeriodoId = @periodoId
-      INNER JOIN dbo.Grupo g
-        ON g.GrupoId = gm.GrupoId
-       AND g.Activo = 1
-       AND g.InstitucionId = @institucionId
-       AND g.AnioLectivoId = @anioLectivoId
-      INNER JOIN dbo.Materia m
-        ON m.MateriaId = gm.MateriaId
-       AND m.Activa = 1
-      WHERE hd.UsuarioId = @usuarioId
-        AND hd.Activo = 1
-      ORDER BY hg.DiaSemana, hg.BloqueHorarioId, g.Nombre, m.Nombre
+      ;WITH EntradasBase AS (
+        SELECT
+          hg.HorarioGrupoId,
+          hg.BloqueHorarioId,
+          hg.DiaSemana,
+          gm.GrupoId,
+          g.Nombre AS GrupoNombre,
+          gm.MateriaId,
+          m.Nombre AS MateriaNombre,
+          m.Codigo AS MateriaCodigo,
+          g.AnioLectivoId,
+          al.Nombre AS AnioNombre,
+          COALESCE(gm.PeriodoId, @periodoId) AS PeriodoId,
+          COALESCE(p.Nombre, pFiltro.Nombre) AS PeriodoNombre,
+          CASE
+            WHEN gm.PeriodoId = @periodoId THEN 0
+            WHEN gm.PeriodoId IS NULL THEN 1
+            ELSE 2
+          END AS PrioridadPeriodo,
+          ROW_NUMBER() OVER (
+            PARTITION BY hg.BloqueHorarioId, hg.DiaSemana, gm.GrupoId, gm.MateriaId
+            ORDER BY
+              CASE
+                WHEN gm.PeriodoId = @periodoId THEN 0
+                WHEN gm.PeriodoId IS NULL THEN 1
+                ELSE 2
+              END,
+              hg.HorarioGrupoId DESC
+          ) AS rn
+        FROM dbo.HorarioDocente hd
+        INNER JOIN dbo.HorarioGrupo hg
+          ON hg.HorarioGrupoId = hd.HorarioGrupoId
+         AND hg.Activo = 1
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoMateriaId = hg.GrupoMateriaId
+         AND gm.Activo = 1
+         AND (gm.PeriodoId = @periodoId OR gm.PeriodoId IS NULL)
+        INNER JOIN dbo.Grupo g
+          ON g.GrupoId = gm.GrupoId
+         AND g.Activo = 1
+         AND g.InstitucionId = @institucionId
+         AND g.AnioLectivoId = @anioLectivoId
+        INNER JOIN dbo.Materia m
+          ON m.MateriaId = gm.MateriaId
+         AND m.Activa = 1
+        LEFT JOIN dbo.AnioLectivo al
+          ON al.AnioLectivoId = g.AnioLectivoId
+        LEFT JOIN dbo.Periodo p
+          ON p.PeriodoId = gm.PeriodoId
+        LEFT JOIN dbo.Periodo pFiltro
+          ON pFiltro.PeriodoId = @periodoId
+        WHERE hd.UsuarioId = @usuarioId
+          AND hd.Activo = 1
+      )
+      SELECT
+        HorarioGrupoId,
+        BloqueHorarioId,
+        DiaSemana,
+        GrupoId,
+        GrupoNombre,
+        MateriaId,
+        MateriaNombre,
+        MateriaCodigo,
+        AnioLectivoId,
+        AnioNombre,
+        PeriodoId,
+        PeriodoNombre
+      FROM EntradasBase
+      WHERE rn = 1
+      ORDER BY DiaSemana, BloqueHorarioId, GrupoNombre, MateriaNombre
     `);
 
     return ok(res, {
