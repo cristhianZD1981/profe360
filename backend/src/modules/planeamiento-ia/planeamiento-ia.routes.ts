@@ -662,7 +662,7 @@ Habilidades específicas seleccionadas:
 ${habilidadesText}
 
 Documento de apoyo aportado por la persona docente:
-${input.documentoApoyoTexto || "No se aportó documento de apoyo adicional."}
+${String(input.documentoApoyoTexto || "No se aportó documento de apoyo adicional.").slice(0, 24000)}
 
 Plantilla o formato de salida aportado por la persona docente:
 ${input.plantillaFormatoTexto || "No se aportó una plantilla de formato adicional."}
@@ -887,7 +887,7 @@ Habilidades específicas seleccionadas:
 ${clampPromptText(habilidadesText, 12000)}
 
 Documento de apoyo aportado por la persona docente:
-${clampPromptText(input.documentoApoyoTexto || "No se aportó documento de apoyo adicional.", 8000)}
+${clampPromptText(input.documentoApoyoTexto || "No se aportó documento de apoyo adicional.", 24000)}
 
 Plantilla o formato de salida aportado por la persona docente:
 ${clampPromptText(input.plantillaFormatoTexto || "No se aportó una plantilla de formato adicional.", 30000)}
@@ -1113,7 +1113,7 @@ ${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
 
 DOCUMENTOS/ARCHIVOS DE APOYO MANDATORIOS:
 ${input.documentoApoyoTexto?.trim()
-    ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 10000)}`
+    ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 16000)}`
     : "No se aportaron documentos de apoyo adicionales."}
 
 PERFIL DEL DOCUMENTO DE REFERENCIA:
@@ -1252,7 +1252,7 @@ ${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
 
 DOCUMENTOS/ARCHIVOS DE APOYO MANDATORIOS:
 ${input.documentoApoyoTexto?.trim()
-      ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 10000)}`
+      ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 16000)}`
       : "No se aportaron documentos de apoyo adicionales."}
 
 SECUENCIA EXACTA, INCLUIDAS LAS REPETICIONES:
@@ -1332,7 +1332,7 @@ ${input.indicacionesDocente || "No se aportaron indicaciones adicionales."}
 
 DOCUMENTOS/ARCHIVOS DE APOYO MANDATORIOS:
 ${input.documentoApoyoTexto?.trim()
-    ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 10000)}`
+    ? `Nombres: ${input.documentoApoyoNombre || "documento(s) adjunto(s)"}\n${String(input.documentoApoyoTexto || "").slice(0, 16000)}`
     : "No se aportaron documentos de apoyo adicionales."}
 
 FALLAS QUE DEBÉS CORREGIR:
@@ -2987,7 +2987,104 @@ async function extractDocxText(file: Express.Multer.File, maxChars = 16000) {
   return parts.join("\n\n").trim();
 }
 
-async function extractUploadedText(file: Express.Multer.File | undefined, input: { defaultName: string; maxChars: number; unsupportedMessage: string }) {
+function expandirRangoPaginas(inicio: number, fin: number, maxPaginas = 40) {
+  if (!Number.isInteger(inicio) || !Number.isInteger(fin) || inicio <= 0 || fin <= 0) return [];
+  const desde = Math.min(inicio, fin);
+  const hasta = Math.max(inicio, fin);
+  const limite = Math.min(hasta, desde + maxPaginas - 1);
+  return Array.from({ length: limite - desde + 1 }, (_item, index) => desde + index);
+}
+
+export function extraerPaginasIndicadas(textoEntrada: string, maxPaginas = 40) {
+  const texto = repararMojibakeTexto(textoEntrada);
+  const paginas: number[] = [];
+  const coincidencias: Array<{ index: number; pages: number[] }> = [];
+  const agregar = (values: number[]) => {
+    for (const page of values) {
+      if (!Number.isInteger(page) || page <= 0 || page > 2000) continue;
+      if (!paginas.includes(page)) paginas.push(page);
+      if (paginas.length >= maxPaginas) return;
+    }
+  };
+
+  const patrones = [
+    /entre\s+las?\s+p[aá]ginas?\s+(\d{1,4})\s+(?:y|a|al|hasta|-|–|—)\s+(\d{1,4})/gi,
+    /p[aá]g(?:ina|inas)?s?\.?\s*(?:n[úu]m(?:ero)?\.?\s*)?(\d{1,4})(?:\s*(?:a|al|hasta|-|–|—|y)\s*(\d{1,4}))?/gi,
+    /\bp\.?\s*(\d{1,4})(?:\s*(?:a|al|hasta|-|–|—|y)\s*(\d{1,4}))?/gi
+  ];
+
+  for (const patron of patrones) {
+    let match: RegExpExecArray | null;
+    while ((match = patron.exec(texto))) {
+      const inicio = Number(match[1]);
+      const fin = match[2] ? Number(match[2]) : inicio;
+      coincidencias.push({
+        index: match.index,
+        pages: expandirRangoPaginas(inicio, fin, maxPaginas)
+      });
+    }
+  }
+
+  coincidencias
+    .sort((a, b) => a.index - b.index)
+    .forEach((coincidencia) => agregar(coincidencia.pages));
+
+  return paginas;
+}
+
+function normalizePdfExtractedText(value: any) {
+  return repararMojibakeTexto(value)
+    .replace(/\u0000/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function extractPdfText(file: Express.Multer.File, maxChars = 24000, paginasSolicitadas: number[] = []) {
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(file.buffer) });
+
+  try {
+    const info = await parser.getInfo();
+    const totalPaginas = Math.max(0, Number(info.total || 0));
+    const paginas = Array.from(new Set(
+      paginasSolicitadas
+        .map(Number)
+        .filter((page) => Number.isInteger(page) && page > 0 && (!totalPaginas || page <= totalPaginas))
+    )).slice(0, 40);
+
+    const params = paginas.length
+      ? { partial: paginas, pageJoiner: "" }
+      : { first: Math.min(totalPaginas || 12, 12), pageJoiner: "" };
+    const result = await parser.getText(params);
+    const pages = Array.isArray(result.pages) ? result.pages : [];
+    const partes: string[] = [];
+    let usedChars = 0;
+
+    for (const page of pages) {
+      const text = normalizePdfExtractedText(page.text);
+      if (!text) continue;
+      const encabezado = `Página ${page.num}${totalPaginas ? ` de ${totalPaginas}` : ""}`;
+      const bloque = `${encabezado}\n${text}`.trim();
+      const restante = Math.max(0, maxChars - usedChars);
+      if (!restante) break;
+      const recortado = bloque.slice(0, restante);
+      if (!recortado) continue;
+      partes.push(recortado);
+      usedChars += recortado.length;
+    }
+
+    const texto = partes.join("\n\n---\n\n").trim();
+    if (texto && paginas.length) {
+      return `Páginas solicitadas por las indicaciones docentes: ${paginas.join(", ")}.\n\n${texto}`;
+    }
+    return texto;
+  } finally {
+    await parser.destroy();
+  }
+}
+
+async function extractUploadedText(file: Express.Multer.File | undefined, input: { defaultName: string; maxChars: number; unsupportedMessage: string; paginasPdf?: number[] }) {
   if (!file?.buffer) return { nombre: null as string | null, texto: "" };
 
   const nombre = file.originalname || input.defaultName;
@@ -2997,6 +3094,7 @@ async function extractUploadedText(file: Express.Multer.File | undefined, input:
     || mime.includes("csv")
     || /\.(txt|csv|json|md)$/i.test(nombre);
   const esDocx = mime.includes("wordprocessingml.document") || /\.docx$/i.test(nombre);
+  const esPdf = mime.includes("pdf") || /\.pdf$/i.test(nombre);
 
   try {
     if (esTexto) {
@@ -3008,6 +3106,15 @@ async function extractUploadedText(file: Express.Multer.File | undefined, input:
       const texto = await extractDocxText(file, input.maxChars);
       if (texto) return { nombre, texto };
     }
+
+    if (esPdf) {
+      const texto = await extractPdfText(file, input.maxChars, input.paginasPdf || []);
+      if (texto) return { nombre, texto };
+      return {
+        nombre,
+        texto: `Se adjuntó el PDF ${nombre} como apoyo obligatorio, pero no se pudo extraer texto seleccionable. Si el PDF es escaneado o está protegido, subí una versión con texto seleccionable o convertí las páginas solicitadas a imágenes legibles.`
+      };
+    }
   } catch (error) {
     console.warn(`No se pudo extraer texto del archivo ${nombre}:`, error);
   }
@@ -3018,7 +3125,7 @@ async function extractUploadedText(file: Express.Multer.File | undefined, input:
   };
 }
 
-function extractDocumentoApoyoText(file?: Express.Multer.File) {
+function extractDocumentoApoyoText(file?: Express.Multer.File, paginasPdf: number[] = []) {
   if (isImageFile(file)) {
     return Promise.resolve({
       nombre: file?.originalname || "imagen_apoyo",
@@ -3028,8 +3135,9 @@ function extractDocumentoApoyoText(file?: Express.Multer.File) {
 
   return extractUploadedText(file, {
     defaultName: "documento_apoyo",
-    maxChars: 12000,
-    unsupportedMessage: "Se adjuntó el archivo {nombre} como apoyo obligatorio, pero el sistema no pudo extraer su contenido. Para que la IA lo use con precisión, subí el material en PDF, DOCX, TXT o imagen legible."
+    maxChars: paginasPdf.length ? 30000 : 16000,
+    unsupportedMessage: "Se adjuntó el archivo {nombre} como apoyo obligatorio, pero el sistema no pudo extraer su contenido. Para que la IA lo use con precisión, subí el material en PDF, DOCX, TXT o imagen legible.",
+    paginasPdf
   });
 }
 
@@ -3080,14 +3188,15 @@ ${apoyo}
 `.trim();
 }
 
-async function extractDocumentosApoyoText(files: Express.Multer.File[]) {
+async function extractDocumentosApoyoText(files: Express.Multer.File[], indicacionesDocente = "") {
   const documentos = Array.isArray(files) ? files : [];
   if (!documentos.length) return { nombres: [] as string[], texto: "", imagenes: [] as ImagenApoyoIA[] };
 
   const partes: string[] = [];
   const nombres: string[] = [];
   const imagenes: ImagenApoyoIA[] = [];
-  const maxTotal = 16000;
+  const paginasPdf = extraerPaginasIndicadas(indicacionesDocente);
+  const maxTotal = paginasPdf.length ? 32000 : 18000;
   let usado = 0;
 
   for (const file of documentos) {
@@ -3101,7 +3210,7 @@ async function extractDocumentosApoyoText(files: Express.Multer.File[]) {
         });
       }
     }
-    const contenido = await extractDocumentoApoyoText(file);
+    const contenido = await extractDocumentoApoyoText(file, paginasPdf);
     if (contenido.nombre && !isImageFile(file)) nombres.push(contenido.nombre);
     if (!contenido.texto) continue;
 
@@ -4234,7 +4343,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     actualizarProgresoOperacion(operacionId, 24, "Analizando el planeamiento de referencia");
     const effectiveMateria = materiaNombre || habilidades.recordset[0]?.MateriaNombre || "Materia";
     const documentoApoyoFiles = getUploadedFiles(req, "documentoApoyo");
-    const documentoApoyo = await extractDocumentosApoyoText(documentoApoyoFiles);
+    const documentoApoyo = await extractDocumentosApoyoText(documentoApoyoFiles, indicacionesDocente);
     const plantillaFormatoFile = getUploadedFile(req, "plantillaFormato");
     const referenciaFile = getUploadedFile(req, "archivoReferencia") || plantillaFormatoFile;
     if (referenciaObligatoria && !referenciaFile) {

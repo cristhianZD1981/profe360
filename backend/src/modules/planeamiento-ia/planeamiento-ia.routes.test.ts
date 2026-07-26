@@ -7,6 +7,7 @@ import {
   construirAdecuacionSignificativa,
   construirPerfilEstrategiasReferencia,
   detectTemplateContentRole,
+  extraerPaginasIndicadas,
   limpiarEncabezadoEstrategiaReferencia,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
@@ -134,6 +135,14 @@ test("conserva la adecuacion significativa especifica que ya resolvio la IA", ()
     resultado.estrategiasMediacion.filter((item: string) => /adecuaci[oÃ³]n curricular significativa/i.test(item)).length,
     1
   );
+});
+
+test("extrae paginas indicadas en instrucciones docentes para priorizar PDFs", () => {
+  assert.deepEqual(
+    extraerPaginasIndicadas("Considerar la pagina 47 y elaborar ejercicios entre las paginas 47 y 64 del PDF."),
+    Array.from({ length: 18 }, (_item, index) => 47 + index)
+  );
+  assert.deepEqual(extraerPaginasIndicadas("Usar p. 12-14 y pagina 20."), [12, 13, 14, 20]);
 });
 
 function escapeXml(value: string) {
