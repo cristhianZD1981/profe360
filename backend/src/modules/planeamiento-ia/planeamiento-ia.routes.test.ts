@@ -332,6 +332,38 @@ test("rechaza estrategias resumidas cuando la referencia tiene muchos parrafos",
   assert.match(fidelidad?.detalle || "", /párrafos/i);
 });
 
+test("acepta estrategias con margen minimo de parrafos si conservan profundidad textual", () => {
+  const etapa = "PRIMERA ETAPA: APRENDIZAJE DE CONOCIMIENTOS";
+  const estrategias = [
+    `${etapa}\nActividad de inicio con situacion contextualizada, preguntas generadoras, analisis de datos y registro de procedimientos para probabilidad de union y complemento.`,
+    ...Array.from(
+      { length: 78 },
+      (_, index) => `Parrafo ${index + 2}: desarrollo amplio con mediacion docente, trabajo del estudiantado, ejercicio contextualizado, recurso concreto, producto observable, retroalimentacion y cierre parcial de la actividad de probabilidad.`
+    )
+  ];
+  const validacion = validarPlaneamientoGenerado({
+    nombre: "Planeamiento amplio",
+    aprendizajesEsperados: ["Aprendizaje actual"],
+    indicadoresEvaluacion: ["1.1 Indicador observable"],
+    estrategiasMediacion: estrategias
+  }, {
+    perfilEstrategias: {
+      encabezados: [etapa],
+      cantidadParrafos: 115,
+      cantidadCaracteres: 8262,
+      cantidadActividadesNumeradas: 0,
+      cantidadPreguntas: 0,
+      usaTemasNumerados: false,
+      usaActividadesNumeradas: false,
+      nivelDetalle: "amplio",
+      descripcion: "Referencia amplia."
+    }
+  });
+
+  const fidelidad = validacion.verificaciones.find((item) => item.codigo === "fidelidad_referencia");
+  assert.equal(fidelidad?.estado, "ok");
+});
+
 test("el perfil no impone momentos cuando la referencia usa otra secuencia", () => {
   const perfil = construirPerfilEstrategiasReferencia(
     "Preparacion del escenario\nTexto amplio\nConstruccion colaborativa\nTexto amplio",

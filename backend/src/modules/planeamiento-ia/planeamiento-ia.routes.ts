@@ -3964,7 +3964,14 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
         )
       : 0;
     const incumpleCaracteres = minimoCaracteres > 0 && estrategiasTexto.length < minimoCaracteres;
-    const incumpleParrafos = minimoParrafos > 0 && parrafosGenerados < minimoParrafos;
+    const margenParrafos = minimoParrafos > 0
+      ? Math.min(5, Math.max(2, Math.ceil(minimoParrafos * 0.05)))
+      : 0;
+    const cumpleProfundidadTextual = minimoCaracteres === 0 || estrategiasTexto.length >= Math.ceil(minimoCaracteres * 1.25);
+    const parrafosCasiCompletos = minimoParrafos > 0
+      && parrafosGenerados >= Math.max(1, minimoParrafos - margenParrafos)
+      && cumpleProfundidadTextual;
+    const incumpleParrafos = minimoParrafos > 0 && parrafosGenerados < minimoParrafos && !parrafosCasiCompletos;
     const incumpleProfundidad = incumpleCaracteres || incumpleParrafos;
     verificaciones.push({
       codigo: "fidelidad_referencia",
