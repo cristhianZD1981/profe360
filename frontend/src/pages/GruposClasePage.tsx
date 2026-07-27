@@ -132,7 +132,7 @@ export default function GruposClasePage() {
     const q = normalizeSearch(estudianteSearch);
     if (!q) return candidatos;
     return candidatos.filter((item: any) => normalizeSearch(
-      `${item.Identificacion || ""} ${item.PrimerApellido || ""} ${item.SegundoApellido || ""} ${item.Nombre || ""} ${item.GrupoNombre || ""}`
+      `${item.Identificacion || ""} ${item.PrimerApellido || ""} ${item.SegundoApellido || ""} ${item.Nombre || ""} ${item.GrupoNombre || ""} ${item.Especialidad || ""}`
     ).includes(q));
   }, [candidatos, estudianteSearch]);
 
@@ -691,7 +691,7 @@ export default function GruposClasePage() {
                 </button>
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={tableHeader}></th><th style={tableHeader}>Estudiante</th><th style={tableHeader}>Sección</th><th style={tableHeader}>Perfil técnico</th><th style={tableHeader}></th></tr></thead>
+                <thead><tr><th style={tableHeader}></th><th style={tableHeader}>Estudiante</th><th style={tableHeader}>Sección</th><th style={tableHeader}>Especialidad</th><th style={tableHeader}>Perfil técnico</th><th style={tableHeader}></th></tr></thead>
                 <tbody>
                   {candidatosFiltrados.map((item: any, index: number) => {
                     const id = Number(item.MatriculaId);
@@ -706,6 +706,7 @@ export default function GruposClasePage() {
                           <small style={{ color: "#334155", fontWeight: 700 }}>{item.Identificacion}</small>
                         </td>
                         <td style={{ padding: 8 }}>{item.GrupoNombre}</td>
+                        <td style={{ padding: 8 }}>{item.Especialidad || "Sin especialidad"}</td>
                         <td style={{ padding: 8 }}>{item.SubEspecialidades || "Sin perfil asignado"}</td>
                         <td style={{ padding: 8 }}><button type="button" onClick={() => {
                           setPerfilMatriculaId(id);

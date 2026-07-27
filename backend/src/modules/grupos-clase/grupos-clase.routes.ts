@@ -490,6 +490,12 @@ router.post("/candidatos", async (req, res) => {
             ma.EstudianteId,
             ma.GrupoId,
             g.Nombre AS GrupoNombre,
+            COALESCE(
+              NULLIF(LTRIM(RTRIM(detalle.EspecialidadDescripcion)), N''),
+              NULLIF(LTRIM(RTRIM(detalle.Especialidad)), N''),
+              NULLIF(LTRIM(RTRIM(g.Especialidad)), N''),
+              N''
+            ) AS Especialidad,
             e.Identificacion,
             e.Nombre,
             e.PrimerApellido,
@@ -503,6 +509,16 @@ router.post("/candidatos", async (req, res) => {
           INNER JOIN dbo.Estudiante e
             ON e.EstudianteId = ma.EstudianteId
            AND e.Activo = 1
+          OUTER APPLY (
+            SELECT TOP 1
+              md.Especialidad,
+              esp.Descripcion AS EspecialidadDescripcion
+            FROM dbo.MatriculaDetalle md
+            LEFT JOIN dbo.Especialidad esp
+              ON esp.EspecialidadId = md.EspecialidadId
+            WHERE md.MatriculaId = ma.MatriculaId
+            ORDER BY md.MatriculaDetalleId DESC
+          ) detalle
           WHERE ma.AnioLectivoId = @anioLectivoId
             AND ma.Estado <> N'Inactiva'
         ),
@@ -523,6 +539,7 @@ router.post("/candidatos", async (req, res) => {
           b.EstudianteId,
           b.GrupoId,
           b.GrupoNombre,
+          b.Especialidad,
           b.Identificacion,
           b.Nombre,
           b.PrimerApellido,
