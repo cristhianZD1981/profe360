@@ -4052,17 +4052,18 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
 
   if (input.referenciaObligatoria || input.auditoriaSemantica) {
     const auditoria = input.auditoriaSemantica;
+    const auditoriaDisponible = Boolean(auditoria?.disponible);
     verificaciones.push({
       codigo: "auditoria_semantica",
       etiqueta: "Revisión semántica final",
-      estado: auditoria?.disponible && auditoria.cumple ? "ok" : "error",
-      detalle: auditoria?.disponible
+      estado: auditoriaDisponible ? (auditoria?.cumple ? "ok" : "error") : "alerta",
+      detalle: auditoriaDisponible
         ? (
           auditoria.cumple
             ? "La revisión independiente confirmó referencia, coherencia e indicaciones."
             : `Incumplimientos: ${auditoria.incumplimientos.join(" | ") || "la revisión semántica rechazó el resultado"}`
         )
-        : "No fue posible completar la revisión independiente; el planeamiento no puede guardarse todavía."
+        : "No fue posible completar la revisión independiente; se permite continuar si las demás verificaciones obligatorias están correctas."
     });
   }
 
@@ -4241,9 +4242,13 @@ router.post("/mejorar-prompt", async (req, res) => {
     actualizarProgresoOperacion(operacionId, 40, "La IA está mejorando el prompt");
     const mejorado = await callOpenAiTextIfConfigured(`
 Sos un asistente pedagógico que mejora prompts para crear planeamientos didácticos del MEP de Costa Rica.
-Mejorá el siguiente prompt de trabajo para que sea claro, concreto, aplicable al aula y útil para generar un planeamiento de alta calidad.
+Mejorá el siguiente prompt de trabajo para que sea claro, concreto, aplicable al aula y resistente a fallos de validación automática.
 Conservá exactamente los datos ya indicados: no inventés habilidades, normas, fechas, instituciones, secciones ni contenidos oficiales.
-Mantené las indicaciones docentes y el uso solicitado de archivos de ejemplo o machote.
+Mantené las indicaciones docentes y el uso solicitado de archivos de ejemplo, machote o apoyo.
+Convertí cualquier indicación sobre archivos adjuntos en una obligación verificable: si se pide usar páginas específicas de un PDF, indicá que el planeamiento debe recuperar datos, contextos, ejercicios, representaciones o ejemplos concretos de esas páginas, no solo mencionarlas.
+Si hay machote o referencia Word, indicá que debe conservarse su estructura, encabezados, orden y profundidad pedagógica, pero sin copiar contenido sustantivo anterior.
+Si hay adecuación curricular significativa, exigí actividades, apoyos, consignas, recursos, productos y ejercicios diferenciados al nivel indicado, no reducciones genéricas.
+Si alguna fuente adjunta no puede extraerse, el resultado no debe fingir uso documental: debe explicitar la limitación y construir el planeamiento solo con evidencia disponible, sin referencias decorativas.
 Devolvé solamente el prompt mejorado en texto plano, sin saludo, explicación, markdown ni un planeamiento terminado.
 
 PROMPT ORIGINAL:

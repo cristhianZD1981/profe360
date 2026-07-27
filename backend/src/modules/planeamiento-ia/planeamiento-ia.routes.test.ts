@@ -432,7 +432,7 @@ test("detecta contenido real entre encabezados sin reconstruir las estrategias",
   assert.equal(estructura?.estado, "ok");
 });
 
-test("bloquea columnas vacias, estructura ajena y auditoria no disponible", () => {
+test("bloquea columnas vacias y estructura ajena aunque la auditoria no disponible sea alerta", () => {
   const validacion = validarPlaneamientoGenerado({
     nombre: "Plan solicitado",
     aprendizajesEsperados: ["Aprendizaje nuevo"],
@@ -489,7 +489,70 @@ test("bloquea columnas vacias, estructura ajena y auditoria no disponible", () =
   assert.ok(errores.has("estructura_estrategias"));
   assert.ok(errores.has("fidelidad_referencia"));
   assert.ok(errores.has("campos_machote"));
-  assert.ok(errores.has("auditoria_semantica"));
+  assert.equal(
+    validacion.verificaciones.find((item) => item.codigo === "auditoria_semantica")?.estado,
+    "alerta"
+  );
+});
+
+test("permite guardar si solo falla la disponibilidad de la auditoria independiente", () => {
+  const etapa = "Preparacion del escenario";
+  const validacion = validarPlaneamientoGenerado({
+    nombre: "Plan solicitado",
+    aprendizajesEsperados: ["Aprendizaje nuevo"],
+    criteriosEvaluacion: ["Criterio nuevo"],
+    estrategiasMediacion: [
+      `${etapa}\nLa persona docente desarrolla una actividad contextualizada con consignas, recursos, evidencia y cierre.`,
+      "La persona docente modela una resolucion breve y verifica comprension con preguntas guiadas.",
+      "El estudiantado registra datos, compara procedimientos y explica el criterio utilizado.",
+      "Construccion colaborativa\nEl estudiantado resuelve una practica guiada y comunica sus conclusiones con apoyo docente.",
+      "Los equipos revisan respuestas, ajustan procedimientos y preparan una evidencia breve.",
+      "La persona docente cierra con retroalimentacion y conecta el producto con el aprendizaje esperado."
+    ],
+    indicadoresEvaluacion: ["1.1 Indicador observable"],
+    camposReferencia: { "Eje tematico": "Probabilidad" }
+  }, {
+    nombreSolicitado: "Plan solicitado",
+    estructuraEstrategias: [etapa, "Construccion colaborativa"],
+    perfilEstrategias: {
+      encabezados: [etapa, "Construccion colaborativa"],
+      cantidadParrafos: 6,
+      cantidadCaracteres: 150,
+      cantidadActividadesNumeradas: 0,
+      cantidadPreguntas: 0,
+      usaTemasNumerados: false,
+      usaActividadesNumeradas: false,
+      nivelDetalle: "breve",
+      descripcion: "Secuencia propia."
+    },
+    perfilDocumentoReferencia: {
+      esDocx: true,
+      columnas: [
+        { indice: 0, encabezado: "Criterios", rol: "criterios" },
+        { indice: 1, encabezado: "Estrategias", rol: "estrategias" },
+        { indice: 2, encabezado: "Indicadores", rol: "indicadores" }
+      ],
+      camposVariables: [{ etiqueta: "Eje tematico", valorAnterior: "Tema anterior" }],
+      estrategiasTexto: "",
+      encabezadosEstrategias: [etapa, "Construccion colaborativa"],
+      valoresContenidoAnterior: [],
+      cantidadSeccionesContenido: 1,
+      descripcion: "Referencia de prueba."
+    },
+    auditoriaSemantica: {
+      disponible: false,
+      cumple: false,
+      incumplimientos: ["No disponible"],
+      fortalezas: []
+    },
+    referenciaObligatoria: true
+  });
+
+  assert.equal(validacion.puedeGuardar, true);
+  assert.equal(
+    validacion.verificaciones.find((item) => item.codigo === "auditoria_semantica")?.estado,
+    "alerta"
+  );
 });
 
 test("el Word coloca criterios, estrategias e indicadores en sus columnas correctas", async () => {

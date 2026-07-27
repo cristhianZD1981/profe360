@@ -6481,17 +6481,65 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     }
   }
 
-  function crearPromptPlaneamientoIa() {
+  async function crearPromptPlaneamientoIa() {
     const prompt = construirPromptPlaneamientoIa();
     if (!prompt) {
       setErrorMessage("Completá materia, grado, al menos una sección y una habilidad antes de crear el prompt");
       return;
     }
+    const grupoBase = getGrupoPlaneamientoIa();
+    const materiaId = Number(selected?.MateriaId || grupoBase?.MateriaId || planeamientoIaForm.materiaId || 0);
+    const grupoId = Number(grupoBase?.GrupoId || selected?.GrupoId || 0);
     setPromptPlaneamientoIa(prompt);
     setPromptPlaneamientoIaConstruido(true);
     setPromptPlaneamientoIaMejorado(false);
     setErrorMessage("");
-    setMessage("Prompt construido. Podés mejorarlo con IA o generar el planeamiento.");
+    setMessage("");
+
+    if (!grupoBase || !materiaId || !grupoId) {
+      setMessage("Prompt construido. Revisá el texto y generá el planeamiento.");
+      return;
+    }
+
+    const operacionId = crearOperacionIdPlaneamientoIa("construir-prompt");
+    setMejorandoPromptPlaneamientoIa(true);
+    setMejorandoPromptPlaneamientoIaProgress(0);
+    setMejorandoPromptPlaneamientoIaEtapa("Construyendo y revisando el prompt");
+    iniciarMonitoreoProgresoPlaneamientoIa(
+      operacionId,
+      setMejorandoPromptPlaneamientoIaProgress,
+      setMejorandoPromptPlaneamientoIaEtapa,
+      mejorandoPromptPlaneamientoIaTimerRef
+    );
+
+    try {
+      const response = await api.post("/planeamiento-ia/mejorar-prompt", {
+        operacionId,
+        prompt,
+        grupoId,
+        materiaId,
+        anioLectivoId: grupoBase.AnioLectivoId || selected?.AnioLectivoId,
+        periodoId: grupoBase.PeriodoId || selected?.PeriodoId
+      }, { timeout: 70000 });
+      const data = response.data?.data || response.data || {};
+      const promptMejorado = String(data.prompt || "").trim();
+      if (!promptMejorado) throw new Error("La IA no devolvió un prompt revisado");
+      setPromptPlaneamientoIa(promptMejorado);
+      setPromptPlaneamientoIaConstruido(true);
+      setPromptPlaneamientoIaMejorado(true);
+      setMejorandoPromptPlaneamientoIaProgress(100);
+      setMejorandoPromptPlaneamientoIaEtapa("Prompt construido y revisado");
+      setMessage("Prompt construido y revisado con IA. Ya podés generar el planeamiento.");
+    } catch (error: any) {
+      setMejorandoPromptPlaneamientoIaEtapa("No se pudo completar la revisión del prompt");
+      setPromptPlaneamientoIa(prompt);
+      setPromptPlaneamientoIaConstruido(true);
+      setPromptPlaneamientoIaMejorado(false);
+      setMessage("Prompt construido. La revisión automática no respondió, pero podés revisar el texto y generar el planeamiento.");
+    } finally {
+      detenerMonitoreoProgresoPlaneamientoIa(mejorandoPromptPlaneamientoIaTimerRef);
+      setMejorandoPromptPlaneamientoIa(false);
+    }
   }
 
   function crearOperacionIdPlaneamientoIa(prefijo: string) {
@@ -8015,10 +8063,6 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     && !analizandoReferenciaIa;
   const promptPlaneamientoIaListo = promptPlaneamientoIaConstruido && Boolean(promptPlaneamientoIa.trim());
   const puedeConstruirPromptPlaneamientoIa = datosPromptPlaneamientoIaCompletos
-    && !ultimoPlaneamientoIa
-    && !generatingPlaneamientoIa
-    && !mejorandoPromptPlaneamientoIa;
-  const puedeMejorarPromptPlaneamientoIa = promptPlaneamientoIaListo
     && !ultimoPlaneamientoIa
     && !generatingPlaneamientoIa
     && !mejorandoPromptPlaneamientoIa;
@@ -10853,10 +10897,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                 <div style={{ ...helperDarkBoxStyle, display: "grid", gap: "8px" }}>
                   <strong>Paso a paso</strong>
                   <div>1. Completá los datos requeridos y adjuntá el planeamiento de referencia.</div>
-                  <div>2. Presioná “Construir prompt”.</div>
-                  <div>3. Podés usar “Mejorar prompt con IA” para fortalecer las instrucciones.</div>
-                  <div>4. Presioná “Generar planeamiento”. Podés mejorarlo o generarlo nuevamente cuando lo necesités.</div>
-                  <div>5. Cuando el resultado esté correcto, guardalo y continuá con sus indicadores.</div>
+                  <div>2. Presioná “Construir prompt” para crearlo y revisarlo con IA.</div>
+                  <div>3. Presioná “Generar planeamiento”. Podés mejorarlo o generarlo nuevamente cuando lo necesités.</div>
+                  <div>4. Cuando el resultado esté correcto, guardalo y continuá con sus indicadores.</div>
                 </div>
 
 
@@ -10884,9 +10927,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "8px" }}>
                     {[
                       { label: "1. Completar datos", ready: datosPromptPlaneamientoIaCompletos, optional: false },
-                      { label: "2. Construir prompt", ready: promptPlaneamientoIaListo, optional: false },
-                      { label: "3. Mejorar prompt", ready: promptPlaneamientoIaMejorado, optional: true },
-                      { label: "4. Generar planeamiento", ready: Boolean(ultimoPlaneamientoIa), optional: false }
+                      { label: "2. Construir y revisar prompt", ready: promptPlaneamientoIaListo, optional: false },
+                      { label: "3. Generar planeamiento", ready: Boolean(ultimoPlaneamientoIa), optional: false }
                     ].map((step) => (
                       <div
                         key={step.label}
@@ -11456,8 +11498,8 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         : !promptPlaneamientoIaListo
                           ? "Datos completos. El siguiente paso es construir el prompt."
                           : promptPlaneamientoIaMejorado
-                            ? "Prompt mejorado y listo. Podés volver a mejorarlo o generar el planeamiento."
-                            : "Prompt construido y listo. Podés mejorarlo con IA o generar el planeamiento."}
+                            ? "Prompt construido, revisado y listo. Podés generar el planeamiento."
+                            : "Prompt construido y listo. Podés revisarlo o generar el planeamiento."}
                     </div>
 
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
@@ -11466,18 +11508,9 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         className={promptPlaneamientoIaListo ? "ghost-btn" : "primary-btn"}
                         onClick={crearPromptPlaneamientoIa}
                         disabled={!puedeConstruirPromptPlaneamientoIa}
-                        title={ultimoPlaneamientoIa ? "Usá las acciones debajo del resultado" : (datosPromptPlaneamientoIaCompletos ? "Construir el prompt con los datos actuales" : "Completá primero los datos requeridos")}
+                        title={ultimoPlaneamientoIa ? "Usá las acciones debajo del resultado" : (datosPromptPlaneamientoIaCompletos ? "Construir y revisar el prompt con IA" : "Completá primero los datos requeridos")}
                       >
-                        1. Construir prompt
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={mejorarPromptPlaneamientoIa}
-                        disabled={!puedeMejorarPromptPlaneamientoIa}
-                        title={ultimoPlaneamientoIa ? "Usá las acciones debajo del resultado" : (promptPlaneamientoIaListo ? "Mejorar las instrucciones antes de generar" : "Construí primero el prompt")}
-                      >
-                        {mejorandoPromptPlaneamientoIa ? "Mejorando prompt..." : "2. Mejorar prompt con IA"}
+                        {mejorandoPromptPlaneamientoIa ? "Construyendo y revisando..." : "1. Construir prompt"}
                       </button>
                       <button
                         type="button"
@@ -11488,19 +11521,19 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                       >
                         {generatingPlaneamientoIa
                           ? "Generando planeamiento..."
-                          : "3. Generar planeamiento"}
+                          : "2. Generar planeamiento"}
                       </button>
                     </div>
 
                     {mejorandoPromptPlaneamientoIa ? (
                       <div style={{ width: "420px", maxWidth: "100%", display: "grid", gap: "5px" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", color: "#dbeafe", fontSize: "0.86rem" }}>
-                          <span>{mejorandoPromptPlaneamientoIaEtapa || "Mejorando prompt con IA"}</span>
+                          <span>{mejorandoPromptPlaneamientoIaEtapa || "Construyendo y revisando prompt"}</span>
                           <strong>{Math.round(mejorandoPromptPlaneamientoIaProgress)}%</strong>
                         </div>
                         <div
                           role="progressbar"
-                          aria-label="Avance de mejora del prompt con IA"
+                          aria-label="Avance de construcción y revisión del prompt con IA"
                           aria-valuemin={0}
                           aria-valuemax={100}
                           aria-valuenow={Math.round(mejorandoPromptPlaneamientoIaProgress)}
