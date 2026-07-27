@@ -401,6 +401,7 @@ export default function GestionProfePage() {
   const [loadingCierreCurso, setLoadingCierreCurso] = useState(false);
   const [savingCierreCurso, setSavingCierreCurso] = useState(false);
   const asistenciaInFlightKeyRef = useRef<string>("");
+  const asistenciaEstadoInicialPropagadoRef = useRef<Set<string>>(new Set());
   const auditoriaInFlightKeyRef = useRef<string>("");
   const bitacoraInFlightKeyRef = useRef<string>("");
   const [seguimientoTipo, setSeguimientoTipo] = useState<string>("");
@@ -4081,25 +4082,71 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
     }
   }
 
-function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, field: "estado" | "minutosTardia" | "observacion" | "notificarEncargado", value: string | boolean) {
+function updateAsistenciaDraft(
+  estudianteId: number,
+  horarioGrupoId: number,
+  field: "estado" | "minutosTardia" | "observacion" | "notificarEncargado",
+  value: string | boolean,
+  options: { propagarEstado?: boolean } = {}
+) {
   const key = asistenciaDraftKey(estudianteId, horarioGrupoId);
-  const previo = asistenciaDrafts[key];
-  const estadoNuevo = (field === "estado" ? (value as EstadoAsistencia) : (previo?.estado || "PRESENTE")) as EstadoAsistencia;
-  const mensajeSugerido = getMensajeAsistenciaPreconfigurado(seguimientoContexto?.mensajesSeguimiento || [], estadoNuevo);
-  const observacionSiguiente =
-    field === "observacion"
-      ? String(value)
-      : (field === "estado" ? (mensajeSugerido || "") : String(previo?.observacion || ""));
-  setAsistenciaDrafts((prev) => ({
-    ...prev,
-    [key]: {
-      estado: prev[key]?.estado || "PRESENTE",
-      minutosTardia: prev[key]?.minutosTardia || "",
-      observacion: observacionSiguiente,
-      notificarEncargado: prev[key]?.notificarEncargado || false,
-      [field]: field === "estado" ? value as EstadoAsistencia : field === "notificarEncargado" ? Boolean(value) : String(value)
+  const contextoPropagacionKey = `${getGrupoProfesorKey(selected || detalle?.asignacion)}|${asistenciaFecha}|${estudianteId}`;
+  const leccionesEstudiante = asistenciaLecciones.length ? asistenciaLecciones : getAsistenciaLeccionesFallback();
+  const debePropagarEstado =
+    field === "estado" &&
+    Boolean(options.propagarEstado) &&
+    leccionesEstudiante.length > 1 &&
+    !asistenciaEstadoInicialPropagadoRef.current.has(contextoPropagacionKey);
+
+  if (debePropagarEstado) {
+    asistenciaEstadoInicialPropagadoRef.current.add(contextoPropagacionKey);
+  }
+
+  setAsistenciaDrafts((prev) => {
+    const buildNextDraft = (draftKey: string) => {
+      const previo = prev[draftKey] || {
+        estado: "PRESENTE" as EstadoAsistencia,
+        minutosTardia: "",
+        observacion: "",
+        notificarEncargado: false
+      };
+      const estadoNuevo = (field === "estado" ? (value as EstadoAsistencia) : (previo.estado || "PRESENTE")) as EstadoAsistencia;
+      const mensajeSugerido = getMensajeAsistenciaPreconfigurado(seguimientoContexto?.mensajesSeguimiento || [], estadoNuevo);
+      const observacionSiguiente =
+        field === "observacion"
+          ? String(value)
+          : (field === "estado" ? (mensajeSugerido || "") : String(previo.observacion || ""));
+
+      return {
+        estado: previo.estado || "PRESENTE",
+        minutosTardia: previo.minutosTardia || "",
+        observacion: observacionSiguiente,
+        notificarEncargado: previo.notificarEncargado || false,
+        [field]: field === "estado" ? value as EstadoAsistencia : field === "notificarEncargado" ? Boolean(value) : String(value)
+      };
+    };
+
+    if (field !== "estado") {
+      return {
+        ...prev,
+        [key]: buildNextDraft(key)
+      };
     }
-  }));
+
+    if (!debePropagarEstado) {
+      return {
+        ...prev,
+        [key]: buildNextDraft(key)
+      };
+    }
+
+    const next = { ...prev };
+    leccionesEstudiante.forEach((leccion) => {
+      const draftKey = asistenciaDraftKey(estudianteId, leccion.HorarioGrupoId);
+      next[draftKey] = buildNextDraft(draftKey);
+    });
+    return next;
+  });
 }
 
   function getResumenAsistencia(estudianteId: number) {
@@ -4419,6 +4466,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
     setPlaneamientoIndicadores([]);
     setAsistenciaDrafts({});
     setAsistenciaLecciones([]);
+    asistenciaEstadoInicialPropagadoRef.current.clear();
     setResumenAsistencia([]);
     setEval360Plantillas([]);
     setEval360PlantillaId("");
@@ -7266,6 +7314,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
       const drafts = buildAsistenciaDrafts(estudiantes, registros, lecciones);
       setAsistenciaDrafts(drafts);
       setAsistenciaDraftsBase(drafts);
+      asistenciaEstadoInicialPropagadoRef.current.clear();
       setAsistenciaYaCalificada(registros.length > 0);
       const notificacionesCargadas: AsistenciaNotificacionEstado = {};
       for (const registro of registros) {
@@ -9886,6 +9935,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               value={asistenciaFecha}
                               onChange={(event) => {
                                 setAsistenciaFecha(event.target.value);
+                                asistenciaEstadoInicialPropagadoRef.current.clear();
                                 setSavedAsistencia(false);
                                 setAsistenciaNotificaciones({});
                               }}
@@ -9973,7 +10023,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                                                   aria-label={estadoAsistenciaLabel(estado)}
                                                   name={`asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`}
                                                   checked={draft.estado === estado}
-                                                  onChange={() => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "estado", estado)}
+                                                  onChange={() => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "estado", estado, { propagarEstado: true })}
                                                   style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
                                                 />
                                               </td>
@@ -10757,6 +10807,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                         value={asistenciaFecha}
                         onChange={(e) => {
                           setAsistenciaFecha(e.target.value);
+                          asistenciaEstadoInicialPropagadoRef.current.clear();
                           setAsistenciaNotificaciones({});
                         }}
                       />
@@ -10818,7 +10869,7 @@ function updateAsistenciaDraft(estudianteId: number, horarioGrupoId: number, fie
                               </td>
                               <td>{estudiante.Identificacion}</td>
                               <td>
-                                <select value={draft.estado} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value)}>
+                                <select value={draft.estado} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { propagarEstado: true })}>
                                   <option value="PRESENTE">Presente</option>
                                   <option value="AUSENTE_JUSTIFICADA">Ausente justificada</option>
                                   <option value="AUSENTE_INJUSTIFICADA">Ausente injustificada</option>

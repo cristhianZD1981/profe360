@@ -2291,59 +2291,86 @@ router.get("/mi-horario", async (req, res) => {
       .input("periodoId", sql.Int, periodoId);
 
     const entradas = await request.query(`
-      ;WITH EntradasBase AS (
+      ;WITH AsignacionesPeriodo AS (
+        SELECT DISTINCT
+          ad.GrupoId,
+          ad.MateriaId,
+          ad.AnioLectivoId,
+          ad.PeriodoId
+        FROM dbo.AsignacionDocente ad
+        WHERE ad.InstitucionId = @institucionId
+          AND ad.UsuarioId = @usuarioId
+          AND ad.Activo = 1
+          AND ad.MateriaId IS NOT NULL
+          AND ad.AnioLectivoId = @anioLectivoId
+          AND ad.PeriodoId = @periodoId
+      ),
+      HorariosCandidatos AS (
         SELECT
           hg.HorarioGrupoId,
           hg.BloqueHorarioId,
           hg.DiaSemana,
-          gm.GrupoId,
+          ap.GrupoId,
           g.Nombre AS GrupoNombre,
-          gm.MateriaId,
+          ap.MateriaId,
           m.Nombre AS MateriaNombre,
           m.Codigo AS MateriaCodigo,
-          g.AnioLectivoId,
+          ap.AnioLectivoId,
           al.Nombre AS AnioNombre,
-          COALESCE(gm.PeriodoId, @periodoId) AS PeriodoId,
-          COALESCE(p.Nombre, pFiltro.Nombre) AS PeriodoNombre,
+          ap.PeriodoId AS PeriodoId,
+          pFiltro.Nombre AS PeriodoNombre,
           CASE
             WHEN gm.PeriodoId = @periodoId THEN 0
             WHEN gm.PeriodoId IS NULL THEN 1
             ELSE 2
           END AS PrioridadPeriodo,
-          ROW_NUMBER() OVER (
-            PARTITION BY hg.BloqueHorarioId, hg.DiaSemana, gm.GrupoId, gm.MateriaId
-            ORDER BY
-              CASE
-                WHEN gm.PeriodoId = @periodoId THEN 0
-                WHEN gm.PeriodoId IS NULL THEN 1
-                ELSE 2
-              END,
-              hg.HorarioGrupoId DESC
-          ) AS rn
-        FROM dbo.HorarioDocente hd
-        INNER JOIN dbo.HorarioGrupo hg
-          ON hg.HorarioGrupoId = hd.HorarioGrupoId
-         AND hg.Activo = 1
-        INNER JOIN dbo.GrupoMateria gm
-          ON gm.GrupoMateriaId = hg.GrupoMateriaId
-         AND gm.Activo = 1
-         AND (gm.PeriodoId = @periodoId OR gm.PeriodoId IS NULL)
+          CASE WHEN hd.HorarioDocenteId IS NULL THEN 1 ELSE 0 END AS PrioridadVinculoDocente,
+          ABS(ISNULL(pHorario.NumeroOrden, 0) - ISNULL(pFiltro.NumeroOrden, 0)) AS DistanciaPeriodo
+        FROM AsignacionesPeriodo ap
         INNER JOIN dbo.Grupo g
-          ON g.GrupoId = gm.GrupoId
+          ON g.GrupoId = ap.GrupoId
          AND g.Activo = 1
          AND g.InstitucionId = @institucionId
-         AND g.AnioLectivoId = @anioLectivoId
+         AND g.AnioLectivoId = ap.AnioLectivoId
+        INNER JOIN dbo.GrupoMateria gm
+          ON gm.GrupoId = ap.GrupoId
+         AND gm.MateriaId = ap.MateriaId
+         AND gm.Activo = 1
+        INNER JOIN dbo.HorarioGrupo hg
+          ON hg.GrupoMateriaId = gm.GrupoMateriaId
+         AND hg.Activo = 1
+        LEFT JOIN dbo.HorarioDocente hd
+          ON hd.HorarioGrupoId = hg.HorarioGrupoId
+         AND hd.UsuarioId = @usuarioId
+         AND hd.Activo = 1
         INNER JOIN dbo.Materia m
-          ON m.MateriaId = gm.MateriaId
+          ON m.MateriaId = ap.MateriaId
          AND m.Activa = 1
         LEFT JOIN dbo.AnioLectivo al
-          ON al.AnioLectivoId = g.AnioLectivoId
-        LEFT JOIN dbo.Periodo p
-          ON p.PeriodoId = gm.PeriodoId
+          ON al.AnioLectivoId = ap.AnioLectivoId
+        LEFT JOIN dbo.Periodo pHorario
+          ON pHorario.PeriodoId = gm.PeriodoId
         LEFT JOIN dbo.Periodo pFiltro
           ON pFiltro.PeriodoId = @periodoId
-        WHERE hd.UsuarioId = @usuarioId
-          AND hd.Activo = 1
+      ),
+      HorariosPriorizados AS (
+        SELECT
+          *,
+          MIN(PrioridadPeriodo) OVER (PARTITION BY GrupoId, MateriaId) AS MejorPrioridadPeriodo
+        FROM HorariosCandidatos
+      ),
+      EntradasBase AS (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY BloqueHorarioId, DiaSemana, GrupoId, MateriaId
+            ORDER BY
+              PrioridadVinculoDocente,
+              DistanciaPeriodo,
+              HorarioGrupoId DESC
+          ) AS rn
+        FROM HorariosPriorizados
+        WHERE PrioridadPeriodo = MejorPrioridadPeriodo
       )
       SELECT
         HorarioGrupoId,
@@ -4779,12 +4806,22 @@ async function buildResumenAsistencia(
     .input("periodoId", sql.Int, periodoId)
     .input("grupoClaseId", sql.Int, grupoClaseId || null)
     .query(`
-      SELECT COUNT(DISTINCT CONCAT(CONVERT(varchar(10), Fecha, 23), '-', ISNULL(CONVERT(varchar(20), HorarioGrupoId), '0'))) AS TotalLecciones
-      FROM dbo.AsistenciaRegistro
-      WHERE GrupoId = @grupoId
-        AND MateriaId = @materiaId
-        AND AnioLectivoId = @anioLectivoId
-        AND PeriodoId = @periodoId
+      SELECT COUNT(DISTINCT CONCAT(
+        CONVERT(varchar(10), ar.Fecha, 23),
+        N'-',
+        CASE
+          WHEN @grupoClaseId IS NOT NULL
+            THEN ISNULL(CONVERT(varchar(20), COALESCE(ar.BloqueHorarioId, hg.BloqueHorarioId, ar.HorarioGrupoId)), N'0')
+          ELSE ISNULL(CONVERT(varchar(20), ar.HorarioGrupoId), N'0')
+        END
+      )) AS TotalLecciones
+      FROM dbo.AsistenciaRegistro ar
+      LEFT JOIN dbo.HorarioGrupo hg
+        ON hg.HorarioGrupoId = ar.HorarioGrupoId
+      WHERE ar.GrupoId = @grupoId
+        AND ar.MateriaId = @materiaId
+        AND ar.AnioLectivoId = @anioLectivoId
+        AND ar.PeriodoId = @periodoId
         ${filtroGrupoClaseResumen}
     `);
 
@@ -4797,21 +4834,47 @@ async function buildResumenAsistencia(
     .input("periodoId", sql.Int, periodoId)
     .input("grupoClaseId", sql.Int, grupoClaseId || null)
     .query(`
+      ;WITH registros AS (
+        SELECT
+          ar.EstudianteId,
+          e.Identificacion,
+          e.Nombre,
+          e.PrimerApellido,
+          e.SegundoApellido,
+          ar.Estado,
+          ar.Fecha,
+          ar.HorarioGrupoId,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              ar.EstudianteId,
+              ar.Fecha,
+              CASE
+                WHEN @grupoClaseId IS NOT NULL
+                  THEN ISNULL(CONVERT(varchar(20), COALESCE(ar.BloqueHorarioId, hg.BloqueHorarioId, ar.HorarioGrupoId)), N'0')
+                ELSE ISNULL(CONVERT(varchar(20), ar.HorarioGrupoId), N'0')
+              END
+            ORDER BY ISNULL(ar.UpdatedAt, ar.CreatedAt) DESC, ar.AsistenciaRegistroId DESC
+          ) AS Posicion
+        FROM dbo.AsistenciaRegistro ar
+        LEFT JOIN dbo.HorarioGrupo hg
+          ON hg.HorarioGrupoId = ar.HorarioGrupoId
+        INNER JOIN dbo.Estudiante e ON e.EstudianteId = ar.EstudianteId
+        WHERE ar.GrupoId = @grupoId
+          AND ar.MateriaId = @materiaId
+          AND ar.AnioLectivoId = @anioLectivoId
+          AND ar.PeriodoId = @periodoId
+          ${filtroGrupoClaseResumenAlias}
+      )
       SELECT
-        ar.EstudianteId,
-        e.Identificacion,
-        e.Nombre,
-        e.PrimerApellido,
-        e.SegundoApellido,
-        ar.Estado
-      FROM dbo.AsistenciaRegistro ar
-      INNER JOIN dbo.Estudiante e ON e.EstudianteId = ar.EstudianteId
-      WHERE ar.GrupoId = @grupoId
-        AND ar.MateriaId = @materiaId
-        AND ar.AnioLectivoId = @anioLectivoId
-        AND ar.PeriodoId = @periodoId
-        ${filtroGrupoClaseResumenAlias}
-      ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, ar.Fecha, ar.HorarioGrupoId
+        EstudianteId,
+        Identificacion,
+        Nombre,
+        PrimerApellido,
+        SegundoApellido,
+        Estado
+      FROM registros
+      WHERE Posicion = 1
+      ORDER BY PrimerApellido, SegundoApellido, Nombre, Fecha, HorarioGrupoId
     `);
 
   const resumenMap = new Map<number, any>();
@@ -4929,15 +4992,17 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
           FROM lecciones
         )
         SELECT
-          HorarioGrupoId,
+          MIN(HorarioGrupoId) AS HorarioGrupoId,
           BloqueHorarioId,
           Nombre,
           HoraInicio,
           HoraFin,
           OrdenVisual,
-          DiaSemana
+          DiaSemana,
+          COUNT(DISTINCT HorarioGrupoId) AS TotalHorariosVinculados
         FROM leccionesPriorizadas
         WHERE PrioridadPeriodo = MejorPrioridadPeriodo
+        GROUP BY BloqueHorarioId, Nombre, HoraInicio, HoraFin, OrdenVisual, DiaSemana
         ORDER BY OrdenVisual, HoraInicio
       `);
 
@@ -4968,41 +5033,101 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
       .input("fecha", sql.Date, fecha)
+      .input("diaSemana", sql.Int, diaSemana)
       .input("grupoClaseId", sql.Int, grupoClaseId)
       .query(`
+        ;WITH lecciones AS (
+          SELECT
+            hg.HorarioGrupoId,
+            hg.BloqueHorarioId,
+            CASE
+              WHEN gm.PeriodoId = @periodoId THEN 0
+              WHEN gm.PeriodoId IS NULL THEN 1
+              ELSE 2
+            END AS PrioridadPeriodo
+          FROM dbo.HorarioGrupo hg
+          INNER JOIN dbo.GrupoMateria gm
+            ON gm.GrupoMateriaId = hg.GrupoMateriaId
+           AND gm.Activo = 1
+          WHERE gm.MateriaId = @materiaId
+            ${filtroLeccionesGrupo}
+            AND hg.DiaSemana = @diaSemana
+            AND hg.Activo = 1
+        ),
+        leccionesPriorizadas AS (
+          SELECT *, MIN(PrioridadPeriodo) OVER () AS MejorPrioridadPeriodo
+          FROM lecciones
+        ),
+        leccionesVisibles AS (
+          SELECT
+            MIN(HorarioGrupoId) AS HorarioGrupoId,
+            BloqueHorarioId
+          FROM leccionesPriorizadas
+          WHERE PrioridadPeriodo = MejorPrioridadPeriodo
+          GROUP BY BloqueHorarioId
+        ),
+        registros AS (
+          SELECT
+            ar.AsistenciaRegistroId,
+            ar.EstudianteId,
+            lv.HorarioGrupoId AS HorarioGrupoIdVisible,
+            ar.HorarioGrupoId AS HorarioGrupoIdOriginal,
+            COALESCE(ar.BloqueHorarioId, hgAr.BloqueHorarioId, lv.BloqueHorarioId) AS BloqueHorarioId,
+            ar.GrupoId,
+            ar.MateriaId,
+            ar.AnioLectivoId,
+            ar.PeriodoId,
+            ar.Fecha,
+            ar.Estado,
+            ar.MinutosTardia,
+            ar.Observacion,
+            ROW_NUMBER() OVER (
+              PARTITION BY ar.EstudianteId, lv.HorarioGrupoId
+              ORDER BY
+                CASE WHEN ar.HorarioGrupoId = lv.HorarioGrupoId THEN 0 ELSE 1 END,
+                ISNULL(ar.UpdatedAt, ar.CreatedAt) DESC,
+                ar.AsistenciaRegistroId DESC
+            ) AS Posicion
+          FROM dbo.AsistenciaRegistro ar
+          LEFT JOIN dbo.HorarioGrupo hgAr
+            ON hgAr.HorarioGrupoId = ar.HorarioGrupoId
+          INNER JOIN leccionesVisibles lv
+            ON lv.BloqueHorarioId = COALESCE(ar.BloqueHorarioId, hgAr.BloqueHorarioId)
+          WHERE ar.GrupoId = @grupoId
+            AND ar.MateriaId = @materiaId
+            AND ar.AnioLectivoId = @anioLectivoId
+            AND ar.PeriodoId = @periodoId
+            AND ar.Fecha = @fecha
+            ${filtroRegistrosGrupoClase}
+        )
         SELECT
-          ar.AsistenciaRegistroId,
-          ar.EstudianteId,
-          ar.HorarioGrupoId,
-          ar.BloqueHorarioId,
-          ar.GrupoId,
-          ar.MateriaId,
-          ar.AnioLectivoId,
-          ar.PeriodoId,
-          ar.Fecha,
-          ar.Estado,
-          ar.MinutosTardia,
-          ar.Observacion,
+          r.AsistenciaRegistroId,
+          r.EstudianteId,
+          r.HorarioGrupoIdVisible AS HorarioGrupoId,
+          r.BloqueHorarioId,
+          r.GrupoId,
+          r.MateriaId,
+          r.AnioLectivoId,
+          r.PeriodoId,
+          r.Fecha,
+          r.Estado,
+          r.MinutosTardia,
+          r.Observacion,
           ISNULL(reb.CorreoEnviado, 0) AS CorreoEnviado,
           ISNULL(reb.WaEnviado, 0) AS WaEnviado
-        FROM dbo.AsistenciaRegistro ar
+        FROM registros r
         LEFT JOIN dbo.ReporteEnvioBitacora reb
           ON reb.Modulo = N'ASISTENCIA'
          AND reb.RegistroClave = CONCAT(
            N'ASIS|',
-           CONVERT(varchar(20), ar.GrupoId), N'|',
-           CONVERT(varchar(20), ar.MateriaId), N'|',
-           CONVERT(varchar(20), ar.PeriodoId), N'|',
-           CONVERT(varchar(10), ar.Fecha, 23), N'|',
-           CONVERT(varchar(20), ar.EstudianteId), N'|',
-           CONVERT(varchar(20), ar.HorarioGrupoId)
+           CONVERT(varchar(20), r.GrupoId), N'|',
+           CONVERT(varchar(20), r.MateriaId), N'|',
+           CONVERT(varchar(20), r.PeriodoId), N'|',
+           CONVERT(varchar(10), r.Fecha, 23), N'|',
+           CONVERT(varchar(20), r.EstudianteId), N'|',
+           CONVERT(varchar(20), r.HorarioGrupoIdOriginal)
          )
-        WHERE ar.GrupoId = @grupoId
-          AND ar.MateriaId = @materiaId
-          AND ar.AnioLectivoId = @anioLectivoId
-          AND ar.PeriodoId = @periodoId
-          AND ar.Fecha = @fecha
-          ${filtroRegistrosGrupoClase}
+        WHERE r.Posicion = 1
       `);
 
     const resumen = await buildResumenAsistencia(grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
@@ -5142,9 +5267,23 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       `);
     const leccionesPermitidas = new Map<number, number>();
     const leccionesNombrePorHorario = new Map<number, string>();
+    const horariosPorBloque = new Map<number, number[]>();
+    const horariosEquivalentesPorHorario = new Map<number, number[]>();
     for (const item of leccionesPermitidasResult.recordset) {
-      leccionesPermitidas.set(Number(item.HorarioGrupoId), Number(item.BloqueHorarioId));
-      leccionesNombrePorHorario.set(Number(item.HorarioGrupoId), String(item.LeccionNombre || "").trim());
+      const horarioGrupoId = Number(item.HorarioGrupoId);
+      const bloqueHorarioId = Number(item.BloqueHorarioId);
+      leccionesPermitidas.set(horarioGrupoId, bloqueHorarioId);
+      leccionesNombrePorHorario.set(horarioGrupoId, String(item.LeccionNombre || "").trim());
+      const horarios = horariosPorBloque.get(bloqueHorarioId) || [];
+      horarios.push(horarioGrupoId);
+      horariosPorBloque.set(bloqueHorarioId, horarios);
+    }
+    for (const [bloqueHorarioId, horarios] of horariosPorBloque.entries()) {
+      const ordenados = Array.from(new Set(horarios)).sort((a, b) => a - b);
+      horariosPorBloque.set(bloqueHorarioId, ordenados);
+      for (const horarioGrupoId of ordenados) {
+        horariosEquivalentesPorHorario.set(horarioGrupoId, ordenados);
+      }
     }
 
     const normalizadosSolicitados = registros.map((item: any) => ({
@@ -5173,8 +5312,19 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       }
     }
 
+    const normalizadosExpandidos = normalizadosSolicitados.flatMap((item: any) => {
+      const horariosEquivalentes = grupoClaseId
+        ? (horariosEquivalentesPorHorario.get(item.horarioGrupoId) || [item.horarioGrupoId])
+        : [item.horarioGrupoId];
+      return horariosEquivalentes.map((horarioGrupoId) => ({
+        ...item,
+        horarioGrupoId,
+        bloqueHorarioId: leccionesPermitidas.get(horarioGrupoId) || item.bloqueHorarioId
+      }));
+    });
+
     const normalizadosMap = new Map<string, any>();
-    for (const item of normalizadosSolicitados) {
+    for (const item of normalizadosExpandidos) {
       normalizadosMap.set(`${item.estudianteId}|${item.horarioGrupoId}`, item);
     }
 

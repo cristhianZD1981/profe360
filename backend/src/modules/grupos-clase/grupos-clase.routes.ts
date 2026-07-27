@@ -37,6 +37,18 @@ function text(value: unknown, max = 500) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function dateText(value: unknown) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, 10) : null;
+}
+
+function duplicateName(value: unknown) {
+  const base = text(value, 189) || "Grupo de clase";
+  return `Copia de ${base}`.slice(0, 200);
+}
+
 function getUserId(req: any) {
   return positiveId(req.auth?.userId ?? req.auth?.usuarioId ?? req.auth?.id);
 }
@@ -973,6 +985,127 @@ router.post("/", async (req, res) => {
       return res.status(409).json({ ok: false, message: "El grupo contiene relaciones duplicadas" });
     }
     return res.status(500).json({ ok: false, message: "No se pudo crear el grupo de clase" });
+  }
+});
+
+router.post("/:grupoClaseId/duplicar", async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    if (!await requireSchema(pool, res)) return;
+    const grupoClaseIdOrigen = positiveId(req.params.grupoClaseId);
+    if (!grupoClaseIdOrigen) return badRequest(res, "Grupo de clase invalido");
+
+    const source = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("grupoClaseId", sql.Int, grupoClaseIdOrigen)
+      .query(`
+        SELECT TOP 1
+          GrupoClaseId,
+          AnioLectivoId,
+          PeriodoId,
+          MateriaId,
+          GrupoIdPrincipal,
+          Nombre,
+          Descripcion,
+          ModoSeleccion,
+          ReglaCoincidencia,
+          FechaInicio,
+          FechaFin
+        FROM dbo.GrupoClase
+        WHERE GrupoClaseId = @grupoClaseId
+          AND InstitucionId = @institucionId
+          AND Activo = 1;
+
+        SELECT GrupoId
+        FROM dbo.GrupoClaseSeccion
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+
+        SELECT SubEspecialidadId
+        FROM dbo.GrupoClaseSubEspecialidad
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+
+        SELECT MatriculaId
+        FROM dbo.GrupoClaseEstudiante
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+
+        SELECT UsuarioId, EsPrincipal
+        FROM dbo.GrupoClaseDocente
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+
+        SELECT HorarioGrupoId
+        FROM dbo.GrupoClaseHorario
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+      `);
+
+    const header = source.recordsets[0]?.[0];
+    if (!header) {
+      return res.status(404).json({ ok: false, message: "Grupo de clase no encontrado" });
+    }
+
+    const profesores = source.recordsets[4] || [];
+    const payload = {
+      nombre: text(req.body?.nombre, 200) || duplicateName(header.Nombre),
+      descripcion: header.Descripcion,
+      anioLectivoId: Number(header.AnioLectivoId),
+      periodoId: Number(header.PeriodoId),
+      materiaId: Number(header.MateriaId),
+      grupoIdPrincipal: Number(header.GrupoIdPrincipal),
+      grupoIds: (source.recordsets[1] || []).map((row: any) => Number(row.GrupoId)),
+      subEspecialidadIds: (source.recordsets[2] || []).map((row: any) => Number(row.SubEspecialidadId)),
+      matriculaIds: (source.recordsets[3] || []).map((row: any) => Number(row.MatriculaId)),
+      usuarioIds: profesores.map((row: any) => Number(row.UsuarioId)),
+      usuarioPrincipalId: Number(profesores.find((row: any) => row.EsPrincipal)?.UsuarioId || 0) || null,
+      horarioGrupoIds: (source.recordsets[5] || []).map((row: any) => Number(row.HorarioGrupoId)),
+      modoSeleccion: header.ModoSeleccion || "MIXTO",
+      reglaCoincidencia: header.ReglaCoincidencia || "CUALQUIERA",
+      fechaInicio: dateText(header.FechaInicio),
+      fechaFin: dateText(header.FechaFin)
+    };
+
+    const validation = await validatePayload({ pool, institucionId, payload });
+    if (!validation.valid) return badRequest(res, "No se pudo duplicar el grupo", validation.errors);
+    const data = validation.data!;
+
+    await transaction.begin();
+    const inserted = await new sql.Request(transaction)
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, data.anioLectivoId)
+      .input("periodoId", sql.Int, data.periodoId)
+      .input("materiaId", sql.Int, data.materiaId)
+      .input("grupoIdPrincipal", sql.Int, data.grupoIdPrincipal)
+      .input("nombre", sql.NVarChar(200), data.nombre)
+      .input("descripcion", sql.NVarChar(500), data.descripcion)
+      .input("modoSeleccion", sql.NVarChar(20), data.modoSeleccion)
+      .input("reglaCoincidencia", sql.NVarChar(20), data.reglaCoincidencia)
+      .input("fechaInicio", sql.Date, data.fechaInicio)
+      .input("fechaFin", sql.Date, data.fechaFin)
+      .input("usuarioId", sql.Int, getUserId(req))
+      .query(`
+        INSERT INTO dbo.GrupoClase
+          (InstitucionId, AnioLectivoId, PeriodoId, MateriaId, GrupoIdPrincipal,
+           Nombre, Descripcion, ModoSeleccion, ReglaCoincidencia, FechaInicio,
+           FechaFin, Activo, UsuarioCreadorId)
+        OUTPUT INSERTED.GrupoClaseId
+        VALUES
+          (@institucionId, @anioLectivoId, @periodoId, @materiaId, @grupoIdPrincipal,
+           @nombre, @descripcion, @modoSeleccion, @reglaCoincidencia, @fechaInicio,
+           @fechaFin, 1, @usuarioId);
+      `);
+    const grupoClaseId = Number(inserted.recordset[0].GrupoClaseId);
+    await saveChildren(transaction, grupoClaseId, data, getUserId(req));
+    await transaction.commit();
+    catalogCache.delete(institucionId);
+    return created(res, { grupoClaseId }, "Grupo de clase duplicado correctamente");
+  } catch (error: any) {
+    try { await transaction.rollback(); } catch {}
+    console.error("Error duplicando grupo de clase:", error);
+    if (error?.number === 2601 || error?.number === 2627) {
+      return res.status(409).json({ ok: false, message: "El grupo contiene relaciones duplicadas" });
+    }
+    return res.status(500).json({ ok: false, message: "No se pudo duplicar el grupo de clase" });
   }
 });
 

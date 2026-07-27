@@ -341,6 +341,26 @@ export default function GruposClasePage() {
     }
   }
 
+  async function duplicateGroup(id: number) {
+    if (!window.confirm("¿Duplicar este grupo de clase? Se creará una copia activa para editarla.")) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const duplicated = dataOf(await api.post(`/grupos-clase/${id}/duplicar`));
+      const newId = Number(duplicated?.grupoClaseId || 0);
+      await loadBase();
+      if (newId) {
+        await editGroup(newId);
+      }
+      setMessage("Grupo duplicado. Se abrió la copia para editarla.");
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.message || "No se pudo duplicar");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function saveStudentProfile() {
     if (!perfilMatriculaId) return;
     try {
@@ -462,7 +482,7 @@ export default function GruposClasePage() {
 
   return (
     <div className="grupos-clase-page" style={{ display: "grid", gap: 14, color: "#0f172a" }}>
-      <header>
+      <header className="grupos-clase-page-header">
         <h2 style={{ marginBottom: 4 }}>Grupos de clase</h2>
         <p style={{ margin: 0 }}>
           Agrupá estudiantes de varias secciones sin cambiar su matrícula oficial.
@@ -762,8 +782,9 @@ export default function GruposClasePage() {
                   <td style={{ padding: 8 }}>{item.Profesores}</td>
                   <td style={{ padding: 8 }}>{item.TotalEstudiantes}</td>
                   <td style={{ padding: 8, whiteSpace: "nowrap" }}>
-                    <button type="button" onClick={() => editGroup(Number(item.GrupoClaseId))}>Editar</button>{" "}
-                    <button type="button" onClick={() => deactivateGroup(Number(item.GrupoClaseId))}>Desactivar</button>
+                    <button type="button" disabled={loading} onClick={() => editGroup(Number(item.GrupoClaseId))}>Editar</button>{" "}
+                    <button type="button" disabled={loading} onClick={() => duplicateGroup(Number(item.GrupoClaseId))}>Duplicar</button>{" "}
+                    <button type="button" disabled={loading} onClick={() => deactivateGroup(Number(item.GrupoClaseId))}>Desactivar</button>
                   </td>
                 </tr>
               ))}
