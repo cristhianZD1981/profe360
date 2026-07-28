@@ -578,6 +578,7 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
           e.PrimerApellido,
           e.SegundoApellido,
           e.Nombre,
+          e.Adecuacion,
           ROW_NUMBER() OVER (
             PARTITION BY e.EstudianteId
             ORDER BY m.MatriculaId DESC
@@ -600,7 +601,8 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
         Identificacion AS cedula,
         PrimerApellido AS apellido1,
         SegundoApellido AS apellido2,
-        Nombre AS nombre
+        Nombre AS nombre,
+        Adecuacion AS adecuacion
       FROM AlumnosSeccion
       WHERE rn = 1
       ORDER BY PrimerApellido, SegundoApellido, Nombre, EstudianteId
@@ -610,6 +612,19 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
     seccion: String(grupo.GrupoNombre || ""),
     rows: result.recordset
   };
+}
+
+function getAdecuacionReporteStyleKind(value: any): "SIGNIFICATIVA" | "NO_SIGNIFICATIVA" | null {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  if (normalized.includes("no significativa")) return "NO_SIGNIFICATIVA";
+  if (normalized.includes("significativa")) return "SIGNIFICATIVA";
+  return null;
 }
 
 function toRoundedNumber(value: number | null | undefined, digits = 2) {
@@ -743,6 +758,7 @@ async function buildPromediosAcademicosPreview(params: {
             e.PrimerApellido,
             e.SegundoApellido,
             e.Nombre,
+            e.Adecuacion,
             g.Nombre AS GrupoNombre,
             ROW_NUMBER() OVER (
               PARTITION BY m.EstudianteId
@@ -832,6 +848,7 @@ async function buildPromediosAcademicosPreview(params: {
         ea.PrimerApellido,
         ea.SegundoApellido,
         ea.Nombre,
+        ea.Adecuacion,
         ea.GrupoId,
         ea.GrupoNombre,
         p.PeriodoId,
@@ -893,6 +910,7 @@ async function buildPromediosAcademicosPreview(params: {
         apellido2: String(row.SegundoApellido || ""),
         nombre: String(row.Nombre || ""),
         seccion: String(row.GrupoNombre || ""),
+        adecuacion: String(row.Adecuacion || ""),
         periodos: new Map<number, any>()
       });
     }
@@ -980,6 +998,7 @@ async function buildPromediosAcademicosPreview(params: {
       apellido2: estudiante.apellido2,
       nombre: estudiante.nombre,
       seccion: estudiante.seccion,
+      adecuacion: estudiante.adecuacion,
       periodos: `${periodosConPromedio.length}/${periodosOrdenados.length}`,
       materias: `${materiasConNota}/${materiasEsperadas}`,
       promedio: toRoundedNumber(promedio),
@@ -1067,7 +1086,8 @@ async function buildReporteAsistenciaGeneral(params: {
         e.Identificacion,
         e.Nombre,
         e.PrimerApellido,
-        e.SegundoApellido
+        e.SegundoApellido,
+        e.Adecuacion
       FROM dbo.Matricula m
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
@@ -1116,7 +1136,8 @@ async function buildReporteAsistenciaGeneral(params: {
           e.Identificacion,
           e.Nombre,
           e.PrimerApellido,
-          e.SegundoApellido
+          e.SegundoApellido,
+          e.Adecuacion
         FROM dbo.Matricula m
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
         INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
@@ -1236,6 +1257,7 @@ async function buildReporteAsistenciaGeneral(params: {
         bs.Nombre,
         bs.PrimerApellido,
         bs.SegundoApellido,
+        bs.Adecuacion,
         bs.GrupoNombre,
         ISNULL(rp.TotalLecciones, 0) AS TotalLecciones,
         ISNULL(rp.Presentes, 0) AS Presentes,
@@ -1272,6 +1294,7 @@ async function buildReporteAsistenciaGeneral(params: {
         alumno: [student.PrimerApellido, student.SegundoApellido, student.Nombre].filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
         identificacion: String(student.Identificacion || ""),
         seccion: String(student.GrupoNombre || ""),
+        adecuacion: String(student.Adecuacion || ""),
         alertaTemprana: alert.alertaTemprana,
         totalLecciones,
         tardias,
@@ -1301,7 +1324,8 @@ async function buildReporteAsistenciaGeneral(params: {
         e.Identificacion,
         e.Nombre,
         e.PrimerApellido,
-        e.SegundoApellido
+        e.SegundoApellido,
+        e.Adecuacion
       FROM dbo.Matricula m
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
@@ -1344,6 +1368,7 @@ async function buildReporteAsistenciaGeneral(params: {
         bs.Nombre,
         bs.PrimerApellido,
         bs.SegundoApellido,
+        bs.Adecuacion,
         gm.MateriaId,
         m.Nombre AS MateriaNombre
       FROM BaseStudents bs
@@ -1437,6 +1462,7 @@ async function buildReporteAsistenciaGeneral(params: {
       mb.Nombre,
       mb.PrimerApellido,
       mb.SegundoApellido,
+      mb.Adecuacion,
       mb.MateriaId,
       mb.MateriaNombre,
       prof.ProfesorId AS ProfesorId,
@@ -1536,6 +1562,7 @@ async function buildReporteAsistenciaGeneral(params: {
       alumno: [student.PrimerApellido, student.SegundoApellido, student.Nombre].filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
       identificacion: String(student.Identificacion || ""),
       seccion: String(student.GrupoNombre || ""),
+      adecuacion: String(student.Adecuacion || ""),
       alertaTemprana: alert.alertaTemprana,
       totalLecciones,
       tardias,
@@ -2412,6 +2439,7 @@ router.get("/gestion-filtros", async (req, res) => {
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
+          e.Adecuacion,
           g.GrupoId,
           g.Nombre AS GrupoNombre
         FROM dbo.Matricula m
@@ -3036,7 +3064,8 @@ router.get("/gestion-profe/secciones/excel", async (req, res) => {
         String(item.nombre || "")
       ];
       row.height = 18;
-      const fillColor = idx % 2 === 0 ? "FFFFFFFF" : "FFEEF6FF";
+      const fillColor = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+      const adecuacionStyleKind = getAdecuacionReporteStyleKind(item.adecuacion);
       row.eachCell((cell, colNumber) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fillColor } };
         cell.alignment = {
@@ -3050,6 +3079,12 @@ router.get("/gestion-profe/secciones/excel", async (req, res) => {
           bottom: { style: "thin", color: { argb: "FF64748B" } },
           right: { style: "thin", color: { argb: "FF64748B" } }
         };
+        if (adecuacionStyleKind === "SIGNIFICATIVA") {
+          cell.font = { ...(cell.font || {}), bold: true };
+        }
+        if (adecuacionStyleKind === "NO_SIGNIFICATIVA") {
+          cell.font = { ...(cell.font || {}), color: { argb: "FF64748B" } };
+        }
       });
       worksheet.getCell(`B${rowNumber}`).numFmt = "@";
       worksheet.getCell(`B${rowNumber}`).alignment = { horizontal: "left", vertical: "middle", wrapText: false };
@@ -3690,6 +3725,7 @@ router.get("/gestion-profe", async (req, res) => {
         e.Nombre,
         e.PrimerApellido,
         e.SegundoApellido,
+        e.Adecuacion,
         ISNULL(envio.CorreoEnviado, 0) AS CorreoEnviado,
         ISNULL(envio.WhatsAppEnviado, 0) AS WhatsAppEnviado
       FROM dbo.BoletaConducta b
@@ -3729,6 +3765,7 @@ router.get("/gestion-profe", async (req, res) => {
       nombre: [item.PrimerApellido, item.SegundoApellido, item.Nombre].filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
       cedula: String(item.Identificacion || ""),
       seccion: String(item.Seccion || item.GrupoNombre || ""),
+      adecuacion: String(item.Adecuacion || ""),
       fecha: String(item.FechaTexto || ""),
       envioCorreo: Number(item.CorreoEnviado || 0) ? "Si" : "No",
       envioWhatsApp: Number(item.WhatsAppEnviado || 0) ? "Si" : "No"

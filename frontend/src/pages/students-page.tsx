@@ -1,6 +1,7 @@
 ﻿import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { getAdecuacionRowStyle } from "../utils/adecuacionStyles";
 
 export function StudentsPage() {
   const qc = useQueryClient();
@@ -57,7 +58,7 @@ export function StudentsPage() {
 
       {isLoading && <p>Cargando...</p>}
 
-      <table width="100%" cellPadding={8} style={{ marginTop: 24 }}>
+      <table className="adecuacion-zebra-list" width="100%" cellPadding={8} style={{ marginTop: 24 }}>
         <thead>
           <tr>
             <th>Identificación</th>
@@ -67,7 +68,7 @@ export function StudentsPage() {
         </thead>
         <tbody>
           {rows.map((student: any) => (
-            <tr key={student.EstudianteId}>
+            <tr key={student.EstudianteId} style={getAdecuacionRowStyle(student.Adecuacion)}>
               <td>{student.Identificacion}</td>
               <td>{student.Nombre} {student.PrimerApellido} {student.SegundoApellido ?? ""}</td>
               <td>{student.matriculas?.[0]?.grupo?.Nombre ?? "Sin grupo"}</td>

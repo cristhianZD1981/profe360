@@ -3,6 +3,14 @@ import { useLocation, useNavigate } from "react-router-dom";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 import { getCostaRicaIsoDate } from "../utils/date";
+import {
+  getAdecuacionAsistenciaHtmlStyle,
+  getAdecuacionAsistenciaRowStyle,
+  getAdecuacionHtmlStyle,
+  getAdecuacionRowStyle,
+  mergeAdecuacionCellStyle,
+  normalizeAdecuacionText
+} from "../utils/adecuacionStyles";
 
 type TipoReporte =
   | "ASISTENCIA"
@@ -36,6 +44,7 @@ type AsistenciaResumen = {
   alumno: string;
   identificacion: string;
   seccion: string;
+  adecuacion?: string | null;
   alertaTemprana: string;
   totalLecciones: number;
   tardias: number;
@@ -54,6 +63,7 @@ type BoletaReporteRow = {
   nombre: string;
   cedula: string;
   seccion: string;
+  adecuacion?: string | null;
   fecha: string;
   envioCorreo: string;
   envioWhatsApp: string;
@@ -217,6 +227,22 @@ function getVistaActual(pathname: string): "menu" | "consultas" | "certificacion
   if (normalized.endsWith("/consultas")) return "consultas";
   if (normalized.endsWith("/certificaciones")) return "certificaciones";
   return "menu";
+}
+
+function getReporteRowAdecuacion(row: any) {
+  if (!row) return "";
+  const directValue = row.adecuacion ?? row.Adecuacion ?? row["Tipo de Adecuación"] ?? row["Tipo de AdecuaciÃ³n"];
+  if (directValue) return String(directValue);
+  const adecuacionKey = Object.keys(row).find((key) => normalizeAdecuacionText(key) === "tipo de adecuacion");
+  return adecuacionKey ? String(row[adecuacionKey] || "") : "";
+}
+
+function getReporteVisibleKeys(row: any) {
+  return Object.keys(row || {}).filter((key) => !["adecuacion", "Adecuacion"].includes(key));
+}
+
+function getReporteZebraBackground(index: number) {
+  return index % 2 === 0 ? "#ffffff" : "#f8fafc";
 }
 
 function getGradoFromGrupoNombre(value: any) {
@@ -864,10 +890,13 @@ export default function ReportesPage() {
     }
 
     if (tipo === "ESTUDIANTES") {
-      const headers = ["Línea", ...Object.keys(filas[0] || {})];
-      const rows = filas.map((f, idx) => [idx + 1, ...headers.slice(1).map((h) => f[h])]);
+      const headers = ["Línea", ...getReporteVisibleKeys(filas[0])];
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
-      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const tbody = filas.map((f, idx) => {
+        const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+        const row = [idx + 1, ...headers.slice(1).map((h) => f[h])];
+        return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+      }).join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte de estudiantes</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
       const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
       descargarBlob(blob, "reporte-estudiantes.xls");
@@ -876,22 +905,25 @@ export default function ReportesPage() {
 
     if (tipo === "PROMEDIOS_ACADEMICOS") {
       const headers = ["#", "Cédula", "Apellido 1", "Apellido 2", "Nombre", "Sección", "Períodos", "Con nota / materias", "Promedio", "Estado", "Advertencias"];
-      const rows = filas.map((f) => [
-        f.linea,
-        f.cedula,
-        f.apellido1,
-        f.apellido2,
-        f.nombre,
-        f.seccion,
-        f.periodos,
-        f.materias,
-        f.promedio ?? "",
-        f.estado,
-        f.advertencias
-      ]);
       const titulo = `Vista previa de promedios académicos - ${promediosResumen?.periodo || (modoPromedios === "ANUAL" ? "Anual" : "Período")}`;
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
-      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const tbody = filas.map((f, idx) => {
+        const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+        const row = [
+          f.linea,
+          f.cedula,
+          f.apellido1,
+          f.apellido2,
+          f.nombre,
+          f.seccion,
+          f.periodos,
+          f.materias,
+          f.promedio ?? "",
+          f.estado,
+          f.advertencias
+        ];
+        return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+      }).join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtml(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
       const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
       descargarBlob(blob, `vista-previa-promedios-${modoPromedios.toLowerCase()}.xls`);
@@ -925,20 +957,23 @@ export default function ReportesPage() {
 
     if (tipo === "ASISTENCIA") {
       const headers = ["Alumno", "Identificación", "Sección", "Alerta Temprana", "Tardías", "Ausencias Justificadas", "Ausencias Injustificadas", "Presentes", "Cantidad de correos enviados", "Cantidad de WhatsApp enviados"];
-      const rows = asistenciaRows.map((item) => [
-        item.alumno,
-        item.identificacion,
-        item.seccion,
-        item.alertaTemprana,
-        item.tardias,
-        item.ausenciasJustificadas,
-        item.ausenciasInjustificadas,
-        item.presentes,
-        item.cantidadCorreosEnviados,
-        item.cantidadWhatsAppEnviados
-      ]);
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
-      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const tbody = asistenciaRows.map((item, idx) => {
+        const rowStyle = getAdecuacionAsistenciaHtmlStyle(item.adecuacion, getReporteZebraBackground(idx));
+        const row = [
+          item.alumno,
+          item.identificacion,
+          item.seccion,
+          item.alertaTemprana,
+          item.tardias,
+          item.ausenciasJustificadas,
+          item.ausenciasInjustificadas,
+          item.presentes,
+          item.cantidadCorreosEnviados,
+          item.cantidadWhatsAppEnviados
+        ];
+        return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+      }).join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte general de asistencia</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
       const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
       descargarBlob(blob, `reporte-general-asistencia-${vistaAsistencia}.xls`);
@@ -947,27 +982,33 @@ export default function ReportesPage() {
 
     if (tipo === "BOLETAS") {
       const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
-      const rows = boletasRows.map((item) => [
-        String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
-        item.nombre,
-        item.cedula,
-        item.seccion,
-        item.fecha,
-        item.envioCorreo,
-        item.envioWhatsApp
-      ]);
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
-      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const tbody = boletasRows.map((item, idx) => {
+        const rowStyle = getAdecuacionHtmlStyle(item.adecuacion);
+        const row = [
+          String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
+          item.nombre,
+          item.cedula,
+          item.seccion,
+          item.fecha,
+          item.envioCorreo,
+          item.envioWhatsApp
+        ];
+        return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+      }).join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte de boletas</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
       const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
       descargarBlob(blob, `reporte-boletas-${vistaAsistencia}.xls`);
       return;
     }
 
-    const headers = Object.keys(filas[0] || {});
-    const rows = filas.map((f) => headers.map((h) => f[h]));
+    const headers = getReporteVisibleKeys(filas[0]);
     const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
-    const tbody = rows.map((row) => `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+    const tbody = filas.map((f, idx) => {
+      const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+      const row = headers.map((h) => f[h]);
+      return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+    }).join("");
     const titulo = tipo === "ESTUDIANTES" ? "Reporte de estudiantes" : `Reporte ${tipo}`;
     const archivo = tipo === "ESTUDIANTES" ? "reporte-estudiantes.xls" : `reporte-${tipo}.xls`;
     const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtml(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
@@ -978,20 +1019,23 @@ export default function ReportesPage() {
   function exportarPdf() {
     if (tipo === "ASISTENCIA") {
       const headers = ["Alumno", "Identificación", "Sección", "Alerta Temprana", "Tardías", "Ausencias Justificadas", "Ausencias Injustificadas", "Presentes", "Cantidad de correos enviados", "Cantidad de WhatsApp enviados"];
-      const rows = asistenciaRows.map((item) => [
-        item.alumno,
-        item.identificacion,
-        item.seccion,
-        item.alertaTemprana,
-        item.tardias,
-        item.ausenciasJustificadas,
-        item.ausenciasInjustificadas,
-        item.presentes,
-        item.cantidadCorreosEnviados,
-        item.cantidadWhatsAppEnviados
-      ]);
       const thead = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
-      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const tbody = asistenciaRows.map((item, idx) => {
+        const rowStyle = getAdecuacionAsistenciaHtmlStyle(item.adecuacion, getReporteZebraBackground(idx));
+        const row = [
+          item.alumno,
+          item.identificacion,
+          item.seccion,
+          item.alertaTemprana,
+          item.tardias,
+          item.ausenciasJustificadas,
+          item.ausenciasInjustificadas,
+          item.presentes,
+          item.cantidadCorreosEnviados,
+          item.cantidadWhatsAppEnviados
+        ];
+        return `<tr>${row.map((c) => `<td style="${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+      }).join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /><title>Reporte general de asistencia</title><style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style></head><body><h2>Reporte general de asistencia</h2><table>${thead}${tbody}</table><script>window.onload=function(){window.print();}</script></body></html>`;
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -1002,17 +1046,20 @@ export default function ReportesPage() {
 
     if (tipo === "BOLETAS") {
       const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
-      const rows = boletasRows.map((item) => [
-        String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
-        item.nombre,
-        item.cedula,
-        item.seccion,
-        item.fecha,
-        item.envioCorreo,
-        item.envioWhatsApp
-      ]);
       const thead = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
-      const tbody = rows.map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const tbody = boletasRows.map((item, idx) => {
+        const rowStyle = getAdecuacionHtmlStyle(item.adecuacion);
+        const row = [
+          String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
+          item.nombre,
+          item.cedula,
+          item.seccion,
+          item.fecha,
+          item.envioCorreo,
+          item.envioWhatsApp
+        ];
+        return `<tr>${row.map((c) => `<td style="background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+      }).join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /><title>Reporte de boletas</title><style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style></head><body><h2>Reporte de boletas</h2><table>${thead}${tbody}</table><script>window.onload=function(){window.print();}</script></body></html>`;
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -1021,10 +1068,13 @@ export default function ReportesPage() {
       return;
     }
 
-    const headers = Object.keys(filas[0] || {});
-    const rows = filas.map((f) => headers.map((h) => f[h]));
+    const headers = getReporteVisibleKeys(filas[0]);
     const thead = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
-    const tbody = rows.map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+    const tbody = filas.map((f, idx) => {
+      const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+      const row = headers.map((h) => f[h]);
+      return `<tr>${row.map((c) => `<td style="background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
+    }).join("");
     const titulo = tipo === "ESTUDIANTES" ? "Reporte de estudiantes" : `Reporte ${tipo}`;
     const html = `<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(titulo)}</title><style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style></head><body><h2>${escapeHtml(titulo)}</h2><table>${thead}${tbody}</table><script>window.onload=function(){window.print();}</script></body></html>`;
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
@@ -1624,7 +1674,7 @@ export default function ReportesPage() {
             renderHorarioSeccionReporte()
           ) : tipo === "ASISTENCIA" ? (
             <div className="table-wrap">
-              <table>
+              <table className="adecuacion-zebra-list adecuacion-attendance-list">
                 <thead>
                   <tr>
                   {(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? <th>Detalle</th> : null}
@@ -1645,7 +1695,7 @@ export default function ReportesPage() {
                     <tr><td colSpan={(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? 11 : 10} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : asistenciaRows.map((fila) => (
                     <Fragment key={`asis-wrap-${fila.estudianteId}`}>
-                      <tr key={`asis-${fila.estudianteId}`}>
+                      <tr key={`asis-${fila.estudianteId}`} style={getAdecuacionAsistenciaRowStyle(fila.adecuacion)}>
                         {(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? (
                           <td style={{ textAlign: "center" }}>
                             <button
@@ -1660,7 +1710,7 @@ export default function ReportesPage() {
                         <td>{fila.alumno}</td>
                         <td>{fila.identificacion}</td>
                         <td>{fila.seccion}</td>
-                        <td><span style={getAlertStyle(fila.alertaTemprana)}>{fila.alertaTemprana}</span></td>
+                        <td><span style={{ ...getAlertStyle(fila.alertaTemprana), ...getAdecuacionRowStyle(fila.adecuacion) }}>{fila.alertaTemprana}</span></td>
                         <td style={{ textAlign: "center" }}>{fila.tardias}</td>
                         <td style={{ textAlign: "center" }}>{fila.ausenciasJustificadas}</td>
                         <td style={{ textAlign: "center" }}>{fila.ausenciasInjustificadas}</td>
@@ -1715,7 +1765,7 @@ export default function ReportesPage() {
             </div>
           ) : tipo === "BOLETAS" ? (
             <div className="table-wrap">
-              <table>
+              <table className="adecuacion-zebra-list">
                 <thead>
                   <tr>
                     <th>N° de boleta</th>
@@ -1732,7 +1782,7 @@ export default function ReportesPage() {
                   {!boletasRows.length ? (
                     <tr><td colSpan={7} style={{ textAlign: "center", padding: "12px" }}>No hay boletas para mostrar con esos filtros.</td></tr>
                   ) : boletasRows.map((fila) => (
-                    <tr key={fila.boletaConductaId}>
+                    <tr key={fila.boletaConductaId} style={getAdecuacionRowStyle(fila.adecuacion)}>
                       <td>{fila.numeroBoleta}</td>
                       <td>{fila.nombre}</td>
                       <td>{fila.cedula}</td>
@@ -1760,7 +1810,7 @@ export default function ReportesPage() {
               <div style={{ padding: "10px 12px", background: "#102738", borderBottom: "1px solid #24465d", color: "#f8fafc", fontWeight: 800 }}>
                 Sección {seccionReporteTitulo || secciones.find((item) => String(item.GrupoId) === String(grupoId))?.GrupoNombre || ""}
               </div>
-              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+              <table className="adecuacion-zebra-list" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
                 <thead>
                   <tr>
                     <th style={{ width: 70, textAlign: "center", fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>#</th>
@@ -1773,15 +1823,18 @@ export default function ReportesPage() {
                 <tbody>
                   {!filas.length ? (
                     <tr><td colSpan={5} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Seleccioná una sección y presioná Consultar.</td></tr>
-                  ) : filas.map((fila, idx) => (
-                    <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
-                      <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{Number(fila.linea || idx + 1)}</td>
-                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.cedula ?? "")}</td>
-                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido1 ?? "")}</td>
-                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido2 ?? "")}</td>
-                      <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.nombre ?? "")}</td>
-                    </tr>
-                  ))}
+                  ) : filas.map((fila, idx) => {
+                    const rowAdecuacion = getReporteRowAdecuacion(fila);
+                    return (
+                      <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}>
+                        <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{Number(fila.linea || idx + 1)}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.cedula ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido1 ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido2 ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.nombre ?? "")}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1798,7 +1851,7 @@ export default function ReportesPage() {
                   {promediosResumen.advertencia}
                 </div>
               ) : null}
-              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+              <table className="adecuacion-zebra-list" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
                 <thead>
                   <tr>
                     <th style={{ width: 62, textAlign: "center", fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>#</th>
@@ -1819,23 +1872,24 @@ export default function ReportesPage() {
                     <tr><td colSpan={11} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : filas.map((fila, idx) => {
                     const completo = String(fila.estado || "").toLowerCase() === "completo";
+                    const rowAdecuacion = getReporteRowAdecuacion(fila);
                     return (
-                      <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
-                        <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{Number(fila.linea || idx + 1)}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.cedula ?? "")}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido1 ?? "")}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.apellido2 ?? "")}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.nombre ?? "")}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila.seccion ?? "")}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d", textAlign: "center" }}>{String(fila.periodos ?? "")}</td>
-                        <td style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d", textAlign: "center" }}>{String(fila.materias ?? "")}</td>
-                        <td style={{ color: "#f8fafc", fontWeight: 900, borderBottom: "1px solid #24465d", textAlign: "center" }}>{fila.promedio == null ? "-" : Number(fila.promedio).toFixed(2)}</td>
-                        <td style={{ borderBottom: "1px solid #24465d" }}>
-                          <span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 999, fontWeight: 800, color: completo ? "#166534" : "#92400e", background: completo ? "#dcfce7" : "#fef3c7" }}>
+                      <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}>
+                        <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{Number(fila.linea || idx + 1)}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.cedula ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido1 ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido2 ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.nombre ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.seccion ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1", textAlign: "center" }, rowAdecuacion)}>{String(fila.periodos ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1", textAlign: "center" }, rowAdecuacion)}>{String(fila.materias ?? "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", fontWeight: 900, borderBottom: "1px solid #cbd5e1", textAlign: "center" }, rowAdecuacion)}>{fila.promedio == null ? "-" : Number(fila.promedio).toFixed(2)}</td>
+                        <td style={mergeAdecuacionCellStyle({ borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>
+                          <span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 999, fontWeight: 800, color: completo ? "#166534" : "#92400e", background: completo ? "#dcfce7" : "#fef3c7", ...getAdecuacionRowStyle(rowAdecuacion) }}>
                             {String(fila.estado || "")}
                           </span>
                         </td>
-                        <td style={{ color: completo ? "#bbf7d0" : "#fde68a", borderBottom: "1px solid #24465d", whiteSpace: "normal" }}>{String(fila.advertencias || "")}</td>
+                        <td style={mergeAdecuacionCellStyle({ color: completo ? "#166534" : "#92400e", borderBottom: "1px solid #cbd5e1", whiteSpace: "normal" }, rowAdecuacion)}>{String(fila.advertencias || "")}</td>
                       </tr>
                     );
                   })}
@@ -1905,41 +1959,51 @@ export default function ReportesPage() {
             </div>
           ) : tipo === "ESTUDIANTES" ? (
             <div className="table-wrap">
-              <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", color: "#dbe7f5" }}>
+              <table className="adecuacion-zebra-list" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}>
                 <thead>
                   <tr>
                     <th style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>Línea</th>
-                    {Object.keys(filas[0] || { Resultado: "" }).map((h) => <th key={h} style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>{h}</th>)}
+                    {(filas.length ? getReporteVisibleKeys(filas[0]) : ["Resultado"]).map((h) => <th key={h} style={{ fontWeight: 800, background: "#163041", color: "#f8fafc", borderBottom: "1px solid #2b4c63" }}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {!filas.length ? (
                     <tr><td colSpan={50} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
-                  ) : filas.map((fila, idx) => (
-                    <tr key={idx} style={{ background: idx % 2 === 0 ? "#102738" : "#153247" }}>
-                      <td style={{ fontWeight: 700, textAlign: "center", color: "#f8fafc", borderBottom: "1px solid #24465d" }}>{idx + 1}</td>
-                      {Object.keys(filas[0] || {}).map((h) => <td key={h} style={{ color: "#dbe7f5", borderBottom: "1px solid #24465d" }}>{String(fila[h] ?? "")}</td>)}
-                    </tr>
-                  ))}
+                  ) : filas.map((fila, idx) => {
+                    const rowAdecuacion = getReporteRowAdecuacion(fila);
+                    return (
+                      <tr key={idx} style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}>
+                        <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{idx + 1}</td>
+                        {getReporteVisibleKeys(filas[0]).map((h) => (
+                          <td key={h} style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>
+                            {String(fila[h] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           ) : (
             <div className="table-wrap">
-              <table>
+              <table className="adecuacion-zebra-list">
                 <thead>
                   <tr>
-                    {Object.keys(filas[0] || { Resultado: "" }).map((h) => <th key={h}>{h}</th>)}
+                    {(filas.length ? getReporteVisibleKeys(filas[0]) : ["Resultado"]).map((h) => <th key={h}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {!filas.length ? (
                     <tr><td colSpan={20} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
-                  ) : filas.map((fila, idx) => (
-                    <tr key={idx}>
-                      {Object.keys(filas[0] || {}).map((h) => <td key={h}>{String(fila[h] ?? "")}</td>)}
-                    </tr>
-                  ))}
+                  ) : filas.map((fila, idx) => {
+                    const rowAdecuacion = getReporteRowAdecuacion(fila);
+                    return (
+                      <tr key={idx} style={getAdecuacionRowStyle(rowAdecuacion)}>
+                        {getReporteVisibleKeys(filas[0]).map((h) => <td key={h}>{String(fila[h] ?? "")}</td>)}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

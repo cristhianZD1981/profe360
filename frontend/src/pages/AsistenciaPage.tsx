@@ -1,5 +1,9 @@
 ﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
+import {
+  getAdecuacionAsistenciaRowStyle,
+  getAdecuacionRowStyle
+} from "../utils/adecuacionStyles";
 
 type AnioLectivo = {
   AnioLectivoId: number;
@@ -60,6 +64,7 @@ type EstudianteClase = {
   Nombre: string;
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
+  Adecuacion?: string | null;
   DetalleAsistenciaId?: number | null;
   EstadoAsistenciaId?: number | null;
   Observacion?: string | null;
@@ -106,6 +111,7 @@ type SesionDetalle = {
     Nombre: string;
     PrimerApellido?: string | null;
     SegundoApellido?: string | null;
+    Adecuacion?: string | null;
     NombreEstado?: string | null;
     Descripcion?: string | null;
     Codigo?: string | null;
@@ -116,6 +122,7 @@ type DetalleForm = {
   estudianteId: number;
   identificacion: string;
   nombreCompleto: string;
+  adecuacion: string;
   estadoAsistenciaId: string;
   observacion: string;
 };
@@ -288,6 +295,7 @@ export default function AsistenciaPage() {
           estudianteId: item.EstudianteId,
           identificacion: item.Identificacion,
           nombreCompleto: fullName(item),
+          adecuacion: item.Adecuacion || "",
           estadoAsistenciaId: item.EstadoAsistenciaId !== undefined && item.EstadoAsistenciaId !== null
             ? String(item.EstadoAsistenciaId)
             : defaultEstadoId,
@@ -343,6 +351,7 @@ export default function AsistenciaPage() {
           estudianteId: item.EstudianteId,
           identificacion: item.Identificacion,
           nombreCompleto: fullName(item),
+          adecuacion: item.Adecuacion || "",
           estadoAsistenciaId: String(item.EstadoAsistenciaId),
           observacion: item.Observacion || ""
         }))
@@ -789,7 +798,7 @@ export default function AsistenciaPage() {
               </label>
 
               <div className="table-wrap">
-                <table>
+                <table className="adecuacion-zebra-list adecuacion-attendance-list">
                   <thead>
                     <tr>
                       <th>Identificación</th>
@@ -800,12 +809,13 @@ export default function AsistenciaPage() {
                   </thead>
                   <tbody>
                     {detalles.map((item) => (
-                      <tr key={`detalle-${item.estudianteId}`}>
+                      <tr key={`detalle-${item.estudianteId}`} style={getAdecuacionAsistenciaRowStyle(item.adecuacion)}>
                         <td>{item.identificacion}</td>
                         <td>{item.nombreCompleto}</td>
                         <td>
                           <select
                             value={item.estadoAsistenciaId}
+                            style={getAdecuacionRowStyle(item.adecuacion)}
                             onChange={(e) =>
                               updateDetalle(item.estudianteId, "estadoAsistenciaId", e.target.value)
                             }
@@ -824,6 +834,7 @@ export default function AsistenciaPage() {
                         <td>
                           <input
                             value={item.observacion}
+                            style={getAdecuacionRowStyle(item.adecuacion)}
                             onChange={(e) =>
                               updateDetalle(item.estudianteId, "observacion", e.target.value)
                             }

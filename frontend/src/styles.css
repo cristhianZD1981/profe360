@@ -2280,6 +2280,54 @@ table input {
   border: 1px solid #94a3b8 !important;
 }
 
+.adecuacion-zebra-list {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.adecuacion-zebra-list tbody tr:nth-child(odd) {
+  background: #ffffff;
+}
+
+.adecuacion-zebra-list tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+.adecuacion-zebra-list th,
+.adecuacion-zebra-list td,
+.adecuacion-zebra-list th *,
+.adecuacion-zebra-list td * {
+  color: inherit;
+}
+
+.adecuacion-zebra-list th {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.adecuacion-zebra-list td {
+  border-bottom-color: #cbd5e1;
+}
+
+.adecuacion-zebra-list input,
+.adecuacion-zebra-list select,
+.adecuacion-zebra-list textarea {
+  background: #ffffff !important;
+  color: inherit !important;
+  border-color: #cbd5e1 !important;
+}
+
+.adecuacion-attendance-list input,
+.adecuacion-attendance-list select,
+.adecuacion-attendance-list textarea {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.adecuacion-attendance-list tbody tr > td {
+  background-color: inherit;
+}
+
 div[style*="background: #ffffff"] input,
 div[style*="background:#ffffff"] input,
 div[style*="background: rgb(255, 255, 255)"] input,

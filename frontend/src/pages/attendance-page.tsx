@@ -1,6 +1,10 @@
 ﻿import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import {
+  getAdecuacionAsistenciaRowStyle,
+  getAdecuacionRowStyle
+} from "../utils/adecuacionStyles";
 
 export function AttendancePage() {
   const [grupoId, setGrupoId] = useState<number>(1);
@@ -58,7 +62,7 @@ export function AttendancePage() {
           ))}
         </select>
 
-        <table width="100%" cellPadding={8}>
+        <table className="adecuacion-zebra-list adecuacion-attendance-list" width="100%" cellPadding={8}>
           <thead>
             <tr>
               <th>Estudiante</th>
@@ -67,11 +71,12 @@ export function AttendancePage() {
           </thead>
           <tbody>
             {activeStudents.map((student: any) => (
-              <tr key={student.EstudianteId}>
+              <tr key={student.EstudianteId} style={getAdecuacionAsistenciaRowStyle(student.Adecuacion)}>
                 <td>{student.Nombre} {student.PrimerApellido}</td>
                 <td>
                   <select
                     value={selected[student.EstudianteId] || states.data?.[0]?.EstadoAsistenciaId || ""}
+                    style={getAdecuacionRowStyle(student.Adecuacion)}
                     onChange={(e) => setSelected((prev) => ({ ...prev, [student.EstudianteId]: Number(e.target.value) }))}
                   >
                     {(states.data ?? []).map((state: any) => (

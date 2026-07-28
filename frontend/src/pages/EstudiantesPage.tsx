@@ -4,6 +4,7 @@ import { useRef } from "react";
 import api from "../lib/http";
 import { getCostaRicaIsoDate } from "../utils/date";
 import { useAuth } from "../context/auth";
+import { getAdecuacionRowStyle } from "../utils/adecuacionStyles";
 
 type Student = {
   EstudianteId: number;
@@ -2119,7 +2120,7 @@ export default function EstudiantesPage() {
         </div>
 
         <div className="table-wrap">
-          <table>
+          <table className="adecuacion-zebra-list">
             <thead>
               <tr>
                 <th>ID</th>
@@ -2142,7 +2143,7 @@ export default function EstudiantesPage() {
             <tbody>
               {items.map((item) => (
                 <>
-                  <tr key={item.EstudianteId}>
+                  <tr key={item.EstudianteId} style={getAdecuacionRowStyle(item.Adecuacion)}>
                     <td>{item.EstudianteId}</td>
                     <td>
                       {item.FotoUrl ? (

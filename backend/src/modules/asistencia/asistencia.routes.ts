@@ -445,6 +445,7 @@ router.get("/fechas-clase/:id/estudiantes", async (req, res) => {
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
+          e.Adecuacion,
           da.DetalleAsistenciaId,
           da.EstadoAsistenciaId,
           da.Observacion
@@ -686,6 +687,7 @@ router.get("/sesiones/:id", async (req, res) => {
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
+          e.Adecuacion,
           ea.EstadoAsistenciaId AS EstadoCatalogoId,
           ea.Nombre AS EstadoNombre,
           ea.Codigo AS EstadoCodigo,
