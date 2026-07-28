@@ -2328,6 +2328,33 @@ table input {
   background-color: inherit;
 }
 
+tr.adecuacion-student-row[data-adecuacion="SIGNIFICATIVA"] > td {
+  background-color: #dcfce7 !important;
+  color: #0f172a !important;
+  font-weight: 800 !important;
+}
+
+tr.adecuacion-student-row[data-adecuacion="SIGNIFICATIVA"] > td :is(div, span, p, strong, small, label, a) {
+  font-weight: 800 !important;
+}
+
+tr.adecuacion-student-row[data-adecuacion="SIGNIFICATIVA"] > td :is(input, select, textarea) {
+  font-weight: 800 !important;
+}
+
+tr.adecuacion-student-row[data-adecuacion="NO_SIGNIFICATIVA"] > td {
+  background-color: #e0f2fe !important;
+  color: #64748b !important;
+}
+
+tr.adecuacion-student-row[data-adecuacion="NO_SIGNIFICATIVA"] > td :is(div, span, p, strong, small, label, a) {
+  color: #64748b !important;
+}
+
+tr.adecuacion-student-row[data-adecuacion="NO_SIGNIFICATIVA"] > td :is(input, select, textarea) {
+  color: #64748b !important;
+}
+
 div[style*="background: #ffffff"] input,
 div[style*="background:#ffffff"] input,
 div[style*="background: rgb(255, 255, 255)"] input,

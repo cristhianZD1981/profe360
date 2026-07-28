@@ -2363,6 +2363,7 @@ router.get("/boletas-conducta", async (req, res) => {
       e.Nombre,
       e.PrimerApellido,
       e.SegundoApellido,
+      e.Adecuacion AS TipoAdecuacion,
       ISNULL(envios.TotalEnvios, 0) AS TotalEnviosCorreo,
       ISNULL(envios.TotalExitos, 0) AS TotalEnviosExitosos
     FROM dbo.BoletaConducta b
@@ -3064,8 +3065,12 @@ router.get("/gestion-profe/secciones/excel", async (req, res) => {
         String(item.nombre || "")
       ];
       row.height = 18;
-      const fillColor = idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
       const adecuacionStyleKind = getAdecuacionReporteStyleKind(item.adecuacion);
+      const fillColor = adecuacionStyleKind === "SIGNIFICATIVA"
+        ? "FFDCFCE7"
+        : adecuacionStyleKind === "NO_SIGNIFICATIVA"
+          ? "FFE0F2FE"
+          : idx % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
       row.eachCell((cell, colNumber) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fillColor } };
         cell.alignment = {
@@ -4217,6 +4222,7 @@ router.get("/certificaciones/constancia-estudio/registros", async (req, res) => 
         cer.MotivoTramite,
         cer.CursoLectivo,
         cer.OtroColegioDestino,
+        e.Adecuacion AS adecuacion,
         CONVERT(varchar(10), cer.FechaEmision, 103) AS FechaEmisionTexto
       FROM dbo.CertificacionEstudioRegistro cer
       LEFT JOIN dbo.Estudiante e
@@ -4434,6 +4440,7 @@ router.get("/admin/consecutivos", async (req, res) => {
           Seccion = ISNULL(NULLIF(b.Seccion, N''), ISNULL(g.Nombre, N'')),
           Codigo = ISNULL(NULLIF(b.CodigoBoleta, N''), RIGHT(N'000' + CONVERT(varchar(20), ISNULL(b.Consecutivo, 0)), 3)),
           Detalle = ISNULL(b.DetalleHechos, N''),
+          adecuacion = e.Adecuacion,
           CorreoEnviado = CASE
             WHEN ISNULL(envio.CorreoEnviado, 0) = 1 THEN N'Sí'
             ELSE N'No'
@@ -4481,9 +4488,13 @@ router.get("/admin/consecutivos", async (req, res) => {
         Seccion = ISNULL(cer.GrupoNombre, N''),
           Codigo = ISNULL(NULLIF(cer.CodigoConstancia, N''), N'CONST-' + RIGHT(N'000' + CONVERT(varchar(20), ISNULL(cer.Consecutivo, 0)), 3)),
         Detalle = ISNULL(cer.MotivoTramite, N''),
+        adecuacion = e.Adecuacion,
         CorreoEnviado = N'-',
         WhatsAppEnviado = N'-'
       FROM dbo.CertificacionEstudioRegistro cer
+      LEFT JOIN dbo.Estudiante e
+        ON e.EstudianteId = cer.EstudianteId
+       AND e.InstitucionId = cer.InstitucionId
       WHERE cer.InstitucionId = @institucionId
       ORDER BY cer.Consecutivo ASC, cer.CertificacionEstudioId ASC
     `);

@@ -5406,6 +5406,7 @@ router.get("/matriculas", async (req, res) => {
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
+          e.Adecuacion AS TipoAdecuacion,
           g.Nombre AS GrupoNombre,
           g.Nivel AS GrupoNivel,
           g.NivelAcademico AS GrupoNivelAcademico,

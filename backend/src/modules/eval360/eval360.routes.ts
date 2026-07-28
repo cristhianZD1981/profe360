@@ -14512,6 +14512,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                   e.SegundoApellido,
 
+                  e.Adecuacion AS TipoAdecuacion,
+
                   e.Correo,
 
                   e.Telefono,
@@ -14590,6 +14592,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                 eb.SegundoApellido,
 
+                eb.TipoAdecuacion,
+
                 eb.Correo,
 
                 eb.Telefono,
@@ -14647,6 +14651,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
                 e.PrimerApellido,
 
                 e.SegundoApellido,
+
+                e.Adecuacion AS TipoAdecuacion,
 
                 e.Correo,
 
@@ -14795,6 +14801,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
               eb.PrimerApellido,
 
               eb.SegundoApellido,
+
+              eb.TipoAdecuacion,
 
               eb.Correo,
 

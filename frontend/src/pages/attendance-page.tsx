@@ -3,7 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import {
   getAdecuacionAsistenciaRowStyle,
-  getAdecuacionRowStyle
+  getAdecuacionRowStyle,
+  getAdecuacionStyleKind
 } from "../utils/adecuacionStyles";
 
 export function AttendancePage() {
@@ -71,7 +72,12 @@ export function AttendancePage() {
           </thead>
           <tbody>
             {activeStudents.map((student: any) => (
-              <tr key={student.EstudianteId} style={getAdecuacionAsistenciaRowStyle(student.Adecuacion)}>
+              <tr
+                key={student.EstudianteId}
+                className="adecuacion-student-row"
+                data-adecuacion={getAdecuacionStyleKind(student.Adecuacion) || undefined}
+                style={getAdecuacionAsistenciaRowStyle(student.Adecuacion)}
+              >
                 <td>{student.Nombre} {student.PrimerApellido}</td>
                 <td>
                   <select

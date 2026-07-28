@@ -1,7 +1,7 @@
 ﻿import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { getAdecuacionRowStyle } from "../utils/adecuacionStyles";
+import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 
 export function StudentsPage() {
   const qc = useQueryClient();
@@ -68,7 +68,11 @@ export function StudentsPage() {
         </thead>
         <tbody>
           {rows.map((student: any) => (
-            <tr key={student.EstudianteId} style={getAdecuacionRowStyle(student.Adecuacion)}>
+            <tr
+              key={student.EstudianteId}
+              className="adecuacion-student-row"
+              data-adecuacion={getAdecuacionStyleKind(student.Adecuacion) || undefined}
+            >
               <td>{student.Identificacion}</td>
               <td>{student.Nombre} {student.PrimerApellido} {student.SegundoApellido ?? ""}</td>
               <td>{student.matriculas?.[0]?.grupo?.Nombre ?? "Sin grupo"}</td>

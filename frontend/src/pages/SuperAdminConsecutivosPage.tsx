@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
+import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 
 type InstitucionOption = {
   InstitucionId: number;
@@ -23,6 +24,7 @@ type ConsecutivoRow = {
   Detalle: string;
   CorreoEnviado: string;
   WhatsAppEnviado: string;
+  adecuacion?: string | null;
 };
 
 function formatConsecutivo(row: ConsecutivoRow) {
@@ -325,7 +327,7 @@ export default function SuperAdminConsecutivosPage() {
         </div>
 
         <div className="table-wrap" style={tableWrapStyle}>
-          <table>
+          <table className="adecuacion-zebra-list">
             <thead>
               <tr>
                 <th>Sel.</th>
@@ -346,7 +348,11 @@ export default function SuperAdminConsecutivosPage() {
                   </td>
                 </tr>
               ) : rows.map((row) => (
-                <tr key={`${tipo}-${row.RegistroId}`} style={{ color: "#e2e8f0" }}>
+                <tr
+                  key={`${tipo}-${row.RegistroId}`}
+                  className="adecuacion-student-row"
+                  data-adecuacion={getAdecuacionStyleKind(row.adecuacion) || undefined}
+                >
                   <td>
                     <input
                       type="checkbox"

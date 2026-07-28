@@ -1,6 +1,7 @@
 ﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
+import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 
 type AnioLectivo = {
   AnioLectivoId: number;
@@ -101,6 +102,7 @@ type BusquedaAlumnoResultado = {
   GrupoNombre: string;
   GrupoNivel: string | null;
   MatriculaId: number;
+  TipoAdecuacion?: string | null;
 };
 
 type BusquedaProfesorResultado = {
@@ -716,7 +718,7 @@ export default function HorariosPage() {
 
               {resultadosAlumnos.length > 0 && (
                 <div className="table-wrap" style={{ marginBottom: "16px" }}>
-                  <table>
+                  <table className="adecuacion-zebra-list">
                     <thead>
                       <tr>
                         <th>Cédula</th>
@@ -727,7 +729,11 @@ export default function HorariosPage() {
                     </thead>
                     <tbody>
                       {resultadosAlumnos.map((item) => (
-                        <tr key={item.EstudianteId}>
+                        <tr
+                          key={item.EstudianteId}
+                          className="adecuacion-student-row"
+                          data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                        >
                           <td>{item.Identificacion}</td>
                           <td>{getFullName(item)}</td>
                           <td>{item.GrupoNombre} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
+import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 
 const dias: Record<number, string> = {
   2: "Lunes",
@@ -710,13 +711,18 @@ export default function GruposClasePage() {
                   Quitar selección
                 </button>
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr><th style={tableHeader}></th><th style={tableHeader}>Estudiante</th><th style={tableHeader}>Sección</th><th style={tableHeader}>Especialidad</th><th style={tableHeader}>Perfil técnico</th><th style={tableHeader}></th></tr></thead>
                 <tbody>
                   {candidatosFiltrados.map((item: any, index: number) => {
                     const id = Number(item.MatriculaId);
                     return (
-                      <tr key={id} style={{ background: index % 2 === 0 ? "#ffffff" : "#eaf1f8", color: "#0f172a" }}>
+                      <tr
+                        key={id}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                        style={{ background: index % 2 === 0 ? "#ffffff" : "#eaf1f8", color: "#0f172a" }}
+                      >
                         <td style={{ padding: 8 }}><input type="checkbox" checked={form.matriculaIds.includes(id)} onChange={() => setForm({ ...form, matriculaIds: toggleId(form.matriculaIds, id) })} /></td>
                         <td style={{ padding: 8 }}>
                           <span style={{ color: "#0f172a", fontWeight: 900 }}>

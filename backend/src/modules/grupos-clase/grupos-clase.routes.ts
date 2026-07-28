@@ -511,7 +511,8 @@ router.post("/candidatos", async (req, res) => {
             e.Identificacion,
             e.Nombre,
             e.PrimerApellido,
-            e.SegundoApellido
+            e.SegundoApellido,
+            e.Adecuacion AS TipoAdecuacion
           FROM dbo.Matricula ma
           INNER JOIN GruposSeleccionados gs
             ON gs.GrupoId = ma.GrupoId
@@ -556,6 +557,7 @@ router.post("/candidatos", async (req, res) => {
           b.Nombre,
           b.PrimerApellido,
           b.SegundoApellido,
+          b.TipoAdecuacion,
           CAST(CASE
             WHEN @totalSubEspecialidades = 0 THEN 1
             WHEN @regla = N'TODAS' AND ISNULL(c.TotalCoincidencias, 0) = @totalSubEspecialidades THEN 1

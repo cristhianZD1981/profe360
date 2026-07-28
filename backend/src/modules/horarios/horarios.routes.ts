@@ -933,6 +933,7 @@ router.get("/busqueda", async (req, res) => {
             e.Nombre,
             e.PrimerApellido,
             e.SegundoApellido,
+            e.Adecuacion AS TipoAdecuacion,
             g.GrupoId,
             g.Nombre AS GrupoNombre,
             g.Nivel AS GrupoNivel,

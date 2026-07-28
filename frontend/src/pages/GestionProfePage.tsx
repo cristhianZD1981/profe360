@@ -3,6 +3,8 @@ import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 import { getCostaRicaIsoDate, getCostaRicaIsoDateWithOffset } from "../utils/date";
+import { getAdecuacionListHtmlStyle, getAdecuacionStyleKind } from "../utils/adecuacionStyles";
+import { debePropagarPrimeraSeleccionAsistencia } from "../utils/asistenciaRules";
 import {
   type ActivePanel,
   type Actividad,
@@ -401,7 +403,7 @@ export default function GestionProfePage() {
   const [loadingCierreCurso, setLoadingCierreCurso] = useState(false);
   const [savingCierreCurso, setSavingCierreCurso] = useState(false);
   const asistenciaInFlightKeyRef = useRef<string>("");
-  const asistenciaEstadoInicialPropagadoRef = useRef<Set<string>>(new Set());
+  const asistenciaPrimeraSeleccionRegistradaRef = useRef<Set<string>>(new Set());
   const auditoriaInFlightKeyRef = useRef<string>("");
   const bitacoraInFlightKeyRef = useRef<string>("");
   const [seguimientoTipo, setSeguimientoTipo] = useState<string>("");
@@ -2014,6 +2016,7 @@ export default function GestionProfePage() {
         EstudianteId: estudiante.EstudianteId,
         NombreCompleto: getFullName(estudiante),
         Identificacion: estudiante.Identificacion,
+        TipoAdecuacion: estudiante.TipoAdecuacion || estudiante.Adecuacion || null,
         NotasRegistradas: notasRegistradas,
         TotalActividades: detalle.actividades.length,
         AcumuladoEvaluacion: acumuladoEvaluacion,
@@ -2085,6 +2088,7 @@ export default function GestionProfePage() {
           EstudianteId: estudiante.EstudianteId,
           NombreCompleto: getFullName(estudiante),
           Identificacion: estudiante.Identificacion,
+          TipoAdecuacion: estudiante.TipoAdecuacion || estudiante.Adecuacion || null,
           ActividadesRegistradas: evaluadas.length,
           TotalActividades: acts.length,
           Promedio: promedio
@@ -2198,6 +2202,7 @@ export default function GestionProfePage() {
             EstudianteId: Number(estudiante.EstudianteId),
             NombreCompleto: getFullName(estudiante),
             Identificacion: String(estudiante.Identificacion || ""),
+            TipoAdecuacion: estudiante.TipoAdecuacion || estudiante.Adecuacion || null,
             RegistradasCalificadas: `${evaluados}/${totalIndicadores}`,
             porcentajeEvaluado,
             porcentajeGanado,
@@ -2265,6 +2270,7 @@ export default function GestionProfePage() {
           EstudianteId: Number(estudiante.EstudianteId),
           NombreCompleto: getFullName(estudiante),
           Identificacion: String(estudiante.Identificacion || ""),
+          TipoAdecuacion: estudiante.TipoAdecuacion || estudiante.Adecuacion || null,
           RegistradasCalificadas: `${calificadas}/${totalActividades}`,
           porcentajeEvaluado,
           porcentajeGanado,
@@ -2406,6 +2412,7 @@ export default function GestionProfePage() {
         estudianteId: Number(est.EstudianteId),
         nombre: getFullName(est),
         identificacion: String(est.Identificacion || ""),
+        tipoAdecuacion: est.TipoAdecuacion || est.Adecuacion || null,
         nota: porcentajeGanadoAsistencia,
         promedioFinal: Number(promedioFinalPorEstudiante.get(Number(est.EstudianteId)) || 0),
         alerta,
@@ -2630,17 +2637,34 @@ export default function GestionProfePage() {
       .replace(/'/g, "&#39;");
   }
 
-  function exportarTablaGenericaExcel(fileName: string, titulo: string, headers: string[], rows: Array<Array<string | number>>) {
+  function exportarTablaGenericaExcel(
+    fileName: string,
+    titulo: string,
+    headers: string[],
+    rows: Array<Array<string | number>>,
+    adecuaciones: Array<string | null | undefined> = []
+  ) {
     const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtmlExport(h)}</th>`).join("")}</tr>`;
-    const tbody = rows.map((row) => `<tr>${row.map((cell) => `<td style="border:1px solid #cbd5e1;padding:8px">${escapeHtmlExport(cell)}</td>`).join("")}</tr>`).join("");
+    const tbody = rows.map((row, rowIndex) => {
+      const rowStyle = getAdecuacionListHtmlStyle(adecuaciones[rowIndex], rowIndex % 2 === 0 ? "#ffffff" : "#f8fafc");
+      return `<tr>${row.map((cell) => `<td style="border:1px solid #cbd5e1;padding:8px;${rowStyle}">${escapeHtmlExport(cell)}</td>`).join("")}</tr>`;
+    }).join("");
     const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtmlExport(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
     const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
     descargarBlob(blob, `${fileName}.xls`);
   }
 
-  function exportarTablaGenericaPdf(titulo: string, headers: string[], rows: Array<Array<string | number>>) {
+  function exportarTablaGenericaPdf(
+    titulo: string,
+    headers: string[],
+    rows: Array<Array<string | number>>,
+    adecuaciones: Array<string | null | undefined> = []
+  ) {
     const thead = `<tr>${headers.map((h) => `<th>${escapeHtmlExport(h)}</th>`).join("")}</tr>`;
-    const tbody = rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtmlExport(cell)}</td>`).join("")}</tr>`).join("");
+    const tbody = rows.map((row, rowIndex) => {
+      const rowStyle = getAdecuacionListHtmlStyle(adecuaciones[rowIndex], rowIndex % 2 === 0 ? "#ffffff" : "#f8fafc");
+      return `<tr>${row.map((cell) => `<td style="${rowStyle}">${escapeHtmlExport(cell)}</td>`).join("")}</tr>`;
+    }).join("");
     const html = `<!doctype html>
 <html><head><meta charset="utf-8" /><title>${escapeHtmlExport(titulo)}</title>
 <style>body{font-family:Arial,sans-serif;padding:16px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:8px;font-size:12px}th{background:#f1f5f9}</style>
@@ -2660,18 +2684,18 @@ export default function GestionProfePage() {
     if (tipoReporteGestion === "ASISTENCIA") {
       const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37", "Promedio final"];
       const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2), f.PromedioFinal.toFixed(2)]);
-      return exportarTablaGenericaExcel(`reporte-asistencia-${base}`, "Reporte de Asistencia", headers, rows);
+      return exportarTablaGenericaExcel(`reporte-asistencia-${base}`, "Reporte de Asistencia", headers, rows, resumenReportes.filas.map((f) => f.TipoAdecuacion));
     }
     if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
       const fuente = tipoReporteGestion === "COTIDIANO" ? detalleReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? detalleReportesPorTipo.tareas : detalleReportesPorTipo.examenes;
       const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
       const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
-      return exportarTablaGenericaExcel(`reporte-${tipoReporteGestion.toLowerCase()}-${base}`, `Reporte de ${tipoReporteGestion}`, headers, rows);
+      return exportarTablaGenericaExcel(`reporte-${tipoReporteGestion.toLowerCase()}-${base}`, `Reporte de ${tipoReporteGestion}`, headers, rows, fuente.rows.map((f) => f.TipoAdecuacion));
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
       const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(3, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
-      return exportarTablaGenericaExcel(`reporte-boletas-${base}`, "Reporte de Boletas", headers, rows);
+      return exportarTablaGenericaExcel(`reporte-boletas-${base}`, "Reporte de Boletas", headers, rows, boletasConductaFiltradas.map((b) => b.TipoAdecuacion));
     }
     if (tipoReporteGestion === "BITACORA") {
       const headers = ["Fecha", "Temas desarrollados", "Observaciones", "Hechos relevantes", "Usuario"];
@@ -2687,24 +2711,24 @@ export default function GestionProfePage() {
     if (tipoReporteGestion === "MENSAJES") {
       const headers = ["Fecha", "Módulo", "Estudiante", "Identificación", "Correo", "WA", "Último envío"];
       const rows = auditoriaEnvios.map((f) => [f.Fecha ? String(f.Fecha).slice(0, 10) : "", f.ModuloNombre || f.Modulo, [f.Nombre, f.PrimerApellido, f.SegundoApellido].filter(Boolean).join(" "), f.Identificacion || "", f.CorreoEnviado ? "Enviado" : "No", f.WaEnviado ? "Enviado" : "No", f.UltimoEnvioAt ? String(f.UltimoEnvioAt).slice(0, 19).replace("T", " ") : ""]);
-      return exportarTablaGenericaPdf("Reporte de mensajes enviados", headers, rows);
+      return exportarTablaGenericaPdf("Reporte de mensajes enviados", headers, rows, auditoriaEnvios.map((f) => f.TipoAdecuacion));
     }
 
     if (tipoReporteGestion === "ASISTENCIA") {
       const headers = ["Estudiante", "Identificación", "Total lecciones", "Ausencias equivalentes", "% ausencias", "% asistencia Art. 37", "Promedio final"];
       const rows = resumenReportes.filas.map((f) => [f.NombreCompleto, f.Identificacion, f.TotalLecciones, f.AusenciasEquivalentes.toFixed(2), f.PorcentajeAusencias.toFixed(2), f.PorcentajeAsistencia.toFixed(2), f.PromedioFinal.toFixed(2)]);
-      return exportarTablaGenericaPdf("Reporte de Asistencia", headers, rows);
+      return exportarTablaGenericaPdf("Reporte de Asistencia", headers, rows, resumenReportes.filas.map((f) => f.TipoAdecuacion));
     }
     if (tipoReporteGestion === "COTIDIANO" || tipoReporteGestion === "TAREAS" || tipoReporteGestion === "EXAMENES") {
       const fuente = tipoReporteGestion === "COTIDIANO" ? detalleReportesPorTipo.cotidiano : tipoReporteGestion === "TAREAS" ? detalleReportesPorTipo.tareas : detalleReportesPorTipo.examenes;
       const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
       const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
-      return exportarTablaGenericaPdf(`Reporte de ${tipoReporteGestion}`, headers, rows);
+      return exportarTablaGenericaPdf(`Reporte de ${tipoReporteGestion}`, headers, rows, fuente.rows.map((f) => f.TipoAdecuacion));
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
       const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(3, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
-      return exportarTablaGenericaPdf("Reporte de Boletas", headers, rows);
+      return exportarTablaGenericaPdf("Reporte de Boletas", headers, rows, boletasConductaFiltradas.map((b) => b.TipoAdecuacion));
     }
     if (tipoReporteGestion === "BITACORA") {
       const headers = ["Fecha", "Temas desarrollados", "Observaciones", "Hechos relevantes", "Usuario"];
@@ -4087,20 +4111,16 @@ function updateAsistenciaDraft(
   horarioGrupoId: number,
   field: "estado" | "minutosTardia" | "observacion" | "notificarEncargado",
   value: string | boolean,
-  options: { propagarEstado?: boolean } = {}
+  options: { aplicarReglaPrimeraSeleccion?: boolean } = {}
 ) {
   const key = asistenciaDraftKey(estudianteId, horarioGrupoId);
-  const contextoPropagacionKey = `${getGrupoProfesorKey(selected || detalle?.asignacion)}|${asistenciaFecha}|${estudianteId}`;
   const leccionesEstudiante = asistenciaLecciones.length ? asistenciaLecciones : getAsistenciaLeccionesFallback();
-  const debePropagarEstado =
-    field === "estado" &&
-    Boolean(options.propagarEstado) &&
-    leccionesEstudiante.length > 1 &&
-    !asistenciaEstadoInicialPropagadoRef.current.has(contextoPropagacionKey);
-
-  if (debePropagarEstado) {
-    asistenciaEstadoInicialPropagadoRef.current.add(contextoPropagacionKey);
-  }
+  const esPrimeraSeleccion =
+    field === "estado"
+    && Boolean(options.aplicarReglaPrimeraSeleccion)
+    && registrarPrimeraSeleccionAsistencia(estudianteId);
+  const debePropagarEstado = field === "estado"
+    && debePropagarPrimeraSeleccionAsistencia(String(value), esPrimeraSeleccion, leccionesEstudiante.length);
 
   setAsistenciaDrafts((prev) => {
     const buildNextDraft = (draftKey: string) => {
@@ -4147,6 +4167,13 @@ function updateAsistenciaDraft(
     });
     return next;
   });
+}
+
+function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
+  const contextoKey = `${getGrupoProfesorKey(selected || detalle?.asignacion)}|${asistenciaFecha}|${estudianteId}`;
+  if (asistenciaPrimeraSeleccionRegistradaRef.current.has(contextoKey)) return false;
+  asistenciaPrimeraSeleccionRegistradaRef.current.add(contextoKey);
+  return true;
 }
 
   function getResumenAsistencia(estudianteId: number) {
@@ -4466,7 +4493,7 @@ function updateAsistenciaDraft(
     setPlaneamientoIndicadores([]);
     setAsistenciaDrafts({});
     setAsistenciaLecciones([]);
-    asistenciaEstadoInicialPropagadoRef.current.clear();
+    asistenciaPrimeraSeleccionRegistradaRef.current.clear();
     setResumenAsistencia([]);
     setEval360Plantillas([]);
     setEval360PlantillaId("");
@@ -7314,7 +7341,7 @@ function updateAsistenciaDraft(
       const drafts = buildAsistenciaDrafts(estudiantes, registros, lecciones);
       setAsistenciaDrafts(drafts);
       setAsistenciaDraftsBase(drafts);
-      asistenciaEstadoInicialPropagadoRef.current.clear();
+      asistenciaPrimeraSeleccionRegistradaRef.current.clear();
       setAsistenciaYaCalificada(registros.length > 0);
       const notificacionesCargadas: AsistenciaNotificacionEstado = {};
       for (const registro of registros) {
@@ -8820,7 +8847,7 @@ function updateAsistenciaDraft(
                     </div>
                   ) : (
                   <div className="table-wrap">
-                    <table>
+                    <table className="adecuacion-zebra-list">
                       <thead>
                         <tr>
                           <th></th>
@@ -8834,7 +8861,11 @@ function updateAsistenciaDraft(
                       </thead>
                       <tbody>
                         {apoyoEducativoAlumnosDisponiblesFiltrados.map((item) => (
-                          <tr key={`apoyo-estudiante-${item.EstudianteId}-${item.GrupoId}`}>
+                          <tr
+                            key={`apoyo-estudiante-${item.EstudianteId}-${item.GrupoId}`}
+                            className="adecuacion-student-row"
+                            data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                          >
                             <td>
                               <input
                                 type="checkbox"
@@ -8990,7 +9021,7 @@ function updateAsistenciaDraft(
                 <p style={{ marginTop: "16px" }}>Cargando apoyos educativos...</p>
               ) : (
                 <div className="table-wrap" style={{ marginTop: "16px" }}>
-                  <table>
+                  <table className="adecuacion-zebra-list">
                     <thead>
                       <tr>
                         <th>Cédula</th>
@@ -9006,7 +9037,10 @@ function updateAsistenciaDraft(
                         const informes = apoyoEducativoInformesPorEstudiante.get(`${item.EstudianteId}|${item.GrupoId}`) || [];
                         return (
                           <React.Fragment key={`resumen-apoyo-${item.EstudianteId}-${item.GrupoId}`}>
-                            <tr>
+                            <tr
+                              className="adecuacion-student-row"
+                              data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                            >
                               <td>{item.Identificacion}</td>
                               <td>{item.NombreCompleto}</td>
                               <td>{item.Edad ?? "-"}</td>
@@ -9015,7 +9049,12 @@ function updateAsistenciaDraft(
                               <td>{item.NivelFuncionamiento || "-"}</td>
                             </tr>
                             {informes.map((informe) => (
-                              <tr key={`informe-apoyo-${informe.ApoyoEducativoEstudianteId}`} style={{ background: "rgba(20, 184, 166, 0.08)" }}>
+                              <tr
+                                key={`informe-apoyo-${informe.ApoyoEducativoEstudianteId}`}
+                                className="adecuacion-student-row"
+                                data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                                style={{ background: "rgba(20, 184, 166, 0.08)" }}
+                              >
                                 <td colSpan={6} style={{ padding: "10px 14px" }}>
                                   <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                                     <span>
@@ -9354,7 +9393,7 @@ function updateAsistenciaDraft(
 
                       return (
                         <div style={{ overflowX: "auto", border: "1px solid #cbd5e1", borderRadius: "14px", background: "#ffffff" }}>
-                          <table style={{ width: "100%", minWidth: `${680 + componentesTabla.length * 120}px`, borderCollapse: "collapse", color: "#0f172a", fontSize: "12px" }}>
+                          <table className="adecuacion-zebra-list" style={{ width: "100%", minWidth: `${680 + componentesTabla.length * 120}px`, borderCollapse: "collapse", color: "#0f172a", fontSize: "12px" }}>
                             <thead>
                               <tr>
                                 <th rowSpan={2} style={{ ...thBase, textAlign: "left", minWidth: "150px" }}>Alumno</th>
@@ -9390,7 +9429,11 @@ function updateAsistenciaDraft(
                                 const rowBg = abierto ? "#eff6ff" : getTransferRowBg(Number(alumno.estudiante?.EstudianteId || 0), zebraRowBg);
                                 return (
                                   <React.Fragment key={`consolidado-alumno-${alumno.key}`}>
-                                    <tr style={{ background: rowBg }}>
+                                    <tr
+                                      className="adecuacion-student-row"
+                                      data-adecuacion={getAdecuacionStyleKind(alumno.estudiante?.TipoAdecuacion || alumno.estudiante?.Adecuacion) || undefined}
+                                      style={{ background: rowBg }}
+                                    >
                                       <td style={{ ...tdBase, textAlign: "left", fontWeight: 900, background: rowBg }}>
                                         <div style={{ display: "grid", gap: "4px" }}>
                                           <span>{alumno.nombre}</span>
@@ -9935,7 +9978,7 @@ function updateAsistenciaDraft(
                               value={asistenciaFecha}
                               onChange={(event) => {
                                 setAsistenciaFecha(event.target.value);
-                                asistenciaEstadoInicialPropagadoRef.current.clear();
+                                asistenciaPrimeraSeleccionRegistradaRef.current.clear();
                                 setSavedAsistencia(false);
                                 setAsistenciaNotificaciones({});
                               }}
@@ -9976,7 +10019,7 @@ function updateAsistenciaDraft(
                             </div>
 
                             <div style={{ overflowX: "auto", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "14px" }}>
-                              <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
+                              <table className="gestion-asistencia-list adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
                                 <thead>
                                   <tr style={{ background: "#cbd5e1", color: "#0f172a" }}>
                                     <th style={{ minWidth: "230px", padding: "10px", textAlign: "left" }}>Alumno</th>
@@ -9995,8 +10038,14 @@ function updateAsistenciaDraft(
                                       const key = asistenciaDraftKey(estudiante.EstudianteId, leccion.HorarioGrupoId);
                                       const draft = asistenciaDrafts[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
                                       const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
+                                      const adecuacionKind = getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion);
                                       return (
-                                        <tr key={`seg-asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`} style={{ background: zebraBg }}>
+                                        <tr
+                                          key={`seg-asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`}
+                                          className="adecuacion-student-row"
+                                          data-adecuacion={adecuacionKind || undefined}
+                                          style={{ background: zebraBg }}
+                                        >
                                           <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>
                                             {leccionIndex === 0 ? (
                                               <>
@@ -10023,7 +10072,10 @@ function updateAsistenciaDraft(
                                                   aria-label={estadoAsistenciaLabel(estado)}
                                                   name={`asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`}
                                                   checked={draft.estado === estado}
-                                                  onChange={() => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "estado", estado, { propagarEstado: true })}
+                                                  onClick={() => {
+                                                    if (draft.estado === estado) registrarPrimeraSeleccionAsistencia(estudiante.EstudianteId);
+                                                  }}
+                                                  onChange={() => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "estado", estado, { aplicarReglaPrimeraSeleccion: true })}
                                                   style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
                                                 />
                                               </td>
@@ -10149,7 +10201,7 @@ function updateAsistenciaDraft(
                               );
                             })()}
                             <div style={{ overflowX: "auto", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "14px" }}>
-                              <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
+                              <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
                                 <thead>
                                   <tr style={{ background: "#cbd5e1", color: "#0f172a" }}>
                                     <th style={{ minWidth: "230px", padding: "10px", textAlign: "left" }}>Alumno</th>
@@ -10174,6 +10226,8 @@ function updateAsistenciaDraft(
                                     return (
                                       <tr
                                         key={`exam-${estudiante.EstudianteId}`}
+                                        className="adecuacion-student-row"
+                                        data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
                                         style={{
                                           background: filaConError ? "#fef2f2" : zebraBg,
                                           boxShadow: filaConError ? "inset 0 0 0 2px #ef4444" : "none"
@@ -10460,7 +10514,7 @@ function updateAsistenciaDraft(
                               <strong>Indicador base:</strong> {seguimientoIndicadorSeleccionado.IndicadorBase}
                             </div>
                             <div style={{ overflowX: "auto", background: "#f8fafc", border: "1px solid #94a3b8", borderRadius: "14px" }}>
-                              <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
+                              <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", background: "#ffffff", fontSize: "14px" }}>
                                 <thead>
                                   <tr style={{ background: "#cbd5e1", color: "#0f172a" }}>
                                     <th style={{ minWidth: "230px", color: "#0f172a", padding: "10px", borderBottom: "1px solid #cbd5e1" }}>Alumno</th>
@@ -10485,7 +10539,12 @@ function updateAsistenciaDraft(
                                     const puedeWhatsApp = Boolean(estudiante.AutorizaWhatsAppEncargado);
                                     const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                                     return (
-                                      <tr key={estudiante.EstudianteId} style={{ background: zebraBg }}>
+                                      <tr
+                                        key={estudiante.EstudianteId}
+                                        className="adecuacion-student-row"
+                                        data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
+                                        style={{ background: zebraBg }}
+                                      >
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", color: "#0f172a", fontWeight: 700 }}>
                                           {getFullName(estudiante)}
                                           <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
@@ -10807,7 +10866,7 @@ function updateAsistenciaDraft(
                         value={asistenciaFecha}
                         onChange={(e) => {
                           setAsistenciaFecha(e.target.value);
-                          asistenciaEstadoInicialPropagadoRef.current.clear();
+                          asistenciaPrimeraSeleccionRegistradaRef.current.clear();
                           setAsistenciaNotificaciones({});
                         }}
                       />
@@ -10837,7 +10896,7 @@ function updateAsistenciaDraft(
                   <p>Cargando asistencia...</p>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
-                    <table>
+                    <table className="adecuacion-zebra-list">
                       <thead>
                         <tr>
                           <th style={stickyTableHeaderStyle}>Estudiante</th>
@@ -10856,7 +10915,12 @@ function updateAsistenciaDraft(
                           const resumen = getResumenAsistencia(estudiante.EstudianteId);
                           const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                           return (
-                            <tr key={`asis-${estudiante.EstudianteId}`} style={{ background: zebraBg }}>
+                            <tr
+                              key={`asis-${estudiante.EstudianteId}`}
+                              className="adecuacion-student-row"
+                              data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
+                              style={{ background: zebraBg }}
+                            >
                               <td style={stickyTableCellStyle}>
                                 {getFullName(estudiante)}
                                 <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
@@ -10869,7 +10933,7 @@ function updateAsistenciaDraft(
                               </td>
                               <td>{estudiante.Identificacion}</td>
                               <td>
-                                <select value={draft.estado} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { propagarEstado: true })}>
+                                <select value={draft.estado} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { aplicarReglaPrimeraSeleccion: true })}>
                                   <option value="PRESENTE">Presente</option>
                                   <option value="AUSENTE_JUSTIFICADA">Ausente justificada</option>
                                   <option value="AUSENTE_INJUSTIFICADA">Ausente injustificada</option>
@@ -13641,7 +13705,7 @@ function updateAsistenciaDraft(
                   </div>
                 </div>
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
+                  <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                     <thead>
                       <tr>
                         <th
@@ -13672,7 +13736,12 @@ function updateAsistenciaDraft(
                     </thead>
                     <tbody>
                       {resumenReportes.filas.map((fila) => (
-                        <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                        <tr
+                          key={fila.EstudianteId}
+                          className="adecuacion-student-row"
+                          data-adecuacion={getAdecuacionStyleKind(fila.TipoAdecuacion) || undefined}
+                          style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}
+                        >
                           <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
                           <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
                           <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.NotasRegistradas} / {fila.TotalActividades}</td>
@@ -13706,7 +13775,7 @@ function updateAsistenciaDraft(
                         {loadingAsistencia ? "Actualizando..." : "Actualizar asistencia"}
                       </button>
                     </div>
-                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
+                    <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
                           <th
@@ -13752,7 +13821,12 @@ function updateAsistenciaDraft(
                           </tr>
                         ) : null}
                         {reporteAsistenciaDetallado.rows.map((fila) => (
-                          <tr key={fila.estudianteId} style={{ background: getTransferRowBg(Number(fila.estudianteId), "#ffffff") }}>
+                          <tr
+                            key={fila.estudianteId}
+                            className="adecuacion-student-row"
+                            data-adecuacion={getAdecuacionStyleKind(fila.tipoAdecuacion) || undefined}
+                            style={{ background: getTransferRowBg(Number(fila.estudianteId), "#ffffff") }}
+                          >
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.nombre}</td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.identificacion}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", background: "#ffffff", fontWeight: 800 }}>
@@ -13782,7 +13856,7 @@ function updateAsistenciaDraft(
 
                 {tipoReporteGestion === "COTIDIANO" && (
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
+                    <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
                           <th colSpan={6 + detalleReportesPorTipo.cotidiano.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
@@ -13803,7 +13877,12 @@ function updateAsistenciaDraft(
                       </thead>
                       <tbody>
                         {detalleReportesPorTipo.cotidiano.rows.map((fila) => (
-                          <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                          <tr
+                            key={fila.EstudianteId}
+                            className="adecuacion-student-row"
+                            data-adecuacion={getAdecuacionStyleKind(fila.TipoAdecuacion) || undefined}
+                            style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}
+                          >
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.RegistradasCalificadas}</td>
@@ -13822,7 +13901,7 @@ function updateAsistenciaDraft(
 
                 {tipoReporteGestion === "TAREAS" && (
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
+                    <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
                           <th colSpan={6 + detalleReportesPorTipo.tareas.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
@@ -13843,7 +13922,12 @@ function updateAsistenciaDraft(
                       </thead>
                       <tbody>
                         {detalleReportesPorTipo.tareas.rows.map((fila) => (
-                          <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                          <tr
+                            key={fila.EstudianteId}
+                            className="adecuacion-student-row"
+                            data-adecuacion={getAdecuacionStyleKind(fila.TipoAdecuacion) || undefined}
+                            style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}
+                          >
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.RegistradasCalificadas}</td>
@@ -13862,7 +13946,7 @@ function updateAsistenciaDraft(
 
                 {tipoReporteGestion === "EXAMENES" && (
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
+                    <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
                           <th colSpan={6 + detalleReportesPorTipo.examenes.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
@@ -13883,7 +13967,12 @@ function updateAsistenciaDraft(
                       </thead>
                       <tbody>
                         {detalleReportesPorTipo.examenes.rows.map((fila) => (
-                          <tr key={fila.EstudianteId} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                          <tr
+                            key={fila.EstudianteId}
+                            className="adecuacion-student-row"
+                            data-adecuacion={getAdecuacionStyleKind(fila.TipoAdecuacion) || undefined}
+                            style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}
+                          >
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.RegistradasCalificadas}</td>
@@ -13911,7 +14000,7 @@ function updateAsistenciaDraft(
                       </button>
                     </div>
                     <div style={{ overflowX: "auto" }}>
-                      <table>
+                      <table className="adecuacion-zebra-list">
                         <thead>
                           <tr>
                             <th>N°</th>
@@ -13931,7 +14020,11 @@ function updateAsistenciaDraft(
                               </td>
                             </tr>
                           ) : boletasConductaFiltradas.map((item) => (
-                            <tr key={item.BoletaConductaId}>
+                            <tr
+                              key={item.BoletaConductaId}
+                              className="adecuacion-student-row"
+                              data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                            >
                               <td>{String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0")}</td>
                               <td>{String(item.Fecha || "").slice(0, 10)}</td>
                               <td>{[item.PrimerApellido || "", item.SegundoApellido || "", item.Nombre || ""].join(" ").replace(/\s+/g, " ").trim()}</td>
@@ -13983,7 +14076,7 @@ function updateAsistenciaDraft(
                   </div>
 
                   <div style={{ overflowX: "auto" }}>
-                    <table>
+                    <table className="adecuacion-zebra-list">
                       <thead>
                         <tr>
                           <th>Fecha</th>
@@ -14001,7 +14094,11 @@ function updateAsistenciaDraft(
                             <td colSpan={7} style={{ textAlign: "center", opacity: 0.75 }}>No hay registros en el rango seleccionado.</td>
                           </tr>
                         ) : auditoriaEnvios.map((fila) => (
-                          <tr key={fila.ReporteEnvioBitacoraId}>
+                          <tr
+                            key={fila.ReporteEnvioBitacoraId}
+                            className="adecuacion-student-row"
+                            data-adecuacion={getAdecuacionStyleKind(fila.TipoAdecuacion) || undefined}
+                          >
                             <td>{fila.Fecha ? String(fila.Fecha).slice(0, 10) : ""}</td>
                             <td>{fila.ModuloNombre || fila.Modulo}</td>
                             <td>{[fila.Nombre, fila.PrimerApellido, fila.SegundoApellido].filter(Boolean).join(" ")}</td>
@@ -14076,7 +14173,7 @@ function updateAsistenciaDraft(
                   </button>
                 </div>
 
-                <table>
+                <table className="adecuacion-zebra-list">
                   <thead>
                     <tr>
                       <th style={stickyTableHeaderStyle}>Estudiante</th>
@@ -14108,7 +14205,11 @@ function updateAsistenciaDraft(
                       const acumulado = calcularAcumuladoEstudiante(estudiante.EstudianteId);
 
                       return (
-                        <tr key={estudiante.EstudianteId}>
+                        <tr
+                          key={estudiante.EstudianteId}
+                          className="adecuacion-student-row"
+                          data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
+                        >
                           <td style={stickyTableCellStyle}>{getFullName(estudiante)}</td>
                           <td>{estudiante.Identificacion}</td>
                           {detalle.actividades.map((actividad) => {

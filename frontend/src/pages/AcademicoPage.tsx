@@ -1,6 +1,7 @@
 ﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../lib/http";
+import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 import EvaluacionParametrizacionPage from "./EvaluacionParametrizacionPage";
 import HabilidadesPlaneamientoAcademicoPage from "./HabilidadesPlaneamientoAcademicoPage";
 
@@ -79,6 +80,7 @@ type Matricula = {
   ObservacionesDetalle?: string | null;
   GrupoNivelAcademico?: number | null;
   GrupoEspecialidad?: string | null;
+  TipoAdecuacion?: string | null;
 };
 
 type MatriculaImportResultRow = {
@@ -5137,7 +5139,7 @@ function resetMatriculaForm() {
                 Incluir matrículas inactivas
               </label>
               <div className="table-wrap">
-                <table>
+                <table className="adecuacion-zebra-list">
                   <thead>
                     <tr>
                       <th>ID</th>
@@ -5156,7 +5158,11 @@ function resetMatriculaForm() {
                   </thead>
                   <tbody>
                     {matriculas.map((item) => (
-                      <tr key={item.MatriculaId}>
+                      <tr
+                        key={item.MatriculaId}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(item.TipoAdecuacion) || undefined}
+                      >
                         <td>{item.MatriculaId}</td>
                         <td>{item.Identificacion} - {getStudentFullName(item)}</td>
                         <td>{item.GrupoNombre || ""} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>

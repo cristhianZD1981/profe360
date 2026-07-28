@@ -2,7 +2,8 @@
 import api from "../lib/http";
 import {
   getAdecuacionAsistenciaRowStyle,
-  getAdecuacionRowStyle
+  getAdecuacionRowStyle,
+  getAdecuacionStyleKind
 } from "../utils/adecuacionStyles";
 
 type AnioLectivo = {
@@ -809,7 +810,12 @@ export default function AsistenciaPage() {
                   </thead>
                   <tbody>
                     {detalles.map((item) => (
-                      <tr key={`detalle-${item.estudianteId}`} style={getAdecuacionAsistenciaRowStyle(item.adecuacion)}>
+                      <tr
+                        key={`detalle-${item.estudianteId}`}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(item.adecuacion) || undefined}
+                        style={getAdecuacionAsistenciaRowStyle(item.adecuacion)}
+                      >
                         <td>{item.identificacion}</td>
                         <td>{item.nombreCompleto}</td>
                         <td>

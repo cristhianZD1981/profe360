@@ -11,6 +11,7 @@ import {
   isCierreCursoCerrado
 } from "../academico/cierre-curso.utils";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
+import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
 import multer from "multer";
 import JSZip from "jszip";
@@ -2495,6 +2496,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
+          e.Adecuacion AS TipoAdecuacion,
           e.Correo,
           e.Telefono,
           enc.NombreCompleto AS EncargadoPrincipalNombre,
@@ -2979,6 +2981,26 @@ function fullName(row: any) {
     .trim();
 }
 
+function getAdecuacionReportStyleKind(value: any): "SIGNIFICATIVA" | "NO_SIGNIFICATIVA" | null {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  if (normalized.includes("no significativa")) return "NO_SIGNIFICATIVA";
+  if (normalized.includes("significativa")) return "SIGNIFICATIVA";
+  return null;
+}
+
+function getAdecuacionReportHtmlStyle(value: any, index: number) {
+  const kind = getAdecuacionReportStyleKind(value);
+  if (kind === "SIGNIFICATIVA") return "background:#dcfce7;font-weight:800;";
+  if (kind === "NO_SIGNIFICATIVA") return "background:#e0f2fe;color:#64748b;";
+  return `background:${index % 2 === 0 ? "#ffffff" : "#f8fafc"};`;
+}
+
 function formatNumber(value: any, decimals = 2) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0.00";
@@ -3246,6 +3268,7 @@ async function buildReporteFormalData(req: any, res: any, grupoId: number, mater
         e.Nombre,
         e.PrimerApellido,
         e.SegundoApellido,
+        e.Adecuacion AS TipoAdecuacion,
         ma.MatriculaId
       FROM dbo.Matricula ma
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
@@ -5017,6 +5040,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
+          e.Adecuacion AS TipoAdecuacion,
           ma.MatriculaId
         FROM dbo.Matricula ma
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
@@ -5983,12 +6007,48 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/excel", async (req
       rows.push(row);
     }
 
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
-    worksheet["!cols"] = header.map((_, index) => ({ wch: index === 0 ? 36 : 18 }));
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Reporte");
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Reporte");
+    worksheet.addRows(rows);
+    worksheet.columns = header.map((_, index) => ({ width: index === 0 ? 36 : 18 }));
 
-    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const headerRowNumber = rows.findIndex((row) => row === header) + 1;
+    const headerRow = worksheet.getRow(headerRowNumber);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FF0F172A" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    });
+
+    data.estudiantes.forEach((estudiante: any, index: number) => {
+      const row = worksheet.getRow(headerRowNumber + index + 1);
+      const kind = getAdecuacionReportStyleKind(estudiante.TipoAdecuacion);
+      const fillColor = kind === "SIGNIFICATIVA"
+        ? "FFDCFCE7"
+        : kind === "NO_SIGNIFICATIVA"
+          ? "FFE0F2FE"
+          : index % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+      row.eachCell((cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fillColor } };
+        if (kind === "SIGNIFICATIVA") cell.font = { ...(cell.font || {}), bold: true };
+        if (kind === "NO_SIGNIFICATIVA") cell.font = { ...(cell.font || {}), color: { argb: "FF64748B" } };
+      });
+    });
+
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber < headerRowNumber) return;
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFCBD5E1" } },
+          left: { style: "thin", color: { argb: "FFCBD5E1" } },
+          bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+          right: { style: "thin", color: { argb: "FFCBD5E1" } }
+        };
+      });
+    });
+
+    const rawBuffer: any = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.isBuffer(rawBuffer) ? rawBuffer : Buffer.from(rawBuffer);
     const fileName = `reporte-${String(contexto.GrupoNombre || "grupo").replace(/\s+/g, "-")}-${String(contexto.MateriaNombre || "materia").replace(/\s+/g, "-")}.xlsx`;
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -6022,14 +6082,14 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/pdf", async (req, 
       <th>${escapeHtml(actividad.ComponenteDescripcion)}<br><small>${escapeHtml(actividad.Descripcion)}<br>${formatNumber(actividad.PorcentajeReal)}%</small></th>
     `).join("");
 
-    const rows = data.estudiantes.map((estudiante: any) => {
+    const rows = data.estudiantes.map((estudiante: any, estudianteIndex: number) => {
       const notas = data.actividades.map((actividad: any) => {
         const nota = estudiante.detalleNotas.find((item: any) => Number(item.actividadId) === Number(actividad.EvaluacionActividadId));
         return `<td class="num">${nota?.nota === null || nota?.nota === undefined ? "" : formatNumber(nota.nota, Number(data.plantilla?.DecimalesNota || 2))}</td>`;
       }).join("");
 
       return `
-        <tr>
+        <tr style="${getAdecuacionReportHtmlStyle(estudiante.TipoAdecuacion, estudianteIndex)}">
           <td>${escapeHtml(estudiante.NombreCompleto)}</td>
           <td>${escapeHtml(estudiante.Identificacion)}</td>
           ${notas}
@@ -6182,7 +6242,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/auditoria-envios",
           e.Identificacion,
           e.Nombre,
           e.PrimerApellido,
-          e.SegundoApellido
+          e.SegundoApellido,
+          e.Adecuacion AS TipoAdecuacion
         FROM dbo.ReporteEnvioBitacora reb
         LEFT JOIN dbo.Estudiante e ON e.EstudianteId = reb.EstudianteId
         WHERE reb.GrupoId = @grupoId
@@ -6252,7 +6313,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/auditoria-envios/e
           CASE WHEN reb.CorreoEnviado = 1 THEN N'Sí' ELSE N'No' END AS CorreoEnviado,
           CASE WHEN reb.WaEnviado = 1 THEN N'Sí' ELSE N'No' END AS WaEnviado,
           reb.UltimoEnvioAt,
-          reb.RegistroClave
+          reb.RegistroClave,
+          e.Adecuacion AS TipoAdecuacion
         FROM dbo.ReporteEnvioBitacora reb
         LEFT JOIN dbo.Estudiante e ON e.EstudianteId = reb.EstudianteId
         WHERE reb.GrupoId = @grupoId
@@ -6284,11 +6346,52 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/auditoria-envios/e
       ]);
     }
 
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
-    worksheet["!cols"] = [{ wch: 24 }, { wch: 14 }, { wch: 18 }, { wch: 34 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 48 }];
-    XLSX.utils.book_append_sheet(workbook, worksheet, "AuditoriaEnvios");
-    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("AuditoriaEnvios");
+    worksheet.addRows(rows);
+    worksheet.columns = [
+      { width: 24 },
+      { width: 14 },
+      { width: 18 },
+      { width: 34 },
+      { width: 14 },
+      { width: 12 },
+      { width: 20 },
+      { width: 48 }
+    ];
+    const tableHeaderRowNumber = 5;
+    worksheet.getRow(tableHeaderRowNumber).eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FF0F172A" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    });
+    result.recordset.forEach((item: any, index: number) => {
+      const row = worksheet.getRow(tableHeaderRowNumber + index + 1);
+      const kind = getAdecuacionReportStyleKind(item.TipoAdecuacion);
+      const fillColor = kind === "SIGNIFICATIVA"
+        ? "FFDCFCE7"
+        : kind === "NO_SIGNIFICATIVA"
+          ? "FFE0F2FE"
+          : index % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+      row.eachCell((cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fillColor } };
+        if (kind === "SIGNIFICATIVA") cell.font = { ...(cell.font || {}), bold: true };
+        if (kind === "NO_SIGNIFICATIVA") cell.font = { ...(cell.font || {}), color: { argb: "FF64748B" } };
+      });
+    });
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber < tableHeaderRowNumber) return;
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFCBD5E1" } },
+          left: { style: "thin", color: { argb: "FFCBD5E1" } },
+          bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+          right: { style: "thin", color: { argb: "FFCBD5E1" } }
+        };
+      });
+    });
+    const rawBuffer: any = await workbook.xlsx.writeBuffer();
+    const buffer = Buffer.isBuffer(rawBuffer) ? rawBuffer : Buffer.from(rawBuffer);
     const fileName = `auditoria-envios-${String(asignacion?.GrupoNombre || "grupo").replace(/\s+/g, "-")}-${String(asignacion?.MateriaNombre || "materia").replace(/\s+/g, "-")}-${desde}-a-${hasta}.xlsx`;
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

@@ -40,6 +40,8 @@ export type EstudianteGrupo = {
   Nombre: string;
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
+  Adecuacion?: string | null;
+  TipoAdecuacion?: string | null;
   Correo?: string | null;
   Telefono?: string | null;
   EncargadoPrincipalNombre?: string | null;
@@ -760,6 +762,7 @@ export type AuditoriaEnvioFila = {
   Nombre?: string | null;
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
+  TipoAdecuacion?: string | null;
 };
 export type BoletaConductaReporte = {
   BoletaConductaId: number;
@@ -773,6 +776,7 @@ export type BoletaConductaReporte = {
   Nombre?: string | null;
   PrimerApellido?: string | null;
   SegundoApellido?: string | null;
+  TipoAdecuacion?: string | null;
   TotalEnviosCorreo?: number | null;
   TotalEnviosExitosos?: number | null;
 };

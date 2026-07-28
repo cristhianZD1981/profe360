@@ -23,6 +23,16 @@ export function getAdecuacionStyleKind(value?: string | null): AdecuacionStyleKi
   return null;
 }
 
+export function getAdecuacionValue(row: any): string | null {
+  if (!row || typeof row !== "object") return null;
+  return row.TipoAdecuacion
+    ?? row.Adecuacion
+    ?? row.adecuacion
+    ?? row["Tipo de Adecuación"]
+    ?? row["Tipo de Adecuacion"]
+    ?? null;
+}
+
 export function getAdecuacionRowStyle(value?: string | null): CSSProperties {
   const kind = getAdecuacionStyleKind(value);
   if (kind === "SIGNIFICATIVA") return { fontWeight: 800 };
@@ -43,6 +53,10 @@ export function getAdecuacionAsistenciaRowStyle(value?: string | null): CSSPrope
     ...getAdecuacionRowStyle(value),
     ...(backgroundColor ? { backgroundColor } : {})
   };
+}
+
+export function getAdecuacionListRowStyle(value?: string | null): CSSProperties {
+  return getAdecuacionAsistenciaRowStyle(value);
 }
 
 export function mergeAdecuacionCellStyle(
@@ -68,4 +82,11 @@ export function getAdecuacionAsistenciaHtmlStyle(
 ) {
   const backgroundColor = getAdecuacionAsistenciaBackground(value) || fallbackBackground;
   return `${backgroundColor ? `background:${backgroundColor};` : ""}${getAdecuacionHtmlStyle(value)}`;
+}
+
+export function getAdecuacionListHtmlStyle(
+  value?: string | null,
+  fallbackBackground = ""
+) {
+  return getAdecuacionAsistenciaHtmlStyle(value, fallbackBackground);
 }

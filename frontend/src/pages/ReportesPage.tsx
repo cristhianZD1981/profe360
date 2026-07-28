@@ -6,8 +6,9 @@ import { getCostaRicaIsoDate } from "../utils/date";
 import {
   getAdecuacionAsistenciaHtmlStyle,
   getAdecuacionAsistenciaRowStyle,
-  getAdecuacionHtmlStyle,
+  getAdecuacionListHtmlStyle,
   getAdecuacionRowStyle,
+  getAdecuacionStyleKind,
   mergeAdecuacionCellStyle,
   normalizeAdecuacionText
 } from "../utils/adecuacionStyles";
@@ -83,6 +84,7 @@ type CertificacionRow = {
   CursoLectivo: string;
   OtroColegioDestino?: string | null;
   FechaEmisionTexto: string;
+  adecuacion?: string | null;
 };
 
 type PromediosResumen = {
@@ -893,7 +895,7 @@ export default function ReportesPage() {
       const headers = ["Línea", ...getReporteVisibleKeys(filas[0])];
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
       const tbody = filas.map((f, idx) => {
-        const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+        const rowStyle = getAdecuacionListHtmlStyle(getReporteRowAdecuacion(f), getReporteZebraBackground(idx));
         const row = [idx + 1, ...headers.slice(1).map((h) => f[h])];
         return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
       }).join("");
@@ -908,7 +910,7 @@ export default function ReportesPage() {
       const titulo = `Vista previa de promedios académicos - ${promediosResumen?.periodo || (modoPromedios === "ANUAL" ? "Anual" : "Período")}`;
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9;font-weight:700">${escapeHtml(h)}</th>`).join("")}</tr>`;
       const tbody = filas.map((f, idx) => {
-        const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+        const rowStyle = getAdecuacionListHtmlStyle(getReporteRowAdecuacion(f), getReporteZebraBackground(idx));
         const row = [
           f.linea,
           f.cedula,
@@ -984,7 +986,7 @@ export default function ReportesPage() {
       const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
       const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
       const tbody = boletasRows.map((item, idx) => {
-        const rowStyle = getAdecuacionHtmlStyle(item.adecuacion);
+        const rowStyle = getAdecuacionListHtmlStyle(item.adecuacion, getReporteZebraBackground(idx));
         const row = [
           String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
           item.nombre,
@@ -1005,7 +1007,7 @@ export default function ReportesPage() {
     const headers = getReporteVisibleKeys(filas[0]);
     const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
     const tbody = filas.map((f, idx) => {
-      const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+      const rowStyle = getAdecuacionListHtmlStyle(getReporteRowAdecuacion(f), getReporteZebraBackground(idx));
       const row = headers.map((h) => f[h]);
       return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
     }).join("");
@@ -1048,7 +1050,7 @@ export default function ReportesPage() {
       const headers = ["N° de boleta", "Nombre", "Cédula", "Sección", "Fecha", "Envío correo", "Envío WhatsApp"];
       const thead = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
       const tbody = boletasRows.map((item, idx) => {
-        const rowStyle = getAdecuacionHtmlStyle(item.adecuacion);
+        const rowStyle = getAdecuacionListHtmlStyle(item.adecuacion, getReporteZebraBackground(idx));
         const row = [
           String(item.numeroBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
           item.nombre,
@@ -1071,7 +1073,7 @@ export default function ReportesPage() {
     const headers = getReporteVisibleKeys(filas[0]);
     const thead = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
     const tbody = filas.map((f, idx) => {
-      const rowStyle = getAdecuacionHtmlStyle(getReporteRowAdecuacion(f));
+      const rowStyle = getAdecuacionListHtmlStyle(getReporteRowAdecuacion(f), getReporteZebraBackground(idx));
       const row = headers.map((h) => f[h]);
       return `<tr>${row.map((c) => `<td style="background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
     }).join("");
@@ -1695,7 +1697,12 @@ export default function ReportesPage() {
                     <tr><td colSpan={(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? 11 : 10} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : asistenciaRows.map((fila) => (
                     <Fragment key={`asis-wrap-${fila.estudianteId}`}>
-                      <tr key={`asis-${fila.estudianteId}`} style={getAdecuacionAsistenciaRowStyle(fila.adecuacion)}>
+                      <tr
+                        key={`asis-${fila.estudianteId}`}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(fila.adecuacion) || undefined}
+                        style={getAdecuacionAsistenciaRowStyle(fila.adecuacion)}
+                      >
                         {(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? (
                           <td style={{ textAlign: "center" }}>
                             <button
@@ -1782,7 +1789,12 @@ export default function ReportesPage() {
                   {!boletasRows.length ? (
                     <tr><td colSpan={7} style={{ textAlign: "center", padding: "12px" }}>No hay boletas para mostrar con esos filtros.</td></tr>
                   ) : boletasRows.map((fila) => (
-                    <tr key={fila.boletaConductaId} style={getAdecuacionRowStyle(fila.adecuacion)}>
+                    <tr
+                      key={fila.boletaConductaId}
+                      className="adecuacion-student-row"
+                      data-adecuacion={getAdecuacionStyleKind(fila.adecuacion) || undefined}
+                      style={getAdecuacionRowStyle(fila.adecuacion)}
+                    >
                       <td>{fila.numeroBoleta}</td>
                       <td>{fila.nombre}</td>
                       <td>{fila.cedula}</td>
@@ -1826,7 +1838,12 @@ export default function ReportesPage() {
                   ) : filas.map((fila, idx) => {
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
                     return (
-                      <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}>
+                      <tr
+                        key={`${fila.cedula || "sin-cedula"}-${idx}`}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
+                        style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}
+                      >
                         <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{Number(fila.linea || idx + 1)}</td>
                         <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.cedula ?? "")}</td>
                         <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido1 ?? "")}</td>
@@ -1874,7 +1891,12 @@ export default function ReportesPage() {
                     const completo = String(fila.estado || "").toLowerCase() === "completo";
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
                     return (
-                      <tr key={`${fila.cedula || "sin-cedula"}-${idx}`} style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}>
+                      <tr
+                        key={`${fila.cedula || "sin-cedula"}-${idx}`}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
+                        style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}
+                      >
                         <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{Number(fila.linea || idx + 1)}</td>
                         <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.cedula ?? "")}</td>
                         <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido1 ?? "")}</td>
@@ -1972,7 +1994,12 @@ export default function ReportesPage() {
                   ) : filas.map((fila, idx) => {
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
                     return (
-                      <tr key={idx} style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}>
+                      <tr
+                        key={idx}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
+                        style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}
+                      >
                         <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{idx + 1}</td>
                         {getReporteVisibleKeys(filas[0]).map((h) => (
                           <td key={h} style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>
@@ -1999,7 +2026,12 @@ export default function ReportesPage() {
                   ) : filas.map((fila, idx) => {
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
                     return (
-                      <tr key={idx} style={getAdecuacionRowStyle(rowAdecuacion)}>
+                      <tr
+                        key={idx}
+                        className="adecuacion-student-row"
+                        data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
+                        style={getAdecuacionRowStyle(rowAdecuacion)}
+                      >
                         {getReporteVisibleKeys(filas[0]).map((h) => <td key={h}>{String(fila[h] ?? "")}</td>)}
                       </tr>
                     );
@@ -2172,7 +2204,7 @@ export default function ReportesPage() {
               </button>
             </div>
             <div className="table-wrap">
-              <table>
+                <table className="adecuacion-zebra-list">
                 <thead>
                   <tr>
                     <th>{"Código"}</th>
@@ -2194,7 +2226,11 @@ export default function ReportesPage() {
                       </td>
                     </tr>
                   ) : certificacionesRows.map((row) => (
-                    <tr key={row.CertificacionEstudioId}>
+                    <tr
+                      key={row.CertificacionEstudioId}
+                      className="adecuacion-student-row"
+                      data-adecuacion={getAdecuacionStyleKind(row.adecuacion) || undefined}
+                    >
                       <td>{row.CodigoConstancia || `CONST-${String(row.Consecutivo || "").padStart(4, "0")}`}</td>
                       <td>{row.FechaEmisionTexto || "-"}</td>
                       <td>{row.EstudianteNombre || "-"}</td>
