@@ -15,6 +15,9 @@ import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
 import multer from "multer";
 import JSZip from "jszip";
+import { appendFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Document, Header, ImageRun, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
 import { sendEmail } from "../../services/email.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
@@ -40,6 +43,22 @@ let estudianteApoyoColumnsCache: { at: number; columns: {
   hasNivelFuncionamiento: boolean;
   hasObservaciones: boolean;
 } } | null = null;
+const MIS_GRUPOS_PERF_LOG_PATH = join(tmpdir(), "profe360-mis-grupos-perf.jsonl");
+
+function writeLocalMisGruposPerfTrace(trace: Record<string, unknown>) {
+  if (process.env.NODE_ENV === "production" || process.env.RENDER) return;
+  void appendFile(MIS_GRUPOS_PERF_LOG_PATH, `${JSON.stringify(trace)}\n`, "utf8")
+    .catch((error) => console.warn("[PERF][gestion.mis-grupos.trace-error]", error));
+}
+
+function getPoolPerfStats(pool: any) {
+  return {
+    size: Number(pool?.size || 0),
+    available: Number(pool?.available || 0),
+    pending: Number(pool?.pending || 0),
+    borrowed: Number(pool?.borrowed || 0)
+  };
+}
 
 router.use(requireAuth);
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
@@ -992,12 +1011,30 @@ router.get("/mis-grupos/filtros-admin", async (req, res) => {
 });
 
 router.get("/mis-grupos", async (req, res) => {
+  const tMisGruposTotal = Date.now();
+  const perfTrace: Record<string, unknown> = {
+    startedAt: new Date().toISOString(),
+    cache: "miss"
+  };
   try {
     if (!assertCanAccessProfessorModule(req, res)) return;
 
+    const tPool = Date.now();
     const pool = await getPool();
+    perfTrace.poolMs = Date.now() - tPool;
+    perfTrace.poolAtRouteStart = getPoolPerfStats(pool);
+    console.log(
+      `[SQL][gestion.mis-grupos.pool] ${perfTrace.poolMs}ms`
+      + ` size=${Number((pool as any).size || 0)}`
+      + ` available=${Number((pool as any).available || 0)}`
+      + ` pending=${Number((pool as any).pending || 0)}`
+      + ` borrowed=${Number((pool as any).borrowed || 0)}`
+    );
     const auth = getAuth(req);
     const userId = getUserId(req);
+    perfTrace.scope = isSuperAdmin(req)
+      ? "super-admin"
+      : (isInstitutionAdmin(req) ? "institution-admin" : "professor");
     const q = normalizeLike(req.query.q);
     const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
     const periodoId = toOptionalNumber(req.query.periodoId);
@@ -1006,6 +1043,16 @@ router.get("/mis-grupos", async (req, res) => {
     const profesorId = toOptionalNumber(req.query.profesorId);
     const institucionSeleccionadaId = toOptionalNumber(req.query.institucionId);
     const grado = String(req.query.grado || "").trim();
+    perfTrace.filterShape = {
+      q: q !== "%%",
+      anio: anioLectivoId !== null,
+      periodo: periodoId !== null,
+      materia: materiaId !== null,
+      grupo: grupoId !== null,
+      profesor: profesorId !== null,
+      institucion: institucionSeleccionadaId !== null,
+      grado: grado.length > 0
+    };
     const cacheKey = [
       "gestion.mis-grupos",
       `u:${userId || 0}`,
@@ -1024,15 +1071,19 @@ router.get("/mis-grupos", async (req, res) => {
     ].join("|");
     const cached = bootstrapCache.get(cacheKey);
     if (cached && Date.now() - cached.at <= BOOTSTRAP_CACHE_TTL_MS) {
+      perfTrace.cache = "hit";
+      perfTrace.payloadRows = Array.isArray(cached.data) ? cached.data.length : null;
+      console.log("[PERF][gestion.mis-grupos.cache-hit]");
       return ok(res, cached.data);
     }
     const inFlight = bootstrapInFlight.get(cacheKey);
     if (inFlight) {
+      perfTrace.cache = "in-flight";
+      console.log("[PERF][gestion.mis-grupos.in-flight-hit]");
       const shared = await inFlight;
+      perfTrace.payloadRows = Array.isArray(shared) ? shared.length : null;
       return ok(res, shared);
     }
-    await ensureCierreAcademicoCursoTables(pool);
-
     const request = pool.request()
       .input("q", sql.NVarChar(250), q)
       .input("usuarioId", sql.Int, userId)
@@ -1068,9 +1119,15 @@ router.get("/mis-grupos", async (req, res) => {
       ? "AND LEFT(g.Nombre, CHARINDEX('-', g.Nombre + '-') - 1) = @grado"
       : "";
 
-    const tMisGrupos = Date.now();
-    const result = await request.query(`
-      ;WITH AsignacionesBase AS (
+    const loadPromise = (async () => {
+      const tCierreSchema = Date.now();
+      await ensureCierreAcademicoCursoTables(pool);
+      perfTrace.schemaCierreMs = Date.now() - tCierreSchema;
+      console.log(`[SQL][gestion.mis-grupos.schema-cierre] ${perfTrace.schemaCierreMs}ms`);
+
+      const tMisGrupos = Date.now();
+      perfTrace.poolBeforeListado = getPoolPerfStats(pool);
+      const result = await request.query(`
         SELECT
           ad.AsignacionDocenteId,
           ad.UsuarioId,
@@ -1088,18 +1145,78 @@ router.get("/mis-grupos", async (req, res) => {
           al.Nombre AS AnioNombre,
           ad.PeriodoId,
           p.Nombre AS PeriodoNombre,
-          p.NumeroOrden,
           ad.TipoAsignacion,
           ad.Activo,
           u.Nombre AS ProfesorNombre,
           u.PrimerApellido AS ProfesorPrimerApellido,
-          u.SegundoApellido AS ProfesorSegundoApellido
+          u.SegundoApellido AS ProfesorSegundoApellido,
+          ISNULL(ma.TotalEstudiantes, 0) AS TotalEstudiantes,
+          COALESCE(epSesion.EvaluacionPlantillaId, ep.EvaluacionPlantillaId) AS EvaluacionPlantillaId,
+          COALESCE(epSesion.Nombre, ep.Nombre) AS EvaluacionPlantillaNombre,
+          COALESCE(epSesion.Estado, ep.Estado) AS EvaluacionPlantillaEstado,
+          CASE WHEN eg.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
+          CAST(0 AS bit) AS TieneCalificacionesEvaluacion,
+          CASE WHEN cc.Estado = N'CERRADO_DOCENTE' THEN 1 ELSE 0 END AS CursoCerrado,
+          cc.Estado AS CierreCursoEstado,
+          cc.CerradoAt AS CierreCursoCerradoAt,
+          cc.ReabiertoAt AS CierreCursoReabiertoAt
         FROM dbo.AsignacionDocente ad
         INNER JOIN dbo.Grupo g ON g.GrupoId = ad.GrupoId
         LEFT JOIN dbo.Materia m ON m.MateriaId = ad.MateriaId
         INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = ad.AnioLectivoId
         LEFT JOIN dbo.Periodo p ON p.PeriodoId = ad.PeriodoId
         INNER JOIN dbo.Usuario u ON u.UsuarioId = ad.UsuarioId
+        OUTER APPLY (
+          SELECT COUNT(DISTINCT ma2.MatriculaId) AS TotalEstudiantes
+          FROM dbo.Matricula ma2
+          WHERE ma2.GrupoId = ad.GrupoId
+            AND ma2.AnioLectivoId = ad.AnioLectivoId
+            AND ma2.Estado <> N'Inactiva'
+        ) ma
+        OUTER APPLY (
+          SELECT TOP 1
+            ep2.EvaluacionPlantillaId,
+            ep2.Nombre,
+            ep2.Estado
+          FROM dbo.EvaluacionPlantilla ep2
+          WHERE ep2.InstitucionId = ad.InstitucionId
+            AND ep2.AnioLectivoId = ad.AnioLectivoId
+            AND ep2.PeriodoId = ad.PeriodoId
+            AND ep2.MateriaId = ad.MateriaId
+            AND ep2.Activo = 1
+          ORDER BY
+            CASE WHEN ep2.Estado = N'ACTIVA' THEN 0 ELSE 1 END,
+            ep2.EvaluacionPlantillaId DESC
+        ) ep
+        OUTER APPLY (
+          SELECT TOP 1
+            eg2.EstructuraGrupoId,
+            eg2.PlantillaBaseId
+          FROM dbo.Eval360_EstructuraGrupo eg2
+          WHERE eg2.InstitucionId = ad.InstitucionId
+            AND eg2.GrupoId = ad.GrupoId
+            AND eg2.MateriaId = ad.MateriaId
+            AND eg2.AnioLectivoId = ad.AnioLectivoId
+            AND eg2.PeriodoId = ad.PeriodoId
+            AND eg2.Activo = 1
+          ORDER BY eg2.EstructuraGrupoId DESC
+        ) eg
+        LEFT JOIN dbo.EvaluacionPlantilla epSesion
+          ON epSesion.EvaluacionPlantillaId = eg.PlantillaBaseId
+        OUTER APPLY (
+          SELECT TOP 1
+            c.Estado,
+            c.CerradoAt,
+            c.ReabiertoAt
+          FROM dbo.CierreAcademicoCurso c
+          WHERE c.InstitucionId = ad.InstitucionId
+            AND c.GrupoId = ad.GrupoId
+            AND c.MateriaId = ad.MateriaId
+            AND c.AnioLectivoId = ad.AnioLectivoId
+            AND c.PeriodoId = ad.PeriodoId
+            AND c.Activo = 1
+          ORDER BY c.UpdatedAt DESC, c.CierreAcademicoCursoId DESC
+        ) cc
         WHERE ad.Activo = 1
           AND ad.MateriaId IS NOT NULL
           AND (@anioLectivoId IS NULL OR ad.AnioLectivoId = @anioLectivoId)
@@ -1118,187 +1235,145 @@ router.get("/mis-grupos", async (req, res) => {
           ${filtroInstitucion}
           ${filtroProfesor}
           ${filtroGrado}
-      ),
-      Matriculados AS (
-        SELECT ma.GrupoId, ma.AnioLectivoId, COUNT(DISTINCT ma.MatriculaId) AS TotalEstudiantes
-        FROM dbo.Matricula ma
-        INNER JOIN (
-          SELECT DISTINCT GrupoId, AnioLectivoId FROM AsignacionesBase
-        ) b ON b.GrupoId = ma.GrupoId AND b.AnioLectivoId = ma.AnioLectivoId
-        WHERE ma.Estado <> N'Inactiva'
-        GROUP BY ma.GrupoId, ma.AnioLectivoId
-      ),
-      PlantillasPredeterminadas AS (
-        SELECT
-          ep.EvaluacionPlantillaId,
-          ep.InstitucionId,
-          ep.AnioLectivoId,
-          ep.PeriodoId,
-          ep.MateriaId,
-          ep.Nombre,
-          ep.Estado,
-          ROW_NUMBER() OVER (
-            PARTITION BY ep.InstitucionId, ep.AnioLectivoId, ep.PeriodoId, ep.MateriaId
-            ORDER BY CASE WHEN ep.Estado = N'ACTIVA' THEN 0 ELSE 1 END, ep.EvaluacionPlantillaId DESC
-          ) AS rn
-        FROM dbo.EvaluacionPlantilla ep
-        INNER JOIN (
-          SELECT DISTINCT InstitucionId, AnioLectivoId, PeriodoId, MateriaId FROM AsignacionesBase
-        ) b ON b.InstitucionId = ep.InstitucionId
-           AND b.AnioLectivoId = ep.AnioLectivoId
-           AND b.PeriodoId = ep.PeriodoId
-           AND b.MateriaId = ep.MateriaId
-        WHERE ep.Activo = 1
-      ),
-      Estructuras AS (
-        SELECT
-          eg.EstructuraGrupoId,
-          eg.InstitucionId,
-          eg.GrupoId,
-          eg.MateriaId,
-          eg.AnioLectivoId,
-          eg.PeriodoId,
-          eg.PlantillaBaseId,
-          ROW_NUMBER() OVER (
-            PARTITION BY eg.InstitucionId, eg.GrupoId, eg.MateriaId, eg.AnioLectivoId, eg.PeriodoId
-            ORDER BY eg.EstructuraGrupoId DESC
-          ) AS rn
-        FROM dbo.Eval360_EstructuraGrupo eg
-        INNER JOIN (
-          SELECT DISTINCT InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId FROM AsignacionesBase
-        ) b ON b.InstitucionId = eg.InstitucionId
-           AND b.GrupoId = eg.GrupoId
-           AND b.MateriaId = eg.MateriaId
-           AND b.AnioLectivoId = eg.AnioLectivoId
-           AND b.PeriodoId = eg.PeriodoId
-        WHERE eg.Activo = 1
-      ),
-      NotasCalificadas AS (
-        SELECT DISTINCT act.EstructuraGrupoId
-        FROM dbo.Eval360_Actividad act
-        INNER JOIN dbo.Eval360_NotaActividad na ON na.ActividadId = act.ActividadId
-        INNER JOIN Estructuras eg ON eg.EstructuraGrupoId = act.EstructuraGrupoId AND eg.rn = 1
-        WHERE (na.PuntosObtenidos IS NOT NULL AND na.PuntosObtenidos > 0)
-           OR (na.PorcentajeObtenido IS NOT NULL AND na.PorcentajeObtenido > 0)
-      ),
-      SeguimientosCalificados AS (
-        SELECT DISTINCT act.EstructuraGrupoId
-        FROM dbo.Eval360_Actividad act
-        INNER JOIN dbo.Eval360_SeguimientoIndicador si ON si.ActividadId = act.ActividadId
-        INNER JOIN Estructuras eg ON eg.EstructuraGrupoId = act.EstructuraGrupoId AND eg.rn = 1
-        WHERE ISNULL(si.ValorSeleccionado, 0) > 0
-      ),
-      AsistenciaCalificada AS (
-        SELECT DISTINCT ar.GrupoId, ar.MateriaId, ar.AnioLectivoId, ar.PeriodoId
-        FROM dbo.AsistenciaRegistro ar
-        INNER JOIN (
-          SELECT DISTINCT GrupoId, MateriaId, AnioLectivoId, PeriodoId FROM AsignacionesBase
-        ) b ON b.GrupoId = ar.GrupoId
-           AND b.MateriaId = ar.MateriaId
-           AND b.AnioLectivoId = ar.AnioLectivoId
-           AND b.PeriodoId = ar.PeriodoId
-      ),
-      CierresCurso AS (
-        SELECT
-          c.CierreAcademicoCursoId,
-          c.InstitucionId,
-          c.GrupoId,
-          c.MateriaId,
-          c.AnioLectivoId,
-          c.PeriodoId,
-          c.Estado,
-          c.CerradoAt,
-          c.ReabiertoAt,
-          ROW_NUMBER() OVER (
-            PARTITION BY c.InstitucionId, c.GrupoId, c.MateriaId, c.AnioLectivoId, c.PeriodoId
-            ORDER BY c.UpdatedAt DESC, c.CierreAcademicoCursoId DESC
-          ) AS rn
-        FROM dbo.CierreAcademicoCurso c
-        INNER JOIN (
-          SELECT DISTINCT InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId FROM AsignacionesBase
-        ) b ON b.InstitucionId = c.InstitucionId
-           AND b.GrupoId = c.GrupoId
-           AND b.MateriaId = c.MateriaId
-           AND b.AnioLectivoId = c.AnioLectivoId
-           AND b.PeriodoId = c.PeriodoId
-        WHERE c.Activo = 1
-      )
-      SELECT
-        b.AsignacionDocenteId,
-        b.UsuarioId,
-        b.InstitucionId,
-        b.GrupoId,
-        b.GrupoNombre,
-        b.GrupoNivel,
-        b.GrupoJornada,
-        b.GrupoNivelAcademico,
-        b.GrupoEspecialidad,
-        b.MateriaId,
-        b.MateriaNombre,
-        b.MateriaCodigo,
-        b.AnioLectivoId,
-        b.AnioNombre,
-        b.PeriodoId,
-        b.PeriodoNombre,
-        b.TipoAsignacion,
-        b.Activo,
-        b.ProfesorNombre,
-        b.ProfesorPrimerApellido,
-        b.ProfesorSegundoApellido,
-        ISNULL(ma.TotalEstudiantes, 0) AS TotalEstudiantes,
-        COALESCE(epSesion.EvaluacionPlantillaId, ep.EvaluacionPlantillaId) AS EvaluacionPlantillaId,
-        COALESCE(epSesion.Nombre, ep.Nombre) AS EvaluacionPlantillaNombre,
-        COALESCE(epSesion.Estado, ep.Estado) AS EvaluacionPlantillaEstado,
-        CASE WHEN eg.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
-        CASE WHEN nc.EstructuraGrupoId IS NOT NULL
-               OR sc.EstructuraGrupoId IS NOT NULL
-               OR ac.GrupoId IS NOT NULL
-             THEN 1 ELSE 0 END AS TieneCalificacionesEvaluacion,
-        CASE WHEN cc.Estado = N'CERRADO_DOCENTE' THEN 1 ELSE 0 END AS CursoCerrado,
-        cc.Estado AS CierreCursoEstado,
-        cc.CerradoAt AS CierreCursoCerradoAt,
-        cc.ReabiertoAt AS CierreCursoReabiertoAt
-      FROM AsignacionesBase b
-      LEFT JOIN Matriculados ma
-        ON ma.GrupoId = b.GrupoId AND ma.AnioLectivoId = b.AnioLectivoId
-      LEFT JOIN PlantillasPredeterminadas ep
-        ON ep.InstitucionId = b.InstitucionId
-       AND ep.AnioLectivoId = b.AnioLectivoId
-       AND ep.PeriodoId = b.PeriodoId
-       AND ep.MateriaId = b.MateriaId
-       AND ep.rn = 1
-      LEFT JOIN Estructuras eg
-        ON eg.InstitucionId = b.InstitucionId
-       AND eg.GrupoId = b.GrupoId
-       AND eg.MateriaId = b.MateriaId
-       AND eg.AnioLectivoId = b.AnioLectivoId
-       AND eg.PeriodoId = b.PeriodoId
-       AND eg.rn = 1
-      LEFT JOIN dbo.EvaluacionPlantilla epSesion ON epSesion.EvaluacionPlantillaId = eg.PlantillaBaseId
-      LEFT JOIN NotasCalificadas nc ON nc.EstructuraGrupoId = eg.EstructuraGrupoId
-      LEFT JOIN SeguimientosCalificados sc ON sc.EstructuraGrupoId = eg.EstructuraGrupoId
-      LEFT JOIN AsistenciaCalificada ac
-        ON ac.GrupoId = b.GrupoId
-       AND ac.MateriaId = b.MateriaId
-       AND ac.AnioLectivoId = b.AnioLectivoId
-       AND ac.PeriodoId = b.PeriodoId
-      LEFT JOIN CierresCurso cc
-        ON cc.InstitucionId = b.InstitucionId
-       AND cc.GrupoId = b.GrupoId
-       AND cc.MateriaId = b.MateriaId
-       AND cc.AnioLectivoId = b.AnioLectivoId
-       AND cc.PeriodoId = b.PeriodoId
-       AND cc.rn = 1
-      ORDER BY b.AnioNombre DESC, b.NumeroOrden, b.GrupoNombre, b.MateriaNombre
-      OPTION (RECOMPILE)
-    `);
-    console.log(`[SQL][gestion.mis-grupos.listado] ${Date.now() - tMisGrupos}ms`);
+        ORDER BY al.Nombre DESC, p.NumeroOrden, g.Nombre, m.Nombre
+        OPTION (MAXDOP 1, MAX_GRANT_PERCENT = 0.5)
+      `);
+      perfTrace.listadoMs = Date.now() - tMisGrupos;
+      perfTrace.listadoRows = result.recordset?.length || 0;
+      perfTrace.poolAfterListado = getPoolPerfStats(pool);
+      console.log(`[SQL][gestion.mis-grupos.listado] ${perfTrace.listadoMs}ms`);
+
+      const asignacionIds = Array.from(new Set(
+        (result.recordset || [])
+          .map((item: any) => Number(item.AsignacionDocenteId))
+          .filter((value: number) => Number.isInteger(value) && value > 0)
+      ));
+
+      if (asignacionIds.length > 0) {
+        const tCalificaciones = Date.now();
+        const calificacionesRequest = pool.request();
+        let calificacionesCanceladasPorTiempo = false;
+        const calificacionesTimeout = setTimeout(() => {
+          calificacionesCanceladasPorTiempo = true;
+          calificacionesRequest.cancel();
+        }, 2500);
+        const asignacionParams = asignacionIds.map((asignacionId, index) => {
+          const paramName = `asignacionId${index}`;
+          calificacionesRequest.input(paramName, sql.Int, asignacionId);
+          return `@${paramName}`;
+        });
+
+        try {
+          const calificacionesResult = await calificacionesRequest.query(`
+            SET NOCOUNT ON;
+            SET LOCK_TIMEOUT 1500;
+
+            BEGIN TRY
+              SELECT
+                ad.AsignacionDocenteId,
+                CAST(CASE
+                  WHEN EXISTS (
+                    SELECT 1
+                    FROM dbo.Eval360_Actividad act
+                    INNER JOIN dbo.Eval360_NotaActividad na ON na.ActividadId = act.ActividadId
+                    WHERE act.EstructuraGrupoId = eg.EstructuraGrupoId
+                      AND (
+                        (na.PuntosObtenidos IS NOT NULL AND na.PuntosObtenidos > 0)
+                        OR (na.PorcentajeObtenido IS NOT NULL AND na.PorcentajeObtenido > 0)
+                      )
+                  )
+                  OR EXISTS (
+                    SELECT 1
+                    FROM dbo.Eval360_Actividad act
+                    INNER JOIN dbo.Eval360_SeguimientoIndicador si ON si.ActividadId = act.ActividadId
+                    WHERE act.EstructuraGrupoId = eg.EstructuraGrupoId
+                      AND ISNULL(si.ValorSeleccionado, 0) > 0
+                  )
+                  OR EXISTS (
+                    SELECT 1
+                    FROM dbo.AsistenciaRegistro ar
+                    WHERE ar.GrupoId = ad.GrupoId
+                      AND ar.MateriaId = ad.MateriaId
+                      AND ar.AnioLectivoId = ad.AnioLectivoId
+                      AND ar.PeriodoId = ad.PeriodoId
+                  )
+                  THEN 1
+                  ELSE 0
+                END AS bit) AS TieneCalificacionesEvaluacion
+              FROM dbo.AsignacionDocente ad
+              OUTER APPLY (
+                SELECT TOP 1 eg2.EstructuraGrupoId
+                FROM dbo.Eval360_EstructuraGrupo eg2
+                WHERE eg2.InstitucionId = ad.InstitucionId
+                  AND eg2.GrupoId = ad.GrupoId
+                  AND eg2.MateriaId = ad.MateriaId
+                  AND eg2.AnioLectivoId = ad.AnioLectivoId
+                  AND eg2.PeriodoId = ad.PeriodoId
+                  AND eg2.Activo = 1
+                ORDER BY eg2.EstructuraGrupoId DESC
+              ) eg
+              WHERE ad.AsignacionDocenteId IN (${asignacionParams.join(", ")})
+              OPTION (MAXDOP 1, MAX_GRANT_PERCENT = 0.5);
+
+              SET LOCK_TIMEOUT -1;
+            END TRY
+            BEGIN CATCH
+              SET LOCK_TIMEOUT -1;
+              THROW;
+            END CATCH;
+          `);
+
+          const calificacionesPorAsignacion = new Map<number, number>(
+            (calificacionesResult.recordset || []).map((item: any) => [
+              Number(item.AsignacionDocenteId),
+              Number(item.TieneCalificacionesEvaluacion || 0)
+            ])
+          );
+          for (const item of result.recordset || []) {
+            item.TieneCalificacionesEvaluacion =
+              calificacionesPorAsignacion.get(Number(item.AsignacionDocenteId)) || 0;
+          }
+          perfTrace.calificacionesRows = calificacionesResult.recordset?.length || 0;
+        } catch (error: any) {
+          const sqlErrors = [
+            error,
+            error?.originalError?.info,
+            ...(Array.isArray(error?.precedingErrors) ? error.precedingErrors : [])
+          ];
+          const isLockTimeout = sqlErrors.some((item) => Number(item?.number) === 1222);
+          if (!isLockTimeout && !calificacionesCanceladasPorTiempo) throw error;
+
+          // Ante contencion, conservar la regla mas restrictiva: no permitir cambiar plantilla.
+          for (const item of result.recordset || []) {
+            item.TieneCalificacionesEvaluacion = 1;
+          }
+          perfTrace.calificacionesFallback = calificacionesCanceladasPorTiempo
+            ? "request-timeout"
+            : "lock-timeout";
+          console.warn(
+            `[SQL][gestion.mis-grupos.calificaciones] ${perfTrace.calificacionesFallback}; usando estado conservador`
+          );
+        } finally {
+          clearTimeout(calificacionesTimeout);
+          perfTrace.calificacionesMs = Date.now() - tCalificaciones;
+          console.log(`[SQL][gestion.mis-grupos.calificaciones] ${perfTrace.calificacionesMs}ms`);
+        }
+      } else {
+        perfTrace.calificacionesMs = 0;
+        perfTrace.calificacionesRows = 0;
+      }
 
     let gruposClaseRows: any[] = [];
-    if (await hasGrupoClaseSchema(pool)) {
+    const tGrupoClaseSchema = Date.now();
+    const grupoClaseSchemaReady = await hasGrupoClaseSchema(pool);
+    perfTrace.schemaGrupoClaseMs = Date.now() - tGrupoClaseSchema;
+    perfTrace.grupoClaseSchemaReady = grupoClaseSchemaReady;
+    console.log(`[SQL][gestion.mis-grupos.schema-grupo-clase] ${perfTrace.schemaGrupoClaseMs}ms`);
+    if (grupoClaseSchemaReady) {
       const usuarioFiltroGrupoClase = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
         ? userId
         : profesorId;
+      const tGruposClase = Date.now();
       const clasesResult = await pool.request()
         .input("institucionId", sql.Int, institucionFiltroId)
         .input("usuarioFiltroId", sql.Int, usuarioFiltroGrupoClase)
@@ -1443,9 +1518,13 @@ router.get("/mis-grupos", async (req, res) => {
                   AND g.Nombre LIKE @q
               )
             )
-          ORDER BY al.Nombre DESC, p.NumeroOrden, gc.Nombre, m.Nombre;
+          ORDER BY al.Nombre DESC, p.NumeroOrden, gc.Nombre, m.Nombre
+          OPTION (MAXDOP 1, MAX_GRANT_PERCENT = 0.5);
         `);
+      perfTrace.gruposClaseMs = Date.now() - tGruposClase;
       gruposClaseRows = clasesResult.recordset || [];
+      perfTrace.gruposClaseRows = gruposClaseRows.length;
+      console.log(`[SQL][gestion.mis-grupos.grupos-clase] ${perfTrace.gruposClaseMs}ms`);
     }
 
     const gruposUnicos = new Map<string, any>();
@@ -1496,11 +1575,26 @@ router.get("/mis-grupos", async (req, res) => {
     }
 
     const payload = Array.from(gruposUnicos.values());
+    perfTrace.payloadRows = payload.length;
     bootstrapCache.set(cacheKey, { at: Date.now(), data: payload });
+    return payload;
+    })();
+    bootstrapInFlight.set(cacheKey, loadPromise);
+
+    let payload: any[];
+    try {
+      payload = await loadPromise;
+    } finally {
+      bootstrapInFlight.delete(cacheKey);
+    }
     return ok(res, payload);
   } catch (error) {
     console.error("Error cargando mis grupos:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los grupos del profesor" });
+  } finally {
+    perfTrace.totalMs = Date.now() - tMisGruposTotal;
+    console.log(`[PERF][gestion.mis-grupos.total] ${perfTrace.totalMs}ms`);
+    writeLocalMisGruposPerfTrace(perfTrace);
   }
 });
 
