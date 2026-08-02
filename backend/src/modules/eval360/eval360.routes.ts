@@ -31,6 +31,11 @@ import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "..
 import { assertCierreCursoAbierto } from "../academico/cierre-curso.utils";
 
 import { reaplicarTrasladosPendientesEnGrupo } from "../academico/matricula-traslado.utils";
+import {
+  getGrupoClasePermitido,
+  hasGrupoClaseSchema,
+  toOptionalGrupoClaseId
+} from "../grupos-clase/grupos-clase.utils";
 
 
 
@@ -650,9 +655,11 @@ function getContextCacheKeyFromParts(params: {
 
   periodoId: number;
 
+  grupoClaseId?: number | null;
+
 }) {
 
-  return `${params.institucionId}|${params.grupoId}|${params.materiaId}|${params.anioLectivoId}|${params.periodoId}`;
+  return `${params.institucionId}|${params.grupoId}|${params.materiaId}|${params.anioLectivoId}|${params.periodoId}|gc:${Number(params.grupoClaseId || 0)}`;
 
 }
 
@@ -670,13 +677,19 @@ function clearContextCacheByParts(params: {
 
   periodoId: number;
 
+  grupoClaseId?: number | null;
+
 }) {
 
   const key = getContextCacheKeyFromParts(params);
 
-  contextoCache.delete(key);
+  for (const cacheKey of Array.from(contextoCache.keys())) {
+    if (cacheKey === key || cacheKey.startsWith(`${key}|`)) contextoCache.delete(cacheKey);
+  }
 
-  contextoInFlight.delete(key);
+  for (const cacheKey of Array.from(contextoInFlight.keys())) {
+    if (cacheKey === key || cacheKey.startsWith(`${key}|`)) contextoInFlight.delete(cacheKey);
+  }
 
 }
 
@@ -4834,6 +4847,8 @@ async function getAsignacionPermitida(req: any, res: any, input: {
 
   periodoId: number;
 
+  grupoClaseId?: number | null;
+
 }) {
 
   if (!assertCanAccess(req, res)) return null;
@@ -4843,6 +4858,54 @@ async function getAsignacionPermitida(req: any, res: any, input: {
   const pool = await getPool();
 
   const userId = getUserId(req);
+
+  await ensureEval360GrupoClaseColumn(pool);
+
+  const grupoClaseId = toOptionalGrupoClaseId(input.grupoClaseId);
+
+  if (grupoClaseId && await hasGrupoClaseSchema(pool)) {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return null;
+
+    const grupoClase = await getGrupoClasePermitido({
+      pool,
+      grupoClaseId,
+      institucionId,
+      usuarioId: userId || null,
+      permitirAdministrativo: isSuperAdmin(req) || isInstitutionAdmin(req)
+    });
+
+    if (!grupoClase) {
+      forbidden(res, "No tenÃ©s permisos para trabajar con ese grupo de clase");
+      return null;
+    }
+
+    if (
+      Number(grupoClase.GrupoIdPrincipal) !== Number(input.grupoId) ||
+      Number(grupoClase.MateriaId) !== Number(input.materiaId) ||
+      Number(grupoClase.AnioLectivoId) !== Number(input.anioLectivoId) ||
+      Number(grupoClase.PeriodoId) !== Number(input.periodoId)
+    ) {
+      forbidden(res, "El grupo de clase no coincide con el grupo, materia y periodo seleccionados");
+      return null;
+    }
+
+    return {
+      AsignacionDocenteId: 0,
+      UsuarioId: Number(grupoClase.UsuarioPrincipalId || userId || 0),
+      InstitucionId: Number(grupoClase.InstitucionId),
+      GrupoId: Number(grupoClase.GrupoIdPrincipal),
+      GrupoNombre: grupoClase.Nombre,
+      GrupoNivel: grupoClase.GrupoNivel,
+      MateriaId: Number(grupoClase.MateriaId),
+      MateriaNombre: grupoClase.MateriaNombre,
+      AnioLectivoId: Number(grupoClase.AnioLectivoId),
+      AnioNombre: grupoClase.AnioNombre,
+      PeriodoId: Number(grupoClase.PeriodoId),
+      PeriodoNombre: grupoClase.PeriodoNombre,
+      GrupoClaseId: Number(grupoClase.GrupoClaseId)
+    };
+  }
 
 
 
@@ -5820,17 +5883,20 @@ router.get("/estructuras/grupo", async (req, res) => {
 
     const periodoId = toRequiredNumber(req.query.periodoId, "periodoId", res);
 
+    const grupoClaseId = toOptionalGrupoClaseId(req.query.grupoClaseId);
+
     if ([grupoId, materiaId, anioLectivoId, periodoId].some((value) => value === null)) return;
 
 
 
-    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId });
+    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId });
 
     if (!asignacion) return;
 
 
 
     const pool = await getPool();
+    await ensureEval360GrupoClaseColumn(pool);
 
     const result = await pool.request()
 
@@ -5843,6 +5909,8 @@ router.get("/estructuras/grupo", async (req, res) => {
       .input("anioLectivoId", sql.Int, anioLectivoId)
 
       .input("periodoId", sql.Int, periodoId)
+
+      .input("grupoClaseId", sql.Int, grupoClaseId)
 
       .query(`
 
@@ -5859,6 +5927,8 @@ router.get("/estructuras/grupo", async (req, res) => {
           AND AnioLectivoId = @anioLectivoId
 
           AND PeriodoId = @periodoId
+
+          AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
 
           AND Activo = 1
 
@@ -6285,6 +6355,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
   const pool = await getPool();
 
   await ensurePlantillaVisibilityColumns(pool);
+  await ensureEval360GrupoClaseColumn(pool);
 
   const transaction = new sql.Transaction(pool);
 
@@ -6302,6 +6373,8 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
     const plantillaId = toOptionalNumber(req.body.plantillaId || req.body.evaluacionPlantillaId);
 
+    const grupoClaseId = toOptionalGrupoClaseId(req.body.grupoClaseId ?? req.query.grupoClaseId);
+
     const nombrePersonalizado = normalizeText(req.body.nombre);
 
 
@@ -6310,7 +6383,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
 
 
-    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId });
+    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId });
 
     if (!asignacion) return;
 
@@ -6328,6 +6401,8 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
       .input("periodoId", sql.Int, periodoId)
 
+      .input("grupoClaseId", sql.Int, grupoClaseId)
+
       .query(`
 
         SELECT TOP 1 EstructuraGrupoId, PlantillaBaseId
@@ -6343,6 +6418,8 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
           AND AnioLectivoId = @anioLectivoId
 
           AND PeriodoId = @periodoId
+
+          AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
 
           AND Activo = 1
 
@@ -6429,6 +6506,8 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
                  AND ar.AnioLectivoId = eg.AnioLectivoId
 
                  AND ar.PeriodoId = eg.PeriodoId
+
+                 AND ISNULL(ar.GrupoClaseId, 0) = ISNULL(eg.GrupoClaseId, 0)
 
                 WHERE eg.EstructuraGrupoId = @estructuraGrupoId
 
@@ -6614,6 +6693,8 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
       .input("periodoId", sql.Int, periodoId)
 
+      .input("grupoClaseId", sql.Int, grupoClaseId)
+
       .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req)) || null)
 
       .input("plantillaBaseId", sql.Int, Number(plantilla.EvaluacionPlantillaId))
@@ -6626,13 +6707,13 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
         INSERT INTO dbo.Eval360_EstructuraGrupo
 
-          (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, UsuarioId, PlantillaBaseId, Nombre, TotalPorcentaje, Activo, CreatedAt)
+          (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, GrupoClaseId, UsuarioId, PlantillaBaseId, Nombre, TotalPorcentaje, Activo, CreatedAt)
 
         OUTPUT INSERTED.EstructuraGrupoId
 
         VALUES
 
-          (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioId, @plantillaBaseId, @nombre, @totalPorcentaje, 1, SYSDATETIME())
+          (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @grupoClaseId, @usuarioId, @plantillaBaseId, @nombre, @totalPorcentaje, 1, SYSDATETIME())
 
       `);
 
@@ -6748,6 +6829,15 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
     await sincronizarEstructuraConPlantilla(pool, estructuraGrupoId, Number(plantilla.EvaluacionPlantillaId));
 
+    clearContextCacheByParts({
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId: Number(grupoId),
+      materiaId: Number(materiaId),
+      anioLectivoId: Number(anioLectivoId),
+      periodoId: Number(periodoId),
+      grupoClaseId
+    });
+
 
 
     const data = await getEstructuraCompleta(pool, estructuraGrupoId);
@@ -6842,7 +6932,9 @@ router.put("/estructuras/:id/detalles", async (req, res) => {
 
       anioLectivoId: Number(row.AnioLectivoId),
 
-      periodoId: Number(row.PeriodoId)
+      periodoId: Number(row.PeriodoId),
+
+      grupoClaseId: Number(row.GrupoClaseId || 0) || null
 
     });
 
@@ -7174,26 +7266,46 @@ async function getEstructuraPermitidaPorId(req: any, res: any, pool: any, estruc
 
     ? `
 
-      AND EXISTS (
+      AND (
+        EXISTS (
 
-        SELECT 1
+          SELECT 1
 
-        FROM dbo.AsignacionDocente ad
+          FROM dbo.AsignacionDocente ad
 
-        WHERE ad.Activo = 1
+          WHERE ad.Activo = 1
 
-          AND ad.InstitucionId = eg.InstitucionId
+            AND ad.InstitucionId = eg.InstitucionId
 
-          AND ad.GrupoId = eg.GrupoId
+            AND ad.GrupoId = eg.GrupoId
 
-          AND ad.MateriaId = eg.MateriaId
+            AND ad.MateriaId = eg.MateriaId
 
-          AND ad.AnioLectivoId = eg.AnioLectivoId
+            AND ad.AnioLectivoId = eg.AnioLectivoId
 
-          AND ad.PeriodoId = eg.PeriodoId
+            AND ad.PeriodoId = eg.PeriodoId
 
-          AND ad.UsuarioId = @usuarioId
+            AND ad.UsuarioId = @usuarioId
 
+        )
+
+        OR (
+          eg.GrupoClaseId IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM dbo.GrupoClaseDocente gcd
+            INNER JOIN dbo.GrupoClase gc ON gc.GrupoClaseId = gcd.GrupoClaseId
+            WHERE gcd.GrupoClaseId = eg.GrupoClaseId
+              AND gcd.UsuarioId = @usuarioId
+              AND gcd.Activo = 1
+              AND gc.Activo = 1
+              AND gc.InstitucionId = eg.InstitucionId
+              AND gc.GrupoIdPrincipal = eg.GrupoId
+              AND gc.MateriaId = eg.MateriaId
+              AND gc.AnioLectivoId = eg.AnioLectivoId
+              AND gc.PeriodoId = eg.PeriodoId
+          )
+        )
       )
 
     `
@@ -7234,6 +7346,17 @@ async function getEstructuraPermitidaPorId(req: any, res: any, pool: any, estruc
 
   return row;
 
+}
+
+async function ensureEval360GrupoClaseColumn(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID(N'dbo.Eval360_EstructuraGrupo', N'U') IS NOT NULL
+       AND OBJECT_ID(N'dbo.GrupoClase', N'U') IS NOT NULL
+       AND COL_LENGTH(N'dbo.Eval360_EstructuraGrupo', N'GrupoClaseId') IS NULL
+    BEGIN
+      ALTER TABLE dbo.Eval360_EstructuraGrupo ADD GrupoClaseId INT NULL;
+    END;
+  `);
 }
 
 async function responderSiEstructuraCursoCerrado(res: any, pool: any, estructura: any) {
@@ -14204,6 +14327,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
     const periodoId = toRequiredNumber(req.query.periodoId, "periodoId", res);
 
+    const grupoClaseId = toOptionalGrupoClaseId(req.query.grupoClaseId);
+
     const sincronizarSolicitado = ["1", "true", "si", "sí"].includes(
 
       String(req.query.sincronizar ?? "").trim().toLowerCase()
@@ -14226,7 +14351,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
-    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId });
+    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId });
 
     if (!asignacion) return;
 
@@ -14238,7 +14363,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
-    cacheKey = `${getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId })}|asis:${incluirAsistencia ? 1 : 0}|env:${incluirEnvios ? 1 : 0}`;
+    cacheKey = `${getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId })}|asis:${incluirAsistencia ? 1 : 0}|env:${incluirEnvios ? 1 : 0}`;
 
     canUseCache = !sincronizarSolicitado;
 
@@ -14275,6 +14400,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
       const pool = await getPool();
 
       await ensureComponenteAjusteManualTables(pool);
+      await ensureEval360GrupoClaseColumn(pool);
 
 
 
@@ -14289,6 +14415,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
       .input("periodoId", sql.Int, periodoId)
 
       .input("institucionId", sql.Int, institucionId)
+
+      .input("grupoClaseId", sql.Int, grupoClaseId)
 
       .query(`
 
@@ -14307,6 +14435,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
           AND eg.AnioLectivoId = @anioLectivoId
 
           AND eg.PeriodoId = @periodoId
+
+          AND ISNULL(eg.GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
 
           AND eg.Activo = 1
 
@@ -14450,7 +14580,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
       const plantillasSectionKey = `plantillas|${institucionId}`;
 
-      const estudiantesSectionKey = `estudiantes|${institucionId}|${grupoId}|${anioLectivoId}`;
+      const estudiantesSectionKey = `estudiantes|${institucionId}|${grupoId}|${anioLectivoId}|gc:${Number(grupoClaseId || 0)}`;
 
       const planeamientosSectionKey = `planeamientos|${institucionId}|${grupoId}|${materiaId}|${anioLectivoId}|${periodoId}`;
 

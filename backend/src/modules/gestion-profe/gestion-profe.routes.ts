@@ -1370,6 +1370,14 @@ router.get("/mis-grupos", async (req, res) => {
     perfTrace.grupoClaseSchemaReady = grupoClaseSchemaReady;
     console.log(`[SQL][gestion.mis-grupos.schema-grupo-clase] ${perfTrace.schemaGrupoClaseMs}ms`);
     if (grupoClaseSchemaReady) {
+      await pool.request().query(`
+        IF OBJECT_ID(N'dbo.Eval360_EstructuraGrupo', N'U') IS NOT NULL
+           AND COL_LENGTH(N'dbo.Eval360_EstructuraGrupo', N'GrupoClaseId') IS NULL
+        BEGIN
+          ALTER TABLE dbo.Eval360_EstructuraGrupo ADD GrupoClaseId INT NULL;
+        END;
+      `);
+
       const usuarioFiltroGrupoClase = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
         ? userId
         : profesorId;
@@ -1411,10 +1419,10 @@ router.get("/mis-grupos", async (req, res) => {
              FROM dbo.GrupoClaseEstudiante gce
              WHERE gce.GrupoClaseId = gc.GrupoClaseId
                AND gce.Activo = 1) AS TotalEstudiantes,
-            CAST(NULL AS int) AS EvaluacionPlantillaId,
-            CAST(NULL AS nvarchar(200)) AS EvaluacionPlantillaNombre,
-            CAST(NULL AS nvarchar(30)) AS EvaluacionPlantillaEstado,
-            CAST(0 AS bit) AS TieneEstructuraEvaluacion,
+            epSesion.EvaluacionPlantillaId AS EvaluacionPlantillaId,
+            epSesion.Nombre AS EvaluacionPlantillaNombre,
+            epSesion.Estado AS EvaluacionPlantillaEstado,
+            CASE WHEN eg.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
             CAST(0 AS bit) AS TieneCalificacionesEvaluacion,
             CAST(0 AS bit) AS CursoCerrado,
             CAST(NULL AS nvarchar(40)) AS CierreCursoEstado,
@@ -1478,6 +1486,22 @@ router.get("/mis-grupos", async (req, res) => {
               AND ad2.Activo = 1
             ORDER BY ad2.AsignacionDocenteId DESC
           ) ad
+          OUTER APPLY (
+            SELECT TOP 1
+              eg2.EstructuraGrupoId,
+              eg2.PlantillaBaseId
+            FROM dbo.Eval360_EstructuraGrupo eg2
+            WHERE eg2.InstitucionId = gc.InstitucionId
+              AND eg2.GrupoId = gc.GrupoIdPrincipal
+              AND eg2.MateriaId = gc.MateriaId
+              AND eg2.AnioLectivoId = gc.AnioLectivoId
+              AND eg2.PeriodoId = gc.PeriodoId
+              AND ISNULL(eg2.GrupoClaseId, 0) = gc.GrupoClaseId
+              AND eg2.Activo = 1
+            ORDER BY eg2.EstructuraGrupoId DESC
+          ) eg
+          LEFT JOIN dbo.EvaluacionPlantilla epSesion
+            ON epSesion.EvaluacionPlantillaId = eg.PlantillaBaseId
           WHERE gc.Activo = 1
             AND docente.UsuarioId IS NOT NULL
             AND (@institucionId IS NULL OR gc.InstitucionId = @institucionId)

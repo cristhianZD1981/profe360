@@ -4763,8 +4763,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       const dataRaw = unwrapApiData(response) || null;
       const data = (() => {
         if (!dataRaw) return dataRaw;
-        const estudiantesPermitidos = item.GrupoClaseId
-          ? new Set((detalle?.estudiantes || []).map((row: any) => Number(row.EstudianteId)))
+        const estudiantesDetalle = detalle?.estudiantes || [];
+        const estudiantesPermitidos = item.GrupoClaseId && estudiantesDetalle.length
+          ? new Set(estudiantesDetalle.map((row: any) => Number(row.EstudianteId)))
           : null;
         const filtrarPorEstudiante = (rows: any) => {
           const list = Array.isArray(rows) ? rows : [];
@@ -9150,7 +9151,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <button
                     type="button"
                     className="primary-btn"
-                    onClick={async () => { await crearEval360DesdePlantilla(); if (selected) { await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); } }}
+                    onClick={async () => { await crearEval360DesdePlantilla(); if (selected) { await loadSeguimientoEvaluacion(selected, { sincronizar: true }); } }}
                     disabled={!eval360PlantillaId || savingEval360 || !selected}
                   >
                     {savingEval360 ? "Asignando..." : "Asignar plantilla"}
@@ -9859,7 +9860,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         ))}
                       </select>
                     </label>
-                    <button type="button" className="primary-btn" onClick={async () => { await crearEval360DesdePlantilla(); setMostrarSelectorCambioPlantilla(false); await loadSeguimientoEvaluacion(selected); await loadDetalle(selected); }} disabled={!eval360PlantillaId || savingEval360 || !selected}>
+                    <button type="button" className="primary-btn" onClick={async () => { await crearEval360DesdePlantilla(); setMostrarSelectorCambioPlantilla(false); await loadSeguimientoEvaluacion(selected, { sincronizar: true }); }} disabled={!eval360PlantillaId || savingEval360 || !selected}>
                       {savingEval360 ? (mostrarSelectorCambioPlantilla ? "Cambiando..." : "Asignando...") : (mostrarSelectorCambioPlantilla ? "Cambiar plantilla" : "Asignar plantilla")}
                     </button>
                     {savingEval360 ? (
