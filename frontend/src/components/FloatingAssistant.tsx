@@ -16,6 +16,13 @@ type ScreenSnapshot = {
   headings: string[];
   buttons: string[];
   labels: string[];
+  alerts: string[];
+  selectedOptions: string[];
+  checkedOptions: string[];
+  fieldValues: string[];
+  activeElement: string;
+  tableHeaders: string[];
+  rowCount: number;
 };
 
 function getRouteLabel(pathname: string) {
@@ -62,22 +69,119 @@ function buildWelcomeMessage(displayName: string) {
 
 function collectScreenSnapshot(routeLabel: string): ScreenSnapshot {
   if (typeof document === "undefined") {
-    return { routeLabel, documentTitle: "", headings: [], buttons: [], labels: [] };
+    return {
+      routeLabel,
+      documentTitle: "",
+      headings: [],
+      buttons: [],
+      labels: [],
+      alerts: [],
+      selectedOptions: [],
+      checkedOptions: [],
+      fieldValues: [],
+      activeElement: "",
+      tableHeaders: [],
+      rowCount: 0
+    };
   }
+
+  const cleanText = (value: unknown, max = 140) =>
+    String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, max);
 
   const readTexts = (selector: string, limit: number) =>
     Array.from(document.querySelectorAll(selector))
-      .map((node) => String((node as HTMLElement).innerText || (node as HTMLInputElement).value || "").trim())
+      .map((node) => cleanText((node as HTMLElement).innerText || (node as HTMLInputElement).value || ""))
       .filter(Boolean)
       .filter((value, index, array) => array.indexOf(value) === index)
       .slice(0, limit);
+
+  const getFieldLabel = (field: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) => {
+    const labelledBy = field.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const labelText = labelledBy
+        .split(/\s+/)
+        .map((id) => cleanText(document.getElementById(id)?.innerText))
+        .filter(Boolean)
+        .join(" ");
+      if (labelText) return labelText;
+    }
+
+    const aria = cleanText(field.getAttribute("aria-label"));
+    if (aria) return aria;
+
+    if (field.id) {
+      const explicit = document.querySelector(`label[for="${CSS.escape(field.id)}"]`);
+      const explicitText = cleanText((explicit as HTMLElement | null)?.innerText);
+      if (explicitText) return explicitText;
+    }
+
+    const wrappingLabel = field.closest("label");
+    const wrappingText = cleanText((wrappingLabel as HTMLElement | null)?.innerText, 80);
+    if (wrappingText) return wrappingText;
+
+    const placeholder = field instanceof HTMLSelectElement ? "" : field.placeholder;
+    return cleanText(field.name || placeholder || field.title || "Campo", 60);
+  };
+
+  const fieldNodes = Array.from(document.querySelectorAll("input, select, textarea"))
+    .filter((node) => {
+      const field = node as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      const type = String((field as HTMLInputElement).type || "").toLowerCase();
+      if (["password", "hidden", "file"].includes(type)) return false;
+      const style = window.getComputedStyle(field);
+      return style.display !== "none" && style.visibility !== "hidden";
+    });
+
+  const selectedOptions = fieldNodes
+    .filter((node) => node instanceof HTMLSelectElement)
+    .map((node) => {
+      const select = node as HTMLSelectElement;
+      const label = getFieldLabel(select);
+      const selected = Array.from(select.selectedOptions).map((option) => cleanText(option.text || option.value)).filter(Boolean).join(", ");
+      return selected ? `${label}: ${selected}` : "";
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+
+  const checkedOptions = fieldNodes
+    .filter((node) => node instanceof HTMLInputElement && ["checkbox", "radio"].includes(String((node as HTMLInputElement).type || "").toLowerCase()) && (node as HTMLInputElement).checked)
+    .map((node) => getFieldLabel(node as HTMLInputElement))
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index)
+    .slice(0, 18);
+
+  const fieldValues = fieldNodes
+    .filter((node) => {
+      if (node instanceof HTMLSelectElement) return false;
+      const input = node as HTMLInputElement | HTMLTextAreaElement;
+      const type = String((input as HTMLInputElement).type || "").toLowerCase();
+      return !["checkbox", "radio"].includes(type) && cleanText(input.value).length > 0;
+    })
+    .map((node) => `${getFieldLabel(node as HTMLInputElement | HTMLTextAreaElement)}: ${cleanText((node as HTMLInputElement | HTMLTextAreaElement).value, 100)}`)
+    .filter(Boolean)
+    .slice(0, 14);
+
+  const active = document.activeElement as HTMLElement | null;
+  const activeElement = active && active !== document.body
+    ? cleanText(active.innerText || (active as HTMLInputElement).value || active.getAttribute("aria-label") || active.getAttribute("title") || active.tagName, 120)
+    : "";
 
   return {
     routeLabel,
     documentTitle: String(document.title || "").trim(),
     headings: readTexts("h1, h2, h3, [data-assistant-heading='true']", 8),
     buttons: readTexts("button", 12),
-    labels: readTexts("label, th, .card strong", 14)
+    labels: readTexts("label, th, .card strong", 14),
+    alerts: readTexts("[role='alert'], .alert, .error, .error-message, .success-message, .message, .toast", 8),
+    selectedOptions,
+    checkedOptions,
+    fieldValues,
+    activeElement,
+    tableHeaders: readTexts("table th", 16),
+    rowCount: document.querySelectorAll("tbody tr").length
   };
 }
 

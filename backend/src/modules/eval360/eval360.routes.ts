@@ -12157,6 +12157,21 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       ? `AND h.Mes IN (${meses.map((_, index) => `@mes${index}`).join(", ")})`
       : "";
 
+    const materiaCompatibleSql = `
+      (
+        h.MateriaId = @materiaId
+        OR (
+          LEN(LTRIM(RTRIM(COALESCE(NULLIF(h.MateriaNombre, N''), m.Nombre, N'')))) >= 4
+          AND (
+            UPPER(LTRIM(RTRIM(COALESCE(NULLIF(h.MateriaNombre, N''), m.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI
+              LIKE N'%' + UPPER(LTRIM(RTRIM(mref.Nombre))) COLLATE Latin1_General_100_CI_AI + N'%'
+            OR UPPER(LTRIM(RTRIM(mref.Nombre))) COLLATE Latin1_General_100_CI_AI
+              LIKE N'%' + UPPER(LTRIM(RTRIM(COALESCE(NULLIF(h.MateriaNombre, N''), m.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI + N'%'
+          )
+        )
+      )
+    `;
+
     const habilidadesResult = await habilidadesRequest.query(`
       SELECT
         h.PlaneamientoHabilidadId,
@@ -12173,9 +12188,10 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
         h.DocumentoReferencia
       FROM dbo.PlaneamientoHabilidad h
       LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
+      CROSS JOIN (SELECT TOP 1 Nombre FROM dbo.Materia WHERE MateriaId = @materiaId) mref
       WHERE h.PlaneamientoHabilidadId IN (${placeholdersHabilidades})
         AND (h.InstitucionId = @institucionId OR h.InstitucionId IS NULL)
-        AND h.MateriaId = @materiaId
+        AND ${materiaCompatibleSql}
         AND ISNULL(h.Activo, 1) = 1
         ${filtroMeses}
       ORDER BY h.Mes, h.Area, TRY_CONVERT(INT, h.NumeroHabilidad), h.NumeroHabilidad
@@ -12184,7 +12200,54 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
     const habilidades = habilidadesResult.recordset || [];
 
     if (habilidades.length !== habilidadesIds.length) {
-      return badRequest(res, "Una o más habilidades seleccionadas no están disponibles para los filtros indicados");
+      const habilidadesValidas = new Set(habilidades.map((habilidad: any) => Number(habilidad.PlaneamientoHabilidadId)));
+      const idsFaltantes = habilidadesIds.filter((id) => !habilidadesValidas.has(Number(id)));
+      const diagnosticoRequest = pool.request()
+        .input("institucionId", sql.Int, Number(asignacionBase.InstitucionId))
+        .input("materiaId", sql.Int, Number(materiaId));
+
+      habilidadesIds.forEach((id, index) => diagnosticoRequest.input(`dhid${index}`, sql.Int, id));
+      meses.forEach((mes, index) => diagnosticoRequest.input(`dmes${index}`, sql.NVarChar(100), mes));
+
+      const diagnosticoResult = await diagnosticoRequest.query(`
+        SELECT
+          h.PlaneamientoHabilidadId,
+          h.InstitucionId,
+          h.MateriaId,
+          COALESCE(m.Nombre, h.MateriaNombre) AS MateriaNombre,
+          h.Grado,
+          h.Mes,
+          h.NumeroHabilidad,
+          h.DescripcionHabilidad,
+          CASE WHEN h.InstitucionId = @institucionId OR h.InstitucionId IS NULL THEN 1 ELSE 0 END AS InstitucionOk,
+          CASE WHEN ${materiaCompatibleSql} THEN 1 ELSE 0 END AS MateriaOk,
+          CASE WHEN ISNULL(h.Activo, 1) = 1 THEN 1 ELSE 0 END AS ActivoOk,
+          CASE WHEN h.Mes IN (${meses.map((_, index) => `@dmes${index}`).join(", ")}) THEN 1 ELSE 0 END AS MesOk
+        FROM dbo.PlaneamientoHabilidad h
+        LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
+        CROSS JOIN (SELECT TOP 1 Nombre FROM dbo.Materia WHERE MateriaId = @materiaId) mref
+        WHERE h.PlaneamientoHabilidadId IN (${habilidadesIds.map((_, index) => `@dhid${index}`).join(", ")})
+      `);
+
+      const diagnosticos = new Map<number, any>((diagnosticoResult.recordset || []).map((row: any) => [Number(row.PlaneamientoHabilidadId), row]));
+      const detalles = idsFaltantes.slice(0, 3).map((id) => {
+        const row = diagnosticos.get(Number(id));
+        if (!row) return `ID ${id}: no existe o no esta disponible`;
+
+        const razones = [
+          Number(row.InstitucionOk) !== 1 ? "institucion" : "",
+          Number(row.MateriaOk) !== 1 ? "materia" : "",
+          Number(row.ActivoOk) !== 1 ? "inactiva" : "",
+          Number(row.MesOk) !== 1 ? "mes" : ""
+        ].filter(Boolean).join(", ") || "filtros";
+
+        const numero = normalizeText(row.NumeroHabilidad);
+        const descripcion = normalizeText(row.DescripcionHabilidad).slice(0, 90);
+        return `${numero ? `${numero}. ` : ""}${descripcion || `ID ${id}`} (${razones})`;
+      });
+
+      const extra = detalles.length ? `: ${detalles.join(" | ")}` : "";
+      return badRequest(res, `Una o mas habilidades seleccionadas no estan disponibles para los filtros indicados${extra}`);
     }
 
     const promptBases = buildPromptIndicadoresBaseDesdeHabilidades({

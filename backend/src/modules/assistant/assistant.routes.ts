@@ -335,6 +335,13 @@ type AssistantScreenSnapshot = {
   headings?: string[];
   buttons?: string[];
   labels?: string[];
+  alerts?: string[];
+  selectedOptions?: string[];
+  checkedOptions?: string[];
+  fieldValues?: string[];
+  activeElement?: string;
+  tableHeaders?: string[];
+  rowCount?: number;
 };
 
 type AssistantSuggestedAction = {
@@ -1821,16 +1828,29 @@ function normalizeScreenSnapshot(value: any): AssistantScreenSnapshot {
     documentTitle: normalizeText(value?.documentTitle),
     headings: ensureArray(value?.headings, 10),
     buttons: ensureArray(value?.buttons, 16),
-    labels: ensureArray(value?.labels, 18)
+    labels: ensureArray(value?.labels, 18),
+    alerts: ensureArray(value?.alerts, 8),
+    selectedOptions: ensureArray(value?.selectedOptions, 12),
+    checkedOptions: ensureArray(value?.checkedOptions, 18),
+    fieldValues: ensureArray(value?.fieldValues, 14),
+    activeElement: normalizeText(value?.activeElement),
+    tableHeaders: ensureArray(value?.tableHeaders, 16),
+    rowCount: Math.max(0, Math.min(500, Number(value?.rowCount || 0) || 0))
   };
 }
 
 function inferScreenFocus(snapshot: AssistantScreenSnapshot | null) {
   const focusPool = [
+    ...(snapshot?.alerts || []).map((item) => `Alerta visible: ${item}`),
+    ...(snapshot?.selectedOptions || []).map((item) => `Seleccionado: ${item}`),
+    ...(snapshot?.checkedOptions || []).map((item) => `Marcado: ${item}`),
+    ...(snapshot?.fieldValues || []).map((item) => `Campo con valor: ${item}`),
+    snapshot?.activeElement ? `Elemento activo: ${snapshot.activeElement}` : "",
+    snapshot?.rowCount ? `Filas visibles en tablas: ${snapshot.rowCount}` : "",
     ...(snapshot?.headings || []),
     ...(snapshot?.labels || [])
   ].filter(Boolean);
-  return focusPool.slice(0, 4);
+  return focusPool.slice(0, 12);
 }
 
 function pushSuggestedAction(list: AssistantSuggestedAction[], action: AssistantSuggestedAction | null | undefined) {
@@ -1992,6 +2012,57 @@ function getLastAssistantText(history: any[] = []) {
   const assistantItems = history.filter((item) => String(item?.role || "").toLowerCase() === "assistant");
   const lastAssistant = assistantItems.length ? assistantItems[assistantItems.length - 1] : null;
   return normalizeText(lastAssistant?.text);
+}
+
+function getPreviousUserText(history: any[] = []) {
+  const userItems = history.filter((item) => String(item?.role || "").toLowerCase() === "user");
+  if (userItems.length <= 1) return "";
+  return normalizeText(userItems[userItems.length - 2]?.text);
+}
+
+function getUserTurnCount(history: any[] = []) {
+  return history.filter((item) => String(item?.role || "").toLowerCase() === "user").length;
+}
+
+function shouldUseGreetingInReply(question: string, history: any[] = []) {
+  if (isGreetingOnly(question) || isThanksOnly(question) || isGoodbyeOnly(question)) return true;
+  return getUserTurnCount(history) <= 1;
+}
+
+function buildAssistantConversationStyle(input: {
+  question: string;
+  history: any[];
+  userDisplayName: string;
+  userName: string;
+  userRoleLabel: string;
+}) {
+  const turnCount = getUserTurnCount(input.history);
+  const previousUserText = getPreviousUserText(input.history);
+  const lastAssistantText = getLastAssistantText(input.history);
+  const conversationInProgress = turnCount > 1;
+
+  return [
+    "Estilo conversacional de Margarita:",
+    "- Habla como una asesora cercana y practica: natural, respetuosa y tranquila.",
+    "- Si la conversacion ya esta en curso, no vuelvas a saludar ni repitas presentacion.",
+    "- Usa el historial reciente para entender referencias como 'eso', 'aca', 'este error', 'dale', 'la habilidad' o 'el alumno'.",
+    "- Si el usuario reporta un problema, primero confirma brevemente lo que entendiste y luego da el siguiente paso concreto.",
+    "- Si el contexto visible trae alertas, errores, campos seleccionados, checks marcados o valores de formulario, usalos antes de pedir informacion.",
+    "- Si preguntas 'que pasa aca' o 'por que no me deja', prioriza explicar la alerta visible, los valores seleccionados y el boton/panel activo.",
+    "- Si ves filas de tabla o encabezados, podes usarlos para ubicar al usuario, pero no inventes datos de filas que no vengan en el contexto.",
+    "- Si falta informacion, pide solo un dato puntual. Evita interrogatorios largos.",
+    "- Prefiere respuestas cortas y accionables. Da pasos numerados solo cuando el usuario necesita una guia.",
+    "- Si hay riesgo de afectar datos, recomienda revisar antes de guardar o pedir apoyo admin segun rol.",
+    "- No inventes datos. Si algo no esta en el contexto, dilo con naturalidad y explica que dato falta.",
+    "- Mantene el vocabulario real de PROFE360: Gestion del Profe, Planeamiento e Indicadores, Informar al encargado, Estudiantes, Reportes y Certificaciones.",
+    `Conversacion en curso: ${conversationInProgress ? "si" : "no"}.`,
+    `Cantidad de turnos del usuario: ${turnCount}.`,
+    previousUserText ? `Mensaje anterior del usuario: ${previousUserText}` : "Mensaje anterior del usuario: (ninguno).",
+    lastAssistantText ? `Ultima respuesta de Margarita: ${lastAssistantText.slice(0, 900)}` : "Ultima respuesta de Margarita: (ninguna).",
+    input.userDisplayName || input.userName
+      ? `Nombre visible para trato natural: ${input.userDisplayName || input.userName}${input.userRoleLabel ? ` (${input.userRoleLabel})` : ""}.`
+      : "Nombre visible para trato natural: no disponible."
+  ].join("\n");
 }
 
 function getFollowupGuideFromHistory(history: any[] = [], guides: ModuleGuide[] = [], detailGuides: DetailGuide[] = []) {
@@ -2380,7 +2451,7 @@ function buildAdministrativoDetailedReply(greetingName: string, question: string
   return `${intro} Te guío con ${match.title} en Administrativo:\n\n${match.body}`;
 }
 function buildDirectReply(question: string, userName: string, userDisplayName: string, context: any, history: any[] = []) {
-  const greetingName = userDisplayName || userName;
+  const greetingName = shouldUseGreetingInReply(question, history) ? (userDisplayName || userName) : "";
   const currentPath = normalizeText(context?.currentPath);
   const accessibleGuides = Array.isArray(context?.accessibleModuleGuides) ? context.accessibleModuleGuides : [];
   const accessibleDetailGuides = Array.isArray(context?.assistantDetailGuides) ? context.assistantDetailGuides : [];
@@ -3658,6 +3729,7 @@ router.post("/chat", async (req, res) => {
 
     const systemPrompt = [
       "Sos Margarita, la asistente interna de PROFE360.",
+      buildAssistantConversationStyle({ question, history, userDisplayName, userName, userRoleLabel }),
       "Responde en espanol claro, amable, cordial y humano.",
       "Saluda de forma natural.",
       userDisplayName
@@ -3667,6 +3739,10 @@ router.post("/chat", async (req, res) => {
           : "Si todavía no sabes el nombre de la persona, pedíselo amablemente en tu respuesta.",
       "Tu trabajo principal es apoyar el uso correcto de los módulos de PROFE360, paso a paso.",
       "Si la persona pregunta cómo hacer algo en la plataforma, prioriza una guía clara antes de pedir cédula, grupo o materia.",
+      "Si la persona esta continuando una consulta anterior, responde como seguimiento directo y evita reiniciar la explicacion completa.",
+      "Cuando haya un error visible o un mensaje tecnico, explica que significa en palabras simples y cual es el siguiente chequeo.",
+      "Si el usuario dice 'dale', 'ok', 'si' o algo parecido, interpretalo segun la ultima respuesta de Margarita.",
+      "No termines siempre con una pregunta; cerra con el siguiente paso mas util cuando este claro.",
       "Usa primero el contexto real del sistema que te paso.",
       "Si la consulta es sobre notas de un alumno, prioriza el bloque notasAlumno.",
       "Si la consulta es sobre horario de una sección, prioriza el bloque horariosSeccion.",
