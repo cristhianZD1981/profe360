@@ -1757,6 +1757,106 @@ function getUserRoles(req: any) {
   return Array.isArray(getAuth(req).roles) ? getAuth(req).roles.map((role: any) => String(role || "").trim().toUpperCase()) : [];
 }
 
+function normalizeRoles(value: any) {
+  return Array.isArray(value) ? value.map((role: any) => String(role || "").trim().toUpperCase()).filter(Boolean) : [];
+}
+
+function canManageStudentRecordsFromRoles(roles: string[]) {
+  return roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role));
+}
+
+function canManageStudentRecords(context: any) {
+  return canManageStudentRecordsFromRoles(normalizeRoles(context?.userRoles));
+}
+
+function userHasModuleAccess(context: any, moduleKey: string) {
+  const accessibleGuides = Array.isArray(context?.accessibleModuleGuides) ? context.accessibleModuleGuides : [];
+  return accessibleGuides.some((guide: ModuleGuide) => guide.key === moduleKey);
+}
+
+const ADMIN_ONLY_MODULE_SCOPE: Record<string, { title: string; routePrefixes: string[]; phrases: RegExp; allowedRoles: string; allowedUse: string }> = {
+  instituciones: {
+    title: "Instituciones",
+    routePrefixes: ["/instituciones"],
+    phrases: /(INSTITUCION|INSTITUCIONES|CREAR INSTITUCION|EDITAR INSTITUCION)/,
+    allowedRoles: "SUPER_ADMIN, ADMIN_INSTITUCIONAL o ADMINISTRATIVO",
+    allowedUse: "crear, editar o mantener la informacion institucional"
+  },
+  usuarios: {
+    title: "Usuarios",
+    routePrefixes: ["/usuarios"],
+    phrases: /(USUARIO|USUARIOS|ROL|ROLES|ACCESO|ACCESOS|CLAVE)/,
+    allowedRoles: "SUPER_ADMIN, ADMIN_INSTITUCIONAL o ADMINISTRATIVO",
+    allowedUse: "crear usuarios, asignar roles, importar usuarios o restablecer accesos de otras personas"
+  },
+  administrativo: {
+    title: "Administrativo",
+    routePrefixes: ["/administrativo", "/academico"],
+    phrases: /(ADMINISTRATIVO|ACADEMICO|ANO LECTIVO|PERIODO|GESTION DE GRUPOS|CREAR GRUPO|EDITAR GRUPO|CREAR SECCION|EDITAR SECCION|CREAR MATERIA|EDITAR MATERIA|MATERIAS POR GRUPO|ASIGNACION DOCENTE|BLOQUE HORARIO|CONFIGURAR HORARIO|CREAR HORARIO|HORARIO DE CLASES|FERIADO|DIA LECTIVO)/,
+    allowedRoles: "SUPER_ADMIN, ADMIN_INSTITUCIONAL o ADMINISTRATIVO",
+    allowedUse: "configurar anos lectivos, periodos, grupos, materias, asignaciones, bloques, horarios o feriados"
+  },
+  matricula: {
+    title: "Matricula",
+    routePrefixes: ["/matricula"],
+    phrases: /(MATRICULA|MATRICULAR|CAMBIAR SECCION|TRASLADAR|MOVER DE SECCION|BOLETA DE MATRICULA)/,
+    allowedRoles: "SUPER_ADMIN, ADMIN_INSTITUCIONAL o ADMINISTRATIVO",
+    allowedUse: "crear matriculas, importar matriculas, trasladar estudiantes o cambiar secciones"
+  },
+  reportes: {
+    title: "Reportes institucionales",
+    routePrefixes: ["/reportes"],
+    phrases: /(REPORTES INSTITUCIONALES|REPORTES Y CERTIFICACIONES|CERTIFICACION|CERTIFICACIONES|CONSTANCIA|CONSTANCIAS)/,
+    allowedRoles: "SUPER_ADMIN, ADMIN_INSTITUCIONAL, ADMINISTRATIVO o PROFESOR_GUIA segun el reporte",
+    allowedUse: "generar reportes institucionales, certificaciones o constancias"
+  }
+};
+
+function resolveRestrictedModuleScope(question: string, currentPath: string, context: any) {
+  const path = normalizeText(currentPath).toLowerCase();
+  const key = normalizeKey(question);
+  const currentScreenKey = normalizeText(context?.currentScreenContext?.moduleKey);
+  const isSchoolNameQuestion = /(COMO SE LLAMA|CUAL ES EL NOMBRE).*(INSTITUCION|COLEGIO)/.test(key);
+  const isOwnPasswordQuestion = /(OLVIDE|OLVIDO|NO RECUERDO|RECUPERAR|RECUPERO).*(MI CLAVE|LA CLAVE|CONTRASENA|PASSWORD)/.test(key);
+  if (isSchoolNameQuestion || isOwnPasswordQuestion) return null;
+
+  const asksManagement = /(CREAR|AGREGAR|ANADIR|REGISTRAR|NUEVO|NUEVA|EDITAR|MODIFICAR|ACTUALIZAR|ELIMINAR|BORRAR|QUITAR|IMPORTAR|ASIGNAR|CONFIGURAR|GENERAR|EXPORTAR|RESTABLECER|CAMBIAR|TRASLADAR|MATRICULAR|FORMULARIO|CAMPOS REQUERIDOS|CAMPO POR CAMPO|COMO|PASOS|GUIA|GUIAME|AYUDA|QUE HAGO|QUE HAY|QUE TIENE|QUE ENCUENTRO|QUE PUEDO HACER|QUE LLENO)/.test(key);
+
+  for (const [moduleKey, scope] of Object.entries(ADMIN_ONLY_MODULE_SCOPE)) {
+    const pathMatches = scope.routePrefixes.some((prefix) => path.startsWith(prefix));
+    const phraseMatches = scope.phrases.test(key) && asksManagement;
+    const screenMatches = currentScreenKey === moduleKey;
+    if (!(pathMatches || phraseMatches || screenMatches)) continue;
+    if (userHasModuleAccess(context, moduleKey)) return null;
+    return { moduleKey, ...scope };
+  }
+
+  return null;
+}
+
+function buildRestrictedModuleScopeReply(greetingName: string, scope: ReturnType<typeof resolveRestrictedModuleScope>) {
+  if (!scope) return null;
+  const intro = greetingName ? `Hola ${greetingName}.` : "Claro.";
+  return `${intro} Esa gestion pertenece a ${scope.title} y no esta dentro del alcance del rol actual.\n\nPara ${scope.allowedUse}, el perfil correcto es: ${scope.allowedRoles}.\n\nCon este rol, Margarita debe orientarte solo en las acciones visibles y permitidas. Si no ves el boton o la pantalla, probablemente es por permisos, no porque falte un paso.`;
+}
+
+function isStudentManagementIntent(question: string, currentPath = "") {
+  const key = normalizeKey(`${question} ${currentPath}`);
+  const mentionsStudent = /(ESTUDIANTE|ESTUDIANTES|ALUMNO|ALUMNOS|MATRICULA|MATRICULAR)/.test(key) || normalizeText(currentPath).toLowerCase().startsWith("/estudiantes");
+  const managementAction = /(CREAR|AGREGAR|ANADIR|REGISTRAR|NUEVO|NUEVA|EDITAR|MODIFICAR|ACTUALIZAR|SUSPENDER|SUSPENSION|ACTIVAR|INACTIVAR|MATRICULAR|CAMBIAR SECCION|TRASLADAR)/.test(key);
+  const formQuestion = /(QUE LLENO|QUE PONGO|QUE CAMPO|FORMULARIO|CAMPOS REQUERIDOS|CAMPO POR CAMPO)/.test(key);
+  return mentionsStudent && (managementAction || formQuestion);
+}
+
+function buildStudentRoleScopeReply(greetingName: string, currentPath: string, context: any) {
+  if (canManageStudentRecords(context)) return null;
+  const intro = greetingName ? `Hola ${greetingName}.` : "Claro.";
+  const locationHint = normalizeText(currentPath).toLowerCase().startsWith("/estudiantes")
+    ? "En Estudiantes, con perfil docente, el alcance correcto es consultar o revisar la informacion permitida."
+    : "Con perfil docente, el alcance sobre estudiantes es de consulta segun la informacion disponible.";
+  return `${intro} ${locationHint}\n\nLo correcto para este perfil es:\n1. Buscar el estudiante por nombre, apellido o cedula.\n2. Abrir el detalle o revisar la informacion visible.\n3. Consultar reportes, notas, asistencia o datos disponibles segun permisos.\n\nCrear, registrar, editar, suspender, activar, inactivar, matricular o cambiar seccion de un estudiante corresponde a Admin, Admin Institucional o Administrativo.\n\nSi Margarita te indico antes crear un estudiante desde perfil profe, eso estaba fuera del alcance del rol.`;
+}
+
 function getAccessibleModuleGuides(req: any, guides: ModuleGuide[] = DEFAULT_MODULE_GUIDES) {
   const roles = getUserRoles(req);
   return guides.filter((guide) => {
@@ -1870,18 +1970,27 @@ function buildSuggestedActions(question: string, context: any): AssistantSuggest
   const matchedDetailGuide = resolveDetailGuideFromQuestion(question, currentPath, accessibleDetailGuides);
   const matchedFaq = resolveFaqFromQuestion(question, currentPath, faqs);
   const currentScreenContext = getCurrentScreenContext(currentPath, screenContexts);
+  const restrictedModuleScope = resolveRestrictedModuleScope(question, currentPath, { ...context, currentScreenContext });
+
+  if (restrictedModuleScope) {
+    pushSuggestedAction(actions, { label: "Ver mis modulos", type: "ask", target: "Que modulos puedo usar" });
+    return actions;
+  }
 
   if (matchedGuide?.path) {
     pushSuggestedAction(actions, { label: `Ir a ${matchedGuide.title}`, type: "navigate", target: matchedGuide.path });
     pushSuggestedAction(actions, { label: `Explicame ${matchedGuide.title}`, type: "ask", target: `Explicame ${matchedGuide.title} paso a paso` });
+    pushSuggestedAction(actions, { label: "Guiame paso a paso", type: "ask", target: "Guiame paso a paso" });
   }
 
   if (matchedDetailGuide?.title) {
     pushSuggestedAction(actions, { label: `Ver ${matchedDetailGuide.title}`, type: "ask", target: `Explicame ${matchedDetailGuide.title} campo por campo` });
+    pushSuggestedAction(actions, { label: "Guiame paso a paso", type: "ask", target: "Guiame paso a paso" });
   }
 
   if (matchedFaq?.kind === "DIAGNOSTICO") {
     pushSuggestedAction(actions, { label: "Que reviso primero", type: "ask", target: `Que reviso primero en ${matchedFaq.title}` });
+    pushSuggestedAction(actions, { label: "Guiame paso a paso", type: "ask", target: "Guiame paso a paso" });
   }
 
   if (currentScreenContext?.moduleKey) {
@@ -1990,6 +2099,25 @@ function normalizeKey(text: string) {
   return normalizeText(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
 }
 
+function buildWhatElseReplyForRole(greetingName: string, guides: ModuleGuide[]) {
+  const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
+  const names = guides.map((guide) => guide.title).join(", ");
+  const guideKeys = new Set(guides.map((guide) => guide.key));
+  const examples = [
+    guideKeys.has("gestion-profe") ? "quiero pasar asistencia" : "",
+    guideKeys.has("gestion-profe") ? "quiero calificar tareas" : "",
+    guideKeys.has("planeamiento-ia") || guideKeys.has("gestion-profe") ? "quiero generar indicadores" : "",
+    guideKeys.has("estudiantes") ? "quiero buscar un alumno" : "",
+    guideKeys.has("reportes") ? "quiero sacar un reporte" : "",
+    guideKeys.has("usuarios") ? "quiero crear un usuario" : "",
+    guideKeys.has("matricula") ? "quiero matricular un alumno" : ""
+  ].filter(Boolean).slice(0, 3);
+  const exampleText = examples.length
+    ? `\n\nPodes probar con algo como: ${examples.map((item) => `"${item}"`).join(", ")}.`
+    : "";
+  return `${intro} Ademas de responder dudas, puedo:\n\n- guiarte paso a paso en los modulos que tenes acceso\n- decirte en que modulo se hace cada proceso\n- indicarte validaciones previas antes de guardar\n- explicarte errores comunes y que revisar\n- ayudarte a buscar estudiantes, grupos, horarios, notas, asistencia y reportes cuando aplique\n\nCon tu rol, te puedo orientar sobre: ${names}.${exampleText}`;
+}
+
 function includesAny(text: string, needles: string[]) {
   const key = normalizeKey(text);
   return needles.some((needle) => key.includes(normalizeKey(needle)));
@@ -1998,6 +2126,11 @@ function includesAny(text: string, needles: string[]) {
 function isWhatElseQuestion(question: string) {
   const key = normalizeKey(question);
   return /(Y QUE MAS PUEDES HACER|QUE MAS PUEDES HACER|EN QUE MAS PUEDES AYUDARME|COMO MAS ME PUEDES AYUDAR|QUE MAS HACES)/.test(key);
+}
+
+function isStepByStepRequest(question: string) {
+  const key = normalizeKey(question);
+  return /(GUIAME PASO A PASO|GUIA PASO A PASO|PASO A PASO|EMPECEMOS|EMPEZAR GUIA|VAMOS PASO A PASO|SIGUIENTE PASO|CONTINUAR GUIA)/.test(key);
 }
 
 function matchesConversationPattern(question: string, patterns: ConversationPattern[], patternKey: string, defaults: string[] = []) {
@@ -2088,6 +2221,67 @@ function getFollowupGuideFromHistory(history: any[] = [], guides: ModuleGuide[] 
   return { guide, detailGuide: null as DetailGuide | null };
 }
 
+function extractNumberedSteps(text: string) {
+  const lines = normalizeText(text).split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const steps: Array<{ number: number; text: string }> = [];
+
+  for (const line of lines) {
+    const match = line.match(/^(\d{1,2})[\.\)]\s+(.+)$/);
+    if (!match) continue;
+    const number = Number(match[1]);
+    const stepText = normalizeText(match[2]);
+    if (Number.isFinite(number) && number > 0 && stepText) {
+      steps.push({ number, text: stepText });
+    }
+  }
+
+  return steps;
+}
+
+function extractCompletedStepNumbers(history: any[] = []) {
+  const completed = new Set<number>();
+  for (const item of history) {
+    const role = String(item?.role || "").toLowerCase();
+    if (role !== "assistant") continue;
+    const text = normalizeText(item?.text);
+    const match = text.match(/Paso\s+(\d{1,2})\s+de\s+\d{1,2}/i);
+    if (match) completed.add(Number(match[1]));
+  }
+  return completed;
+}
+
+function findLastStepGuideText(history: any[] = []) {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index];
+    if (String(item?.role || "").toLowerCase() !== "assistant") continue;
+    const text = normalizeText(item?.text);
+    const steps = extractNumberedSteps(text);
+    if (steps.length >= 2) return text;
+  }
+  return "";
+}
+
+function buildStepByStepContinuationReply(history: any[] = []) {
+  const guideText = findLastStepGuideText(history);
+  if (!guideText) return null;
+
+  const steps = extractNumberedSteps(guideText);
+  if (steps.length < 2) return null;
+
+  const completed = extractCompletedStepNumbers(history);
+  const nextStep = steps.find((step) => !completed.has(step.number));
+  if (!nextStep) {
+    return "Listo, ya recorrimos todos los pasos principales. Si algo no te coincide con la pantalla, decime que ves y lo revisamos sobre esa parte.";
+  }
+
+  const remaining = steps.length - nextStep.number;
+  const suffix = remaining > 0
+    ? "\n\nCuando lo tengas, decime \"listo\" y seguimos con el siguiente."
+    : "\n\nCuando lo hagas, ya deberias tener listo este flujo. Si aparece un mensaje o error, mandamelo y lo revisamos.";
+
+  return `Vamos paso a paso.\n\nPaso ${nextStep.number} de ${steps.length}: ${nextStep.text}${suffix}`;
+}
+
 function buildAdministrativeOverviewReply(greetingName: string, detailGuides: DetailGuide[] = []) {
   const intro = greetingName ? `Hola ${greetingName}.` : "Hola.";
   const items = detailGuides
@@ -2152,6 +2346,11 @@ function isCurrentScreenQuestion(question: string) {
   return /(QUE HAGO AQUI|QUE PUEDO HACER AQUI|AYUDAME AQUI|EN ESTA PANTALLA|ACA QUE HAGO|AQUI QUE HAGO|DONDE ESTOY|QUE SIGUE AQUI|SABES EN QUE PANTALLA ESTOY|AHORA QUE HAGO|Y ACA|Y AQUI|Y ACA QUE SE HACE|Y AQUI QUE SE HACE)/.test(key);
 }
 
+function isDiagnosticQuestion(question: string) {
+  const key = normalizeKey(question);
+  return /(NO ME DEJA|NO APARECE|NO SALE|NO VEO|SALE ERROR|ME DA ERROR|ERROR|QUE PASA ACA|QUE PASA AQUI|POR QUE|PORQUE|NO CARGA|SALE VACIO|ESTA VACIO|NO FUNCIONA|NO PUEDO|QUE REVISO|REVISA ESTO|AYUDAME CON ESTE ERROR)/.test(key);
+}
+
 function getCurrentScreenContext(currentPath: string, screenContexts: ScreenContext[] = DEFAULT_SCREEN_CONTEXTS) {
   const path = normalizeText(currentPath).toLowerCase();
   const sorted = [...screenContexts].sort((a, b) => b.routePrefix.length - a.routePrefix.length);
@@ -2179,6 +2378,114 @@ function buildLiveScreenSnapshotReply(greetingName: string, snapshot: AssistantS
     ? `\n\nTambien veo acciones disponibles como: ${snapshot.buttons.slice(0, 5).join(", ")}.`
     : "";
   return `${intro} ${routeLine}${focusLine}${actionLine}\n\nDecime qué parte querés resolver y te guío sobre esa vista exacta.`;
+}
+
+function buildSnapshotEvidence(snapshot: AssistantScreenSnapshot | null) {
+  if (!snapshot) return [];
+  return [
+    ...(snapshot.alerts || []).slice(0, 3).map((item) => `Mensaje visible: ${item}`),
+    ...(snapshot.selectedOptions || []).slice(0, 5).map((item) => `Seleccionado: ${item}`),
+    ...(snapshot.checkedOptions || []).slice(0, 6).map((item) => `Marcado: ${item}`),
+    ...(snapshot.fieldValues || []).slice(0, 5).map((item) => `Campo: ${item}`),
+    snapshot.activeElement ? `Elemento activo: ${snapshot.activeElement}` : "",
+    snapshot.rowCount ? `Filas visibles: ${snapshot.rowCount}` : ""
+  ].filter(Boolean);
+}
+
+function buildModuleDiagnosticChecks(currentPath: string, question: string, snapshot: AssistantScreenSnapshot | null, matchedFaq: AssistantFaq | null) {
+  const path = normalizeText(currentPath).toLowerCase();
+  const key = normalizeKey(question);
+  const visibleText = normalizeKey([
+    ...(snapshot?.headings || []),
+    ...(snapshot?.labels || []),
+    ...(snapshot?.buttons || []),
+    ...(snapshot?.alerts || []),
+    ...(snapshot?.selectedOptions || []),
+    ...(snapshot?.checkedOptions || []),
+    ...(snapshot?.fieldValues || [])
+  ].join(" "));
+
+  if (matchedFaq?.kind === "DIAGNOSTICO" && matchedFaq.steps.length) {
+    return matchedFaq.steps.slice(0, 5);
+  }
+
+  if (path.startsWith("/gestion-profe") && /(INDICADOR|HABILIDAD|PLANEAMIENTO|SIN PLANEAMIENTO)/.test(`${key} ${visibleText}`)) {
+    return [
+      "Verifica que el grupo y la materia seleccionados sean los correctos.",
+      "Confirma que haya al menos un mes marcado.",
+      "Confirma que haya una habilidad marcada y que corresponda a ese mes.",
+      "Revisa que exista una plantilla IA de indicadores seleccionada.",
+      "Si el error menciona filtros, normalmente el choque esta entre materia, mes o habilidad inactiva."
+    ];
+  }
+
+  if (path.startsWith("/gestion-profe") && /(SUSPEND|ROSAD|CALIFICAR|ASISTENCIA|ALUMNO)/.test(`${key} ${visibleText}`)) {
+    return [
+      "Si la fila esta rosada, el estudiante esta suspendido.",
+      "Mientras la suspension este vigente, el docente puede verlo pero no gestionarlo.",
+      "Pasa el mouse sobre la fila para confirmar motivo y fecha fin.",
+      "Si la suspension no corresponde, debe corregirse desde Estudiantes con perfil administrativo."
+    ];
+  }
+
+  if (path.startsWith("/reportes")) {
+    return [
+      "Revisa primero el tipo de reporte seleccionado.",
+      "Confirma que la seccion o filtros obligatorios esten completos.",
+      "Si hay filas visibles, valida si el caso esta en la tabla antes de exportar.",
+      "Si sale vacio, revisa que el dato exista en el modulo origen: asistencia, notas, tareas o estudiantes."
+    ];
+  }
+
+  if (path.startsWith("/estudiantes")) {
+    return [
+      "Busca primero por cedula o nombre completo para evitar duplicados.",
+      "Revisa si el estudiante aparece activo, inactivo o suspendido.",
+      "Si no aparece una accion, confirma el rol del usuario.",
+      "Si el caso es suspension, revisa motivo, fecha inicio y fecha fin."
+    ];
+  }
+
+  if (path.startsWith("/administrativo") || path.startsWith("/academico")) {
+    return [
+      "Revisa la pestana activa y los filtros visibles.",
+      "Confirma que existan los datos base requeridos antes de guardar.",
+      "Si algo no aparece, valida ano lectivo, periodo, grupo, materia y asignacion docente.",
+      "Si el problema es de horarios, revisa materias por grupo y bloques antes del horario de clases."
+    ];
+  }
+
+  return [
+    "Revisa el mensaje visible en pantalla, si existe.",
+    "Confirma que los filtros o campos obligatorios esten completos.",
+    "Valida si tu rol tiene permiso para esa accion.",
+    "Si el listado sale vacio, revisa que los datos existan en el modulo origen."
+  ];
+}
+
+function buildGuidedDiagnosticReply(input: {
+  greetingName: string;
+  question: string;
+  currentPath: string;
+  snapshot: AssistantScreenSnapshot | null;
+  matchedFaq: AssistantFaq | null;
+  currentScreenContext: ScreenContext | null;
+}) {
+  const intro = input.greetingName ? `Hola ${input.greetingName}.` : "Claro.";
+  const evidence = buildSnapshotEvidence(input.snapshot);
+  const checks = buildModuleDiagnosticChecks(input.currentPath, input.question, input.snapshot, input.matchedFaq);
+  const title = input.matchedFaq?.title || input.currentScreenContext?.title || input.snapshot?.routeLabel || "esta pantalla";
+  const evidenceBlock = evidence.length
+    ? `\n\nLo que veo en pantalla:\n${evidence.slice(0, 8).map((item) => `- ${item}`).join("\n")}`
+    : "";
+  const checksBlock = checks.length
+    ? `\n\nRevisemos en orden:\n${checks.map((item, index) => `${index + 1}. ${item}`).join("\n")}`
+    : "";
+  const nextStep = evidence.some((item) => normalizeKey(item).includes("MENSAJE VISIBLE"))
+    ? "Siguiente paso: empezaria por ese mensaje visible, porque normalmente ahi esta la causa inmediata."
+    : "Siguiente paso: revisa el punto 1 y, si esta correcto, seguimos con el punto 2.";
+
+  return `${intro} Revisemos ${title} sin adivinar.${evidenceBlock}${checksBlock}\n\n${nextStep}`;
 }
 
 function isFormGuidanceQuestion(question: string) {
@@ -2493,6 +2800,20 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
       : "Hasta luego. Que te vaya muy bien. Cuando ocupes ayuda en PROFE360, con gusto te acompaño.";
   }
 
+  if (isStudentManagementIntent(question, currentPath)) {
+    const roleScopeReply = buildStudentRoleScopeReply(greetingName, currentPath, context);
+    if (roleScopeReply) return roleScopeReply;
+  }
+
+  if (
+    normalizeText(currentPath).toLowerCase().startsWith("/estudiantes")
+    && !canManageStudentRecords(context)
+    && (isCurrentScreenQuestion(question) || isFormGuidanceQuestion(question) || isHowToQuestion(question) || matchedGuide?.key === "estudiantes" || matchedDetailGuide?.moduleKey === "estudiantes")
+  ) {
+    const roleScopeReply = buildStudentRoleScopeReply(greetingName, currentPath, context);
+    if (roleScopeReply) return roleScopeReply;
+  }
+
   if (
     matchesConversationPattern(question, conversationPatterns, "SCHOOL_NAME", [
       "como se llama el colegio",
@@ -2520,6 +2841,16 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
     return buildForgotPasswordReply(greetingName, currentPath, canManageUsers);
   }
 
+  const restrictedModuleScope = resolveRestrictedModuleScope(question, currentPath, { ...context, currentScreenContext });
+  if (restrictedModuleScope) {
+    return buildRestrictedModuleScopeReply(greetingName, restrictedModuleScope);
+  }
+
+  if (isStepByStepRequest(question)) {
+    const stepReply = buildStepByStepContinuationReply(history);
+    if (stepReply) return stepReply;
+  }
+
   if (
     matchesConversationPattern(question, conversationPatterns, "AFFIRM_CONTINUE", [
       "ok",
@@ -2530,9 +2861,18 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
       "está bien",
       "si dale",
       "perfecto",
-      "de una"
+      "de una",
+      "listo",
+      "ya",
+      "ya esta",
+      "ya lo hice",
+      "siguiente",
+      "continuar"
     ])
   ) {
+    const stepReply = buildStepByStepContinuationReply(history);
+    if (stepReply) return stepReply;
+
     const previousPromptOfferedFollowup = /CAMPO POR CAMPO|DECIME CUAL TE EXPLICO|SI QUERES.*TE EXPLICO/i.test(normalizeKey(getLastAssistantText(history)));
     if (previousPromptOfferedFollowup) {
       const followup = getFollowupGuideFromHistory(history, accessibleGuides, accessibleDetailGuides);
@@ -2557,6 +2897,17 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
     if (reply) return reply;
   }
 
+  if (isDiagnosticQuestion(question)) {
+    return buildGuidedDiagnosticReply({
+      greetingName,
+      question,
+      currentPath,
+      snapshot: screenSnapshot,
+      matchedFaq,
+      currentScreenContext
+    });
+  }
+
   if (isCurrentScreenQuestion(question)) {
     const reply = buildCurrentScreenReply(greetingName, currentScreenContext);
     if (reply) return reply;
@@ -2574,7 +2925,7 @@ function buildDirectReply(question: string, userName: string, userDisplayName: s
   }
 
   if (isWhatElseQuestion(question) && accessibleGuides.length) {
-    return buildWhatElseReply(greetingName, accessibleGuides);
+    return buildWhatElseReplyForRole(greetingName, accessibleGuides);
   }
 
   if (matchedFaq) {
@@ -2967,6 +3318,7 @@ async function buildContext(pool: any, req: any, question: string, currentPath?:
 
   return {
     currentPath: currentPath || "/",
+    userRoles: getUserRoles(req),
     screenSnapshot,
     screenFocus,
     intent,
@@ -3750,6 +4102,11 @@ router.post("/chat", async (req, res) => {
       "No inventes datos ni afirmes consultas que no aparezcan en el contexto.",
       "Guía solo sobre módulos a los que la persona tenga acceso según el contexto.",
       "Podés ayudar con estudiantes, grupos, horarios, notas, asistencia, reportes, planeamientos e indicadores.",
+      `Roles reales del usuario: ${normalizeRoles(context?.userRoles).join(", ") || "(sin roles detectados)"}.`,
+      "Respeta siempre el alcance del rol: PROFESOR y PROFESOR_GUIA pueden consultar estudiantes segun permisos, pero no deben recibir pasos para crear, editar, suspender, activar, inactivar, matricular o cambiar seccion de estudiantes.",
+      "Las acciones administrativas de estudiantes corresponden solo a SUPER_ADMIN, ADMIN_INSTITUCIONAL o ADMINISTRATIVO.",
+      "No guies a perfiles sin permiso para crear usuarios, asignar roles, matricular, configurar anos lectivos, grupos, materias, horarios, instituciones o reportes institucionales.",
+      "Si la persona no tiene acceso a un modulo o boton, explicalo como alcance del rol y ofrece una alternativa visible para su perfil.",
       ...(Array.isArray(context?.assistantAdminInstructions) && context.assistantAdminInstructions.length
         ? [
             "Indicaciones administrativas vigentes para Margarita:",

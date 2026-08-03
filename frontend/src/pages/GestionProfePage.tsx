@@ -386,6 +386,9 @@ export default function GestionProfePage() {
   const [indicadoresHabilidadesOpen, setIndicadoresHabilidadesOpen] = useState(false);
   const [indicadoresHabilidadesForm, setIndicadoresHabilidadesForm] = useState(initialIndicadoresHabilidadesForm);
   const [generatingIndicadoresHabilidades, setGeneratingIndicadoresHabilidades] = useState(false);
+  const [generatingIndicadoresHabilidadesProgress, setGeneratingIndicadoresHabilidadesProgress] = useState(0);
+  const [generatingIndicadoresHabilidadesEtapa, setGeneratingIndicadoresHabilidadesEtapa] = useState("");
+  const generatingIndicadoresHabilidadesTimerRef = useRef<number | null>(null);
   const [indicadorManualPorPlaneamiento, setIndicadorManualPorPlaneamiento] = useState<Record<number, typeof initialIndicadorManualForm>>({});
   const [savingIndicadorManualPlaneamientoId, setSavingIndicadorManualPlaneamientoId] = useState<number | null>(null);
   const [generatingPlaneamientoIa, setGeneratingPlaneamientoIa] = useState(false);
@@ -3599,6 +3602,8 @@ function getAsistenciaEncargadoTooltip(params: {
       stopSeguimientoSaving(true, "actividad");
       await loadSeguimientoEvaluacion(selected);
       setActivePanel("examenes_tabla");
+      setGeneratingIndicadoresHabilidadesProgress(100);
+      setGeneratingIndicadoresHabilidadesEtapa("Indicadores generados correctamente");
     } catch (error: any) {
       console.error("Error guardando matriz de asignación por prueba:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar la matriz de asignación por prueba");
@@ -5788,12 +5793,22 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       return;
     }
 
+    const operacionId = crearOperacionIdPlaneamientoIa("indicadores-habilidades");
     setGeneratingIndicadoresHabilidades(true);
+    setGeneratingIndicadoresHabilidadesProgress(0);
+    setGeneratingIndicadoresHabilidadesEtapa("Preparando generacion de indicadores");
+    iniciarMonitoreoProgresoEval360(
+      operacionId,
+      setGeneratingIndicadoresHabilidadesProgress,
+      setGeneratingIndicadoresHabilidadesEtapa,
+      generatingIndicadoresHabilidadesTimerRef
+    );
     setMessage("");
     setErrorMessage("");
 
     try {
       const response = await api.post("/eval360/indicadores/generar-desde-habilidades", {
+        operacionId,
         grupoId: selected.GrupoId,
         materiaId: selected.MateriaId,
         anioLectivoId: selected.AnioLectivoId,
@@ -5829,9 +5844,15 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setMessage(response?.data?.message || `Indicadores creados desde habilidades para ${Number(data.estructurasAplicadas || 0)}/${grupoIdsDestino.length} sección(es).`);
     } catch (error: any) {
       console.error("Error generando indicadores desde habilidades:", error);
+      setGeneratingIndicadoresHabilidadesEtapa("No se pudieron generar los indicadores");
       setErrorMessage(error?.response?.data?.message || "No se pudieron crear los indicadores desde habilidades");
     } finally {
+      detenerMonitoreoProgresoPlaneamientoIa(generatingIndicadoresHabilidadesTimerRef);
       setGeneratingIndicadoresHabilidades(false);
+      window.setTimeout(() => {
+        setGeneratingIndicadoresHabilidadesProgress(0);
+        setGeneratingIndicadoresHabilidadesEtapa("");
+      }, 900);
     }
   }
 
@@ -7033,6 +7054,37 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         if (data.etapa) setEtapa(String(data.etapa));
       } catch {
         // La solicitud principal continúa; un fallo transitorio del sondeo no debe cancelarla.
+      } finally {
+        consultando = false;
+      }
+    };
+
+    void consultar();
+    timerRef.current = window.setInterval(() => void consultar(), 500);
+  }
+
+  function iniciarMonitoreoProgresoEval360(
+    operacionId: string,
+    setPorcentaje: React.Dispatch<React.SetStateAction<number>>,
+    setEtapa: React.Dispatch<React.SetStateAction<string>>,
+    timerRef: React.MutableRefObject<number | null>
+  ) {
+    detenerMonitoreoProgresoPlaneamientoIa(timerRef);
+    let consultando = false;
+
+    const consultar = async () => {
+      if (consultando) return;
+      consultando = true;
+      try {
+        const response = await api.get(`/eval360/progreso/${encodeURIComponent(operacionId)}`, {
+          timeout: 10000
+        });
+        const data = response.data?.data || response.data || {};
+        const porcentaje = Math.min(100, Math.max(0, Number(data.porcentaje || 0)));
+        setPorcentaje(porcentaje);
+        if (data.etapa) setEtapa(String(data.etapa));
+      } catch {
+        // La solicitud principal continua; un fallo transitorio del sondeo no debe cancelarla.
       } finally {
         consultando = false;
       }
@@ -11615,6 +11667,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         Cancelar
                       </button>
                     </div>
+
+                    {(generatingIndicadoresHabilidades || generatingIndicadoresHabilidadesProgress > 0) && (
+                      <div style={{ display: "grid", gap: "6px" }}>
+                        <div className="processing-progress-track" aria-label="Progreso de generacion de indicadores desde habilidades">
+                          <div
+                            className="processing-progress-bar"
+                            style={{ width: `${Math.max(0, Math.min(100, generatingIndicadoresHabilidadesProgress))}%` }}
+                          />
+                        </div>
+                        <div className="processing-progress-meta" style={{ color: "#ecfeff" }}>
+                          <span>{Math.max(0, Math.min(100, Math.round(generatingIndicadoresHabilidadesProgress)))}%</span>
+                          <span>{generatingIndicadoresHabilidadesEtapa || "Procesando indicadores"}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
