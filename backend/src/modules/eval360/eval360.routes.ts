@@ -68,11 +68,42 @@ const TRASLADOS_REAPLICADOS_TTL_MS = 5 * 60 * 1000;
 
 const trasladosReaplicadosCache = new Map<string, number>();
 
+type EstadoProgresoEval360 = "procesando" | "completado" | "error";
+
+type ProgresoEval360 = {
+  porcentaje: number;
+  etapa: string;
+  estado: EstadoProgresoEval360;
+  actualizadoEn: number;
+};
+
+const progresoEval360Operaciones = new Map<string, ProgresoEval360>();
+
+const PROGRESO_EVAL360_TTL_MS = 30 * 60 * 1000;
+
+const SQL_COSTA_RICA_NOW = "CONVERT(datetime2(3), SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'Central America Standard Time')";
+
 
 
 router.use(requireAuth);
 
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
+
+router.get("/progreso/:operacionId", (req, res) => {
+
+  limpiarProgresosEval360Expirados();
+
+  const operacionId = normalizeOperacionEval360Id(req.params.operacionId);
+
+  if (!operacionId) return badRequest(res, "El identificador de la operacion no es valido");
+
+  return ok(res, progresoEval360Operaciones.get(operacionId) || {
+    porcentaje: 0,
+    etapa: "Esperando que inicie la operacion",
+    estado: "procesando"
+  });
+
+});
 
 
 
@@ -105,6 +136,63 @@ function getUserId(req: any) {
   const auth = getAuth(req);
 
   return Number(auth.userId || auth.usuarioId || 0);
+
+}
+
+function normalizeOperacionEval360Id(value: unknown) {
+
+  const operacionId = String(value || "").trim();
+
+  return /^[a-zA-Z0-9_-]{8,120}$/.test(operacionId) ? operacionId : "";
+
+}
+
+function limpiarProgresosEval360Expirados() {
+
+  const limite = Date.now() - PROGRESO_EVAL360_TTL_MS;
+
+  for (const [operacionId, progreso] of progresoEval360Operaciones.entries()) {
+
+    if (progreso.actualizadoEn < limite) progresoEval360Operaciones.delete(operacionId);
+
+  }
+
+}
+
+function actualizarProgresoEval360(
+  operacionId: string,
+  porcentaje: number,
+  etapa: string,
+  estado: EstadoProgresoEval360 = "procesando"
+) {
+
+  if (!operacionId) return;
+
+  limpiarProgresosEval360Expirados();
+
+  const anterior = progresoEval360Operaciones.get(operacionId);
+
+  const porcentajeNormalizado = Math.max(
+    anterior?.porcentaje || 0,
+    Math.min(100, Math.max(0, Math.round(porcentaje)))
+  );
+
+  progresoEval360Operaciones.set(operacionId, {
+    porcentaje: porcentajeNormalizado,
+    etapa,
+    estado,
+    actualizadoEn: Date.now()
+  });
+
+}
+
+function marcarErrorProgresoEval360(operacionId: string, etapa: string) {
+
+  if (!operacionId) return;
+
+  const anterior = progresoEval360Operaciones.get(operacionId);
+
+  actualizarProgresoEval360(operacionId, anterior?.porcentaje || 0, etapa, "error");
 
 }
 
@@ -8016,7 +8104,7 @@ async function getOrCreateEstructuraIndicadoresHabilidades(executor: any, params
         (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, UsuarioId, PlantillaBaseId, Nombre, TotalPorcentaje, Activo, CreatedAt)
       OUTPUT INSERTED.EstructuraGrupoId, INSERTED.GrupoId, INSERTED.PlantillaBaseId
       VALUES
-        (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioId, @plantillaBaseId, @nombre, 100, 1, SYSDATETIME())
+        (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioId, @plantillaBaseId, @nombre, 100, 1, ${SQL_COSTA_RICA_NOW})
     `);
 
   const estructura = creada.recordset[0];
@@ -12068,7 +12156,11 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
   const transaction = new sql.Transaction(pool);
 
+  const operacionId = normalizeOperacionEval360Id(req.body?.operacionId);
+
   try {
+
+    actualizarProgresoEval360(operacionId, 1, "Validando datos de la solicitud");
 
     if (!assertCanAccess(req, res)) return;
 
@@ -12108,6 +12200,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
     if (!tiposUso.length) return badRequest(res, "Debés indicar al menos una rúbrica válida");
 
+    actualizarProgresoEval360(operacionId, 5, "Comprobando asignacion del grupo y la materia");
+
     const asignacionBase = await getAsignacionPermitida(req, res, {
       grupoId: Number(grupoId),
       materiaId: Number(materiaId),
@@ -12126,6 +12220,10 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
     for (const grupoDestinoId of grupoIdsDestino) {
 
+      const avanceAsignacion = 8 + ((asignacionesDestino.length / Math.max(1, grupoIdsDestino.length)) * 8);
+
+      actualizarProgresoEval360(operacionId, avanceAsignacion, `Validando seccion ${asignacionesDestino.length + 1} de ${grupoIdsDestino.length}`);
+
       const asignacion = await getAsignacionPermitida(req, res, {
         grupoId: Number(grupoDestinoId),
         materiaId: Number(materiaId),
@@ -12138,6 +12236,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       asignacionesDestino.push(asignacion);
 
     }
+
+    actualizarProgresoEval360(operacionId, 17, "Cargando plantilla IA de indicadores");
 
     const plantilla = await getPlantillaIndicadores(req, pool, plantillaPromptIAId);
 
@@ -12171,6 +12271,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
         )
       )
     `;
+
+    actualizarProgresoEval360(operacionId, 22, "Validando habilidades seleccionadas");
 
     const habilidadesResult = await habilidadesRequest.query(`
       SELECT
@@ -12247,6 +12349,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       });
 
       const extra = detalles.length ? `: ${detalles.join(" | ")}` : "";
+      marcarErrorProgresoEval360(operacionId, "Una o mas habilidades no estan disponibles para los filtros indicados");
       return badRequest(res, `Una o mas habilidades seleccionadas no estan disponibles para los filtros indicados${extra}`);
     }
 
@@ -12261,15 +12364,26 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       indicacionesDocente
     });
 
+    actualizarProgresoEval360(operacionId, 32, "Generando indicadores base desde habilidades");
+
     const aiBases = await callOpenAiIndicadores(promptBases);
 
     const indicadoresBase = normalizarIndicadoresBaseDesdeHabilidades(aiBases, habilidades, cantidadPorHabilidad);
 
-    if (!indicadoresBase.length) return badRequest(res, "No se pudieron crear indicadores desde las habilidades seleccionadas");
+    if (!indicadoresBase.length) {
+      marcarErrorProgresoEval360(operacionId, "No se pudieron crear indicadores desde las habilidades seleccionadas");
+      return badRequest(res, "No se pudieron crear indicadores desde las habilidades seleccionadas");
+    }
 
     const resultadosPorTipo: Record<string, any[]> = {};
 
     for (const tipoUso of tiposUso) {
+
+      const indiceTipo = tiposUso.indexOf(tipoUso);
+
+      const avanceTipo = 45 + ((indiceTipo / Math.max(1, tiposUso.length)) * 25);
+
+      actualizarProgresoEval360(operacionId, avanceTipo, `Generando niveles para ${tipoUso} (${indiceTipo + 1}/${tiposUso.length})`);
 
       const prompt = buildPromptIndicadores({
         plantilla,
@@ -12284,6 +12398,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       resultadosPorTipo[tipoUso] = normalizarIndicadoresGenerados(aiResult, indicadoresBase);
 
     }
+
+    actualizarProgresoEval360(operacionId, 72, "Preparando guardado de indicadores");
 
     const estructuraBaseResult = await pool.request()
       .input("institucionId", sql.Int, Number(asignacionBase.InstitucionId))
@@ -12305,6 +12421,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
     const plantillaBaseId = Number(estructuraBaseResult.recordset[0]?.PlantillaBaseId || 0) || null;
 
+    actualizarProgresoEval360(operacionId, 74, "Iniciando guardado en base de datos");
+
     await transaction.begin();
 
     const planeamientosPorGrupo = new Map<number, number>();
@@ -12312,6 +12430,12 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
     const estructurasDestino: any[] = [];
 
     for (const asignacion of asignacionesDestino) {
+
+      const indiceAsignacion = asignacionesDestino.indexOf(asignacion);
+
+      const avanceGuardado = 76 + ((indiceAsignacion / Math.max(1, asignacionesDestino.length)) * 18);
+
+      actualizarProgresoEval360(operacionId, avanceGuardado, `Guardando seccion ${indiceAsignacion + 1} de ${asignacionesDestino.length}`);
 
       const grupoDestinoId = Number(asignacion.GrupoId);
 
@@ -12370,7 +12494,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
               (InstitucionId, AnioLectivoId, PeriodoId, GrupoId, MateriaId, UsuarioId, Nombre, FechaInicio, FechaFin, Observaciones, Activo, CreatedAt)
             OUTPUT INSERTED.PlaneamientoId
             VALUES
-              (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, NULL, NULL, @observaciones, 1, SYSDATETIME())
+              (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, NULL, NULL, @observaciones, 1, ${SQL_COSTA_RICA_NOW})
           `);
 
         planeamientoDestinoId = Number(creado.recordset[0]?.PlaneamientoId || 0);
@@ -12434,7 +12558,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
               INSERT INTO dbo.PlaneamientoIndicador
                 (PlaneamientoId, Descripcion, NivelDesempenoId, Activo, CreatedAt)
               VALUES
-                (@planeamientoId, @descripcion, NULL, 1, SYSDATETIME())
+                (@planeamientoId, @descripcion, NULL, 1, ${SQL_COSTA_RICA_NOW})
             `);
 
         }
@@ -12520,7 +12644,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
                 INSERT INTO dbo.Eval360_IndicadorGrupo
                   (EstructuraGrupoId, PlaneamientoId, TipoUso, IndicadorBase, IndicadorAvanzado, IndicadorIntermedio, IndicadorInicial, Activo, CreatedAt)
                 VALUES
-                  (@estructuraGrupoId, @planeamientoId, @tipoUso, @indicadorBase, @indicadorAvanzado, @indicadorIntermedio, @indicadorInicial, 1, SYSDATETIME())
+                  (@estructuraGrupoId, @planeamientoId, @tipoUso, @indicadorBase, @indicadorAvanzado, @indicadorIntermedio, @indicadorInicial, 1, ${SQL_COSTA_RICA_NOW})
               `);
 
           }
@@ -12539,11 +12663,17 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
       await transaction.rollback();
 
+      marcarErrorProgresoEval360(operacionId, "No se pudo preparar el conjunto de indicadores");
+
       return badRequest(res, "No se pudo preparar el conjunto de indicadores");
 
     }
 
+    actualizarProgresoEval360(operacionId, 96, "Confirmando cambios");
+
     await transaction.commit();
+
+    actualizarProgresoEval360(operacionId, 98, "Cargando indicadores generados");
 
     const indicadoresGuardados = await pool.request()
       .input("estructuraGrupoId", sql.Int, Number(estructuraBase.EstructuraGrupoId))
@@ -12564,6 +12694,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
           IndicadorGrupoId
       `);
 
+    actualizarProgresoEval360(operacionId, 100, "Indicadores generados correctamente", "completado");
+
     return created(res, {
       estructuraGrupoId: Number(estructuraBase.EstructuraGrupoId),
       planeamientoId: planeamientoIdBase,
@@ -12579,6 +12711,8 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
   } catch (error) {
 
     try { await transaction.rollback(); } catch {}
+
+    marcarErrorProgresoEval360(operacionId, "No se pudieron generar los indicadores desde habilidades");
 
     console.error("Error generando indicadores Eval360 desde habilidades:", error);
 
@@ -12901,45 +13035,99 @@ async function getIndicadoresConUso(pool: any, indicadorGrupoIds: number[]) {
 
   const tablas = await pool.request().query(`
 
-    SELECT TABLE_SCHEMA, TABLE_NAME
+    SELECT
 
-    FROM INFORMATION_SCHEMA.COLUMNS
+      c.TABLE_SCHEMA,
 
-    WHERE COLUMN_NAME = 'IndicadorGrupoId'
+      c.TABLE_NAME,
 
-      AND TABLE_SCHEMA = 'dbo'
+      MAX(CASE WHEN c2.COLUMN_NAME = 'Activo' THEN 1 ELSE 0 END) AS HasActivo
 
-      AND TABLE_NAME <> 'Eval360_IndicadorGrupo'
+    FROM INFORMATION_SCHEMA.COLUMNS c
+
+    LEFT JOIN INFORMATION_SCHEMA.COLUMNS c2
+
+      ON c2.TABLE_SCHEMA = c.TABLE_SCHEMA
+
+     AND c2.TABLE_NAME = c.TABLE_NAME
+
+     AND c2.COLUMN_NAME = 'Activo'
+
+    WHERE c.COLUMN_NAME = 'IndicadorGrupoId'
+
+      AND c.TABLE_SCHEMA = 'dbo'
+
+      AND c.TABLE_NAME NOT IN ('Eval360_IndicadorGrupo', 'Eval360_ActividadIndicador')
+
+    GROUP BY c.TABLE_SCHEMA, c.TABLE_NAME
 
   `);
 
 
 
-  if (!tablas.recordset.length) return [];
-
-
-
   const valuesSql = ids.map((id) => `(${id})`).join(",");
 
-  const unionSql = tablas.recordset.map((tabla: any) => {
+  const unionParts = tablas.recordset.map((tabla: any) => {
 
     const schema = String(tabla.TABLE_SCHEMA).replace(/]/g, "]]" );
 
     const table = String(tabla.TABLE_NAME).replace(/]/g, "]]" );
+    const tableLabel = `${String(tabla.TABLE_SCHEMA).replace(/'/g, "''")}.${String(tabla.TABLE_NAME).replace(/'/g, "''")}`;
+    const filtroActivo = Number(tabla.HasActivo || 0) === 1 ? "AND ISNULL(t.Activo, 1) = 1" : "";
 
     return `
 
       SELECT DISTINCT CAST(t.IndicadorGrupoId AS INT) AS IndicadorGrupoId,
 
-             N'${schema}.${table}' AS TablaOrigen
+             N'${tableLabel}' AS TablaOrigen
 
       FROM [${schema}].[${table}] t
 
       INNER JOIN ids ON ids.IndicadorGrupoId = t.IndicadorGrupoId
 
+      WHERE 1 = 1
+
+        ${filtroActivo}
+
     `;
 
-  }).join("\nUNION ALL\n");
+  });
+
+  unionParts.push(`
+
+      SELECT DISTINCT CAST(ai.IndicadorGrupoId AS INT) AS IndicadorGrupoId,
+
+             N'dbo.Eval360_ActividadIndicador' AS TablaOrigen
+
+      FROM dbo.Eval360_ActividadIndicador ai
+
+      INNER JOIN ids ON ids.IndicadorGrupoId = ai.IndicadorGrupoId
+
+      WHERE ISNULL(ai.Activo, 1) = 1
+
+        AND (
+
+          ISNULL(ai.NumeroLecciones, 0) > 0
+
+          OR ISNULL(ai.Puntos, 0) > 0
+
+          OR LEN(NULLIF(LTRIM(RTRIM(ISNULL(ai.DetalleItemsJson, N''))), N'{}')) > 0
+
+          OR EXISTS (
+
+            SELECT 1
+
+            FROM dbo.Eval360_NotaActividad na
+
+            WHERE na.ActividadId = ai.ActividadId
+
+          )
+
+        )
+
+  `);
+
+  const unionSql = unionParts.join("\nUNION ALL\n");
 
 
 
@@ -12960,6 +13148,104 @@ async function getIndicadoresConUso(pool: any, indicadorGrupoIds: number[]) {
 
 
   return result.recordset || [];
+
+}
+
+async function desactivarActividadIndicadoresVacios(executor: any, indicadorGrupoIds: number[]) {
+
+  const ids = indicadorGrupoIds
+
+    .map((id) => Number(id))
+
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+
+
+  if (!ids.length) return 0;
+
+
+
+  const valuesSql = ids.map((id) => `(${id})`).join(",");
+
+  const columnasResult = await new sql.Request(executor).query(`
+
+    SELECT CASE
+
+      WHEN COL_LENGTH('dbo.Eval360_ActividadIndicador', 'UpdatedAt') IS NOT NULL THEN 1
+
+      ELSE 0
+
+    END AS HasUpdatedAt
+
+  `);
+
+  const setUpdatedAt = Number(columnasResult.recordset?.[0]?.HasUpdatedAt || 0) === 1
+
+    ? `,
+
+        UpdatedAt = ${SQL_COSTA_RICA_NOW}`
+
+    : "";
+
+  const result = await new sql.Request(executor).query(`
+
+    WITH ids(IndicadorGrupoId) AS (
+
+      SELECT v.IndicadorGrupoId
+
+      FROM (VALUES ${valuesSql}) v(IndicadorGrupoId)
+
+    )
+
+    UPDATE ai
+
+    SET Activo = 0${setUpdatedAt}
+
+    FROM dbo.Eval360_ActividadIndicador ai
+
+    INNER JOIN ids ON ids.IndicadorGrupoId = ai.IndicadorGrupoId
+
+    WHERE ISNULL(ai.Activo, 1) = 1
+
+      AND ISNULL(ai.NumeroLecciones, 0) = 0
+
+      AND ISNULL(ai.Puntos, 0) = 0
+
+      AND (
+
+        ai.DetalleItemsJson IS NULL
+
+        OR LTRIM(RTRIM(ai.DetalleItemsJson)) IN (N'', N'{}')
+
+      )
+
+      AND NOT EXISTS (
+
+        SELECT 1
+
+        FROM dbo.Eval360_NotaActividad na
+
+        WHERE na.ActividadId = ai.ActividadId
+
+      )
+
+      AND NOT EXISTS (
+
+        SELECT 1
+
+        FROM dbo.Eval360_SeguimientoIndicador si
+
+        WHERE si.IndicadorGrupoId = ai.IndicadorGrupoId
+
+      );
+
+    SELECT @@ROWCOUNT AS afectados;
+
+  `);
+
+
+
+  return Number(result.recordset?.[0]?.afectados || 0);
 
 }
 
@@ -13183,6 +13469,8 @@ router.delete("/indicadores/planeamiento/:planeamientoId", async (req, res) => {
 
     await transaction.begin();
 
+    await desactivarActividadIndicadoresVacios(transaction, ids);
+
 
 
     for (const id of ids) {
@@ -13292,6 +13580,10 @@ router.delete("/indicadores/:id", async (req, res) => {
       });
 
     }
+
+
+
+    await desactivarActividadIndicadoresVacios(pool, [indicadorGrupoId]);
 
 
 
