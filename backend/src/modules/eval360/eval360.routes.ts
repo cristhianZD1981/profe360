@@ -36,6 +36,11 @@ import {
   hasGrupoClaseSchema,
   toOptionalGrupoClaseId
 } from "../grupos-clase/grupos-clase.utils";
+import {
+  assertNoSuspendedStudents,
+  getSuspensionVigenteApplySql,
+  suspensionVigenteSelectSql
+} from "../estudiantes/estudiante-suspension.utils";
 
 
 
@@ -7857,6 +7862,191 @@ function normalizarIndicadoresGenerados(resultado: any, indicadoresBase: string[
 
 }
 
+function normalizarNombreSinPlaneamiento(value: any) {
+  const detalle = normalizeText(value)
+    .replace(/^sin\s+planeamiento\s*-?\s*/i, "")
+    .trim();
+  return `Sin Planeamiento${detalle ? ` - ${detalle}` : " - Habilidades"}`.slice(0, 200);
+}
+
+function buildPromptIndicadoresBaseDesdeHabilidades(input: {
+  plantilla: any;
+  habilidades: any[];
+  cantidadPorHabilidad: number;
+  materiaNombre: string;
+  grado: string;
+  meses: string[];
+  nombre: string;
+  indicacionesDocente?: string;
+}) {
+  const habilidadesTexto = input.habilidades.map((habilidad, index) => [
+    `${index + 1}.`,
+    habilidad.Mes ? `Mes: ${habilidad.Mes}.` : "",
+    habilidad.Area ? `Area: ${habilidad.Area}.` : "",
+    habilidad.NumeroHabilidad ? `Codigo: ${habilidad.NumeroHabilidad}.` : "",
+    `Habilidad: ${habilidad.DescripcionHabilidad || ""}`
+  ].filter(Boolean).join(" ")).join("\n");
+  const cantidadTotal = input.habilidades.length * input.cantidadPorHabilidad;
+
+  return `
+${input.plantilla?.IndicacionesSistema || "Sos un especialista en evaluacion educativa del MEP de Costa Rica."}
+
+${input.plantilla?.ContextoBase || ""}
+
+Vas a crear indicadores base de evaluacion a partir de habilidades oficiales.
+
+Nombre del conjunto: ${input.nombre}
+Materia: ${input.materiaNombre}
+Grado: ${input.grado || "No indicado"}
+Meses seleccionados: ${input.meses.length ? input.meses.join(", ") : "Segun habilidades seleccionadas"}
+Cantidad de indicadores por habilidad: ${input.cantidadPorHabilidad}
+Cantidad total obligatoria de indicadores: ${cantidadTotal}
+
+Indicaciones adicionales de la persona docente:
+${input.indicacionesDocente || "No se indicaron instrucciones adicionales."}
+
+Habilidades seleccionadas:
+${habilidadesTexto}
+
+Reglas de construccion:
+${input.plantilla?.ReglasConstruccion || ""}
+
+Instrucciones obligatorias:
+1. Genera exactamente ${input.cantidadPorHabilidad} indicador(es) por cada habilidad.
+2. La cantidad total de objetos en "indicadores" debe ser exactamente ${cantidadTotal}.
+3. Cada indicador debe responder directamente a una habilidad seleccionada.
+4. Conserva el mismo idioma predominante de las habilidades seleccionadas.
+5. Cada indicador debe ser observable, medible y redactado en tercera persona singular.
+6. Usa estructura: accion + conocimiento + condicion.
+7. No uses markdown.
+8. No agregues explicaciones fuera del JSON.
+
+Formato de salida:
+Devolve SOLO JSON valido con esta estructura exacta:
+
+{
+  "indicadores": [
+    {
+      "habilidadId": 123,
+      "indicadorBase": "Texto del indicador base"
+    }
+  ]
+}
+
+Estructura de salida de la plantilla, usada como guia de redaccion:
+${input.plantilla?.EstructuraSalida || ""}
+
+Formato de respuesta de la plantilla:
+${input.plantilla?.FormatoRespuesta || ""}
+`;
+}
+
+function normalizarIndicadoresBaseDesdeHabilidades(resultado: any, habilidades: any[], cantidadPorHabilidad: number) {
+  const generados = Array.isArray(resultado?.indicadores) ? resultado.indicadores : [];
+  const esperados = habilidades.flatMap((habilidad) =>
+    Array.from({ length: cantidadPorHabilidad }, (_, index) => ({ habilidad, index }))
+  );
+  const usados = new Set<number>();
+
+  return uniqueTextList(esperados.map(({ habilidad, index }, expectedIndex) => {
+    const habilidadId = Number(habilidad?.PlaneamientoHabilidadId || 0);
+    let candidatoIndex = generados.findIndex((item: any, currentIndex: number) =>
+      !usados.has(currentIndex)
+      && Number(item?.habilidadId || item?.PlaneamientoHabilidadId || 0) === habilidadId
+    );
+    if (candidatoIndex < 0 && generados[expectedIndex]) candidatoIndex = expectedIndex;
+    const candidato = candidatoIndex >= 0 ? generados[candidatoIndex] : null;
+    if (candidatoIndex >= 0) usados.add(candidatoIndex);
+
+    const textoGenerado = normalizeText(
+      candidato?.indicadorBase
+      || candidato?.descripcion
+      || candidato?.indicador
+      || candidato?.texto
+    );
+    if (textoGenerado) return textoGenerado;
+
+    const descripcion = normalizeText(habilidad?.DescripcionHabilidad) || "la habilidad seleccionada";
+    const sufijo = cantidadPorHabilidad > 1 ? ` (${index + 1})` : "";
+    return `Demuestra dominio de ${descripcion}${sufijo}.`;
+  })).slice(0, Math.max(1, habilidades.length * cantidadPorHabilidad));
+}
+
+async function getOrCreateEstructuraIndicadoresHabilidades(executor: any, params: {
+  institucionId: number;
+  grupoId: number;
+  materiaId: number;
+  anioLectivoId: number;
+  periodoId: number;
+  usuarioId?: number | null;
+  plantillaBaseId?: number | null;
+  nombre: string;
+}) {
+  const existente = await new sql.Request(executor)
+    .input("institucionId", sql.Int, params.institucionId)
+    .input("grupoId", sql.Int, params.grupoId)
+    .input("materiaId", sql.Int, params.materiaId)
+    .input("anioLectivoId", sql.Int, params.anioLectivoId)
+    .input("periodoId", sql.Int, params.periodoId)
+    .query(`
+      SELECT TOP 1 EstructuraGrupoId, GrupoId, PlantillaBaseId
+      FROM dbo.Eval360_EstructuraGrupo
+      WHERE InstitucionId = @institucionId
+        AND GrupoId = @grupoId
+        AND MateriaId = @materiaId
+        AND AnioLectivoId = @anioLectivoId
+        AND PeriodoId = @periodoId
+        AND Activo = 1
+      ORDER BY EstructuraGrupoId DESC
+    `);
+
+  if (existente.recordset[0]) return existente.recordset[0];
+
+  const creada = await new sql.Request(executor)
+    .input("institucionId", sql.Int, params.institucionId)
+    .input("grupoId", sql.Int, params.grupoId)
+    .input("materiaId", sql.Int, params.materiaId)
+    .input("anioLectivoId", sql.Int, params.anioLectivoId)
+    .input("periodoId", sql.Int, params.periodoId)
+    .input("usuarioId", sql.Int, params.usuarioId || null)
+    .input("plantillaBaseId", sql.Int, params.plantillaBaseId || null)
+    .input("nombre", sql.NVarChar(200), `Estructura de evaluacion - ${params.nombre}`)
+    .query(`
+      INSERT INTO dbo.Eval360_EstructuraGrupo
+        (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, UsuarioId, PlantillaBaseId, Nombre, TotalPorcentaje, Activo, CreatedAt)
+      OUTPUT INSERTED.EstructuraGrupoId, INSERTED.GrupoId, INSERTED.PlantillaBaseId
+      VALUES
+        (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioId, @plantillaBaseId, @nombre, 100, 1, SYSDATETIME())
+    `);
+
+  const estructura = creada.recordset[0];
+  if (!estructura) return null;
+
+  await new sql.Request(executor)
+    .input("estructuraGrupoId", sql.Int, Number(estructura.EstructuraGrupoId))
+    .input("institucionId", sql.Int, params.institucionId)
+    .query(`
+      INSERT INTO dbo.Eval360_NivelDesempenoGrupo
+        (EstructuraGrupoId, Nombre, Valor, Orden, Activo)
+      SELECT
+        @estructuraGrupoId,
+        Nombre,
+        Valor,
+        Orden,
+        Activo
+      FROM dbo.Eval360_NivelDesempenoGlobal
+      WHERE InstitucionId = @institucionId
+        AND Activo = 1
+      ORDER BY Orden
+    `);
+
+  if (params.plantillaBaseId) {
+    await sincronizarEstructuraConPlantilla(executor, Number(estructura.EstructuraGrupoId), Number(params.plantillaBaseId));
+  }
+
+  return estructura;
+}
+
 
 
 router.get("/plantillas-ia-indicadores", async (req, res) => {
@@ -10869,15 +11059,10 @@ router.get("/indicadores", async (req, res) => {
 
 
 
-    const filters = ["i.EstructuraGrupoId = @estructuraGrupoId"];
-
-
-
-    if (!planeamientoId) {
-
-      filters.push("ISNULL(i.Activo, 1) = 1");
-
-    }
+    const filters = [
+      "i.EstructuraGrupoId = @estructuraGrupoId",
+      "ISNULL(i.Activo, 1) = 1"
+    ];
 
 
 
@@ -11877,9 +12062,631 @@ router.post("/indicadores/generar-desde-planeamiento", async (req, res) => {
 
 });
 
+router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
+
+  const pool = await getPool();
+
+  const transaction = new sql.Transaction(pool);
+
+  try {
+
+    if (!assertCanAccess(req, res)) return;
+
+    const grupoId = toRequiredNumber(req.body.grupoId, "grupoId", res);
+
+    const materiaId = toRequiredNumber(req.body.materiaId, "materiaId", res);
+
+    const anioLectivoId = toRequiredNumber(req.body.anioLectivoId, "anioLectivoId", res);
+
+    const periodoId = toRequiredNumber(req.body.periodoId, "periodoId", res);
+
+    const plantillaPromptIAId = toOptionalNumber(req.body.plantillaPromptIAId);
+
+    const habilidadesIds = toNumberList(req.body.habilidadesIds);
+
+    const meses = (Array.isArray(req.body.meses) ? req.body.meses : [])
+      .map((item: any) => normalizeText(item))
+      .filter(Boolean);
+
+    const cantidadPorHabilidad = Math.max(1, Math.min(10, Number(req.body.cantidadPorHabilidad || 1) || 1));
+
+    const nombrePlaneamiento = normalizarNombreSinPlaneamiento(req.body.nombre);
+
+    const indicacionesDocente = normalizeText(req.body.indicacionesDocente);
+
+    const tiposUsoRaw = Array.isArray(req.body.tiposUso) ? req.body.tiposUso : ["Cotidiano", "Tareas", "TablaEspecificaciones"];
+
+    const tiposUso = tiposUsoRaw
+      .map((item: any) => normalizeText(item))
+      .filter((item: string) => ["Cotidiano", "Tareas", "TablaEspecificaciones"].includes(item));
+
+    if ([grupoId, materiaId, anioLectivoId, periodoId].some((value) => value === null)) return;
+
+    if (!habilidadesIds.length) return badRequest(res, "Seleccioná al menos una habilidad");
+
+    if (!meses.length) return badRequest(res, "Seleccioná al menos un mes");
+
+    if (!tiposUso.length) return badRequest(res, "Debés indicar al menos una rúbrica válida");
+
+    const asignacionBase = await getAsignacionPermitida(req, res, {
+      grupoId: Number(grupoId),
+      materiaId: Number(materiaId),
+      anioLectivoId: Number(anioLectivoId),
+      periodoId: Number(periodoId)
+    });
+
+    if (!asignacionBase) return;
+
+    const grupoIdsDestino = Array.from(new Set([
+      Number(grupoId),
+      ...toNumberList(req.body.grupoIds)
+    ])).filter((item) => Number.isFinite(item) && item > 0);
+
+    const asignacionesDestino: any[] = [];
+
+    for (const grupoDestinoId of grupoIdsDestino) {
+
+      const asignacion = await getAsignacionPermitida(req, res, {
+        grupoId: Number(grupoDestinoId),
+        materiaId: Number(materiaId),
+        anioLectivoId: Number(anioLectivoId),
+        periodoId: Number(periodoId)
+      });
+
+      if (!asignacion) return;
+
+      asignacionesDestino.push(asignacion);
+
+    }
+
+    const plantilla = await getPlantillaIndicadores(req, pool, plantillaPromptIAId);
+
+    if (!plantilla) return badRequest(res, "No se encontró una plantilla IA activa de indicadores");
+
+    const placeholdersHabilidades = habilidadesIds.map((_, index) => `@hid${index}`).join(", ");
+
+    const habilidadesRequest = pool.request()
+      .input("institucionId", sql.Int, Number(asignacionBase.InstitucionId))
+      .input("materiaId", sql.Int, Number(materiaId));
+
+    habilidadesIds.forEach((id, index) => habilidadesRequest.input(`hid${index}`, sql.Int, id));
+
+    meses.forEach((mes, index) => habilidadesRequest.input(`mes${index}`, sql.NVarChar(100), mes));
+
+    const filtroMeses = meses.length
+      ? `AND h.Mes IN (${meses.map((_, index) => `@mes${index}`).join(", ")})`
+      : "";
+
+    const habilidadesResult = await habilidadesRequest.query(`
+      SELECT
+        h.PlaneamientoHabilidadId,
+        h.InstitucionId,
+        h.MateriaId,
+        COALESCE(m.Nombre, h.MateriaNombre) AS MateriaNombre,
+        h.TipoColegio,
+        h.Ciclo,
+        h.Grado,
+        h.Mes,
+        h.Area,
+        h.NumeroHabilidad,
+        h.DescripcionHabilidad,
+        h.DocumentoReferencia
+      FROM dbo.PlaneamientoHabilidad h
+      LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
+      WHERE h.PlaneamientoHabilidadId IN (${placeholdersHabilidades})
+        AND (h.InstitucionId = @institucionId OR h.InstitucionId IS NULL)
+        AND h.MateriaId = @materiaId
+        AND ISNULL(h.Activo, 1) = 1
+        ${filtroMeses}
+      ORDER BY h.Mes, h.Area, TRY_CONVERT(INT, h.NumeroHabilidad), h.NumeroHabilidad
+    `);
+
+    const habilidades = habilidadesResult.recordset || [];
+
+    if (habilidades.length !== habilidadesIds.length) {
+      return badRequest(res, "Una o más habilidades seleccionadas no están disponibles para los filtros indicados");
+    }
+
+    const promptBases = buildPromptIndicadoresBaseDesdeHabilidades({
+      plantilla,
+      habilidades,
+      cantidadPorHabilidad,
+      materiaNombre: String(asignacionBase.MateriaNombre || ""),
+      grado: String(asignacionBase.GrupoNivel || ""),
+      meses,
+      nombre: nombrePlaneamiento,
+      indicacionesDocente
+    });
+
+    const aiBases = await callOpenAiIndicadores(promptBases);
+
+    const indicadoresBase = normalizarIndicadoresBaseDesdeHabilidades(aiBases, habilidades, cantidadPorHabilidad);
+
+    if (!indicadoresBase.length) return badRequest(res, "No se pudieron crear indicadores desde las habilidades seleccionadas");
+
+    const resultadosPorTipo: Record<string, any[]> = {};
+
+    for (const tipoUso of tiposUso) {
+
+      const prompt = buildPromptIndicadores({
+        plantilla,
+        indicadoresBase,
+        tipoUso,
+        planeamientoNombre: nombrePlaneamiento,
+        indicacionesDocente
+      });
+
+      const aiResult = await callOpenAiIndicadores(prompt);
+
+      resultadosPorTipo[tipoUso] = normalizarIndicadoresGenerados(aiResult, indicadoresBase);
+
+    }
+
+    const estructuraBaseResult = await pool.request()
+      .input("institucionId", sql.Int, Number(asignacionBase.InstitucionId))
+      .input("grupoId", sql.Int, Number(grupoId))
+      .input("materiaId", sql.Int, Number(materiaId))
+      .input("anioLectivoId", sql.Int, Number(anioLectivoId))
+      .input("periodoId", sql.Int, Number(periodoId))
+      .query(`
+        SELECT TOP 1 EstructuraGrupoId, PlantillaBaseId
+        FROM dbo.Eval360_EstructuraGrupo
+        WHERE InstitucionId = @institucionId
+          AND GrupoId = @grupoId
+          AND MateriaId = @materiaId
+          AND AnioLectivoId = @anioLectivoId
+          AND PeriodoId = @periodoId
+          AND Activo = 1
+        ORDER BY EstructuraGrupoId DESC
+      `);
+
+    const plantillaBaseId = Number(estructuraBaseResult.recordset[0]?.PlantillaBaseId || 0) || null;
+
+    await transaction.begin();
+
+    const planeamientosPorGrupo = new Map<number, number>();
+
+    const estructurasDestino: any[] = [];
+
+    for (const asignacion of asignacionesDestino) {
+
+      const grupoDestinoId = Number(asignacion.GrupoId);
+
+      const estructuraDestino = await getOrCreateEstructuraIndicadoresHabilidades(transaction, {
+        institucionId: Number(asignacion.InstitucionId),
+        grupoId: grupoDestinoId,
+        materiaId: Number(materiaId),
+        anioLectivoId: Number(anioLectivoId),
+        periodoId: Number(periodoId),
+        usuarioId: Number(asignacion.UsuarioId || getUserId(req) || 0) || null,
+        plantillaBaseId,
+        nombre: nombrePlaneamiento
+      });
+
+      if (!estructuraDestino) continue;
+
+      estructurasDestino.push(estructuraDestino);
+
+      const planeamientoExistente = await new sql.Request(transaction)
+        .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+        .input("grupoId", sql.Int, grupoDestinoId)
+        .input("materiaId", sql.Int, Number(materiaId))
+        .input("anioLectivoId", sql.Int, Number(anioLectivoId))
+        .input("periodoId", sql.Int, Number(periodoId))
+        .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req) || 0) || null)
+        .input("nombre", sql.NVarChar(200), nombrePlaneamiento)
+        .query(`
+          SELECT TOP 1 PlaneamientoId
+          FROM dbo.Planeamiento
+          WHERE InstitucionId = @institucionId
+            AND GrupoId = @grupoId
+            AND MateriaId = @materiaId
+            AND AnioLectivoId = @anioLectivoId
+            AND PeriodoId = @periodoId
+            AND UsuarioId = @usuarioId
+            AND LTRIM(RTRIM(ISNULL(Nombre, N''))) = @nombre
+            AND Activo = 1
+          ORDER BY PlaneamientoId DESC
+        `);
+
+      let planeamientoDestinoId = Number(planeamientoExistente.recordset[0]?.PlaneamientoId || 0);
+
+      if (!planeamientoDestinoId) {
+
+        const creado = await new sql.Request(transaction)
+          .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+          .input("anioLectivoId", sql.Int, Number(anioLectivoId))
+          .input("periodoId", sql.Int, Number(periodoId))
+          .input("grupoId", sql.Int, grupoDestinoId)
+          .input("materiaId", sql.Int, Number(materiaId))
+          .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req) || 0) || null)
+          .input("nombre", sql.NVarChar(200), nombrePlaneamiento)
+          .input("observaciones", sql.NVarChar(sql.MAX), "Indicadores creados desde habilidades con IA")
+          .query(`
+            INSERT INTO dbo.Planeamiento
+              (InstitucionId, AnioLectivoId, PeriodoId, GrupoId, MateriaId, UsuarioId, Nombre, FechaInicio, FechaFin, Observaciones, Activo, CreatedAt)
+            OUTPUT INSERTED.PlaneamientoId
+            VALUES
+              (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, NULL, NULL, @observaciones, 1, SYSDATETIME())
+          `);
+
+        planeamientoDestinoId = Number(creado.recordset[0]?.PlaneamientoId || 0);
+
+      }
+
+      if (!planeamientoDestinoId) continue;
+
+      planeamientosPorGrupo.set(grupoDestinoId, planeamientoDestinoId);
+
+      const basesPermitidas = new Set(indicadoresBase.map((base) => normalizeKey(base)));
+
+      const indicadoresPlaneamientoExistentes = await new sql.Request(transaction)
+        .input("planeamientoId", sql.Int, planeamientoDestinoId)
+        .query(`
+          SELECT PlaneamientoIndicadorId, Descripcion
+          FROM dbo.PlaneamientoIndicador
+          WHERE PlaneamientoId = @planeamientoId
+        `);
+
+      for (const row of indicadoresPlaneamientoExistentes.recordset || []) {
+
+        if (!basesPermitidas.has(normalizeKey(row.Descripcion))) {
+
+          await new sql.Request(transaction)
+            .input("planeamientoIndicadorId", sql.Int, Number(row.PlaneamientoIndicadorId))
+            .query(`
+              UPDATE dbo.PlaneamientoIndicador
+              SET Activo = 0
+              WHERE PlaneamientoIndicadorId = @planeamientoIndicadorId
+            `);
+
+        }
+
+      }
+
+      for (const indicadorBase of indicadoresBase) {
+
+        const existente = (indicadoresPlaneamientoExistentes.recordset || []).find((row: any) =>
+          normalizeKey(row.Descripcion) === normalizeKey(indicadorBase)
+        );
+
+        if (existente) {
+
+          await new sql.Request(transaction)
+            .input("planeamientoIndicadorId", sql.Int, Number(existente.PlaneamientoIndicadorId))
+            .input("descripcion", sql.NVarChar(sql.MAX), indicadorBase)
+            .query(`
+              UPDATE dbo.PlaneamientoIndicador
+              SET Descripcion = @descripcion,
+                  Activo = 1
+              WHERE PlaneamientoIndicadorId = @planeamientoIndicadorId
+            `);
+
+        } else {
+
+          await new sql.Request(transaction)
+            .input("planeamientoId", sql.Int, planeamientoDestinoId)
+            .input("descripcion", sql.NVarChar(sql.MAX), indicadorBase)
+            .query(`
+              INSERT INTO dbo.PlaneamientoIndicador
+                (PlaneamientoId, Descripcion, NivelDesempenoId, Activo, CreatedAt)
+              VALUES
+                (@planeamientoId, @descripcion, NULL, 1, SYSDATETIME())
+            `);
+
+        }
+
+      }
+
+      const tiposPermitidos = new Set(tiposUso.map((tipo) => normalizeKey(tipo)));
+
+      const existentesEval = await new sql.Request(transaction)
+        .input("estructuraGrupoId", sql.Int, Number(estructuraDestino.EstructuraGrupoId))
+        .input("planeamientoId", sql.Int, planeamientoDestinoId)
+        .query(`
+          SELECT IndicadorGrupoId, IndicadorBase, TipoUso
+          FROM dbo.Eval360_IndicadorGrupo
+          WHERE EstructuraGrupoId = @estructuraGrupoId
+            AND PlaneamientoId = @planeamientoId
+        `);
+
+      const idsNoPermitidos = existentesEval.recordset
+        .filter((item: any) => !basesPermitidas.has(normalizeKey(item.IndicadorBase)) || !tiposPermitidos.has(normalizeKey(item.TipoUso)))
+        .map((item: any) => Number(item.IndicadorGrupoId))
+        .filter(Boolean);
+
+      for (const indicadorGrupoId of idsNoPermitidos) {
+
+        await new sql.Request(transaction)
+          .input("indicadorGrupoId", sql.Int, indicadorGrupoId)
+          .query(`
+            UPDATE dbo.Eval360_IndicadorGrupo
+            SET Activo = 0,
+                UpdatedAt = SYSDATETIME()
+            WHERE IndicadorGrupoId = @indicadorGrupoId
+          `);
+
+      }
+
+      for (const tipoUso of tiposUso) {
+
+        for (const item of resultadosPorTipo[tipoUso]) {
+
+          const existing = await new sql.Request(transaction)
+            .input("estructuraGrupoId", sql.Int, Number(estructuraDestino.EstructuraGrupoId))
+            .input("planeamientoId", sql.Int, planeamientoDestinoId)
+            .input("tipoUso", sql.NVarChar(50), tipoUso)
+            .input("indicadorBase", sql.NVarChar(sql.MAX), item.indicadorBase)
+            .query(`
+              SELECT TOP 1 IndicadorGrupoId
+              FROM dbo.Eval360_IndicadorGrupo
+              WHERE EstructuraGrupoId = @estructuraGrupoId
+                AND PlaneamientoId = @planeamientoId
+                AND TipoUso = @tipoUso
+                AND IndicadorBase = @indicadorBase
+            `);
+
+          if (existing.recordset[0]) {
+
+            await new sql.Request(transaction)
+              .input("indicadorGrupoId", sql.Int, Number(existing.recordset[0].IndicadorGrupoId))
+              .input("indicadorAvanzado", sql.NVarChar(sql.MAX), item.indicadorAvanzado)
+              .input("indicadorIntermedio", sql.NVarChar(sql.MAX), item.indicadorIntermedio)
+              .input("indicadorInicial", sql.NVarChar(sql.MAX), item.indicadorInicial)
+              .query(`
+                UPDATE dbo.Eval360_IndicadorGrupo
+                SET IndicadorAvanzado = @indicadorAvanzado,
+                    IndicadorIntermedio = @indicadorIntermedio,
+                    IndicadorInicial = @indicadorInicial,
+                    Activo = 1,
+                    UpdatedAt = SYSDATETIME()
+                WHERE IndicadorGrupoId = @indicadorGrupoId
+              `);
+
+          } else {
+
+            await new sql.Request(transaction)
+              .input("estructuraGrupoId", sql.Int, Number(estructuraDestino.EstructuraGrupoId))
+              .input("planeamientoId", sql.Int, planeamientoDestinoId)
+              .input("tipoUso", sql.NVarChar(50), tipoUso)
+              .input("indicadorBase", sql.NVarChar(sql.MAX), item.indicadorBase)
+              .input("indicadorAvanzado", sql.NVarChar(sql.MAX), item.indicadorAvanzado)
+              .input("indicadorIntermedio", sql.NVarChar(sql.MAX), item.indicadorIntermedio)
+              .input("indicadorInicial", sql.NVarChar(sql.MAX), item.indicadorInicial)
+              .query(`
+                INSERT INTO dbo.Eval360_IndicadorGrupo
+                  (EstructuraGrupoId, PlaneamientoId, TipoUso, IndicadorBase, IndicadorAvanzado, IndicadorIntermedio, IndicadorInicial, Activo, CreatedAt)
+                VALUES
+                  (@estructuraGrupoId, @planeamientoId, @tipoUso, @indicadorBase, @indicadorAvanzado, @indicadorIntermedio, @indicadorInicial, 1, SYSDATETIME())
+              `);
+
+          }
+
+        }
+
+      }
+
+    }
+
+    const planeamientoIdBase = Number(planeamientosPorGrupo.get(Number(grupoId)) || 0);
+
+    const estructuraBase = estructurasDestino.find((item: any) => Number(item.GrupoId) === Number(grupoId)) || estructurasDestino[0];
+
+    if (!planeamientoIdBase || !estructuraBase) {
+
+      await transaction.rollback();
+
+      return badRequest(res, "No se pudo preparar el conjunto de indicadores");
+
+    }
+
+    await transaction.commit();
+
+    const indicadoresGuardados = await pool.request()
+      .input("estructuraGrupoId", sql.Int, Number(estructuraBase.EstructuraGrupoId))
+      .input("planeamientoId", sql.Int, planeamientoIdBase)
+      .query(`
+        SELECT *
+        FROM dbo.Eval360_IndicadorGrupo
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND PlaneamientoId = @planeamientoId
+          AND ISNULL(Activo, 1) = 1
+        ORDER BY
+          CASE TipoUso
+            WHEN N'Cotidiano' THEN 1
+            WHEN N'Tareas' THEN 2
+            WHEN N'TablaEspecificaciones' THEN 3
+            ELSE 9
+          END,
+          IndicadorGrupoId
+      `);
+
+    return created(res, {
+      estructuraGrupoId: Number(estructuraBase.EstructuraGrupoId),
+      planeamientoId: planeamientoIdBase,
+      planeamientoNombre: nombrePlaneamiento,
+      plantillaPromptIAId: plantilla.Id,
+      generadoConIA: !!getOpenAiApiKey(),
+      estructurasAplicadas: estructurasDestino.length,
+      gruposSolicitados: grupoIdsDestino,
+      indicadoresBase,
+      indicadores: indicadoresGuardados.recordset
+    }, "Indicadores generados correctamente desde habilidades");
+
+  } catch (error) {
+
+    try { await transaction.rollback(); } catch {}
+
+    console.error("Error generando indicadores Eval360 desde habilidades:", error);
+
+    return res.status(500).json({ ok: false, message: "No se pudieron generar los indicadores desde habilidades" });
+
+  }
+
+});
 
 
 
+
+
+router.post("/indicadores/planeamiento/:planeamientoId/manual", async (req, res) => {
+
+  const pool = await getPool();
+
+  const transaction = new sql.Transaction(pool);
+
+  try {
+
+    if (!assertCanAccess(req, res)) return;
+
+    const planeamientoId = toRequiredNumber(req.params.planeamientoId, "planeamientoId", res);
+
+    const estructuraGrupoId = toOptionalNumber(req.body.estructuraGrupoId);
+
+    if (planeamientoId === null) return;
+
+    const indicadorBase = normalizeText(req.body.indicadorBase);
+
+    const indicadorAvanzado = normalizeText(req.body.indicadorAvanzado || indicadorBase);
+
+    const indicadorIntermedio = normalizeText(req.body.indicadorIntermedio);
+
+    const indicadorInicial = normalizeText(req.body.indicadorInicial);
+
+    const tiposUsoRaw = Array.isArray(req.body.tiposUso) ? req.body.tiposUso : ["Cotidiano", "Tareas", "TablaEspecificaciones"];
+
+    const tiposUso = tiposUsoRaw
+      .map((item: any) => normalizeText(item))
+      .filter((item: string) => ["Cotidiano", "Tareas", "TablaEspecificaciones"].includes(item));
+
+    if (!indicadorBase || !indicadorAvanzado || !indicadorIntermedio || !indicadorInicial) {
+      return badRequest(res, "Completá el indicador y sus niveles Avanzado, Intermedio e Inicial");
+    }
+
+    if (!tiposUso.length) return badRequest(res, "Seleccioná al menos una rúbrica");
+
+    const contexto = await getEstructuraDesdePlaneamiento(req, res, pool, Number(planeamientoId), estructuraGrupoId);
+
+    if (!contexto) return;
+
+    const estructura = contexto.estructura;
+
+    await transaction.begin();
+
+    const indicadorPlaneamientoExistente = await new sql.Request(transaction)
+      .input("planeamientoId", sql.Int, Number(planeamientoId))
+      .input("descripcion", sql.NVarChar(sql.MAX), indicadorBase)
+      .query(`
+        SELECT TOP 1 PlaneamientoIndicadorId
+        FROM dbo.PlaneamientoIndicador
+        WHERE PlaneamientoId = @planeamientoId
+          AND Descripcion = @descripcion
+      `);
+
+    if (indicadorPlaneamientoExistente.recordset[0]) {
+      await new sql.Request(transaction)
+        .input("planeamientoIndicadorId", sql.Int, Number(indicadorPlaneamientoExistente.recordset[0].PlaneamientoIndicadorId))
+        .input("descripcion", sql.NVarChar(sql.MAX), indicadorBase)
+        .query(`
+          UPDATE dbo.PlaneamientoIndicador
+          SET Descripcion = @descripcion,
+              Activo = 1
+          WHERE PlaneamientoIndicadorId = @planeamientoIndicadorId
+        `);
+    } else {
+      await new sql.Request(transaction)
+        .input("planeamientoId", sql.Int, Number(planeamientoId))
+        .input("descripcion", sql.NVarChar(sql.MAX), indicadorBase)
+        .query(`
+          INSERT INTO dbo.PlaneamientoIndicador
+            (PlaneamientoId, Descripcion, NivelDesempenoId, Activo, CreatedAt)
+          VALUES
+            (@planeamientoId, @descripcion, NULL, 1, SYSDATETIME())
+        `);
+    }
+
+    for (const tipoUso of tiposUso) {
+      const existing = await new sql.Request(transaction)
+        .input("estructuraGrupoId", sql.Int, Number(estructura.EstructuraGrupoId))
+        .input("planeamientoId", sql.Int, Number(planeamientoId))
+        .input("tipoUso", sql.NVarChar(50), tipoUso)
+        .input("indicadorBase", sql.NVarChar(sql.MAX), indicadorBase)
+        .query(`
+          SELECT TOP 1 IndicadorGrupoId
+          FROM dbo.Eval360_IndicadorGrupo
+          WHERE EstructuraGrupoId = @estructuraGrupoId
+            AND PlaneamientoId = @planeamientoId
+            AND TipoUso = @tipoUso
+            AND IndicadorBase = @indicadorBase
+        `);
+
+      if (existing.recordset[0]) {
+        await new sql.Request(transaction)
+          .input("indicadorGrupoId", sql.Int, Number(existing.recordset[0].IndicadorGrupoId))
+          .input("indicadorAvanzado", sql.NVarChar(sql.MAX), indicadorAvanzado)
+          .input("indicadorIntermedio", sql.NVarChar(sql.MAX), indicadorIntermedio)
+          .input("indicadorInicial", sql.NVarChar(sql.MAX), indicadorInicial)
+          .query(`
+            UPDATE dbo.Eval360_IndicadorGrupo
+            SET IndicadorAvanzado = @indicadorAvanzado,
+                IndicadorIntermedio = @indicadorIntermedio,
+                IndicadorInicial = @indicadorInicial,
+                Activo = 1,
+                UpdatedAt = SYSDATETIME()
+            WHERE IndicadorGrupoId = @indicadorGrupoId
+          `);
+      } else {
+        await new sql.Request(transaction)
+          .input("estructuraGrupoId", sql.Int, Number(estructura.EstructuraGrupoId))
+          .input("planeamientoId", sql.Int, Number(planeamientoId))
+          .input("tipoUso", sql.NVarChar(50), tipoUso)
+          .input("indicadorBase", sql.NVarChar(sql.MAX), indicadorBase)
+          .input("indicadorAvanzado", sql.NVarChar(sql.MAX), indicadorAvanzado)
+          .input("indicadorIntermedio", sql.NVarChar(sql.MAX), indicadorIntermedio)
+          .input("indicadorInicial", sql.NVarChar(sql.MAX), indicadorInicial)
+          .query(`
+            INSERT INTO dbo.Eval360_IndicadorGrupo
+              (EstructuraGrupoId, PlaneamientoId, TipoUso, IndicadorBase, IndicadorAvanzado, IndicadorIntermedio, IndicadorInicial, Activo, CreatedAt)
+            VALUES
+              (@estructuraGrupoId, @planeamientoId, @tipoUso, @indicadorBase, @indicadorAvanzado, @indicadorIntermedio, @indicadorInicial, 1, SYSDATETIME())
+          `);
+      }
+    }
+
+    await transaction.commit();
+
+    const result = await pool.request()
+      .input("estructuraGrupoId", sql.Int, Number(estructura.EstructuraGrupoId))
+      .input("planeamientoId", sql.Int, Number(planeamientoId))
+      .query(`
+        SELECT *
+        FROM dbo.Eval360_IndicadorGrupo
+        WHERE EstructuraGrupoId = @estructuraGrupoId
+          AND PlaneamientoId = @planeamientoId
+          AND ISNULL(Activo, 1) = 1
+        ORDER BY
+          CASE TipoUso
+            WHEN N'Cotidiano' THEN 1
+            WHEN N'Tareas' THEN 2
+            WHEN N'TablaEspecificaciones' THEN 3
+            ELSE 9
+          END,
+          IndicadorGrupoId
+      `);
+
+    return created(res, result.recordset, "Indicador agregado correctamente");
+
+  } catch (error) {
+
+    try { await transaction.rollback(); } catch {}
+
+    console.error("Error agregando indicador manual Eval360:", error);
+
+    return res.status(500).json({ ok: false, message: "No se pudo agregar el indicador" });
+
+  }
+
+});
 
 router.put("/indicadores/:id", async (req, res) => {
 
@@ -14656,11 +15463,14 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                   m.GrupoId,
 
-                  m.AnioLectivoId
+                  m.AnioLectivoId,
+
+                  ${suspensionVigenteSelectSql}
 
                 FROM dbo.Matricula m
 
                 INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+                ${getSuspensionVigenteApplySql("e")}
 
                 WHERE m.GrupoId = @grupoId
 
@@ -14742,6 +15552,18 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                 eb.EstadoMatricula,
 
+                eb.SuspensionId,
+
+                eb.Suspendido,
+
+                eb.MotivoSuspension,
+
+                eb.FechaInicioSuspension,
+
+                eb.FechaFinSuspension,
+
+                eb.ObservacionSuspension,
+
                 ISNULL(t.FueTrasladado, 0) AS FueTrasladado,
 
                 t.GrupoIdOrigenTraslado,
@@ -14796,11 +15618,14 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
                 m.GrupoId,
 
-                m.AnioLectivoId
+                m.AnioLectivoId,
+
+                ${suspensionVigenteSelectSql}
 
               FROM dbo.Matricula m
 
               INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+              ${getSuspensionVigenteApplySql("e")}
 
               WHERE m.GrupoId = @grupoId
 
@@ -14951,6 +15776,18 @@ router.get("/seguimiento/contexto", async (req, res) => {
               eb.MatriculaId,
 
               eb.EstadoMatricula,
+
+              eb.SuspensionId,
+
+              eb.Suspendido,
+
+              eb.MotivoSuspension,
+
+              eb.FechaInicioSuspension,
+
+              eb.FechaFinSuspension,
+
+              eb.ObservacionSuspension,
 
               ISNULL(t.FueTrasladado, 0) AS FueTrasladado,
 
@@ -16414,6 +17251,19 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
     }> = [];
 
+    const bloqueoSuspension = await assertNoSuspendedStudents(
+      pool,
+      Number(estructura.InstitucionId),
+      registros.map((registro: any) => Number(registro.estudianteId || registro.EstudianteId || 0))
+    );
+    if (bloqueoSuspension) {
+      return res.status(409).json({
+        ok: false,
+        message: bloqueoSuspension.message,
+        suspensiones: bloqueoSuspension.suspensiones
+      });
+    }
+
 
 
     await transaction.begin();
@@ -17330,6 +18180,19 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
     }> = [];
 
+    const bloqueoSuspension = await assertNoSuspendedStudents(
+      pool,
+      Number(estructura.InstitucionId),
+      registros.map((registro: any) => Number(registro.estudianteId || registro.EstudianteId || 0))
+    );
+    if (bloqueoSuspension) {
+      return res.status(409).json({
+        ok: false,
+        message: bloqueoSuspension.message,
+        suspensiones: bloqueoSuspension.suspensiones
+      });
+    }
+
 
 
     await transaction.begin();
@@ -18026,6 +18889,20 @@ router.put("/seguimiento/notas/:notaActividadId/porcentaje", async (req, res) =>
 
     }
 
+    const bloqueoSuspension = await assertNoSuspendedStudents(
+      pool,
+      Number(estructura.InstitucionId),
+      [Number(nota.EstudianteId)]
+    );
+    if (bloqueoSuspension) {
+      await transaction.rollback();
+      return res.status(409).json({
+        ok: false,
+        message: bloqueoSuspension.message,
+        suspensiones: bloqueoSuspension.suspensiones
+      });
+    }
+
     const puntosMaximos = Number(nota.PuntosMaximos || 0);
 
     const porcentajeAnterior = Number(nota.PorcentajeObtenido || 0);
@@ -18201,6 +19078,19 @@ router.put("/seguimiento/componentes/ajustar-porcentaje", async (req, res) => {
 
 
     if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
+
+    const bloqueoSuspension = await assertNoSuspendedStudents(
+      pool,
+      Number(estructura.InstitucionId),
+      [estudianteId]
+    );
+    if (bloqueoSuspension) {
+      return res.status(409).json({
+        ok: false,
+        message: bloqueoSuspension.message,
+        suspensiones: bloqueoSuspension.suspensiones
+      });
+    }
 
     const detalleRes = await pool.request()
 

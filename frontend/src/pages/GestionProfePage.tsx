@@ -120,6 +120,31 @@ function getGrupoProfesorKey(item?: GrupoProfesor | null) {
   ].join("|");
 }
 
+const SUSPENSION_ROW_BG = "#ffe4e6";
+
+function isEstudianteSuspendido(item?: any) {
+  const value = String(item?.Suspendido ?? "").trim().toLowerCase();
+  return item?.Suspendido === true
+    || item?.Suspendido === 1
+    || value === "true"
+    || value === "1"
+    || value === "si"
+    || value === "sí"
+    || Number(item?.SuspensionId || 0) > 0
+    || Boolean(item?.MotivoSuspension && item?.FechaFinSuspension);
+}
+
+function getSuspensionTooltip(item?: any) {
+  if (!isEstudianteSuspendido(item)) return "";
+  const motivo = String(item?.MotivoSuspension || "No indicado").trim();
+  const fechaFin = String(item?.FechaFinSuspension || "").slice(0, 10) || "sin fecha fin";
+  return `Alumno Suspendido, Motivo: ${motivo}, hasta: ${fechaFin}`;
+}
+
+function getGestionRowBg(item: any, fallback: string) {
+  return isEstudianteSuspendido(item) ? SUSPENSION_ROW_BG : fallback;
+}
+
 function getHorarioGrupoMateriaKey(item?: any) {
   if (!item) return "";
   return [
@@ -190,6 +215,16 @@ function habilidadCorrespondeMes(mesHabilidad: string, mesSeleccionado: string) 
   return (periodosCompuestos[habilidad] || []).includes(seleccionado);
 }
 
+function isPlaneamientoDesdeHabilidades(planeamiento?: Planeamiento | null) {
+  const nombre = normalizarMesPlaneamiento(planeamiento?.Nombre || "");
+  return nombre.startsWith("sin planeamiento");
+}
+
+function getNombrePlaneamientoDesdeHabilidades(nombre?: string | null) {
+  const detalle = String(nombre || "").trim();
+  return detalle ? `Sin Planeamiento - ${detalle}` : "Sin Planeamiento - Habilidades";
+}
+
 function apoyoCatalogoCoincideConTiposPermitidos(
   adecuacionCatalogo: string | null | undefined,
   tiposPermitidos: Set<string>
@@ -231,6 +266,27 @@ function dedupeApoyoEducativoEstudiantes(items: ApoyoEducativoResumenItem[]) {
 }
 
 const MIS_GRUPOS_TODOS_KEY = "__TODOS__";
+const DEFAULT_TIPOS_USO_INDICADORES = ["Cotidiano", "Tareas", "TablaEspecificaciones"];
+
+const initialIndicadoresHabilidadesForm = {
+  nombre: "",
+  meses: [],
+  habilidadesIds: [],
+  cantidadPorHabilidad: "1",
+  plantillaPromptIAId: "",
+  indicacionesDocente: "",
+  grupoIds: [],
+  tiposUso: DEFAULT_TIPOS_USO_INDICADORES
+};
+
+const initialIndicadorManualForm = {
+  open: false,
+  indicadorBase: "",
+  indicadorAvanzado: "",
+  indicadorIntermedio: "",
+  indicadorInicial: "",
+  tiposUso: DEFAULT_TIPOS_USO_INDICADORES
+};
 
 function getGrupoHorarioPredeterminado(items: GrupoProfesor[]) {
   return [...(items || [])].sort((a, b) => {
@@ -327,6 +383,11 @@ export default function GestionProfePage() {
   const [planeamientoIaForm, setPlaneamientoIaForm] = useState<PlaneamientoIaForm>(initialPlaneamientoIaForm);
   const [habilidadesIa, setHabilidadesIa] = useState<PlaneamientoHabilidad[]>([]);
   const [loadingHabilidadesIa, setLoadingHabilidadesIa] = useState(false);
+  const [indicadoresHabilidadesOpen, setIndicadoresHabilidadesOpen] = useState(false);
+  const [indicadoresHabilidadesForm, setIndicadoresHabilidadesForm] = useState(initialIndicadoresHabilidadesForm);
+  const [generatingIndicadoresHabilidades, setGeneratingIndicadoresHabilidades] = useState(false);
+  const [indicadorManualPorPlaneamiento, setIndicadorManualPorPlaneamiento] = useState<Record<number, typeof initialIndicadorManualForm>>({});
+  const [savingIndicadorManualPlaneamientoId, setSavingIndicadorManualPlaneamientoId] = useState<number | null>(null);
   const [generatingPlaneamientoIa, setGeneratingPlaneamientoIa] = useState(false);
   const [generatingPlaneamientoIaProgress, setGeneratingPlaneamientoIaProgress] = useState(0);
   const [generatingPlaneamientoIaEtapa, setGeneratingPlaneamientoIaEtapa] = useState("");
@@ -1904,6 +1965,21 @@ export default function GestionProfePage() {
     });
   }, [habilidadesIa, mesesSeleccionadosIa]);
 
+  const habilidadesFiltradasIndicadoresHabilidades = useMemo(() => {
+    return habilidadesIa.filter((habilidad) => {
+      const mes = String(habilidad.Mes || "").trim();
+      if (
+        indicadoresHabilidadesForm.meses.length > 0
+        && !indicadoresHabilidadesForm.meses.some((mesSeleccionado) => habilidadCorrespondeMes(mes, mesSeleccionado))
+      ) return false;
+      return true;
+    });
+  }, [habilidadesIa, indicadoresHabilidadesForm.meses]);
+
+  const nombreIndicadoresHabilidadesPreview = useMemo(() => {
+    return getNombrePlaneamientoDesdeHabilidades(indicadoresHabilidadesForm.nombre);
+  }, [indicadoresHabilidadesForm.nombre]);
+
   const firmaDatosPromptPlaneamientoIa = useMemo(() => JSON.stringify({
     nombre: planeamientoIaForm.nombre,
     materiaId: planeamientoIaForm.materiaId,
@@ -2855,6 +2931,61 @@ function getMensajeAsistenciaPreconfigurado(mensajes: any[], estado: EstadoAsist
     return String(porNivel(3)?.Cuerpo || "").trim();
   }
   return "";
+}
+
+const ESTADOS_ASISTENCIA_INFORMAR_ENCARGADO = new Set<EstadoAsistencia>([
+  "AUSENTE_INJUSTIFICADA",
+  "TARDIA_MENOR_10",
+  "TARDIA_MAYOR_10"
+]);
+
+function debeInformarEncargadoPorEstadoAsistencia(estado: EstadoAsistencia) {
+  return ESTADOS_ASISTENCIA_INFORMAR_ENCARGADO.has(estado);
+}
+
+function formatFechaAsistenciaMensaje(value?: string | null) {
+  const iso = String(value || "").slice(0, 10);
+  const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+  return iso || "Sin fecha";
+}
+
+function getMensajeAsistenciaFallback(estado: EstadoAsistencia) {
+  if (estado === "AUSENTE_JUSTIFICADA") {
+    return "Se informa la ausencia justificada registrada para el estudiante.";
+  }
+  if (estado === "PRESENTE") {
+    return "Se informa el estado de asistencia registrado para el estudiante.";
+  }
+  return `Se informa el estado registrado: ${estadoAsistenciaLabel(estado)}.`;
+}
+
+function getAsistenciaEncargadoTooltip(params: {
+  estudiante: EstudianteGrupo;
+  leccion: AsistenciaLeccion;
+  draft: { estado: EstadoAsistencia; minutosTardia: string; observacion: string; notificarEncargado?: boolean };
+  fecha: string;
+  materia?: string | null;
+}) {
+  if (!params.draft?.notificarEncargado) return "Informar al encargado";
+  const estado = params.draft.estado || "PRESENTE";
+  const observacion = String(params.draft.observacion || "").trim();
+  const mensaje = observacion || getMensajeAsistenciaFallback(estado);
+  const minutos = params.draft.minutosTardia !== "" && params.draft.minutosTardia != null
+    ? `\nMinutos tarde: ${params.draft.minutosTardia}`
+    : "";
+
+  return [
+    "Mensaje que se enviara al encargado:",
+    "",
+    `Estudiante: ${getFullName(params.estudiante)}`,
+    `Fecha: ${formatFechaAsistenciaMensaje(params.fecha)}`,
+    `Materia: ${String(params.materia || "Materia").trim()}`,
+    `Leccion: ${String(params.leccion?.Nombre || "Leccion").trim()}`,
+    `Estado: ${estadoAsistenciaLabel(estado)}${minutos}`,
+    "",
+    mensaje
+  ].join("\n");
 }
 
   function getTablaIndicadoresAsignadosActividad(actividadId: number) {
@@ -4136,12 +4267,18 @@ function updateAsistenciaDraft(
         field === "observacion"
           ? String(value)
           : (field === "estado" ? (mensajeSugerido || "") : String(previo.observacion || ""));
+      const notificarEncargadoSiguiente =
+        field === "notificarEncargado"
+          ? Boolean(value)
+          : field === "estado"
+            ? debeInformarEncargadoPorEstadoAsistencia(estadoNuevo)
+            : Boolean(previo.notificarEncargado);
 
       return {
         estado: previo.estado || "PRESENTE",
         minutosTardia: previo.minutosTardia || "",
         observacion: observacionSiguiente,
-        notificarEncargado: previo.notificarEncargado || false,
+        notificarEncargado: notificarEncargadoSiguiente,
         [field]: field === "estado" ? value as EstadoAsistencia : field === "notificarEncargado" ? Boolean(value) : String(value)
       };
     };
@@ -4512,6 +4649,14 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     setEval360TiposUsoPorPlaneamiento({});
     setEval360IndicadoresMinimizados({});
     setGeneratingEval360PlaneamientoId(null);
+    setIndicadoresHabilidadesOpen(false);
+    setIndicadoresHabilidadesForm({
+      ...initialIndicadoresHabilidadesForm,
+      grupoIds: [String(item.GrupoId || "")].filter(Boolean),
+      plantillaPromptIAId: eval360PlantillaIaIndicadorId || ""
+    });
+    setIndicadorManualPorPlaneamiento({});
+    setSavingIndicadorManualPlaneamientoId(null);
     setSeguimientoContexto(null);
     setSeguimientoTipo("");
     setSeguimientoPlaneamientoId("");
@@ -5231,7 +5376,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       return;
     }
 
-    const registros = (seguimientoContexto.estudiantes || []).map((estudiante) => {
+    const registros = (seguimientoContexto.estudiantes || [])
+      .filter((estudiante) => !isEstudianteSuspendido(estudiante))
+      .map((estudiante) => {
       const draft = getSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId);
       const aviso = getSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId);
       const puntosTexto = String(draft.puntosObtenidos || "").trim();
@@ -5327,6 +5474,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     }
 
     const registros = (seguimientoContexto.estudiantes || [])
+      .filter((estudiante) => !isEstudianteSuspendido(estudiante))
       .map((estudiante) => {
         const aviso = getSeguimientoInformarActual(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId);
         const recuperacion = isTipoCotidianoSeguimiento(seguimientoTipo)
@@ -5479,6 +5627,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
           ...prev,
           [planId]: indicadores
         }));
+        actualizarTotalIndicadoresIaPlaneamiento(planId, getEval360IndicadoresActivos(indicadores).length);
       }
     } catch (error: any) {
       console.error("Error cargando indicadores Eval360:", error);
@@ -5541,6 +5690,210 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     return Array.from(new Set(ids));
   }
 
+  function abrirIndicadoresDesdeHabilidades() {
+    if (!selected) {
+      setErrorMessage("Seleccioná una sección antes de agregar indicadores desde habilidades");
+      return;
+    }
+
+    const nextOpen = !indicadoresHabilidadesOpen;
+    if (nextOpen) {
+      loadEval360PlantillasIaIndicadores();
+      loadHabilidadesIa(selected.MateriaId, getGradoPlaneamientoFromGrupo(selected), false);
+      setPlaneamientoIaFormOpen(false);
+      setIndicadoresHabilidadesForm((prev) => ({
+        ...initialIndicadoresHabilidadesForm,
+        plantillaPromptIAId: prev.plantillaPromptIAId || eval360PlantillaIaIndicadorId || "",
+        grupoIds: [String(selected.GrupoId || "")].filter(Boolean),
+        tiposUso: [...DEFAULT_TIPOS_USO_INDICADORES]
+      }));
+    }
+    setIndicadoresHabilidadesOpen(nextOpen);
+  }
+
+  function updateIndicadoresHabilidadesField(field: string, value: any) {
+    setIndicadoresHabilidadesForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function toggleIndicadoresHabilidadesMes(mes: string) {
+    setIndicadoresHabilidadesForm((prev) => {
+      const exists = prev.meses.includes(mes);
+      const meses = exists ? prev.meses.filter((item) => item !== mes) : [...prev.meses, mes];
+      const habilidadesVisibles = habilidadesIa
+        .filter((habilidad) => !meses.length || meses.some((mesSeleccionado) => habilidadCorrespondeMes(String(habilidad.Mes || ""), mesSeleccionado)))
+        .map((habilidad) => Number(habilidad.PlaneamientoHabilidadId));
+      return {
+        ...prev,
+        meses,
+        habilidadesIds: prev.habilidadesIds.filter((id) => habilidadesVisibles.includes(Number(id)))
+      };
+    });
+  }
+
+  function toggleIndicadoresHabilidadesId(habilidadId: number) {
+    setIndicadoresHabilidadesForm((prev) => {
+      const exists = prev.habilidadesIds.includes(habilidadId);
+      return {
+        ...prev,
+        habilidadesIds: exists
+          ? prev.habilidadesIds.filter((id) => Number(id) !== Number(habilidadId))
+          : [...prev.habilidadesIds, habilidadId]
+      };
+    });
+  }
+
+  function toggleIndicadoresHabilidadesGrupo(grupoId: string) {
+    setIndicadoresHabilidadesForm((prev) => {
+      const exists = prev.grupoIds.includes(grupoId);
+      const next = exists
+        ? prev.grupoIds.filter((item) => item !== grupoId)
+        : Array.from(new Set([...prev.grupoIds, grupoId]));
+      return { ...prev, grupoIds: next.length ? next : prev.grupoIds };
+    });
+  }
+
+  function toggleIndicadoresHabilidadesTipoUso(tipo: string) {
+    setIndicadoresHabilidadesForm((prev) => {
+      const exists = prev.tiposUso.includes(tipo);
+      const next = exists ? prev.tiposUso.filter((item) => item !== tipo) : [...prev.tiposUso, tipo];
+      return { ...prev, tiposUso: next.length ? next : prev.tiposUso };
+    });
+  }
+
+  async function generarIndicadoresDesdeHabilidades() {
+    if (!selected) {
+      setErrorMessage("Seleccioná una sección antes de agregar indicadores desde habilidades");
+      return;
+    }
+
+    const cantidadPorHabilidad = Number(indicadoresHabilidadesForm.cantidadPorHabilidad || 1);
+    const grupoIdsDestino = indicadoresHabilidadesForm.grupoIds
+      .map((item) => Number(item))
+      .filter((id) => Number.isFinite(id) && id > 0);
+
+    if (!indicadoresHabilidadesForm.habilidadesIds.length) {
+      setErrorMessage("Seleccioná al menos una habilidad");
+      return;
+    }
+    if (!indicadoresHabilidadesForm.meses.length) {
+      setErrorMessage("Seleccioná al menos un mes");
+      return;
+    }
+    if (!grupoIdsDestino.length) {
+      setErrorMessage("Seleccioná al menos una sección");
+      return;
+    }
+    if (!cantidadPorHabilidad || cantidadPorHabilidad < 1) {
+      setErrorMessage("La cantidad por habilidad debe ser mayor o igual a 1");
+      return;
+    }
+
+    setGeneratingIndicadoresHabilidades(true);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const response = await api.post("/eval360/indicadores/generar-desde-habilidades", {
+        grupoId: selected.GrupoId,
+        materiaId: selected.MateriaId,
+        anioLectivoId: selected.AnioLectivoId,
+        periodoId: selected.PeriodoId,
+        plantillaPromptIAId: indicadoresHabilidadesForm.plantillaPromptIAId || eval360PlantillaIaIndicadorId || null,
+        nombre: indicadoresHabilidadesForm.nombre,
+        meses: indicadoresHabilidadesForm.meses,
+        habilidadesIds: indicadoresHabilidadesForm.habilidadesIds,
+        cantidadPorHabilidad,
+        indicacionesDocente: indicadoresHabilidadesForm.indicacionesDocente,
+        grupoIds: grupoIdsDestino,
+        tiposUso: indicadoresHabilidadesForm.tiposUso
+      });
+
+      const data = unwrapApiData(response) || {};
+      const planeamientoId = Number(data.planeamientoId || 0);
+      const indicadores = Array.isArray(data.indicadores) ? data.indicadores : [];
+
+      if (planeamientoId) {
+        setEval360IndicadoresPorPlaneamiento((prev) => ({ ...prev, [planeamientoId]: indicadores }));
+        actualizarTotalIndicadoresIaPlaneamiento(planeamientoId, getEval360IndicadoresActivos(indicadores).length);
+        setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: true }));
+        setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: false }));
+      }
+
+      await loadPlaneamientos(selected, { mostrarLoading: false });
+      setIndicadoresHabilidadesOpen(false);
+      setIndicadoresHabilidadesForm({
+        ...initialIndicadoresHabilidadesForm,
+        grupoIds: [String(selected.GrupoId || "")].filter(Boolean),
+        tiposUso: [...DEFAULT_TIPOS_USO_INDICADORES]
+      });
+      setMessage(response?.data?.message || `Indicadores creados desde habilidades para ${Number(data.estructurasAplicadas || 0)}/${grupoIdsDestino.length} sección(es).`);
+    } catch (error: any) {
+      console.error("Error generando indicadores desde habilidades:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudieron crear los indicadores desde habilidades");
+    } finally {
+      setGeneratingIndicadoresHabilidades(false);
+    }
+  }
+
+  function getIndicadorManualForm(planeamientoId: number) {
+    return indicadorManualPorPlaneamiento[planeamientoId] || initialIndicadorManualForm;
+  }
+
+  function updateIndicadorManualForm(planeamientoId: number, field: string, value: any) {
+    setIndicadorManualPorPlaneamiento((prev) => ({
+      ...prev,
+      [planeamientoId]: {
+        ...initialIndicadorManualForm,
+        ...(prev[planeamientoId] || {}),
+        [field]: value
+      }
+    }));
+  }
+
+  function toggleIndicadorManualTipoUso(planeamientoId: number, tipo: string) {
+    const form = getIndicadorManualForm(planeamientoId);
+    const exists = form.tiposUso.includes(tipo);
+    const next = exists ? form.tiposUso.filter((item) => item !== tipo) : [...form.tiposUso, tipo];
+    updateIndicadorManualForm(planeamientoId, "tiposUso", next.length ? next : form.tiposUso);
+  }
+
+  async function agregarIndicadorManualPlaneamiento(planeamientoId: number, estructuraGrupoId?: number) {
+    const form = getIndicadorManualForm(planeamientoId);
+    if (!String(form.indicadorBase || "").trim()) {
+      setErrorMessage("Escribí el indicador base antes de guardarlo");
+      return;
+    }
+
+    setSavingIndicadorManualPlaneamientoId(planeamientoId);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const response = await api.post(`/eval360/indicadores/planeamiento/${planeamientoId}/manual`, {
+        estructuraGrupoId: estructuraGrupoId || eval360Estructura?.estructura?.EstructuraGrupoId || null,
+        indicadorBase: form.indicadorBase,
+        indicadorAvanzado: form.indicadorAvanzado,
+        indicadorIntermedio: form.indicadorIntermedio,
+        indicadorInicial: form.indicadorInicial,
+        tiposUso: form.tiposUso
+      });
+      const data = unwrapApiData(response) || [];
+      const indicadores = Array.isArray(data) ? data : [];
+      setEval360IndicadoresPorPlaneamiento((prev) => ({ ...prev, [planeamientoId]: indicadores }));
+      actualizarTotalIndicadoresIaPlaneamiento(planeamientoId, getEval360IndicadoresActivos(indicadores).length);
+      setIndicadorManualPorPlaneamiento((prev) => ({
+        ...prev,
+        [planeamientoId]: { ...initialIndicadorManualForm, tiposUso: [...DEFAULT_TIPOS_USO_INDICADORES] }
+      }));
+      setMessage(response?.data?.message || "Indicador agregado correctamente");
+    } catch (error: any) {
+      console.error("Error agregando indicador manual:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo agregar el indicador");
+    } finally {
+      setSavingIndicadorManualPlaneamientoId(null);
+    }
+  }
+
   async function generarEval360IndicadoresDesdePlaneamiento(planeamientoIdParam?: number) {
     if (!selected) {
       setErrorMessage("Seleccioná una sección antes de generar indicadores");
@@ -5590,6 +5943,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         ...prev,
         [planeamientoId]: indicadores
       }));
+      actualizarTotalIndicadoresIaPlaneamiento(planeamientoId, getEval360IndicadoresActivos(indicadores).length);
       setEval360PanelIndicadoresOpen((prev) => ({ ...prev, [planeamientoId]: true }));
       setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: false }));
       const estructurasAplicadas = Number(data.estructurasAplicadas || 0);
@@ -5820,7 +6174,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       await Promise.all(grupoIndicadores.map((indicador) => api.delete("/eval360/indicadores/" + indicador.IndicadorGrupoId)));
       const planId = planeamientoId || Number(principal.PlaneamientoId || 0);
       if (planId) {
+        const idsEliminados = new Set(grupoIndicadores.map((item) => Number(item.IndicadorGrupoId)));
+        const restantes = (eval360IndicadoresPorPlaneamiento[planId] || [])
+          .filter((item) => !idsEliminados.has(Number(item.IndicadorGrupoId)));
         limpiarIndicadoresEliminadosLocalmente(planId, grupoIndicadores);
+        actualizarTotalIndicadoresIaPlaneamiento(planId, getEval360IndicadoresActivos(restantes).length);
       }
       setMessage("Indicador eliminado correctamente");
     } catch (error: any) {
@@ -5879,6 +6237,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       }));
 
       setEval360Indicadores((prev) => prev.filter((item) => Number(item.PlaneamientoId || 0) !== Number(planeamientoId)));
+      actualizarTotalIndicadoresIaPlaneamiento(planeamientoId, 0);
       setEval360IndicadoresMinimizados((prev) => ({ ...prev, [planeamientoId]: false }));
       const data = unwrapApiData(response) || {};
       const estructurasAplicadas = Number(data.estructurasAplicadas || 0);
@@ -5907,6 +6266,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     return tipo;
   }
 
+  function actualizarTotalIndicadoresIaPlaneamiento(planeamientoId: number, total: number) {
+    setPlaneamientos((prev) => prev.map((planeamiento) =>
+      Number(planeamiento.PlaneamientoId) === Number(planeamientoId)
+        ? { ...planeamiento, TotalIndicadoresIAGenerados: Math.max(0, Number(total || 0)) }
+        : planeamiento
+    ));
+  }
+
+  function getTotalIndicadoresIaPlaneamiento(planeamiento: Planeamiento, indicadoresPlaneamiento: Eval360Indicador[]) {
+    return Math.max(
+      Number(planeamiento.TotalIndicadoresIAGenerados || 0),
+      getEval360IndicadoresActivos(indicadoresPlaneamiento || []).length
+    );
+  }
+
   async function loadPlaneamientos(
     item = selected,
     options: { sincronizar?: boolean; mostrarLoading?: boolean } = {}
@@ -5928,7 +6302,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       });
       const data = response.data?.data || response.data || {};
       const planeamientosData = Array.isArray(data.planeamientos) ? data.planeamientos : [];
-      setPlaneamientos(planeamientosData);
       setPlaneamientoIndicadores(Array.isArray(data.indicadores) ? data.indicadores : []);
 
       if (data.sincronizacion?.copiado && Number(data.sincronizacion?.totalPlaneamientosCopiados || 0) > 0) {
@@ -5948,20 +6321,26 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       const indicadoresPorPlan = planeamientosData.map((planeamiento: Planeamiento) => {
         const planeamientoId = Number(planeamiento.PlaneamientoId || 0);
         if (!planeamientoId) return [planeamientoId, []] as [number, Eval360Indicador[]];
-        const directos = indicadoresIncluidosPorPlan[planeamientoId] || [];
-        if (directos.length) return [planeamientoId, directos] as [number, Eval360Indicador[]];
-
-        const nombrePlan = String(planeamiento.Nombre || "").trim().toLowerCase();
-        if (!nombrePlan) return [planeamientoId, []] as [number, Eval360Indicador[]];
-        const porNombre = indicadoresIncluidos.filter((indicador: any) =>
-          String(indicador?.PlaneamientoNombreOrigen || "").trim().toLowerCase() === nombrePlan
-        );
-        return [planeamientoId, porNombre] as [number, Eval360Indicador[]];
+        return [planeamientoId, indicadoresIncluidosPorPlan[planeamientoId] || []] as [number, Eval360Indicador[]];
       });
+      const indicadoresPorPlanMap = Object.fromEntries(indicadoresPorPlan) as Record<number, Eval360Indicador[]>;
+
+      setPlaneamientos(planeamientosData.map((planeamiento: Planeamiento) => {
+        const planeamientoId = Number(planeamiento.PlaneamientoId || 0);
+        const totalIndicadores = Math.max(
+          Number(planeamiento.TotalIndicadoresIAGenerados || 0),
+          getEval360IndicadoresActivos(indicadoresPorPlanMap[planeamientoId] || []).length
+        );
+
+        return {
+          ...planeamiento,
+          TotalIndicadoresIAGenerados: totalIndicadores
+        };
+      }));
 
       setEval360IndicadoresPorPlaneamiento((prev) => ({
         ...prev,
-        ...(Object.fromEntries(indicadoresPorPlan) as Record<number, Eval360Indicador[]>)
+        ...indicadoresPorPlanMap
       }));
     } catch (error: any) {
       console.error("Error cargando planeamientos:", error);
@@ -7527,7 +7906,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     }
 
     const leccionesUsar = asistenciaLecciones.length ? asistenciaLecciones : getAsistenciaLeccionesFallback();
-    const registros = detalle.estudiantes.flatMap((estudiante) =>
+    const estudiantesGestionables = detalle.estudiantes.filter((estudiante) => !isEstudianteSuspendido(estudiante));
+    const registros = estudiantesGestionables.flatMap((estudiante) =>
       leccionesUsar.map((leccion) => {
         const key = asistenciaDraftKey(estudiante.EstudianteId, leccion.HorarioGrupoId);
         const draft = asistenciaDrafts[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
@@ -7554,7 +7934,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
 
     let registrosGuardar = registros;
     if (!asistenciaYaCalificada) {
-      registrosGuardar = detalle.estudiantes.flatMap((estudiante) =>
+      registrosGuardar = estudiantesGestionables.flatMap((estudiante) =>
         leccionesUsar.map((leccion) => {
           const key = asistenciaDraftKey(estudiante.EstudianteId, leccion.HorarioGrupoId);
           const draft = asistenciaDrafts[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
@@ -7574,7 +7954,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     }
 
     if (registrosGuardar.length === 0) {
-      setMessage("No hay cambios en asistencia para guardar");
+      setMessage(estudiantesGestionables.length === 0 ? "No hay estudiantes habilitados para guardar asistencia" : "No hay cambios en asistencia para guardar");
       setSavedAsistencia(asistenciaYaCalificada);
       return;
     }
@@ -7680,7 +8060,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       return;
     }
 
-    const notas = detalle.estudiantes.flatMap((estudiante) =>
+    const estudiantesGestionables = detalle.estudiantes.filter((estudiante) => !isEstudianteSuspendido(estudiante));
+    const notas = estudiantesGestionables.flatMap((estudiante) =>
       detalle.actividades.map((actividad) => {
         const value = getDraftValue(estudiante.EstudianteId, actividad.EvaluacionActividadId);
         return {
@@ -7690,6 +8071,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         };
       })
     );
+
+    if (notas.length === 0) {
+      setMessage("No hay estudiantes habilitados para guardar notas");
+      return;
+    }
 
     const invalid = notas.find((item) => item.nota !== null && (!Number.isFinite(item.nota) || item.nota < 0 || item.nota > 100));
     if (invalid) {
@@ -10040,17 +10426,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                       const draft = asistenciaDrafts[key] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "", notificarEncargado: false };
                                       const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
                                       const adecuacionKind = getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion);
+                                      const suspendido = isEstudianteSuspendido(estudiante);
+                                      const suspensionTooltip = getSuspensionTooltip(estudiante);
                                       return (
                                         <tr
                                           key={`seg-asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`}
                                           className="adecuacion-student-row"
                                           data-adecuacion={adecuacionKind || undefined}
-                                          style={{ background: zebraBg }}
+                                          title={suspensionTooltip || undefined}
+                                          style={{ background: getGestionRowBg(estudiante, zebraBg) }}
                                         >
                                           <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>
                                             {leccionIndex === 0 ? (
                                               <>
                                                 {getFullName(estudiante)}
+                                                {suspendido ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: "12px" }}>Alumno Suspendido</div> : null}
                                                 <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
                                                 <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
                                                   Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
@@ -10073,6 +10463,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                                   aria-label={estadoAsistenciaLabel(estado)}
                                                   name={`asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`}
                                                   checked={draft.estado === estado}
+                                                  disabled={cursoGestionCerrado || suspendido}
                                                   onClick={() => {
                                                     if (draft.estado === estado) registrarPrimeraSeleccionAsistencia(estudiante.EstudianteId);
                                                   }}
@@ -10082,10 +10473,24 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               </td>
                                             ))}
                                           <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
-                                            <input type="number" min="0" title="Minutos de tardía" aria-label="Minutos de tardía" value={draft.minutosTardia} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "minutosTardia", e.target.value)} style={{ width: "110px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }} />
+                                            <input type="number" min="0" title={suspensionTooltip || "Minutos de tardía"} aria-label="Minutos de tardía" value={draft.minutosTardia} disabled={cursoGestionCerrado || suspendido} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "minutosTardia", e.target.value)} style={{ width: "110px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px", background: suspendido ? "#f1f5f9" : "#ffffff" }} />
                                           </td>
                                           <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
-                                            <input type="checkbox" title="Informar al encargado" aria-label="Informar al encargado" checked={Boolean(draft.notificarEncargado)} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "notificarEncargado", e.target.checked)} style={{ accentColor: "#2563eb", width: "18px", height: "18px" }} />
+                                            <input
+                                              type="checkbox"
+                                              title={getAsistenciaEncargadoTooltip({
+                                                estudiante,
+                                                leccion,
+                                                draft,
+                                                fecha: asistenciaFecha,
+                                                materia: selected?.MateriaNombre
+                                              })}
+                                              aria-label="Informar al encargado"
+                                              checked={Boolean(draft.notificarEncargado)}
+                                              disabled={cursoGestionCerrado || suspendido}
+                                              onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "notificarEncargado", e.target.checked)}
+                                              style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
+                                            />
                                           </td>
                                           <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", color: "#166534", fontWeight: 700, fontSize: "12px" }}>
                                             {(() => {
@@ -10224,18 +10629,22 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                     const nota = calcularNotaExamen(draft.puntosObtenidos, puntosMaximosActividad);
                                     const porcentajeGanado = calcularPorcentajeGanadoExamen(nota, seguimientoActividadSeleccionada, seguimientoDetalleSeleccionado);
                                     const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
+                                    const suspendido = isEstudianteSuspendido(estudiante);
+                                    const suspensionTooltip = getSuspensionTooltip(estudiante);
                                     return (
                                       <tr
                                         key={`exam-${estudiante.EstudianteId}`}
                                         className="adecuacion-student-row"
                                         data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
+                                        title={suspensionTooltip || undefined}
                                         style={{
-                                          background: filaConError ? "#fef2f2" : zebraBg,
+                                          background: suspendido ? SUSPENSION_ROW_BG : (filaConError ? "#fef2f2" : zebraBg),
                                           boxShadow: filaConError ? "inset 0 0 0 2px #ef4444" : "none"
                                         }}
                                       >
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>
                                           {getFullName(estudiante)}
+                                          {suspendido ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: "12px" }}>Alumno Suspendido</div> : null}
                                           <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
                                           <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
                                             Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
@@ -10253,6 +10662,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                             inputMode="numeric"
                                             pattern="[0-9]*"
                                             value={draft.puntosObtenidos}
+                                            disabled={cursoGestionCerrado || suspendido}
+                                            title={suspensionTooltip || undefined}
                                             onChange={(e) => {
                                               const limpio = String(e.target.value || "").replace(/\D+/g, "");
                                               if (limpio === "") {
@@ -10269,10 +10680,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               width: "130px",
                                               color: excedido ? "#b91c1c" : "#0f172a",
                                               border: excedido ? "2px solid #ef4444" : "1px solid #94a3b8",
-                                              background: excedido ? "#fef2f2" : "#ffffff",
+                                              background: suspendido ? "#f1f5f9" : (excedido ? "#fef2f2" : "#ffffff"),
                                               borderRadius: "8px",
                                               padding: "7px",
-                                              fontWeight: excedido ? 700 : 500
+                                              fontWeight: excedido ? 700 : 500,
+                                              cursor: suspendido ? "not-allowed" : "text"
                                             }}
                                           />
                                             );
@@ -10281,15 +10693,15 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>{Number(puntosMaximosActividad || 0).toFixed(2)}</td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{nota.toFixed(2)}</td>
                                         <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{porcentajeGanado.toFixed(2)}%</td>
-                                        <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}><input value={draft.observacion} onChange={(e) => updateSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { observacion: e.target.value })} placeholder="Observación" style={{ minWidth: "220px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px" }} /></td>
+                                        <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}><input value={draft.observacion} disabled={cursoGestionCerrado || suspendido} title={suspensionTooltip || undefined} onChange={(e) => updateSeguimientoExamenDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { observacion: e.target.value })} placeholder="Observación" style={{ minWidth: "220px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px", background: suspendido ? "#f1f5f9" : "#ffffff", cursor: suspendido ? "not-allowed" : "text" }} /></td>
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
                                           <label title="Informar al encargado" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "32px", height: "32px", border: "1px solid #94a3b8", borderRadius: "8px", background: aviso.informar ? "#dbeafe" : "#ffffff" }}>
-                                            <input type="checkbox" checked={aviso.informar} onChange={(event) => updateSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { informar: event.target.checked })} style={{ accentColor: "#2563eb", width: "18px", height: "18px" }} />
+                                            <input type="checkbox" checked={aviso.informar} disabled={cursoGestionCerrado || suspendido} onChange={(event) => updateSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { informar: event.target.checked })} style={{ accentColor: "#2563eb", width: "18px", height: "18px" }} />
                                           </label>
                                           {aviso.informar ? (
                                             <div style={{ display: "grid", gap: "6px", marginTop: "8px" }}>
                                               <span style={{ color: "#475569", fontSize: "12px", fontWeight: 700 }}>Mensaje que se enviará</span>
-                                              <textarea value={aviso.observacion} onChange={(event) => updateSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { observacion: event.target.value, mensajeEditado: true })} placeholder="Mensaje para el encargado" rows={5} style={{ width: "100%", minWidth: "320px", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: "#ffffff", lineHeight: 1.4 }} />
+                                              <textarea value={aviso.observacion} disabled={cursoGestionCerrado || suspendido} onChange={(event) => updateSeguimientoActividadInformarDraft(seguimientoActividadSeleccionada.ActividadId, estudiante.EstudianteId, { observacion: event.target.value, mensajeEditado: true })} placeholder="Mensaje para el encargado" rows={5} style={{ width: "100%", minWidth: "320px", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: suspendido ? "#f1f5f9" : "#ffffff", lineHeight: 1.4 }} />
                                             </div>
                                           ) : null}
                                         </td>
@@ -10539,15 +10951,19 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                     const recuperacion = getSeguimientoRecuperacionActual(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId);
                                     const puedeWhatsApp = Boolean(estudiante.AutorizaWhatsAppEncargado);
                                     const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
+                                    const suspendido = isEstudianteSuspendido(estudiante);
+                                    const suspensionTooltip = getSuspensionTooltip(estudiante);
                                     return (
                                       <tr
                                         key={estudiante.EstudianteId}
                                         className="adecuacion-student-row"
                                         data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
-                                        style={{ background: zebraBg }}
+                                        title={suspensionTooltip || undefined}
+                                        style={{ background: getGestionRowBg(estudiante, zebraBg) }}
                                       >
                                         <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0", color: "#0f172a", fontWeight: 700 }}>
                                           {getFullName(estudiante)}
+                                          {suspendido ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: "12px" }}>Alumno Suspendido</div> : null}
                                           <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
                                           <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
                                             Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
@@ -10564,6 +10980,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
                                               name={`seg-${seguimientoIndicadorSeleccionado.IndicadorGrupoId}-${estudiante.EstudianteId}`}
                                               checked={actual === estado}
+                                              disabled={cursoGestionCerrado || suspendido}
                                               onChange={() => updateSeguimientoDraft(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId, estado)}
                                             />
                                           </td>
@@ -10576,6 +10993,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                                 aria-label="Actividad de recuperación"
                                                 style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
                                                 checked={recuperacion.activa}
+                                                disabled={cursoGestionCerrado || suspendido}
                                                 onChange={(event) => updateSeguimientoRecuperacionDraft(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId, { activa: event.target.checked })}
                                               />
                                             </label>
@@ -10583,10 +11001,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               <div style={{ display: "grid", gap: "6px", marginTop: "8px" }}>
                                                 <textarea
                                                   value={recuperacion.texto}
+                                                  disabled={cursoGestionCerrado || suspendido}
                                                   onChange={(event) => updateSeguimientoRecuperacionDraft(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId, { texto: event.target.value })}
                                                   placeholder="Detalle de recuperación"
                                                   rows={2}
-                                                  style={{ width: "100%", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: "#ffffff" }}
+                                                  style={{ width: "100%", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: suspendido ? "#f1f5f9" : "#ffffff" }}
                                                 />
                                               </div>
                                             ) : null}
@@ -10599,6 +11018,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               aria-label="Informar al encargado"
                                               style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
                                               checked={aviso.informar}
+                                              disabled={cursoGestionCerrado || suspendido}
                                               onChange={(event) => updateSeguimientoInformarDraft(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId, { informar: event.target.checked })}
                                             />
                                           </label>
@@ -10606,10 +11026,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                             <div style={{ display: "grid", gap: "6px", marginTop: "8px" }}>
                                               <textarea
                                                 value={aviso.observacion}
+                                                disabled={cursoGestionCerrado || suspendido}
                                                 onChange={(event) => updateSeguimientoInformarDraft(seguimientoIndicadorSeleccionado.IndicadorGrupoId, estudiante.EstudianteId, { observacion: event.target.value })}
                                                 placeholder="Observaciones para el encargado"
                                                 rows={2}
-                                                style={{ width: "100%", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: "#ffffff" }}
+                                                style={{ width: "100%", color: "#0f172a", border: "1px solid #64748b", borderRadius: "10px", padding: "8px", background: suspendido ? "#f1f5f9" : "#ffffff" }}
                                               />
                                               <small style={{ color: puedeWhatsApp ? "#166534" : "#92400e" }}>
                                                 Correo al estudiante. WhatsApp {puedeWhatsApp ? "habilitado" : "no autorizado"}.
@@ -10915,15 +11336,19 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           const draft = asistenciaDrafts[asistenciaDraftKey(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId)] || { estado: "PRESENTE" as EstadoAsistencia, minutosTardia: "", observacion: "" };
                           const resumen = getResumenAsistencia(estudiante.EstudianteId);
                           const zebraBg = estudianteIndex % 2 === 0 ? "#ffffff" : "#f8fafc";
+                          const suspendido = isEstudianteSuspendido(estudiante);
+                          const suspensionTooltip = getSuspensionTooltip(estudiante);
                           return (
                             <tr
                               key={`asis-${estudiante.EstudianteId}`}
                               className="adecuacion-student-row"
                               data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
-                              style={{ background: zebraBg }}
+                              title={suspensionTooltip || undefined}
+                              style={{ background: getGestionRowBg(estudiante, zebraBg) }}
                             >
                               <td style={stickyTableCellStyle}>
                                 {getFullName(estudiante)}
+                                {suspendido ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: "12px" }}>Alumno Suspendido</div> : null}
                                 <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>{estudiante.Identificacion}</div>
                                 <div style={{ color: "#475569", fontWeight: 500, fontSize: "12px" }}>
                                   Correo: {getCorreoHabilitadoEstudiante(estudiante) || "No definido"}
@@ -10934,7 +11359,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                               </td>
                               <td>{estudiante.Identificacion}</td>
                               <td>
-                                <select value={draft.estado} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { aplicarReglaPrimeraSeleccion: true })}>
+                                <select value={draft.estado} disabled={cursoGestionCerrado || suspendido} title={suspensionTooltip || undefined} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { aplicarReglaPrimeraSeleccion: true })}>
                                   <option value="PRESENTE">Presente</option>
                                   <option value="AUSENTE_JUSTIFICADA">Ausente justificada</option>
                                   <option value="AUSENTE_INJUSTIFICADA">Ausente injustificada</option>
@@ -10947,9 +11372,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                   type="number"
                                   min="0"
                                   value={draft.minutosTardia}
+                                  disabled={cursoGestionCerrado || suspendido}
+                                  title={suspensionTooltip || undefined}
                                   onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "minutosTardia", e.target.value)}
                                   placeholder="0"
-                                  style={{ width: "110px" }}
+                                  style={{ width: "110px", background: suspendido ? "#f1f5f9" : undefined }}
                                 />
                               </td>
                               <td>{Number(resumen?.AusenciasInjustificadasEquivalentes || 0).toFixed(2)}</td>
@@ -10980,6 +11407,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       className="primary-btn"
                       onClick={() => {
                         if (!planeamientoIaFormOpen && selected) {
+                          setIndicadoresHabilidadesOpen(false);
                           loadPlantillasPlaneamientoIa();
                           setPlaneamientoIaForm((prev) => ({
                             ...prev,
@@ -11007,6 +11435,13 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     >
                       {planeamientoIaFormOpen ? "Ocultar generación IA" : "Agregar planeamiento con IA"}
                     </button>
+                    <button
+                      type="button"
+                      style={{ ...secondaryButtonStyle, background: "#ccfbf1", borderColor: "#5eead4", color: "#115e59", fontWeight: 900 }}
+                      onClick={abrirIndicadoresDesdeHabilidades}
+                    >
+                      {indicadoresHabilidadesOpen ? "Ocultar indicadores desde habilidades" : "Agregar Indicadores desde Habilidades"}
+                    </button>
                   </div>
                 </div>
 
@@ -11017,6 +11452,171 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <div>3. Presioná “Generar planeamiento”. Podés mejorarlo o generarlo nuevamente cuando lo necesités.</div>
                   <div>4. Cuando el resultado esté correcto, guardalo y continuá con sus indicadores.</div>
                 </div>
+
+                {indicadoresHabilidadesOpen && (
+                  <div style={{ ...cardStyle, background: "#0f2f2e", color: "#ecfeff", border: "1px solid #2dd4bf", display: "grid", gap: "12px", fontSize: "15px", lineHeight: 1.35 }}>
+                    <div>
+                      <strong>Agregar indicadores desde habilidades</strong>
+                      <p style={{ margin: "4px 0 0", color: "#bff7ee" }}>
+                        Se crearán indicadores ligados a {selected?.MateriaNombre || "la materia"} y al grupo seleccionado. El nombre quedará como: <strong>{nombreIndicadoresHabilidadesPreview}</strong>.
+                      </p>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+                      <label style={{ color: "#ecfeff" }}>
+                        Nombre del conjunto
+                        <input
+                          value={indicadoresHabilidadesForm.nombre}
+                          onChange={(event) => updateIndicadoresHabilidadesField("nombre", event.target.value)}
+                          placeholder="Ejemplo: Semana 3"
+                          style={{ background: "#123b3a", color: "#ecfeff", border: "1px solid #5eead4", fontSize: "15px" }}
+                        />
+                      </label>
+                      <label style={{ color: "#ecfeff" }}>
+                        Plantilla IA de indicadores
+                        <select
+                          value={indicadoresHabilidadesForm.plantillaPromptIAId || eval360PlantillaIaIndicadorId}
+                          onChange={(event) => updateIndicadoresHabilidadesField("plantillaPromptIAId", event.target.value)}
+                          style={{ background: "#123b3a", color: "#ecfeff", border: "1px solid #5eead4", fontSize: "15px" }}
+                        >
+                          <option value="">Usar plantilla activa recomendada</option>
+                          {eval360PlantillasIaIndicadores.map((plantilla) => (
+                            <option key={`hab-plantilla-${plantilla.Id}`} value={plantilla.Id}>
+                              {plantilla.NombrePlantilla}{plantilla.TipoGeneracionIANombre ? ` (${plantilla.TipoGeneracionIANombre})` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ color: "#ecfeff" }}>
+                        Indicadores por habilidad
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={indicadoresHabilidadesForm.cantidadPorHabilidad}
+                          onChange={(event) => updateIndicadoresHabilidadesField("cantidadPorHabilidad", event.target.value)}
+                          placeholder="1"
+                          style={{ background: "#123b3a", color: "#ecfeff", border: "1px solid #5eead4", fontSize: "15px" }}
+                        />
+                      </label>
+                    </div>
+
+                    <div style={{ display: "grid", gap: "8px" }}>
+                      <strong style={{ color: "#ecfeff" }}>Meses</strong>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        {mesesHabilidades.length ? mesesHabilidades.map((mes) => {
+                          const checked = indicadoresHabilidadesForm.meses.includes(mes);
+                          return (
+                            <label key={`mes-ind-hab-${mes}`} style={{ display: "flex", alignItems: "center", gap: "6px", background: checked ? "#134e4a" : "#123b3a", border: "1px solid #5eead4", borderRadius: "8px", padding: "6px 8px", fontWeight: 800 }}>
+                              <input type="checkbox" checked={checked} onChange={() => toggleIndicadoresHabilidadesMes(mes)} />
+                              {mes}
+                            </label>
+                          );
+                        }) : (
+                          <span style={{ color: "#bff7ee" }}>{loadingHabilidadesIa ? "Cargando habilidades..." : "No hay meses disponibles para esta materia y grado."}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gap: "8px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                        <strong style={{ color: "#ecfeff" }}>Habilidades</strong>
+                        <button
+                          type="button"
+                          style={secondaryButtonStyle}
+                          onClick={() => updateIndicadoresHabilidadesField("habilidadesIds", habilidadesFiltradasIndicadoresHabilidades.map((h) => Number(h.PlaneamientoHabilidadId)))}
+                          disabled={!habilidadesFiltradasIndicadoresHabilidades.length}
+                        >
+                          Seleccionar todas
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gap: "6px", maxHeight: "260px", overflowY: "auto", background: "#082f2e", border: "1px solid #5eead4", borderRadius: "8px", padding: "8px" }}>
+                        {habilidadesFiltradasIndicadoresHabilidades.length ? habilidadesFiltradasIndicadoresHabilidades.map((habilidad) => {
+                          const habilidadId = Number(habilidad.PlaneamientoHabilidadId);
+                          const checked = indicadoresHabilidadesForm.habilidadesIds.includes(habilidadId);
+                          return (
+                            <label key={`hab-ind-${habilidadId}`} style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px", alignItems: "start", color: "#ecfeff", padding: "6px", borderRadius: "6px", background: checked ? "#134e4a" : "transparent" }}>
+                              <input type="checkbox" checked={checked} onChange={() => toggleIndicadoresHabilidadesId(habilidadId)} />
+                              <span>
+                                <strong>{habilidad.NumeroHabilidad ? `${habilidad.NumeroHabilidad}. ` : ""}</strong>{habilidad.DescripcionHabilidad}
+                                <small style={{ display: "block", color: "#bff7ee" }}>{[habilidad.Mes, habilidad.Area].filter(Boolean).join(" - ")}</small>
+                              </span>
+                            </label>
+                          );
+                        }) : (
+                          <span style={{ color: "#bff7ee" }}>Seleccioná uno o varios meses para ver las habilidades disponibles.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
+                      <div style={{ display: "grid", gap: "8px", background: "#082f2e", border: "1px solid #5eead4", borderRadius: "8px", padding: "10px" }}>
+                        <strong style={{ color: "#ecfeff" }}>Secciones</strong>
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: "8px", color: "#ecfeff", fontWeight: 800, width: "fit-content", maxWidth: "100%" }}>
+                          <span>Aplicar a todas las secciones del mismo grado</span>
+                          <input
+                            type="checkbox"
+                            checked={seccionesMismoGradoMateriaSeleccionado.length > 0 && indicadoresHabilidadesForm.grupoIds.length === seccionesMismoGradoMateriaSeleccionado.length}
+                            onChange={(event) => updateIndicadoresHabilidadesField("grupoIds", event.target.checked ? seccionesMismoGradoMateriaSeleccionado.map((grupo) => String(grupo.GrupoId)) : [String(selected?.GrupoId || "")].filter(Boolean))}
+                            style={{ width: "16px", height: "16px", margin: 0, flexShrink: 0 }}
+                          />
+                        </label>
+                        <div style={{ display: "flex", gap: "8px 14px", flexWrap: "wrap", alignItems: "center" }}>
+                          {seccionesMismoGradoMateriaSeleccionado.map((grupo) => (
+                            <label key={`hab-sec-${grupo.GrupoId}`} style={{ display: "inline-flex", gap: "8px", alignItems: "center", color: "#ecfeff", fontWeight: 800, width: "fit-content", maxWidth: "100%" }}>
+                              <span>{grupo.GrupoNombre}</span>
+                              <input
+                                type="checkbox"
+                                checked={indicadoresHabilidadesForm.grupoIds.includes(String(grupo.GrupoId))}
+                                onChange={() => toggleIndicadoresHabilidadesGrupo(String(grupo.GrupoId))}
+                                style={{ width: "16px", height: "16px", margin: 0, flexShrink: 0 }}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "8px", background: "#082f2e", border: "1px solid #5eead4", borderRadius: "8px", padding: "10px" }}>
+                        <strong style={{ color: "#ecfeff" }}>Rúbricas a calificar</strong>
+                        {[
+                          { key: "Cotidiano", label: "Trabajo cotidiano" },
+                          { key: "Tareas", label: "Tareas" },
+                          { key: "TablaEspecificaciones", label: "Tabla de especificaciones" }
+                        ].map((item) => (
+                          <label key={`hab-tipo-${item.key}`} style={{ display: "inline-flex", gap: "8px", alignItems: "center", color: "#ecfeff", fontWeight: 800, width: "fit-content", maxWidth: "100%" }}>
+                            <span>{item.label}</span>
+                            <input
+                              type="checkbox"
+                              checked={indicadoresHabilidadesForm.tiposUso.includes(item.key)}
+                              onChange={() => toggleIndicadoresHabilidadesTipoUso(item.key)}
+                              style={{ width: "16px", height: "16px", margin: 0, flexShrink: 0 }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <label style={{ color: "#ecfeff" }}>
+                      Indicaciones para la IA
+                      <textarea
+                        value={indicadoresHabilidadesForm.indicacionesDocente}
+                        onChange={(event) => updateIndicadoresHabilidadesField("indicacionesDocente", event.target.value)}
+                        rows={3}
+                        placeholder="Opcional: tono, nivel de detalle o condición especial."
+                        style={{ background: "#123b3a", color: "#ecfeff", border: "1px solid #5eead4", fontSize: "15px" }}
+                      />
+                    </label>
+
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                      <button type="button" className="primary-btn" onClick={generarIndicadoresDesdeHabilidades} disabled={generatingIndicadoresHabilidades}>
+                        {generatingIndicadoresHabilidades ? "Generando indicadores..." : "Generar indicadores desde habilidades"}
+                      </button>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => setIndicadoresHabilidadesOpen(false)} disabled={generatingIndicadoresHabilidades}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
 
 
 
@@ -12157,8 +12757,20 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           const planeamientoId = Number(planeamiento.PlaneamientoId);
                           const panelOpen = !!eval360PanelIndicadoresOpen[planeamientoId];
                           const indicadoresPlaneamiento = eval360IndicadoresPorPlaneamiento[planeamientoId] || [];
+                          const indicadoresPlaneamientoCargados = Object.prototype.hasOwnProperty.call(eval360IndicadoresPorPlaneamiento, planeamientoId);
                           const indicadoresMinimizados = !!eval360IndicadoresMinimizados[planeamientoId];
-                          const tieneIndicadoresGenerados = indicadoresPlaneamiento.length > 0;
+                          const totalIndicadoresGenerados = getTotalIndicadoresIaPlaneamiento(planeamiento, indicadoresPlaneamiento);
+                          const tieneIndicadoresGenerados = totalIndicadoresGenerados > 0;
+                          const esDesdeHabilidades = isPlaneamientoDesdeHabilidades(planeamiento);
+                          const indicadorAccionLabel = panelOpen
+                            ? (esDesdeHabilidades ? "Ocultar indicadores de habilidades" : "Ocultar indicadores IA")
+                            : esDesdeHabilidades
+                              ? (tieneIndicadoresGenerados ? "Ver indicadores a partir de habilidades" : "Agregar indicadores desde habilidades")
+                              : (tieneIndicadoresGenerados ? "Ver indicadores generados con IA" : "Generar Indicadores con IA");
+                          const indicadorAccionStyle = esDesdeHabilidades
+                            ? { ...secondaryButtonStyle, background: "#ccfbf1", borderColor: "#5eead4", color: "#115e59", fontWeight: 900 }
+                            : { ...secondaryButtonStyle, background: "#ede9fe", borderColor: "#c4b5fd", color: "#5b21b6", fontWeight: 800 };
+                          const indicadorManualForm = getIndicadorManualForm(planeamientoId);
 
                           return (
                             <>
@@ -12172,7 +12784,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                 </td>
                                 <td style={{ padding: "10px" }}>
                                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                                    <button type="button" className="primary-btn" onClick={() => exportarPlaneamientoWord(planeamiento)}>Generar plantilla Word</button>
+                                    {!esDesdeHabilidades && (
+                                      <button type="button" className="primary-btn" onClick={() => exportarPlaneamientoWord(planeamiento)}>Generar plantilla Word</button>
+                                    )}
                                     <button
                                       type="button"
                                       style={{ ...secondaryButtonStyle, background: "#dbeafe", borderColor: "#93c5fd", color: "#1e3a8a", fontWeight: 800 }}
@@ -12199,10 +12813,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                     </button>
                                     <button
                                       type="button"
-                                      style={{ ...secondaryButtonStyle, background: "#ede9fe", borderColor: "#c4b5fd", color: "#5b21b6", fontWeight: 800 }}
+                                      style={indicadorAccionStyle}
                                       onClick={() => togglePanelIndicadoresPlaneamiento(planeamientoId)}
                                     >
-                                      {panelOpen ? "Ocultar indicadores IA" : (tieneIndicadoresGenerados ? "Ver Indicadores Generados con IA" : "Generar Indicadores con IA")}
+                                      {indicadorAccionLabel}
                                     </button>
                                   </div>
                                   {deletingPlaneamientoId === planeamientoId ? (
@@ -12219,9 +12833,13 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                     <div style={{ display: "grid", gap: "12px", padding: "14px", border: "1px solid #bfdbfe", borderRadius: "16px", background: "#ffffff", color: "#0f172a" }}>
                                       <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                                         <div>
-                                          <h4 style={{ margin: "0 0 4px", color: "#0f172a" }}>Indicadores IA de: {planeamiento.Nombre}</h4>
+                                          <h4 style={{ margin: "0 0 4px", color: "#0f172a" }}>
+                                            {esDesdeHabilidades ? "Indicadores desde habilidades" : "Indicadores IA"} de: {planeamiento.Nombre}
+                                          </h4>
                                           <p style={{ margin: 0, color: "#1e293b", fontWeight: 700, lineHeight: 1.45 }}>
-                                            Se toman los indicadores de evaluación de este planeamiento y se generan niveles Avanzado, Intermedio e Inicial.
+                                            {esDesdeHabilidades
+                                              ? "Se muestran los indicadores creados desde habilidades y sus niveles Avanzado, Intermedio e Inicial."
+                                              : "Se toman los indicadores de evaluación de este planeamiento y se generan niveles Avanzado, Intermedio e Inicial."}
                                           </p>
                                         </div>
                                         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -12273,7 +12891,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                         </div>
                                       </div>
 
-                                      {!tieneIndicadoresGenerados && (
+                                      {!tieneIndicadoresGenerados && !esDesdeHabilidades && (
                                         <>
                                       <div style={{ padding: "10px 12px", borderRadius: "10px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", display: "grid", gap: "4px" }}>
                                             <strong>Paso a paso</strong>
@@ -12386,6 +13004,84 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                         </>
                                       )}
 
+                                      {!indicadoresMinimizados && (tieneIndicadoresGenerados || esDesdeHabilidades) && (
+                                        <div style={{ display: "grid", gap: "10px", padding: "10px", border: "1px solid #99f6e4", borderRadius: "12px", background: "#f0fdfa" }}>
+                                          <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                                            <strong style={{ color: "#115e59" }}>Agregar más indicadores</strong>
+                                            <button
+                                              type="button"
+                                              style={{ ...secondaryButtonStyle, background: "#ccfbf1", borderColor: "#5eead4", color: "#115e59", fontWeight: 900 }}
+                                              onClick={() => updateIndicadorManualForm(planeamientoId, "open", !indicadorManualForm.open)}
+                                            >
+                                              {indicadorManualForm.open ? "Cerrar" : "Agregar indicador"}
+                                            </button>
+                                          </div>
+
+                                          {indicadorManualForm.open && (
+                                            <div style={{ display: "grid", gap: "10px" }}>
+                                              <label style={{ display: "grid", gap: "6px", color: "#0f172a" }}>
+                                                <span style={{ fontWeight: 800 }}>Indicador base</span>
+                                                <textarea
+                                                  value={indicadorManualForm.indicadorBase}
+                                                  onChange={(event) => updateIndicadorManualForm(planeamientoId, "indicadorBase", event.target.value)}
+                                                  rows={2}
+                                                  placeholder="Escribí el indicador que se usará como base."
+                                                  style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #99f6e4", borderRadius: "10px", padding: "10px" }}
+                                                />
+                                              </label>
+                                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+                                                <label style={{ display: "grid", gap: "6px", color: "#0f172a" }}>
+                                                  <span style={{ fontWeight: 800, color: "#166534" }}>Avanzado</span>
+                                                  <textarea value={indicadorManualForm.indicadorAvanzado} onChange={(event) => updateIndicadorManualForm(planeamientoId, "indicadorAvanzado", event.target.value)} rows={2} style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #99f6e4", borderRadius: "10px", padding: "10px" }} />
+                                                </label>
+                                                <label style={{ display: "grid", gap: "6px", color: "#0f172a" }}>
+                                                  <span style={{ fontWeight: 800, color: "#92400e" }}>Intermedio</span>
+                                                  <textarea value={indicadorManualForm.indicadorIntermedio} onChange={(event) => updateIndicadorManualForm(planeamientoId, "indicadorIntermedio", event.target.value)} rows={2} style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #99f6e4", borderRadius: "10px", padding: "10px" }} />
+                                                </label>
+                                                <label style={{ display: "grid", gap: "6px", color: "#0f172a" }}>
+                                                  <span style={{ fontWeight: 800, color: "#991b1b" }}>Inicial</span>
+                                                  <textarea value={indicadorManualForm.indicadorInicial} onChange={(event) => updateIndicadorManualForm(planeamientoId, "indicadorInicial", event.target.value)} rows={2} style={{ background: "#ffffff", color: "#0f172a", border: "1px solid #99f6e4", borderRadius: "10px", padding: "10px" }} />
+                                                </label>
+                                              </div>
+                                              <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center", color: "#0f172a" }}>
+                                                {[
+                                                  { key: "Cotidiano", label: "Trabajo cotidiano" },
+                                                  { key: "Tareas", label: "Tareas" },
+                                                  { key: "TablaEspecificaciones", label: "Tabla de especificaciones" }
+                                                ].map((item) => (
+                                                  <label key={`manual-tipo-${planeamientoId}-${item.key}`} style={{ display: "flex", gap: "6px", alignItems: "center", fontWeight: 800 }}>
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={indicadorManualForm.tiposUso.includes(item.key)}
+                                                      onChange={() => toggleIndicadorManualTipoUso(planeamientoId, item.key)}
+                                                    />
+                                                    {item.label}
+                                                  </label>
+                                                ))}
+                                              </div>
+                                              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                                                <button
+                                                  type="button"
+                                                  className="primary-btn"
+                                                  onClick={() => agregarIndicadorManualPlaneamiento(planeamientoId, Number(indicadoresPlaneamiento[0]?.EstructuraGrupoId || eval360Estructura?.estructura?.EstructuraGrupoId || 0))}
+                                                  disabled={savingIndicadorManualPlaneamientoId === planeamientoId}
+                                                >
+                                                  {savingIndicadorManualPlaneamientoId === planeamientoId ? "Guardando..." : "Guardar indicador"}
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  style={secondaryButtonStyle}
+                                                  onClick={() => setIndicadorManualPorPlaneamiento((prev) => ({ ...prev, [planeamientoId]: { ...initialIndicadorManualForm, tiposUso: [...DEFAULT_TIPOS_USO_INDICADORES] } }))}
+                                                  disabled={savingIndicadorManualPlaneamientoId === planeamientoId}
+                                                >
+                                                  Cancelar
+                                                </button>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+
                                       {!indicadoresMinimizados && (
                                         indicadoresPlaneamiento.length > 0 ? (
                                           <div style={{ display: "grid", gap: "10px" }}>
@@ -12396,7 +13092,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               return (
                                                 <div key={`${principal.IndicadorBase}-${grupoIndex}`} style={{ display: "grid", gap: "10px", padding: "12px", border: "1px solid #cbd5e1", borderRadius: "12px", background: "#ffffff" }}>
                                                   <div style={{ display: "grid", gap: "6px" }}>
-                                                    <strong style={{ color: "#334155" }}>Indicador base del planeamiento</strong>
+                                                    <strong style={{ color: "#334155" }}>{esDesdeHabilidades ? "Indicador base desde habilidad" : "Indicador base del planeamiento"}</strong>
                                                     <div style={{ padding: "10px", borderRadius: "10px", background: "#f1f5f9", color: "#0f172a" }}>
                                                       {principal.IndicadorBase}
                                                     </div>
@@ -12468,6 +13164,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                                 </div>
                                               );
                                             })}
+                                          </div>
+                                        ) : tieneIndicadoresGenerados && (!indicadoresPlaneamientoCargados || loadingEval360Indicadores) ? (
+                                          <div style={{ padding: "12px", borderRadius: "12px", background: "#eff6ff", color: "#1e3a8a", border: "1px solid #bfdbfe", fontWeight: 800 }}>
+                                            Cargando indicadores generados con IA...
                                           </div>
                                         ) : (
                                           <div style={{ padding: "12px", borderRadius: "12px", background: "#f8fafc", color: "#475569", border: "1px dashed #cbd5e1" }}>
@@ -14204,14 +14904,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <tbody>
                     {detalle.estudiantes.map((estudiante) => {
                       const acumulado = calcularAcumuladoEstudiante(estudiante.EstudianteId);
+                      const suspendido = isEstudianteSuspendido(estudiante);
+                      const suspensionTooltip = getSuspensionTooltip(estudiante);
 
                       return (
                         <tr
                           key={estudiante.EstudianteId}
                           className="adecuacion-student-row"
                           data-adecuacion={getAdecuacionStyleKind(estudiante.TipoAdecuacion || estudiante.Adecuacion) || undefined}
+                          title={suspensionTooltip || undefined}
+                          style={suspendido ? { background: SUSPENSION_ROW_BG } : undefined}
                         >
-                          <td style={stickyTableCellStyle}>{getFullName(estudiante)}</td>
+                          <td style={stickyTableCellStyle}>
+                            {getFullName(estudiante)}
+                            {suspendido ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: "12px" }}>Alumno Suspendido</div> : null}
+                          </td>
                           <td>{estudiante.Identificacion}</td>
                           {detalle.actividades.map((actividad) => {
                             const value = getDraftValue(estudiante.EstudianteId, actividad.EvaluacionActividadId);
@@ -14227,12 +14934,13 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                     onChange={(e) => updateNotaDraft(estudiante.EstudianteId, actividad.EvaluacionActividadId, e.target.value)}
                                     onBlur={() => normalizeNotaOnBlur(estudiante.EstudianteId, actividad.EvaluacionActividadId)}
                                     placeholder="0-100"
-                                    disabled={cursoGestionCerrado}
+                                    disabled={cursoGestionCerrado || suspendido}
+                                    title={suspensionTooltip || undefined}
                                     style={{
                                       ...inputNotaStyle,
-                                      background: cursoGestionCerrado ? "#e2e8f0" : inputNotaStyle.background,
-                                      color: cursoGestionCerrado ? "#64748b" : inputNotaStyle.color,
-                                      cursor: cursoGestionCerrado ? "not-allowed" : "text"
+                                      background: cursoGestionCerrado || suspendido ? "#e2e8f0" : inputNotaStyle.background,
+                                      color: cursoGestionCerrado || suspendido ? "#64748b" : inputNotaStyle.color,
+                                      cursor: cursoGestionCerrado || suspendido ? "not-allowed" : "text"
                                     }}
                                   />
                                   <small style={{ opacity: 0.75 }}>Gana: {formatPercent(porcentajeGanado)}</small>

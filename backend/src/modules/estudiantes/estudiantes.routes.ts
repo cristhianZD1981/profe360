@@ -6,6 +6,12 @@ import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
 import { hashPassword } from "../../utils/password";
+import {
+  MOTIVOS_SUSPENSION_ESTUDIANTE,
+  getSuspensionVigenteApplySql,
+  normalizeSuspensionMotivo,
+  suspensionVigenteSelectSql
+} from "./estudiante-suspension.utils";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -1577,12 +1583,14 @@ router.get("/", async (req, res) => {
             e.RutaTransporteHabitual,
             e.Observaciones,
             e.ObservacionMedica,
-            e.Activo
+            e.Activo,
+            ${suspensionVigenteSelectSql}
           FROM dbo.Estudiante e
           LEFT JOIN dbo.TipoEstudiante te
             ON te.TipoEstudianteId = e.TipoEstudianteId
           LEFT JOIN dbo.RutaTransporte rt
             ON rt.RutaTransporteId = e.RutaTransporteId
+          ${getSuspensionVigenteApplySql("e")}
           WHERE e.InstitucionId = @institucionId
             AND (@incluirInactivos = 1 OR e.Activo = 1)
             AND (
@@ -2379,6 +2387,184 @@ router.post(
   }
 );
 
+router.post(
+  "/:id/suspension",
+  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
+  async (req, res) => {
+    const pool = await getPool();
+    const transaction = new sql.Transaction(pool);
+
+    try {
+      const estudianteId = Number(req.params.id);
+      const institucionId = Number(req.auth?.institucionId || 0);
+      const motivo = normalizeSuspensionMotivo(req.body?.motivo);
+      const fechaInicio = String(req.body?.fechaInicio || "").slice(0, 10);
+      const fechaFin = String(req.body?.fechaFin || "").slice(0, 10);
+      const observacion = String(req.body?.observacion || "").trim().slice(0, 500) || null;
+
+      if (!institucionId) return badRequest(res, "El usuario no tiene institución asignada");
+      if (!estudianteId) return badRequest(res, "Id inválido");
+      if (!MOTIVOS_SUSPENSION_ESTUDIANTE.has(motivo)) return badRequest(res, "Motivo de suspensión inválido");
+      if (!fechaInicio || !fechaFin) return badRequest(res, "Indicá fecha de inicio y fecha fin de suspensión");
+      if (new Date(fechaInicio) > new Date(fechaFin)) return badRequest(res, "La fecha fin no puede ser menor que la fecha inicio");
+
+      const estudianteResult = await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteId)
+        .query(`
+          SELECT TOP 1 EstudianteId
+          FROM dbo.Estudiante
+          WHERE InstitucionId = @institucionId
+            AND EstudianteId = @estudianteId
+        `);
+
+      if (!estudianteResult.recordset.length) {
+        return res.status(404).json({ ok: false, message: "Estudiante no encontrado" });
+      }
+
+      await transaction.begin();
+
+      await new sql.Request(transaction)
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .query(`
+          UPDATE dbo.EstudianteSuspension
+          SET Activo = 0,
+              UsuarioLevantaId = @usuarioId,
+              FechaLevantamiento = SYSDATETIME(),
+              UpdatedAt = SYSDATETIME()
+          WHERE InstitucionId = @institucionId
+            AND EstudianteId = @estudianteId
+            AND Activo = 1
+        `);
+
+      const result = await new sql.Request(transaction)
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("motivo", sql.NVarChar(50), motivo)
+        .input("fechaInicio", sql.Date, fechaInicio)
+        .input("fechaFin", sql.Date, fechaFin)
+        .input("observacion", sql.NVarChar(500), observacion)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .query(`
+          INSERT INTO dbo.EstudianteSuspension
+            (InstitucionId, EstudianteId, Motivo, FechaInicio, FechaFin, Observacion, Activo, UsuarioCreaId, CreatedAt)
+          OUTPUT INSERTED.*
+          VALUES
+            (@institucionId, @estudianteId, @motivo, @fechaInicio, @fechaFin, @observacion, 1, @usuarioId, SYSDATETIME())
+        `);
+
+      await transaction.commit();
+
+      return created(res, result.recordset[0], "Suspensión registrada correctamente");
+    } catch (error) {
+      try { await transaction.rollback(); } catch {}
+      console.error("Error registrando suspensión de estudiante:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo registrar la suspensión" });
+    }
+  }
+);
+
+router.put(
+  "/:id/suspension/:suspensionId",
+  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
+  async (req, res) => {
+    try {
+      const estudianteId = Number(req.params.id);
+      const suspensionId = Number(req.params.suspensionId);
+      const institucionId = Number(req.auth?.institucionId || 0);
+      const motivo = normalizeSuspensionMotivo(req.body?.motivo);
+      const fechaInicio = String(req.body?.fechaInicio || "").slice(0, 10);
+      const fechaFin = String(req.body?.fechaFin || "").slice(0, 10);
+      const observacion = String(req.body?.observacion || "").trim().slice(0, 500) || null;
+
+      if (!institucionId) return badRequest(res, "El usuario no tiene institución asignada");
+      if (!estudianteId || !suspensionId) return badRequest(res, "Id inválido");
+      if (!MOTIVOS_SUSPENSION_ESTUDIANTE.has(motivo)) return badRequest(res, "Motivo de suspensión inválido");
+      if (!fechaInicio || !fechaFin) return badRequest(res, "Indicá fecha de inicio y fecha fin de suspensión");
+      if (new Date(fechaInicio) > new Date(fechaFin)) return badRequest(res, "La fecha fin no puede ser menor que la fecha inicio");
+
+      const pool = await getPool();
+      const result = await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("suspensionId", sql.Int, suspensionId)
+        .input("motivo", sql.NVarChar(50), motivo)
+        .input("fechaInicio", sql.Date, fechaInicio)
+        .input("fechaFin", sql.Date, fechaFin)
+        .input("observacion", sql.NVarChar(500), observacion)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .query(`
+          UPDATE dbo.EstudianteSuspension
+          SET Motivo = @motivo,
+              FechaInicio = @fechaInicio,
+              FechaFin = @fechaFin,
+              Observacion = @observacion,
+              UsuarioActualizaId = @usuarioId,
+              UpdatedAt = SYSDATETIME()
+          OUTPUT INSERTED.*
+          WHERE EstudianteSuspensionId = @suspensionId
+            AND InstitucionId = @institucionId
+            AND EstudianteId = @estudianteId
+            AND Activo = 1
+        `);
+
+      if (!result.recordset.length) {
+        return res.status(404).json({ ok: false, message: "Suspensión no encontrada" });
+      }
+
+      return ok(res, result.recordset[0], "Suspensión actualizada correctamente");
+    } catch (error) {
+      console.error("Error actualizando suspensión de estudiante:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo actualizar la suspensión" });
+    }
+  }
+);
+
+router.delete(
+  "/:id/suspension/:suspensionId",
+  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
+  async (req, res) => {
+    try {
+      const estudianteId = Number(req.params.id);
+      const suspensionId = Number(req.params.suspensionId);
+      const institucionId = Number(req.auth?.institucionId || 0);
+
+      if (!institucionId) return badRequest(res, "El usuario no tiene institución asignada");
+      if (!estudianteId || !suspensionId) return badRequest(res, "Id inválido");
+
+      const pool = await getPool();
+      const result = await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("suspensionId", sql.Int, suspensionId)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .query(`
+          UPDATE dbo.EstudianteSuspension
+          SET Activo = 0,
+              UsuarioLevantaId = @usuarioId,
+              FechaLevantamiento = SYSDATETIME(),
+              UpdatedAt = SYSDATETIME()
+          OUTPUT INSERTED.*
+          WHERE EstudianteSuspensionId = @suspensionId
+            AND InstitucionId = @institucionId
+            AND EstudianteId = @estudianteId
+            AND Activo = 1
+        `);
+
+      if (!result.recordset.length) {
+        return res.status(404).json({ ok: false, message: "Suspensión no encontrada" });
+      }
+
+      return ok(res, result.recordset[0], "Suspensión levantada correctamente");
+    } catch (error) {
+      console.error("Error levantando suspensión de estudiante:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo levantar la suspensión" });
+    }
+  }
+);
+
 router.get("/:id/detalle", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -2429,12 +2615,14 @@ router.get("/:id/detalle", async (req, res) => {
           e.RutaTransporteHabitual,
           e.Observaciones,
           e.ObservacionMedica,
-          e.Activo
+          e.Activo,
+          ${suspensionVigenteSelectSql}
         FROM dbo.Estudiante e
         LEFT JOIN dbo.TipoEstudiante te
           ON te.TipoEstudianteId = e.TipoEstudianteId
         LEFT JOIN dbo.RutaTransporte rt
           ON rt.RutaTransporteId = e.RutaTransporteId
+        ${getSuspensionVigenteApplySql("e")}
         WHERE e.EstudianteId = @id
           AND e.InstitucionId = @institucionId
       `);

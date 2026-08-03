@@ -1,6 +1,7 @@
 ﻿import { FormEvent, useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRef } from "react";
+import { Fragment } from "react";
 import api from "../lib/http";
 import { getCostaRicaIsoDate } from "../utils/date";
 import { useAuth } from "../context/auth";
@@ -38,6 +39,12 @@ type Student = {
   TieneAdecuacion?: boolean | null;
   ObservacionMedica: string | null;
   Activo?: boolean;
+  SuspensionId?: number | null;
+  Suspendido?: boolean | number | null;
+  MotivoSuspension?: string | null;
+  FechaInicioSuspension?: string | null;
+  FechaFinSuspension?: string | null;
+  ObservacionSuspension?: string | null;
 };
 
 type EncargadoForm = {
@@ -227,6 +234,13 @@ const initialForm = {
   observacionMedica: ""
 };
 
+const initialSuspensionForm = {
+  motivo: "Medida Precautoria",
+  fechaInicio: getCostaRicaIsoDate(),
+  fechaFin: "",
+  observacion: ""
+};
+
 function getStudentFullName(item: {
   Nombre: string;
   PrimerApellido?: string | null;
@@ -241,6 +255,18 @@ function getStudentFullName(item: {
 function formatDate(value?: string | null) {
   if (!value) return "";
   return String(value).slice(0, 10);
+}
+
+const SUSPENSION_ROW_BG = "#ffe4e6";
+
+function isStudentSuspended(item?: Pick<Student, "Suspendido"> | null) {
+  const value = String(item?.Suspendido ?? "").trim().toLowerCase();
+  return item?.Suspendido === true || item?.Suspendido === 1 || value === "true" || value === "1" || value === "si" || value === "sí";
+}
+
+function getSuspensionTooltip(item?: Student | null) {
+  if (!isStudentSuspended(item)) return "";
+  return `Alumno Suspendido, Motivo: ${item?.MotivoSuspension || "No indicado"}, hasta: ${formatDate(item?.FechaFinSuspension) || "sin fecha fin"}`;
 }
 
 function normalizeComparableText(value?: string | null) {
@@ -409,6 +435,9 @@ export default function EstudiantesPage() {
   const [boletaConductaContexto, setBoletaConductaContexto] = useState<BoletaConductaContexto | null>(null);
   const [boletaConductaDetalleHechos, setBoletaConductaDetalleHechos] = useState("");
   const [boletaConductaLugar, setBoletaConductaLugar] = useState("");
+  const [suspensionItem, setSuspensionItem] = useState<Student | null>(null);
+  const [suspensionForm, setSuspensionForm] = useState(initialSuspensionForm);
+  const [savingSuspension, setSavingSuspension] = useState(false);
 
   const roles = user?.roles || [];
   const canManageStudents =
@@ -596,6 +625,89 @@ export default function EstudiantesPage() {
         }
       }
     });
+  }
+
+  function openSuspensionModal(item: Student) {
+    clearMessages();
+    setSuspensionItem(item);
+    setSuspensionForm({
+      motivo: item.MotivoSuspension === "Acción Correctiva" ? "Acción Correctiva" : "Medida Precautoria",
+      fechaInicio: formatDate(item.FechaInicioSuspension) || getCostaRicaIsoDate(),
+      fechaFin: formatDate(item.FechaFinSuspension) || "",
+      observacion: item.ObservacionSuspension || ""
+    });
+  }
+
+  async function refreshStudentAfterSuspension(estudianteId: number) {
+    if (lastSearch) {
+      await load(lastSearch, incluirInactivos, page);
+    }
+    if (detalleVisibleId === estudianteId) {
+      try {
+        const response = await api.get(`/estudiantes/${estudianteId}/detalle`);
+        const detalle: StudentDetalleResponse = response.data?.data;
+        setDetalleEstudiante(detalle?.estudiante || null);
+        setDetalleEncargados(detalle?.encargados || []);
+      } catch (error) {
+        console.error("Error refrescando detalle de suspensión:", error);
+      }
+    }
+  }
+
+  async function handleSaveSuspension() {
+    if (!suspensionItem) return;
+    if (!suspensionForm.fechaInicio || !suspensionForm.fechaFin) {
+      setErrorMessage("Debés indicar fecha de inicio y fecha fin de la suspensión");
+      return;
+    }
+    if (suspensionForm.fechaFin < suspensionForm.fechaInicio) {
+      setErrorMessage("La fecha fin no puede ser menor a la fecha de inicio");
+      return;
+    }
+
+    clearMessages();
+    setSavingSuspension(true);
+    try {
+      const payload = {
+        motivo: suspensionForm.motivo,
+        fechaInicio: suspensionForm.fechaInicio,
+        fechaFin: suspensionForm.fechaFin,
+        observacion: suspensionForm.observacion || null
+      };
+      if (isStudentSuspended(suspensionItem) && suspensionItem.SuspensionId) {
+        await api.put(`/estudiantes/${suspensionItem.EstudianteId}/suspension/${suspensionItem.SuspensionId}`, payload);
+        setMessage("Suspensión actualizada correctamente");
+      } else {
+        await api.post(`/estudiantes/${suspensionItem.EstudianteId}/suspension`, payload);
+        setMessage("Estudiante suspendido correctamente");
+      }
+      const estudianteId = suspensionItem.EstudianteId;
+      setSuspensionItem(null);
+      await refreshStudentAfterSuspension(estudianteId);
+    } catch (error: any) {
+      console.error("Error guardando suspensión:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la suspensión");
+    } finally {
+      setSavingSuspension(false);
+    }
+  }
+
+  async function handleLiftSuspension() {
+    if (!suspensionItem?.SuspensionId) return;
+    clearMessages();
+    setSavingSuspension(true);
+    try {
+      const estudianteId = suspensionItem.EstudianteId;
+      await api.delete(`/estudiantes/${estudianteId}/suspension/${suspensionItem.SuspensionId}`);
+      setMessage("Suspensión levantada correctamente");
+      setSuspensionItem(null);
+      await refreshStudentAfterSuspension(estudianteId);
+    } catch (error: any) {
+      console.error("Error levantando suspensión:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudo levantar la suspensión");
+    } finally {
+      setSavingSuspension(false);
+    }
   }
 
   async function handleOpenBoletaConducta(item: Student) {
@@ -2141,12 +2253,17 @@ export default function EstudiantesPage() {
             </thead>
 
             <tbody>
-              {items.map((item) => (
-                <>
+              {items.map((item) => {
+                const suspendido = isStudentSuspended(item);
+                const suspensionTooltip = getSuspensionTooltip(item);
+                const profesorBloqueado = isProfesorRole && suspendido;
+                return (
+                <Fragment key={item.EstudianteId}>
                   <tr
-                    key={item.EstudianteId}
                     className="adecuacion-student-row"
                     data-adecuacion={getAdecuacionStyleKind(item.Adecuacion) || undefined}
+                    title={suspensionTooltip || undefined}
+                    style={suspendido ? { background: SUSPENSION_ROW_BG } : undefined}
                   >
                     <td>{item.EstudianteId}</td>
                     <td>
@@ -2175,19 +2292,28 @@ export default function EstudiantesPage() {
                     <td>{item.Observaciones ?? ""}</td>
                     <td>{item.RutaTransporteDescripcion ?? item.RutaTransporteHabitual ?? ""}</td>
                     <td>{item.AutorizaWhatsAppEncargado ? "Sí" : "No"}</td>
-                    <td>{item.Activo ? "Activo" : "Inactivo"}</td>
+                    <td>
+                      {item.Activo ? "Activo" : "Inactivo"}
+                      {suspendido ? (
+                        <div style={{ marginTop: "4px", color: "#be123c", fontWeight: 800 }}>
+                          Suspendido
+                        </div>
+                      ) : null}
+                    </td>
                     <td>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                         <button
                           type="button"
+                          disabled={profesorBloqueado}
                           onClick={() => handleVerDetalle(item)}
+                          title={profesorBloqueado ? suspensionTooltip : undefined}
                           style={{
                             border: "1px solid #c7d2fe",
-                            background: "#eef2ff",
-                            color: "#4338ca",
+                            background: profesorBloqueado ? "#e5e7eb" : "#eef2ff",
+                            color: profesorBloqueado ? "#64748b" : "#4338ca",
                             borderRadius: "8px",
                             padding: "6px 10px",
-                            cursor: "pointer"
+                            cursor: profesorBloqueado ? "not-allowed" : "pointer"
                           }}
                         >
                           {detalleVisibleId === item.EstudianteId ? "Ocultar detalle" : "Ver detalle"}
@@ -2196,14 +2322,16 @@ export default function EstudiantesPage() {
                         {canAccessStudentMatricula && item.Activo && (
                           <button
                             type="button"
+                            disabled={profesorBloqueado}
                             onClick={() => (isProfesorRole ? handleOpenBoletaConducta(item) : handleGoToMatricula(item))}
+                            title={profesorBloqueado ? suspensionTooltip : undefined}
                             style={{
                               border: "1px solid #bbf7d0",
-                              background: "#ecfdf3",
-                              color: "#166534",
+                              background: profesorBloqueado ? "#e5e7eb" : "#ecfdf3",
+                              color: profesorBloqueado ? "#64748b" : "#166534",
                               borderRadius: "8px",
                               padding: "6px 10px",
-                              cursor: "pointer"
+                              cursor: profesorBloqueado ? "not-allowed" : "pointer"
                             }}
                           >
                             {isProfesorRole ? "Generar Boleta" : "Matrícula"}
@@ -2227,18 +2355,37 @@ export default function EstudiantesPage() {
                           </button>
                         )}
 
+                        {canManageStudents && item.Activo && (
+                          <button
+                            type="button"
+                            onClick={() => openSuspensionModal(item)}
+                            style={{
+                              border: "1px solid #fda4af",
+                              background: suspendido ? "#be123c" : "#fff1f2",
+                              color: suspendido ? "#ffffff" : "#be123c",
+                              borderRadius: "8px",
+                              padding: "6px 10px",
+                              cursor: "pointer"
+                            }}
+                          >
+                            {suspendido ? "Modificar suspensión" : "Suspender Estudiante"}
+                          </button>
+                        )}
+
                         <button
                           type="button"
+                          disabled={profesorBloqueado}
                           onClick={() =>
                             window.open(`/estudiantes/${item.EstudianteId}/carnet`, "_blank")
                           }
+                          title={profesorBloqueado ? suspensionTooltip : undefined}
                           style={{
                             border: "1px solid #c7d2fe",
-                            background: "#eef2ff",
-                            color: "#4338ca",
+                            background: profesorBloqueado ? "#e5e7eb" : "#eef2ff",
+                            color: profesorBloqueado ? "#64748b" : "#4338ca",
                             borderRadius: "8px",
                             padding: "6px 10px",
-                            cursor: "pointer"
+                            cursor: profesorBloqueado ? "not-allowed" : "pointer"
                           }}
                         >
                           Ver carnet
@@ -2368,8 +2515,9 @@ export default function EstudiantesPage() {
                       </td>
                     </tr>
                   )}
-                </>
-              ))}
+                </Fragment>
+                );
+              })}
 
               {!items.length && (
                 <tr>
@@ -2382,6 +2530,75 @@ export default function EstudiantesPage() {
           </table>
         </div>
           </>
+        )}
+
+        {suspensionItem && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 55, display: "grid", placeItems: "center", padding: "18px" }}>
+            <div style={{ width: "min(620px, 100%)", maxHeight: "92vh", overflow: "auto", background: "#ffffff", borderRadius: "16px", border: "1px solid #fecdd3", padding: "16px", display: "grid", gap: "12px" }}>
+              <h3 style={{ margin: 0, color: "#881337" }}>
+                {isStudentSuspended(suspensionItem) ? "Modificar suspensión" : "Suspender Estudiante"}
+              </h3>
+              <div style={{ color: "#334155", fontWeight: 700 }}>
+                {getStudentFullName(suspensionItem)}
+              </div>
+              <div className="form-grid">
+                <label>Motivo
+                  <select
+                    value={suspensionForm.motivo}
+                    onChange={(e) => setSuspensionForm((prev) => ({ ...prev, motivo: e.target.value }))}
+                  >
+                    <option value="Medida Precautoria">Medida Precautoria</option>
+                    <option value="Acción Correctiva">Acción Correctiva</option>
+                  </select>
+                </label>
+                <label>Fecha de inicio suspensión
+                  <input
+                    type="date"
+                    value={suspensionForm.fechaInicio}
+                    onChange={(e) => setSuspensionForm((prev) => ({ ...prev, fechaInicio: e.target.value }))}
+                  />
+                </label>
+                <label>Fecha fin suspensión
+                  <input
+                    type="date"
+                    value={suspensionForm.fechaFin}
+                    onChange={(e) => setSuspensionForm((prev) => ({ ...prev, fechaFin: e.target.value }))}
+                  />
+                </label>
+              </div>
+              <label>Observación
+                <textarea
+                  rows={4}
+                  value={suspensionForm.observacion}
+                  onChange={(e) => setSuspensionForm((prev) => ({ ...prev, observacion: e.target.value }))}
+                  placeholder="Detalle opcional para administración"
+                />
+              </label>
+              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+                {isStudentSuspended(suspensionItem) && (
+                  <button
+                    type="button"
+                    disabled={savingSuspension}
+                    onClick={handleLiftSuspension}
+                    style={{ border: "1px solid #86efac", borderRadius: "10px", padding: "10px 14px", background: "#ecfdf3", color: "#166534", cursor: savingSuspension ? "not-allowed" : "pointer" }}
+                  >
+                    Volver a activo
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={savingSuspension}
+                  onClick={() => setSuspensionItem(null)}
+                  style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: savingSuspension ? "not-allowed" : "pointer" }}
+                >
+                  Cancelar
+                </button>
+                <button type="button" className="primary-btn" disabled={savingSuspension} onClick={handleSaveSuspension}>
+                  {savingSuspension ? "Guardando..." : "Guardar"}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {boletaConductaOpen && (

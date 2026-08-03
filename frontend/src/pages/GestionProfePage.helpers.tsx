@@ -56,6 +56,12 @@ export type EstudianteGrupo = {
   GrupoNombreOrigenTraslado?: string | null;
   GrupoIdDestinoTraslado?: number | null;
   TrasladoCreatedAt?: string | null;
+  SuspensionId?: number | null;
+  Suspendido?: boolean | number | null;
+  MotivoSuspension?: string | null;
+  FechaInicioSuspension?: string | null;
+  FechaFinSuspension?: string | null;
+  ObservacionSuspension?: string | null;
 };
 
 export type ApoyoEducativoSeccion = {
@@ -646,6 +652,7 @@ export type Planeamiento = {
   Observaciones?: string | null;
   ResultadoIAJson?: string | null;
   TieneResultadoIA?: boolean | number;
+  TotalIndicadoresIAGenerados?: number | null;
   Activo: boolean;
   CreatedAt?: string | null;
   UpdatedAt?: string | null;

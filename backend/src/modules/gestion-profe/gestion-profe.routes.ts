@@ -28,6 +28,11 @@ import {
   hasGrupoClaseSchema,
   toOptionalGrupoClaseId
 } from "../grupos-clase/grupos-clase.utils";
+import {
+  assertNoSuspendedStudents,
+  getSuspensionVigenteApplySql,
+  suspensionVigenteSelectSql
+} from "../estudiantes/estudiante-suspension.utils";
 
 const router = Router();
 const uploadApoyoEducativo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -2628,9 +2633,11 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
           traslado.GrupoIdOrigenTraslado,
           traslado.GrupoNombreOrigenTraslado,
           traslado.GrupoIdDestinoTraslado,
-          traslado.TrasladoCreatedAt
+          traslado.TrasladoCreatedAt,
+          ${suspensionVigenteSelectSql}
         FROM dbo.Matricula ma
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+        ${getSuspensionVigenteApplySql("e")}
         OUTER APPLY (
           SELECT TOP 1
             LTRIM(RTRIM(CONCAT(ISNULL(en.Nombre, ''), ' ', ISNULL(en.PrimerApellido, ''), ' ', ISNULL(en.SegundoApellido, '')))) AS NombreCompleto,
@@ -2981,6 +2988,19 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/notas", async (req, res) =
       if (item.nota !== null && (!Number.isFinite(item.nota) || item.nota < 0 || item.nota > 100)) {
         return badRequest(res, "Las notas deben estar entre 0 y 100");
       }
+    }
+
+    const bloqueoSuspension = await assertNoSuspendedStudents(
+      pool,
+      Number(asignacion.InstitucionId),
+      notasNormalizadas.map((item: any) => item.estudianteId)
+    );
+    if (bloqueoSuspension) {
+      return res.status(409).json({
+        ok: false,
+        message: bloqueoSuspension.message,
+        suspensiones: bloqueoSuspension.suspensiones
+      });
     }
 
     await transaction.begin();
@@ -4295,10 +4315,29 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           p.FechaFin,
           p.Observaciones,
           CAST(CASE WHEN p.ResultadoIAJson IS NULL THEN 0 ELSE 1 END AS BIT) AS TieneResultadoIA,
+          ISNULL(indicadoresIa.TotalIndicadoresIAGenerados, 0) AS TotalIndicadoresIAGenerados,
           p.Activo,
           p.CreatedAt,
           p.UpdatedAt
         FROM dbo.Planeamiento p
+        OUTER APPLY (
+          SELECT TOP 1 eg.EstructuraGrupoId
+          FROM dbo.Eval360_EstructuraGrupo eg
+          WHERE eg.InstitucionId = p.InstitucionId
+            AND eg.AnioLectivoId = p.AnioLectivoId
+            AND eg.PeriodoId = p.PeriodoId
+            AND eg.GrupoId = p.GrupoId
+            AND eg.MateriaId = p.MateriaId
+            AND eg.Activo = 1
+          ORDER BY eg.EstructuraGrupoId DESC
+        ) estructuraActual
+        OUTER APPLY (
+          SELECT COUNT(1) AS TotalIndicadoresIAGenerados
+          FROM dbo.Eval360_IndicadorGrupo i
+          WHERE i.PlaneamientoId = p.PlaneamientoId
+            AND i.EstructuraGrupoId = estructuraActual.EstructuraGrupoId
+            AND ISNULL(i.Activo, 1) = 1
+        ) indicadoresIa
         WHERE p.InstitucionId = @institucionId
           AND p.AnioLectivoId = @anioLectivoId
           AND p.PeriodoId = @periodoId
@@ -4361,8 +4400,19 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           AND eg.GrupoId = @grupoId
           AND eg.MateriaId = @materiaId
           AND eg.Activo = 1
+          AND eg.EstructuraGrupoId = (
+            SELECT TOP 1 egActual.EstructuraGrupoId
+            FROM dbo.Eval360_EstructuraGrupo egActual
+            WHERE egActual.InstitucionId = @institucionId
+              AND egActual.AnioLectivoId = @anioLectivoId
+              AND egActual.PeriodoId = @periodoId
+              AND egActual.GrupoId = @grupoId
+              AND egActual.MateriaId = @materiaId
+              AND egActual.Activo = 1
+            ORDER BY egActual.EstructuraGrupoId DESC
+          )
           AND (p.PlaneamientoId IS NULL OR p.Activo = 1)
-          AND i.Activo = 1
+          AND ISNULL(i.Activo, 1) = 1
         ORDER BY
           i.PlaneamientoId,
           CASE i.TipoUso
@@ -5159,9 +5209,11 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
           e.PrimerApellido,
           e.SegundoApellido,
           e.Adecuacion AS TipoAdecuacion,
-          ma.MatriculaId
+          ma.MatriculaId,
+          ${suspensionVigenteSelectSql}
         FROM dbo.Matricula ma
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+        ${getSuspensionVigenteApplySql("e")}
         WHERE ma.AnioLectivoId = @anioLectivoId
           ${filtroEstudiantesGrupo}
           AND ma.Estado <> N'Inactiva'
@@ -5452,6 +5504,19 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       if (item.minutosTardia < 0 || item.minutosTardia > 999) {
         return badRequest(res, "Los minutos de tardía deben estar entre 0 y 999");
       }
+    }
+
+    const bloqueoSuspension = await assertNoSuspendedStudents(
+      pool,
+      Number(asignacion.InstitucionId),
+      normalizadosSolicitados.map((item: any) => item.estudianteId)
+    );
+    if (bloqueoSuspension) {
+      return res.status(409).json({
+        ok: false,
+        message: bloqueoSuspension.message,
+        suspensiones: bloqueoSuspension.suspensiones
+      });
     }
 
     const normalizadosExpandidos = normalizadosSolicitados.flatMap((item: any) => {

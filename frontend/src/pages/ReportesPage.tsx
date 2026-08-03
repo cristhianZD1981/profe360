@@ -46,6 +46,11 @@ type AsistenciaResumen = {
   identificacion: string;
   seccion: string;
   adecuacion?: string | null;
+  suspendido?: boolean | number | string | null;
+  motivoSuspension?: string | null;
+  fechaInicioSuspension?: string | null;
+  fechaFinSuspension?: string | null;
+  observacionSuspension?: string | null;
   alertaTemprana: string;
   totalLecciones: number;
   tardias: number;
@@ -173,6 +178,20 @@ const HORARIO_DIAS = [
   { key: 6, label: "Viernes" }
 ];
 
+const SUSPENSION_ROW_BG = "#ffe4e6";
+const SUSPENSION_HIDDEN_KEYS = new Set([
+  "Suspendido",
+  "suspendido",
+  "MotivoSuspension",
+  "motivoSuspension",
+  "FechaInicioSuspension",
+  "fechaInicioSuspension",
+  "FechaFinSuspension",
+  "fechaFinSuspension",
+  "ObservacionSuspension",
+  "observacionSuspension"
+]);
+
 function getHorarioBloqueLabel(bloque: HorarioBloqueReporte) {
   const nombre = String(bloque.Nombre || "").trim();
   const inicio = String(bloque.HoraInicio || "").trim();
@@ -240,11 +259,35 @@ function getReporteRowAdecuacion(row: any) {
 }
 
 function getReporteVisibleKeys(row: any) {
-  return Object.keys(row || {}).filter((key) => !["adecuacion", "Adecuacion"].includes(key));
+  return Object.keys(row || {}).filter((key) => !["adecuacion", "Adecuacion"].includes(key) && !SUSPENSION_HIDDEN_KEYS.has(key));
 }
 
 function getReporteZebraBackground(index: number) {
   return index % 2 === 0 ? "#ffffff" : "#f8fafc";
+}
+
+function isReporteRowSuspended(row: any) {
+  const raw = row?.suspendido ?? row?.Suspendido;
+  const value = String(raw ?? "").trim().toLowerCase();
+  return raw === true || raw === 1 || value === "true" || value === "1" || value === "si" || value === "sí";
+}
+
+function getReporteSuspensionTooltip(row: any) {
+  if (!isReporteRowSuspended(row)) return "";
+  const motivo = row?.motivoSuspension ?? row?.MotivoSuspension ?? "No indicado";
+  const fechaFin = String(row?.fechaFinSuspension ?? row?.FechaFinSuspension ?? "").slice(0, 10) || "sin fecha fin";
+  return `Alumno Suspendido, Motivo: ${motivo}, hasta: ${fechaFin}`;
+}
+
+function getReporteRowStyle(row: any, baseStyle: Record<string, any> = {}) {
+  return isReporteRowSuspended(row)
+    ? { ...baseStyle, background: SUSPENSION_ROW_BG }
+    : baseStyle;
+}
+
+function getReporteCellStyle(row: any, baseStyle: Record<string, any>, adecuacion?: string | null) {
+  const merged = mergeAdecuacionCellStyle(baseStyle, adecuacion || "");
+  return isReporteRowSuspended(row) ? { ...merged, background: SUSPENSION_ROW_BG } : merged;
 }
 
 function getGradoFromGrupoNombre(value: any) {
@@ -1695,13 +1738,16 @@ export default function ReportesPage() {
                 <tbody>
                   {!asistenciaRows.length ? (
                     <tr><td colSpan={(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? 11 : 10} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
-                  ) : asistenciaRows.map((fila) => (
+                  ) : asistenciaRows.map((fila) => {
+                    const suspensionTooltip = getReporteSuspensionTooltip(fila);
+                    return (
                     <Fragment key={`asis-wrap-${fila.estudianteId}`}>
                       <tr
                         key={`asis-${fila.estudianteId}`}
                         className="adecuacion-student-row"
                         data-adecuacion={getAdecuacionStyleKind(fila.adecuacion) || undefined}
-                        style={getAdecuacionAsistenciaRowStyle(fila.adecuacion)}
+                        title={suspensionTooltip || undefined}
+                        style={getReporteRowStyle(fila, getAdecuacionAsistenciaRowStyle(fila.adecuacion))}
                       >
                         {(vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") ? (
                           <td style={{ textAlign: "center" }}>
@@ -1714,7 +1760,10 @@ export default function ReportesPage() {
                             </button>
                           </td>
                         ) : null}
-                        <td>{fila.alumno}</td>
+                        <td>
+                          {fila.alumno}
+                          {isReporteRowSuspended(fila) ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: 12 }}>Alumno Suspendido</div> : null}
+                        </td>
                         <td>{fila.identificacion}</td>
                         <td>{fila.seccion}</td>
                         <td><span style={{ ...getAlertStyle(fila.alertaTemprana), ...getAdecuacionRowStyle(fila.adecuacion) }}>{fila.alertaTemprana}</span></td>
@@ -1766,7 +1815,8 @@ export default function ReportesPage() {
                         </tr>
                       ) : null}
                     </Fragment>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1837,18 +1887,23 @@ export default function ReportesPage() {
                     <tr><td colSpan={5} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Seleccioná una sección y presioná Consultar.</td></tr>
                   ) : filas.map((fila, idx) => {
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
+                    const suspensionTooltip = getReporteSuspensionTooltip(fila);
                     return (
                       <tr
                         key={`${fila.cedula || "sin-cedula"}-${idx}`}
                         className="adecuacion-student-row"
                         data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
-                        style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}
+                        title={suspensionTooltip || undefined}
+                        style={getReporteRowStyle(fila, { background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) })}
                       >
-                        <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{Number(fila.linea || idx + 1)}</td>
-                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.cedula ?? "")}</td>
-                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido1 ?? "")}</td>
-                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido2 ?? "")}</td>
-                        <td style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.nombre ?? "")}</td>
+                        <td style={getReporteCellStyle(fila, { fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{Number(fila.linea || idx + 1)}</td>
+                        <td style={getReporteCellStyle(fila, { color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.cedula ?? "")}</td>
+                        <td style={getReporteCellStyle(fila, { color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido1 ?? "")}</td>
+                        <td style={getReporteCellStyle(fila, { color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{String(fila.apellido2 ?? "")}</td>
+                        <td style={getReporteCellStyle(fila, { color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>
+                          {String(fila.nombre ?? "")}
+                          {isReporteRowSuspended(fila) ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: 12 }}>Alumno Suspendido</div> : null}
+                        </td>
                       </tr>
                     );
                   })}
@@ -1993,17 +2048,20 @@ export default function ReportesPage() {
                     <tr><td colSpan={50} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : filas.map((fila, idx) => {
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
+                    const suspensionTooltip = getReporteSuspensionTooltip(fila);
                     return (
                       <tr
                         key={idx}
                         className="adecuacion-student-row"
                         data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
-                        style={{ background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) }}
+                        title={suspensionTooltip || undefined}
+                        style={getReporteRowStyle(fila, { background: idx % 2 === 0 ? "#ffffff" : "#f8fafc", ...getAdecuacionRowStyle(rowAdecuacion) })}
                       >
-                        <td style={mergeAdecuacionCellStyle({ fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{idx + 1}</td>
+                        <td style={getReporteCellStyle(fila, { fontWeight: 700, textAlign: "center", color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>{idx + 1}</td>
                         {getReporteVisibleKeys(filas[0]).map((h) => (
-                          <td key={h} style={mergeAdecuacionCellStyle({ color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>
+                          <td key={h} style={getReporteCellStyle(fila, { color: "#0f172a", borderBottom: "1px solid #cbd5e1" }, rowAdecuacion)}>
                             {String(fila[h] ?? "")}
+                            {isReporteRowSuspended(fila) && normalizeAdecuacionText(h) === "nombre completo" ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: 12 }}>Alumno Suspendido</div> : null}
                           </td>
                         ))}
                       </tr>
@@ -2025,14 +2083,21 @@ export default function ReportesPage() {
                     <tr><td colSpan={20} style={{ textAlign: "center", padding: "12px" }}>No hay datos. Elegí filtros y presioná Consultar.</td></tr>
                   ) : filas.map((fila, idx) => {
                     const rowAdecuacion = getReporteRowAdecuacion(fila);
+                    const suspensionTooltip = getReporteSuspensionTooltip(fila);
                     return (
                       <tr
                         key={idx}
                         className="adecuacion-student-row"
                         data-adecuacion={getAdecuacionStyleKind(rowAdecuacion) || undefined}
-                        style={getAdecuacionRowStyle(rowAdecuacion)}
+                        title={suspensionTooltip || undefined}
+                        style={getReporteRowStyle(fila, getAdecuacionRowStyle(rowAdecuacion))}
                       >
-                        {getReporteVisibleKeys(filas[0]).map((h) => <td key={h}>{String(fila[h] ?? "")}</td>)}
+                        {getReporteVisibleKeys(filas[0]).map((h) => (
+                          <td key={h} style={isReporteRowSuspended(fila) ? { background: SUSPENSION_ROW_BG } : undefined}>
+                            {String(fila[h] ?? "")}
+                            {isReporteRowSuspended(fila) && normalizeAdecuacionText(h).includes("nombre") ? <div style={{ color: "#be123c", fontWeight: 900, fontSize: 12 }}>Alumno Suspendido</div> : null}
+                          </td>
+                        ))}
                       </tr>
                     );
                   })}

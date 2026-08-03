@@ -26,6 +26,10 @@ import {
   VerticalAlignTable,
   WidthType
 } from "docx";
+import {
+  getSuspensionVigenteApplySql,
+  suspensionVigenteSelectSql
+} from "../estudiantes/estudiante-suspension.utils";
 
 const router = Router();
 router.use(requireAuth);
@@ -579,6 +583,7 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
           e.SegundoApellido,
           e.Nombre,
           e.Adecuacion,
+          ${suspensionVigenteSelectSql},
           ROW_NUMBER() OVER (
             PARTITION BY e.EstudianteId
             ORDER BY m.MatriculaId DESC
@@ -586,6 +591,7 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
         FROM dbo.Matricula m
         INNER JOIN dbo.Estudiante e
           ON e.EstudianteId = m.EstudianteId
+        ${getSuspensionVigenteApplySql("e")}
         INNER JOIN dbo.Grupo g
           ON g.GrupoId = m.GrupoId
         WHERE e.InstitucionId = @institucionId
@@ -602,7 +608,12 @@ async function buildReporteSeccionData(pool: any, institucionId: number, grupoId
         PrimerApellido AS apellido1,
         SegundoApellido AS apellido2,
         Nombre AS nombre,
-        Adecuacion AS adecuacion
+        Adecuacion AS adecuacion,
+        Suspendido AS suspendido,
+        MotivoSuspension AS motivoSuspension,
+        FechaInicioSuspension AS fechaInicioSuspension,
+        FechaFinSuspension AS fechaFinSuspension,
+        ObservacionSuspension AS observacionSuspension
       FROM AlumnosSeccion
       WHERE rn = 1
       ORDER BY PrimerApellido, SegundoApellido, Nombre, EstudianteId
@@ -1087,9 +1098,11 @@ async function buildReporteAsistenciaGeneral(params: {
         e.Nombre,
         e.PrimerApellido,
         e.SegundoApellido,
-        e.Adecuacion
+        e.Adecuacion,
+        ${suspensionVigenteSelectSql}
       FROM dbo.Matricula m
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+      ${getSuspensionVigenteApplySql("e")}
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
       WHERE e.InstitucionId = @institucionId
         AND e.Activo = 1
@@ -1137,9 +1150,11 @@ async function buildReporteAsistenciaGeneral(params: {
           e.Nombre,
           e.PrimerApellido,
           e.SegundoApellido,
-          e.Adecuacion
+          e.Adecuacion,
+          ${suspensionVigenteSelectSql}
         FROM dbo.Matricula m
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+        ${getSuspensionVigenteApplySql("e")}
         INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
         WHERE e.InstitucionId = @institucionId
           AND e.Activo = 1
@@ -1258,6 +1273,11 @@ async function buildReporteAsistenciaGeneral(params: {
         bs.PrimerApellido,
         bs.SegundoApellido,
         bs.Adecuacion,
+        bs.Suspendido,
+        bs.MotivoSuspension,
+        bs.FechaInicioSuspension,
+        bs.FechaFinSuspension,
+        bs.ObservacionSuspension,
         bs.GrupoNombre,
         ISNULL(rp.TotalLecciones, 0) AS TotalLecciones,
         ISNULL(rp.Presentes, 0) AS Presentes,
@@ -1295,6 +1315,11 @@ async function buildReporteAsistenciaGeneral(params: {
         identificacion: String(student.Identificacion || ""),
         seccion: String(student.GrupoNombre || ""),
         adecuacion: String(student.Adecuacion || ""),
+        suspendido: student.Suspendido,
+        motivoSuspension: student.MotivoSuspension || null,
+        fechaInicioSuspension: student.FechaInicioSuspension || null,
+        fechaFinSuspension: student.FechaFinSuspension || null,
+        observacionSuspension: student.ObservacionSuspension || null,
         alertaTemprana: alert.alertaTemprana,
         totalLecciones,
         tardias,
@@ -1325,9 +1350,11 @@ async function buildReporteAsistenciaGeneral(params: {
         e.Nombre,
         e.PrimerApellido,
         e.SegundoApellido,
-        e.Adecuacion
+        e.Adecuacion,
+        ${suspensionVigenteSelectSql}
       FROM dbo.Matricula m
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+      ${getSuspensionVigenteApplySql("e")}
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
       WHERE e.InstitucionId = @institucionId
         AND e.Activo = 1
@@ -1369,6 +1396,11 @@ async function buildReporteAsistenciaGeneral(params: {
         bs.PrimerApellido,
         bs.SegundoApellido,
         bs.Adecuacion,
+        bs.Suspendido,
+        bs.MotivoSuspension,
+        bs.FechaInicioSuspension,
+        bs.FechaFinSuspension,
+        bs.ObservacionSuspension,
         gm.MateriaId,
         m.Nombre AS MateriaNombre
       FROM BaseStudents bs
@@ -1463,6 +1495,11 @@ async function buildReporteAsistenciaGeneral(params: {
       mb.PrimerApellido,
       mb.SegundoApellido,
       mb.Adecuacion,
+      mb.Suspendido,
+      mb.MotivoSuspension,
+      mb.FechaInicioSuspension,
+      mb.FechaFinSuspension,
+      mb.ObservacionSuspension,
       mb.MateriaId,
       mb.MateriaNombre,
       prof.ProfesorId AS ProfesorId,
@@ -1563,6 +1600,11 @@ async function buildReporteAsistenciaGeneral(params: {
       identificacion: String(student.Identificacion || ""),
       seccion: String(student.GrupoNombre || ""),
       adecuacion: String(student.Adecuacion || ""),
+      suspendido: student.Suspendido,
+      motivoSuspension: student.MotivoSuspension || null,
+      fechaInicioSuspension: student.FechaInicioSuspension || null,
+      fechaFinSuspension: student.FechaFinSuspension || null,
+      observacionSuspension: student.ObservacionSuspension || null,
       alertaTemprana: alert.alertaTemprana,
       totalLecciones,
       tardias,
@@ -3444,12 +3486,14 @@ router.get("/gestion-profe", async (req, res) => {
             e.Enfermedad,
             e.ObservacionMedica,
             e.Observaciones,
+            ${suspensionVigenteSelectSql},
             g.GrupoId,
             g.Nombre AS GrupoNombre,
             TRY_CONVERT(int, LEFT(LTRIM(g.Nombre), PATINDEX('%[^0-9]%', LTRIM(g.Nombre) + 'X') - 1)) AS GradoNumero
           FROM dbo.Matricula m
           INNER JOIN dbo.Estudiante e
             ON e.EstudianteId = m.EstudianteId
+          ${getSuspensionVigenteApplySql("e")}
           INNER JOIN dbo.Grupo g
             ON g.GrupoId = m.GrupoId
           WHERE e.InstitucionId = @institucionId
@@ -3583,7 +3627,12 @@ router.get("/gestion-profe", async (req, res) => {
           ep.Encargado2TelefonoSecundario AS [Teléfono Secundario Encargado 2],
           ep.Encargado2Direccion AS [Dirección Encargado 2],
           b.MatriculaId AS [Matrícula ID],
-          b.EstudianteId AS [Estudiante ID]
+          b.EstudianteId AS [Estudiante ID],
+          b.Suspendido,
+          b.MotivoSuspension,
+          b.FechaInicioSuspension,
+          b.FechaFinSuspension,
+          b.ObservacionSuspension
         FROM BaseEstudiantes b
         LEFT JOIN dbo.TipoEstudiante te
           ON te.TipoEstudianteId = b.TipoEstudianteId
