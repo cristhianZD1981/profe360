@@ -32,6 +32,7 @@ import { assertCierreCursoAbierto } from "../academico/cierre-curso.utils";
 
 import { reaplicarTrasladosPendientesEnGrupo } from "../academico/matricula-traslado.utils";
 import {
+  getGrupoClaseEstudiantesPermitidos,
   getGrupoClasePermitido,
   hasGrupoClaseSchema,
   toOptionalGrupoClaseId
@@ -7464,7 +7465,9 @@ async function responderSiEstructuraCursoCerrado(res: any, pool: any, estructura
 
     anioLectivoId: Number(estructura?.AnioLectivoId || 0),
 
-    periodoId: Number(estructura?.PeriodoId || 0)
+    periodoId: Number(estructura?.PeriodoId || 0),
+
+    grupoClaseId: toOptionalGrupoClaseId(estructura?.GrupoClaseId)
 
   };
 
@@ -7484,6 +7487,31 @@ async function responderSiEstructuraCursoCerrado(res: any, pool: any, estructura
 
   });
 
+}
+
+async function validarEstudiantesDeEstructura(
+  res: any,
+  pool: any,
+  estructura: any,
+  registros: any[]
+) {
+  const grupoClaseId = toOptionalGrupoClaseId(estructura?.GrupoClaseId);
+  if (!grupoClaseId) return true;
+
+  const permitidos = await getGrupoClaseEstudiantesPermitidos(pool, grupoClaseId);
+  const estudianteIdsPermitidos = new Set(
+    permitidos.map((item: any) => Number(item.EstudianteId)).filter((id: number) => id > 0)
+  );
+  const estudianteIdsRecibidos = Array.from(new Set(
+    registros
+      .map((item: any) => Number(item?.estudianteId ?? item?.EstudianteId ?? 0))
+      .filter((id: number) => id > 0)
+  ));
+  const fueraDelGrupo = estudianteIdsRecibidos.filter((id) => !estudianteIdsPermitidos.has(id));
+
+  if (!fueraDelGrupo.length) return true;
+  badRequest(res, "Hay estudiantes que no pertenecen al grupo de clase seleccionado");
+  return false;
 }
 
 
@@ -15784,7 +15812,9 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
           .input("grupoId", sql.Int, grupoId)
 
-          .input("anioLectivoId", sql.Int, anioLectivoId);
+          .input("anioLectivoId", sql.Int, anioLectivoId)
+
+          .input("grupoClaseId", sql.Int, grupoClaseId);
 
           if (!incluirEnvios) {
 
@@ -15827,7 +15857,35 @@ router.get("/seguimiento/contexto", async (req, res) => {
                 INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
                 ${getSuspensionVigenteApplySql("e")}
 
-                WHERE m.GrupoId = @grupoId
+                WHERE (
+
+                    (@grupoClaseId IS NULL AND m.GrupoId = @grupoId)
+
+                    OR (
+
+                      @grupoClaseId IS NOT NULL
+
+                      AND EXISTS (
+
+                        SELECT 1
+
+                        FROM dbo.GrupoClaseEstudiante gce
+
+                        WHERE gce.GrupoClaseId = @grupoClaseId
+
+                          AND gce.MatriculaId = m.MatriculaId
+
+                          AND gce.Activo = 1
+
+                          AND (gce.FechaDesde IS NULL OR gce.FechaDesde <= CONVERT(date, SYSDATETIME()))
+
+                          AND (gce.FechaHasta IS NULL OR gce.FechaHasta >= CONVERT(date, SYSDATETIME()))
+
+                      )
+
+                    )
+
+                  )
 
                   AND m.AnioLectivoId = @anioLectivoId
 
@@ -15982,7 +16040,35 @@ router.get("/seguimiento/contexto", async (req, res) => {
               INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
               ${getSuspensionVigenteApplySql("e")}
 
-              WHERE m.GrupoId = @grupoId
+              WHERE (
+
+                  (@grupoClaseId IS NULL AND m.GrupoId = @grupoId)
+
+                  OR (
+
+                    @grupoClaseId IS NOT NULL
+
+                    AND EXISTS (
+
+                      SELECT 1
+
+                      FROM dbo.GrupoClaseEstudiante gce
+
+                      WHERE gce.GrupoClaseId = @grupoClaseId
+
+                        AND gce.MatriculaId = m.MatriculaId
+
+                        AND gce.Activo = 1
+
+                        AND (gce.FechaDesde IS NULL OR gce.FechaDesde <= CONVERT(date, SYSDATETIME()))
+
+                        AND (gce.FechaHasta IS NULL OR gce.FechaHasta >= CONVERT(date, SYSDATETIME()))
+
+                    )
+
+                  )
+
+                )
 
                 AND m.AnioLectivoId = @anioLectivoId
 
@@ -16558,6 +16644,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
           .input("periodoId", sql.Int, periodoId)
 
+          .input("grupoClaseId", sql.Int, grupoClaseId)
+
           .query(`
 
             SELECT
@@ -16623,6 +16711,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
               AND ar.AnioLectivoId = @anioLectivoId
 
               AND ar.PeriodoId = @periodoId
+
+              AND ISNULL(ar.GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
 
           `)) : Promise.resolve({ recordset: [] }),
 
@@ -16706,6 +16796,14 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
+      const estudiantesRows = estudiantes.recordset || [];
+      const estudiantesGrupoClaseIds = grupoClaseId
+        ? new Set(estudiantesRows.map((item: any) => Number(item.EstudianteId)))
+        : null;
+      const filtrarRegistrosGrupoClase = (rows: any[]) => estudiantesGrupoClaseIds
+        ? (rows || []).filter((item: any) => estudiantesGrupoClaseIds.has(Number(item.EstudianteId)))
+        : (rows || []);
+
       const data = {
 
         estructura,
@@ -16714,7 +16812,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
         plantillas: plantillas.recordset,
 
-        estudiantes: estudiantes.recordset,
+        estudiantes: estudiantesRows,
 
         planeamientos: planeamientos.recordset,
 
@@ -16724,13 +16822,13 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
         actividadIndicadores,
 
-        notasActividades,
+        notasActividades: filtrarRegistrosGrupoClase(notasActividades),
 
-        asistenciaRegistros,
+        asistenciaRegistros: filtrarRegistrosGrupoClase(asistenciaRegistros),
 
-        componenteAjustesManuales,
+        componenteAjustesManuales: filtrarRegistrosGrupoClase(componenteAjustesManuales),
 
-        seguimientos,
+        seguimientos: filtrarRegistrosGrupoClase(seguimientos),
 
         mensajesSeguimiento
 
@@ -17479,6 +17577,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
 
     if (!estructura) return;
+
+    if (!await validarEstudiantesDeEstructura(res, pool, estructura, registros)) return;
 
     if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
 
@@ -18466,6 +18566,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
     const estructura = await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
 
     if (!estructura) return;
+
+    if (!await validarEstudiantesDeEstructura(res, pool, estructura, registros)) return;
 
     if (await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
 

@@ -1203,6 +1203,7 @@ router.get("/mis-grupos", async (req, res) => {
             AND eg2.MateriaId = ad.MateriaId
             AND eg2.AnioLectivoId = ad.AnioLectivoId
             AND eg2.PeriodoId = ad.PeriodoId
+            AND eg2.GrupoClaseId IS NULL
             AND eg2.Activo = 1
           ORDER BY eg2.EstructuraGrupoId DESC
         ) eg
@@ -1219,6 +1220,7 @@ router.get("/mis-grupos", async (req, res) => {
             AND c.MateriaId = ad.MateriaId
             AND c.AnioLectivoId = ad.AnioLectivoId
             AND c.PeriodoId = ad.PeriodoId
+            AND c.GrupoClaseId IS NULL
             AND c.Activo = 1
           ORDER BY c.UpdatedAt DESC, c.CierreAcademicoCursoId DESC
         ) cc
@@ -1429,10 +1431,10 @@ router.get("/mis-grupos", async (req, res) => {
             epSesion.Estado AS EvaluacionPlantillaEstado,
             CASE WHEN eg.EstructuraGrupoId IS NULL THEN 0 ELSE 1 END AS TieneEstructuraEvaluacion,
             CAST(0 AS bit) AS TieneCalificacionesEvaluacion,
-            CAST(0 AS bit) AS CursoCerrado,
-            CAST(NULL AS nvarchar(40)) AS CierreCursoEstado,
-            CAST(NULL AS datetime2) AS CierreCursoCerradoAt,
-            CAST(NULL AS datetime2) AS CierreCursoReabiertoAt,
+            CAST(CASE WHEN cc.Estado = N'${CIERRE_CURSO_ESTADO_CERRADO}' THEN 1 ELSE 0 END AS bit) AS CursoCerrado,
+            cc.Estado AS CierreCursoEstado,
+            cc.CerradoAt AS CierreCursoCerradoAt,
+            cc.ReabiertoAt AS CierreCursoReabiertoAt,
             STUFF((
               SELECT N',' + CONVERT(nvarchar(20), gcs2.GrupoId)
               FROM dbo.GrupoClaseSeccion gcs2
@@ -1507,6 +1509,21 @@ router.get("/mis-grupos", async (req, res) => {
           ) eg
           LEFT JOIN dbo.EvaluacionPlantilla epSesion
             ON epSesion.EvaluacionPlantillaId = eg.PlantillaBaseId
+          OUTER APPLY (
+            SELECT TOP 1
+              c.Estado,
+              c.CerradoAt,
+              c.ReabiertoAt
+            FROM dbo.CierreAcademicoCurso c
+            WHERE c.InstitucionId = gc.InstitucionId
+              AND c.GrupoId = gc.GrupoIdPrincipal
+              AND c.MateriaId = gc.MateriaId
+              AND c.AnioLectivoId = gc.AnioLectivoId
+              AND c.PeriodoId = gc.PeriodoId
+              AND c.GrupoClaseId = gc.GrupoClaseId
+              AND c.Activo = 1
+            ORDER BY c.UpdatedAt DESC, c.CierreAcademicoCursoId DESC
+          ) cc
           WHERE gc.Activo = 1
             AND docente.UsuarioId IS NOT NULL
             AND (@institucionId IS NULL OR gc.InstitucionId = @institucionId)
@@ -2476,6 +2493,27 @@ router.get("/mi-horario", async (req, res) => {
           ON pHorario.PeriodoId = gm.PeriodoId
         LEFT JOIN dbo.Periodo pFiltro
           ON pFiltro.PeriodoId = @periodoId
+        WHERE hd.HorarioDocenteId IS NOT NULL
+           OR NOT EXISTS (
+             SELECT 1
+             FROM dbo.HorarioDocente hdExplicito
+             INNER JOIN dbo.HorarioGrupo hgExplicito
+               ON hgExplicito.HorarioGrupoId = hdExplicito.HorarioGrupoId
+              AND hgExplicito.Activo = 1
+             INNER JOIN dbo.GrupoMateria gmExplicito
+               ON gmExplicito.GrupoMateriaId = hgExplicito.GrupoMateriaId
+              AND gmExplicito.Activo = 1
+             INNER JOIN dbo.Grupo gExplicito
+               ON gExplicito.GrupoId = gmExplicito.GrupoId
+              AND gExplicito.Activo = 1
+              AND gExplicito.InstitucionId = @institucionId
+              AND gExplicito.AnioLectivoId = @anioLectivoId
+             WHERE hdExplicito.UsuarioId = @usuarioId
+               AND hdExplicito.Activo = 1
+               AND gmExplicito.GrupoId = ap.GrupoId
+               AND gmExplicito.MateriaId = ap.MateriaId
+               AND gmExplicito.PeriodoId = @periodoId
+           )
       ),
       HorariosPriorizados AS (
         SELECT
@@ -2896,7 +2934,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/notas", async (req, res) =
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     })) return;
 
     const plantillaResult = await pool.request()
@@ -3358,8 +3397,24 @@ function sanitizeResultadoIAJsonForList(value: any) {
   }
 }
 
-async function buildReporteFormalData(req: any, res: any, grupoId: number, materiaId: number, anioLectivoId: number, periodoId: number) {
-  const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+async function buildReporteFormalData(
+  req: any,
+  res: any,
+  grupoId: number,
+  materiaId: number,
+  anioLectivoId: number,
+  periodoId: number,
+  grupoClaseId?: number | null
+) {
+  const asignacion = await getAsignacionPermitida(
+    req,
+    res,
+    grupoId,
+    materiaId,
+    anioLectivoId,
+    periodoId,
+    grupoClaseId
+  );
   if (!asignacion) return null;
 
   const pool = await getPool();
@@ -3395,10 +3450,12 @@ async function buildReporteFormalData(req: any, res: any, grupoId: number, mater
     `);
 
   const contexto = contextoResult.recordset[0] || {};
+  if (grupoClaseId && asignacion.GrupoNombre) contexto.GrupoNombre = asignacion.GrupoNombre;
 
   const estudiantesResult = await pool.request()
     .input("grupoId", sql.Int, grupoId)
     .input("anioLectivoId", sql.Int, anioLectivoId)
+    .input("grupoClaseId", sql.Int, grupoClaseId || null)
     .query(`
       SELECT
         e.EstudianteId,
@@ -3410,7 +3467,21 @@ async function buildReporteFormalData(req: any, res: any, grupoId: number, mater
         ma.MatriculaId
       FROM dbo.Matricula ma
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
-      WHERE ma.GrupoId = @grupoId
+      WHERE (
+          (@grupoClaseId IS NULL AND ma.GrupoId = @grupoId)
+          OR (
+            @grupoClaseId IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM dbo.GrupoClaseEstudiante gce
+              WHERE gce.GrupoClaseId = @grupoClaseId
+                AND gce.MatriculaId = ma.MatriculaId
+                AND gce.Activo = 1
+                AND (gce.FechaDesde IS NULL OR gce.FechaDesde <= CONVERT(date, SYSDATETIME()))
+                AND (gce.FechaHasta IS NULL OR gce.FechaHasta >= CONVERT(date, SYSDATETIME()))
+            )
+          )
+        )
         AND ma.AnioLectivoId = @anioLectivoId
         AND ma.Estado <> N'Inactiva'
         AND e.Activo = 1
@@ -3467,6 +3538,7 @@ async function buildReporteFormalData(req: any, res: any, grupoId: number, mater
       .input("grupoId", sql.Int, grupoId)
       .input("materiaId", sql.Int, materiaId)
       .input("periodoId", sql.Int, periodoId)
+      .input("grupoClaseId", sql.Int, grupoClaseId || null)
       .query(`
         SELECT
           EvaluacionActividadId,
@@ -3477,11 +3549,18 @@ async function buildReporteFormalData(req: any, res: any, grupoId: number, mater
         WHERE GrupoId = @grupoId
           AND MateriaId = @materiaId
           AND PeriodoId = @periodoId
+          AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
       `);
     notas = notasResult.recordset;
   }
 
-  const resumenAsistencia = await buildResumenAsistencia(grupoId, materiaId, anioLectivoId, periodoId);
+  const resumenAsistencia = await buildResumenAsistencia(
+    grupoId,
+    materiaId,
+    anioLectivoId,
+    periodoId,
+    grupoClaseId
+  );
   const notasMap = new Map<string, any>();
   for (const nota of notas) notasMap.set(`${nota.EstudianteId}-${nota.EvaluacionActividadId}`, nota);
   const asistenciaMap = new Map<number, any>();
@@ -3669,6 +3748,7 @@ function normalizeCierreCursoRow(row: any) {
     MateriaId: Number(row.MateriaId || 0),
     AnioLectivoId: Number(row.AnioLectivoId || 0),
     PeriodoId: Number(row.PeriodoId || 0),
+    GrupoClaseId: row.GrupoClaseId === null || row.GrupoClaseId === undefined ? null : Number(row.GrupoClaseId),
     UsuarioDocenteId: row.UsuarioDocenteId === null || row.UsuarioDocenteId === undefined ? null : Number(row.UsuarioDocenteId),
     Estado: String(row.Estado || "ABIERTO"),
     Cerrado: isCierreCursoCerrado(row),
@@ -3770,6 +3850,7 @@ async function responderSiCursoCerrado(res: any, pool: any, input: {
   materiaId: number;
   anioLectivoId: number;
   periodoId: number;
+  grupoClaseId?: number | null;
 }) {
   const guard = await assertCierreCursoAbierto(pool, input);
   if (guard.abierto) return false;
@@ -5378,7 +5459,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     })) return;
 
     await ensureReporteEnvioBitacoraTable(pool);
@@ -5840,7 +5922,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/bitacora", async (req, res
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     })) return;
 
     await ensureBitacoraGrupoTable(pool);
@@ -5888,7 +5971,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) =
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     );
     if (!asignacion) return forbidden(res, "No tenes permiso para este grupo/materia");
 
@@ -5899,7 +5983,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) =
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     });
     const cierreResponse = normalizeCierreCursoRow(cierreActual) || {
       Estado: "ABIERTO",
@@ -5915,7 +6000,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) =
       return ok(res, { cierre: cierreResponse, preview: null });
     }
 
-    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
     if (!data) return;
 
     const preview = buildCierreCursoPreview(data, cierreActual);
@@ -5959,7 +6044,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) 
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     });
     if (isCierreCursoCerrado(cierreActual)) {
       return res.status(409).json({
@@ -5969,7 +6055,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) 
       });
     }
 
-    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
     if (!data) return;
 
     const preview = buildCierreCursoPreview(data, cierreActual);
@@ -5986,6 +6072,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) 
       .input("materiaId", sql.Int, materiaId)
       .input("anioLectivoId", sql.Int, anioLectivoId)
       .input("periodoId", sql.Int, periodoId)
+      .input("grupoClaseId", sql.Int, grupoClaseId)
       .input("usuarioDocenteId", sql.Int, Number(asignacion.UsuarioId || usuarioId || 0) || null)
       .input("promedioGeneral", sql.Decimal(10, 2), promedioGeneral)
       .input("totalEstudiantes", sql.Int, Number(preview.resumen.totalEstudiantes || 0))
@@ -6002,13 +6089,15 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) 
             @grupoId AS GrupoId,
             @materiaId AS MateriaId,
             @anioLectivoId AS AnioLectivoId,
-            @periodoId AS PeriodoId
+            @periodoId AS PeriodoId,
+            @grupoClaseId AS GrupoClaseId
         ) AS source
         ON target.InstitucionId = source.InstitucionId
           AND target.GrupoId = source.GrupoId
           AND target.MateriaId = source.MateriaId
           AND target.AnioLectivoId = source.AnioLectivoId
           AND target.PeriodoId = source.PeriodoId
+          AND ISNULL(target.GrupoClaseId, 0) = ISNULL(source.GrupoClaseId, 0)
           AND target.Activo = 1
         WHEN MATCHED THEN
           UPDATE SET
@@ -6026,12 +6115,12 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) 
             UpdatedAt = SYSDATETIME()
         WHEN NOT MATCHED THEN
           INSERT (
-            InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, UsuarioDocenteId, Estado,
+            InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, GrupoClaseId, UsuarioDocenteId, Estado,
             PromedioGeneral, TotalEstudiantes, TotalCompletos, TotalIncompletos, SnapshotJson, AdvertenciasJson,
             CerradoPorUsuarioId, CerradoAt, Activo, CreatedAt, UpdatedAt
           )
           VALUES (
-            @institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioDocenteId, N'${CIERRE_CURSO_ESTADO_CERRADO}',
+            @institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @grupoClaseId, @usuarioDocenteId, N'${CIERRE_CURSO_ESTADO_CERRADO}',
             @promedioGeneral, @totalEstudiantes, @totalCompletos, @totalIncompletos, @snapshotJson, @advertenciasJson,
             @usuarioId, SYSDATETIME(), 1, SYSDATETIME(), SYSDATETIME()
           )
@@ -6093,7 +6182,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/cierre/reabrir", async (re
       grupoId,
       materiaId,
       anioLectivoId,
-      periodoId
+      periodoId,
+      grupoClaseId
     });
     if (!cierreActual) return badRequest(res, "Este curso no tiene un cierre registrado");
     if (!isCierreCursoCerrado(cierreActual)) {
@@ -6151,7 +6241,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/excel", async (req
     if (!Number.isFinite(grupoId) || !Number.isFinite(materiaId)) return badRequest(res, "Grupo o materia inválida");
     if (!anioLectivoId || !periodoId) return badRequest(res, "Debés indicar año lectivo y periodo");
 
-    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    const grupoClaseId = toOptionalGrupoClaseId(req.query.grupoClaseId);
+    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
     if (!data) return;
 
     const rows: any[][] = [];
@@ -6255,7 +6346,8 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/reportes/pdf", async (req, 
     if (!Number.isFinite(grupoId) || !Number.isFinite(materiaId)) return badRequest(res, "Grupo o materia inválida");
     if (!anioLectivoId || !periodoId) return badRequest(res, "Debés indicar año lectivo y periodo");
 
-    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    const grupoClaseId = toOptionalGrupoClaseId(req.query.grupoClaseId);
+    const data = await buildReporteFormalData(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
     if (!data) return;
 
     const c = data.contexto;

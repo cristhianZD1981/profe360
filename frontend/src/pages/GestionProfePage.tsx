@@ -2571,7 +2571,8 @@ export default function GestionProfePage() {
       const response = await api.get(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/reportes/excel`, {
         params: {
           anioLectivoId: selected.AnioLectivoId,
-          periodoId: selected.PeriodoId
+          periodoId: selected.PeriodoId,
+          ...getGrupoClaseParams(selected)
         },
         responseType: "blob"
       });
@@ -2588,7 +2589,8 @@ export default function GestionProfePage() {
       const response = await api.get(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/reportes/pdf`, {
         params: {
           anioLectivoId: selected.AnioLectivoId,
-          periodoId: selected.PeriodoId
+          periodoId: selected.PeriodoId,
+          ...getGrupoClaseParams(selected)
         },
         responseType: "blob"
       });
@@ -7827,6 +7829,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         params: {
           anioLectivoId: item.AnioLectivoId,
           periodoId: item.PeriodoId,
+          ...getGrupoClaseParams(item),
           soloEstado: soloEstado ? "true" : undefined
         }
       });
@@ -7849,7 +7852,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       const mismoCurso = Number(grupo.GrupoId) === Number(item.GrupoId)
         && Number(grupo.MateriaId) === Number(item.MateriaId)
         && Number(grupo.AnioLectivoId) === Number(item.AnioLectivoId)
-        && Number(grupo.PeriodoId) === Number(item.PeriodoId);
+        && Number(grupo.PeriodoId) === Number(item.PeriodoId)
+        && Number(grupo.GrupoClaseId || 0) === Number(item.GrupoClaseId || 0);
       if (!mismoCurso) return grupo;
       return {
         ...grupo,
@@ -7875,7 +7879,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setErrorMessage("");
       const response = await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/cierre`, {
         anioLectivoId: selected.AnioLectivoId,
-        periodoId: selected.PeriodoId
+        periodoId: selected.PeriodoId,
+        ...getGrupoClaseParams(selected)
       });
       const data = response.data?.data || {};
       setCierreCurso(data.cierre || null);
@@ -7902,6 +7907,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       const response = await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/cierre/reabrir`, {
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
+        ...getGrupoClaseParams(selected),
         motivo: motivo.trim()
       });
       const data = response.data?.data || {};

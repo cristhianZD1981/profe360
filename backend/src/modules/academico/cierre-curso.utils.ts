@@ -9,6 +9,7 @@ type CierreCursoKey = {
   materiaId: number;
   anioLectivoId: number;
   periodoId: number;
+  grupoClaseId?: number | null;
 };
 
 let cierreCursoTablesReady: Promise<void> | null = null;
@@ -25,6 +26,7 @@ export async function ensureCierreAcademicoCursoTables(pool: any) {
           MateriaId INT NOT NULL,
           AnioLectivoId INT NOT NULL,
           PeriodoId INT NOT NULL,
+          GrupoClaseId INT NULL,
           UsuarioDocenteId INT NULL,
           Estado NVARCHAR(40) NOT NULL CONSTRAINT DF_CierreAcademicoCurso_Estado DEFAULT N'${CIERRE_CURSO_ESTADO_CERRADO}',
           PromedioGeneral DECIMAL(10,2) NULL,
@@ -44,6 +46,12 @@ export async function ensureCierreAcademicoCursoTables(pool: any) {
         );
       END;
 
+      IF OBJECT_ID(N'dbo.CierreAcademicoCurso', N'U') IS NOT NULL
+         AND COL_LENGTH(N'dbo.CierreAcademicoCurso', N'GrupoClaseId') IS NULL
+      BEGIN
+        ALTER TABLE dbo.CierreAcademicoCurso ADD GrupoClaseId INT NULL;
+      END;
+
       IF OBJECT_ID(N'dbo.CierreAcademicoCursoAuditoria', N'U') IS NULL
       BEGIN
         CREATE TABLE dbo.CierreAcademicoCursoAuditoria (
@@ -59,6 +67,28 @@ export async function ensureCierreAcademicoCursoTables(pool: any) {
         );
       END;
 
+      IF EXISTS (
+        SELECT 1
+        FROM sys.indexes i
+        WHERE i.object_id = OBJECT_ID(N'dbo.CierreAcademicoCurso')
+          AND i.name = N'UX_CierreAcademicoCurso_Activo'
+      ) AND NOT EXISTS (
+        SELECT 1
+        FROM sys.indexes i
+        INNER JOIN sys.index_columns ic
+          ON ic.object_id = i.object_id
+         AND ic.index_id = i.index_id
+        INNER JOIN sys.columns c
+          ON c.object_id = ic.object_id
+         AND c.column_id = ic.column_id
+        WHERE i.object_id = OBJECT_ID(N'dbo.CierreAcademicoCurso')
+          AND i.name = N'UX_CierreAcademicoCurso_Activo'
+          AND c.name = N'GrupoClaseId'
+      )
+      BEGIN
+        DROP INDEX UX_CierreAcademicoCurso_Activo ON dbo.CierreAcademicoCurso;
+      END;
+
       IF NOT EXISTS (
         SELECT 1
         FROM sys.indexes
@@ -67,7 +97,7 @@ export async function ensureCierreAcademicoCursoTables(pool: any) {
       )
       BEGIN
         CREATE UNIQUE INDEX UX_CierreAcademicoCurso_Activo
-          ON dbo.CierreAcademicoCurso (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId)
+          ON dbo.CierreAcademicoCurso (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, GrupoClaseId)
           WHERE Activo = 1;
       END;
 
@@ -120,6 +150,7 @@ export async function getCierreAcademicoCurso(pool: any, input: CierreCursoKey) 
     .input("materiaId", sql.Int, input.materiaId)
     .input("anioLectivoId", sql.Int, input.anioLectivoId)
     .input("periodoId", sql.Int, input.periodoId)
+    .input("grupoClaseId", sql.Int, input.grupoClaseId || null)
     .query(`
       SELECT TOP 1 *
       FROM dbo.CierreAcademicoCurso
@@ -128,6 +159,7 @@ export async function getCierreAcademicoCurso(pool: any, input: CierreCursoKey) 
         AND MateriaId = @materiaId
         AND AnioLectivoId = @anioLectivoId
         AND PeriodoId = @periodoId
+        AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
         AND Activo = 1
       ORDER BY CierreAcademicoCursoId DESC
     `);
