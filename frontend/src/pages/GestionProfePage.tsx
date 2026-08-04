@@ -11351,7 +11351,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         }}
                       />
                     </label>
-                    <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia || cursoGestionCerrado}>
+                    <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia || !asistenciaLecciones.length || !detalle.estudiantes.length || cursoGestionCerrado}>
                       {savingAsistencia ? "Guardando asistencia..." : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia")}
                     </button>
                   </div>
@@ -11374,6 +11374,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
 
                 {loadingAsistencia ? (
                   <p>Cargando asistencia...</p>
+                ) : !asistenciaLecciones.length ? (
+                  <div style={{ padding: "12px", background: "#fff7ed", border: "1px solid #fdba74", borderRadius: "12px", color: "#9a3412", fontWeight: 800 }}>
+                    No hay lecciones configuradas para esta fecha. Elegí una fecha con lecciones para calificar asistencia.
+                  </div>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
                     <table className="adecuacion-zebra-list">

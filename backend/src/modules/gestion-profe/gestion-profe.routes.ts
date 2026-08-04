@@ -5257,7 +5257,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
           WHERE gm.MateriaId = @materiaId
             ${filtroLeccionesGrupo}
             AND hg.DiaSemana = @diaSemana
-            AND hg.Activo = 1
+            AND (@grupoClaseId IS NOT NULL OR hg.Activo = 1)
         ),
         leccionesPriorizadas AS (
           SELECT *, MIN(PrioridadPeriodo) OVER () AS MejorPrioridadPeriodo
@@ -5327,7 +5327,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
           WHERE gm.MateriaId = @materiaId
             ${filtroLeccionesGrupo}
             AND hg.DiaSemana = @diaSemana
-            AND hg.Activo = 1
+            AND (@grupoClaseId IS NOT NULL OR hg.Activo = 1)
         ),
         leccionesPriorizadas AS (
           SELECT *, MIN(PrioridadPeriodo) OVER () AS MejorPrioridadPeriodo
@@ -5528,7 +5528,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
           WHERE gm.MateriaId = @materiaId
             ${filtroLeccionesGrupo}
             AND hg.DiaSemana = @diaSemana
-            AND hg.Activo = 1
+            AND (@grupoClaseId IS NOT NULL OR hg.Activo = 1)
         ),
         leccionesPriorizadas AS (
           SELECT *, MIN(PrioridadPeriodo) OVER () AS MejorPrioridadPeriodo
