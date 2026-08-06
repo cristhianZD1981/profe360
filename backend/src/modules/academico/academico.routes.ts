@@ -10,6 +10,7 @@ import {
   copiarNotasPorTraslado,
   ensureMatriculaTrasladoHistorialTable
 } from "./matricula-traslado.utils";
+import { bumpProfesorPeriodoEstadosVersion } from "../periodos-profesor/periodos-profesor.utils";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -3776,6 +3777,37 @@ router.patch("/periodos/:id/reactivar", async (req, res) => {
         message: "Período no encontrado"
       });
     }
+
+    await pool.request()
+      .input("id", sql.Int, id)
+      .input("usuarioRegistroId", sql.Int, Number(req.auth?.userId ?? req.auth?.usuarioId ?? 0) || null)
+      .query(`
+        IF OBJECT_ID(N'dbo.ProfesorPeriodoEstado', N'U') IS NOT NULL
+           AND OBJECT_ID(N'dbo.ProfesorPeriodoEstadoHistorial', N'U') IS NOT NULL
+        BEGIN
+          INSERT INTO dbo.ProfesorPeriodoEstadoHistorial
+            (InstitucionId, UsuarioId, AnioLectivoId, PeriodoId, Habilitado, Origen, UsuarioRegistroId)
+          SELECT
+            ppe.InstitucionId,
+            ppe.UsuarioId,
+            ppe.AnioLectivoId,
+            ppe.PeriodoId,
+            1,
+            N'REACTIVACION_PERIODO',
+            @usuarioRegistroId
+          FROM dbo.ProfesorPeriodoEstado ppe
+          WHERE ppe.PeriodoId = @id
+            AND ppe.Habilitado = 0;
+
+          UPDATE dbo.ProfesorPeriodoEstado
+          SET Habilitado = 1,
+              UsuarioRegistroId = @usuarioRegistroId,
+              UpdatedAt = SYSDATETIME()
+          WHERE PeriodoId = @id
+            AND Habilitado = 0;
+        END;
+      `);
+    bumpProfesorPeriodoEstadosVersion();
 
     return ok(res, { PeriodoId: id }, "Período reactivado correctamente");
   } catch (error) {

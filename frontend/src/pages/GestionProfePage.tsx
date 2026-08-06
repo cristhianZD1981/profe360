@@ -9019,6 +9019,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   {item.SeccionesOrigen ? <span>Secciones: {item.SeccionesOrigen}</span> : null}
                   <span>{item.MateriaCodigo ? `${item.MateriaCodigo} - ` : ""}{item.MateriaNombre}</span>
                   <span style={{ opacity: 0.75 }}>{item.AnioNombre} / {item.PeriodoNombre}</span>
+                  {Boolean(Number(item.SinHorario || 0)) ? (
+                    <span style={{ display: "inline-flex", width: "fit-content", padding: "5px 9px", borderRadius: "999px", background: "#fffbeb", border: "1px solid #f59e0b", color: "#92400e", fontWeight: 900 }}>
+                      Sin horario
+                    </span>
+                  ) : null}
                   {cursoCerradoTarjeta ? (
                     <span style={{ display: "inline-flex", width: "fit-content", padding: "5px 9px", borderRadius: "999px", background: "#fee2e2", border: "1px solid #fca5a5", color: "#991b1b", fontWeight: 900 }}>
                       Curso Cerrado

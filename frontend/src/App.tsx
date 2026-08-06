@@ -115,6 +115,7 @@ export default function App() {
                   visibleTabs={[
                     "anios",
                     "periodos",
+                    "periodosProfesor",
                     "grupos",
                     "tiposEstudiante",
                     "tiposAdecuacion",
@@ -149,6 +150,7 @@ export default function App() {
                   visibleTabs={[
                     "anios",
                     "periodos",
+                    "periodosProfesor",
                     "grupos",
                     "tiposEstudiante",
                     "tiposAdecuacion",

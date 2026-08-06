@@ -7,6 +7,7 @@ export type GrupoProfesor = {
   InstitucionId: number;
   GrupoId: number;
   GrupoClaseId?: number | null;
+  SinHorario?: boolean | number | null;
   GrupoNombre: string;
   SeccionesOrigen?: string | null;
   GrupoNivel?: string | null;

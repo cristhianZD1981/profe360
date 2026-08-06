@@ -22,6 +22,10 @@ export async function hasGrupoClaseSchema(pool: any, force = false) {
          AND OBJECT_ID(N'dbo.GrupoClaseDocente', N'U') IS NOT NULL
          AND OBJECT_ID(N'dbo.GrupoClaseSeccion', N'U') IS NOT NULL
          AND OBJECT_ID(N'dbo.GrupoClaseHorario', N'U') IS NOT NULL
+         AND OBJECT_ID(N'dbo.GrupoClaseLeccionPatron', N'U') IS NOT NULL
+         AND OBJECT_ID(N'dbo.ProfesorPeriodoEstado', N'U') IS NOT NULL
+         AND COL_LENGTH(N'dbo.GrupoClase', N'AplicaTodosPeriodos') IS NOT NULL
+         AND COL_LENGTH(N'dbo.GrupoClase', N'GrupoClaseCanonicoId') IS NOT NULL
         THEN 1 ELSE 0
       END AS BIT
     ) AS Ready
@@ -38,18 +42,20 @@ export async function getGrupoClasePermitido(params: {
   institucionId: number;
   usuarioId?: number | null;
   permitirAdministrativo?: boolean;
+  periodoId?: number | null;
 }) {
   const result = await params.pool.request()
     .input("grupoClaseId", sql.Int, params.grupoClaseId)
     .input("institucionId", sql.Int, params.institucionId)
     .input("usuarioId", sql.Int, params.usuarioId || null)
     .input("permitirAdministrativo", sql.Bit, Boolean(params.permitirAdministrativo))
+    .input("periodoId", sql.Int, params.periodoId || null)
     .query(`
       SELECT TOP 1
         gc.GrupoClaseId,
         gc.InstitucionId,
         gc.AnioLectivoId,
-        gc.PeriodoId,
+        periodo.PeriodoId,
         gc.MateriaId,
         gc.GrupoIdPrincipal,
         gc.Nombre,
@@ -57,13 +63,17 @@ export async function getGrupoClasePermitido(params: {
         g.Nivel AS GrupoNivel,
         m.Nombre AS MateriaNombre,
         al.Nombre AS AnioNombre,
-        p.Nombre AS PeriodoNombre,
+        periodo.Nombre AS PeriodoNombre,
         principal.UsuarioId AS UsuarioPrincipalId
       FROM dbo.GrupoClase gc
       INNER JOIN dbo.Grupo g ON g.GrupoId = gc.GrupoIdPrincipal
       INNER JOIN dbo.Materia m ON m.MateriaId = gc.MateriaId
       INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = gc.AnioLectivoId
-      INNER JOIN dbo.Periodo p ON p.PeriodoId = gc.PeriodoId
+      INNER JOIN dbo.Periodo periodo
+        ON periodo.PeriodoId = CASE
+          WHEN gc.AplicaTodosPeriodos = 1 AND @periodoId IS NOT NULL THEN @periodoId
+          ELSE gc.PeriodoId
+        END
       OUTER APPLY (
         SELECT TOP 1 gcd.UsuarioId
         FROM dbo.GrupoClaseDocente gcd
@@ -75,6 +85,13 @@ export async function getGrupoClasePermitido(params: {
         AND gc.InstitucionId = @institucionId
         AND gc.Activo = 1
         AND (
+          gc.AplicaTodosPeriodos = 0
+          OR (
+            periodo.AnioLectivoId = gc.AnioLectivoId
+            AND (@periodoId IS NULL OR periodo.Activo = 1)
+          )
+        )
+        AND (
           @permitirAdministrativo = 1
           OR EXISTS (
             SELECT 1
@@ -82,6 +99,19 @@ export async function getGrupoClasePermitido(params: {
             WHERE gcd.GrupoClaseId = gc.GrupoClaseId
               AND gcd.UsuarioId = @usuarioId
               AND gcd.Activo = 1
+          )
+        )
+        AND (
+          @periodoId IS NULL
+          OR @permitirAdministrativo = 1
+          OR NOT EXISTS (
+            SELECT 1
+            FROM dbo.ProfesorPeriodoEstado ppe
+            WHERE ppe.InstitucionId = gc.InstitucionId
+              AND ppe.UsuarioId = @usuarioId
+              AND ppe.AnioLectivoId = gc.AnioLectivoId
+              AND ppe.PeriodoId = periodo.PeriodoId
+              AND ppe.Habilitado = 0
           )
         )
     `);

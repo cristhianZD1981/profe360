@@ -159,7 +159,7 @@ export async function getCierreAcademicoCurso(pool: any, input: CierreCursoKey) 
         AND MateriaId = @materiaId
         AND AnioLectivoId = @anioLectivoId
         AND PeriodoId = @periodoId
-        AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
+        AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
         AND Activo = 1
       ORDER BY CierreAcademicoCursoId DESC
     `);

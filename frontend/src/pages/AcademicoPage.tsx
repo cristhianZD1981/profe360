@@ -1,9 +1,11 @@
 ﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../lib/http";
+import { useAuth } from "../context/auth";
 import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 import EvaluacionParametrizacionPage from "./EvaluacionParametrizacionPage";
 import HabilidadesPlaneamientoAcademicoPage from "./HabilidadesPlaneamientoAcademicoPage";
+import PeriodosProfesorPanel from "./PeriodosProfesorPanel";
 
 type AnioLectivo = {
   AnioLectivoId: number;
@@ -740,6 +742,7 @@ function diaSemanaLabel(value?: number | null) {
 type TabKey =
   | "anios"
   | "periodos"
+  | "periodosProfesor"
   | "consecutivos"
   | "grupos"
   | "matriculas"
@@ -806,6 +809,7 @@ const initialOpenSections: Record<FormSectionKey, boolean> = {
 
 export default function AcademicoPage({ initialTab = "anios", visibleTabs }: AcademicoPageProps) {
   const location = useLocation();
+  const { user } = useAuth();
   const consumedNavigationKeyRef = useRef<string | null>(null);
   const [tab, setTab] = useState<TabKey>(initialTab);
   const profesGuia12RequestKeyRef = useRef("");
@@ -3809,6 +3813,7 @@ function resetMatriculaForm() {
   const tabButtons: { key: TabKey; label: string; tone: string; help: string }[] = [
     { key: "anios", label: "Año Lectivo", tone: "#2563eb", help: "Base del curso lectivo" },
     { key: "periodos", label: "Periodos", tone: "#2563eb", help: "Trimestres o periodos" },
+    { key: "periodosProfesor", label: "Periodos por Profesor", tone: "#2563eb", help: "Disponibilidad docente por periodo" },
     { key: "diasLectivos", label: "Días Lectivos", tone: "#2563eb", help: "Días hábiles de clase" },
     { key: "feriados", label: "Feriados", tone: "#2563eb", help: "Excepciones del calendario" },
     { key: "consecutivos", label: "Consecutivos", tone: "#2563eb", help: "Boletas y certificaciones" },
@@ -3832,9 +3837,10 @@ function resetMatriculaForm() {
     { key: "mensajes", label: "Mensajes", tone: "#db2777", help: "Mensajería de seguimiento" }
   ];
 
-  const visibleTabButtons = visibleTabs?.length
+  const canManageTeacherPeriods = Boolean(user?.roles?.some((role) => role === "ADMIN_INSTITUCIONAL" || role === "ADMINISTRATIVO"));
+  const visibleTabButtons = (visibleTabs?.length
     ? tabButtons.filter((item) => visibleTabs.includes(item.key))
-    : tabButtons;
+    : tabButtons).filter((item) => item.key !== "periodosProfesor" || canManageTeacherPeriods);
 
   function getTabButtonStyle(item: (typeof tabButtons)[number]) {
     const isActive = tab === item.key;
@@ -3924,6 +3930,7 @@ function resetMatriculaForm() {
 
 
         {tab === "habilidadesPlaneamiento" && <HabilidadesPlaneamientoAcademicoPage />}
+        {tab === "periodosProfesor" && canManageTeacherPeriods && <PeriodosProfesorPanel />}
 
         {tab === "consecutivos" && (
           <div className="stack">

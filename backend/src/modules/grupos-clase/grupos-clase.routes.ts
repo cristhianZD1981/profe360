@@ -58,13 +58,29 @@ async function requireSchema(pool: any, res: any) {
   res.status(409).json({
     ok: false,
     code: "GRUPOS_CLASE_SCHEMA_PENDIENTE",
-    message: "Primero debe ejecutar el script SQL de grupos de clase"
+    message: "Primero debe ejecutar la migracion SQL de grupos anuales y periodos por profesor"
   });
   return false;
 }
 
 function csv(ids: number[]) {
   return ids.join(",");
+}
+
+type LeccionPatron = { diaSemana: number; bloqueHorarioId: number };
+
+function uniqueLessonPatterns(value: unknown): LeccionPatron[] {
+  if (!Array.isArray(value)) return [];
+  const byKey = new Map<string, LeccionPatron>();
+  for (const item of value) {
+    const rawDay = typeof item === "string" ? item.split(":")[0] : item?.diaSemana;
+    const rawBlock = typeof item === "string" ? item.split(":")[1] : item?.bloqueHorarioId;
+    const diaSemana = Number(rawDay);
+    const bloqueHorarioId = positiveId(rawBlock);
+    if (!Number.isInteger(diaSemana) || diaSemana < 1 || diaSemana > 7 || !bloqueHorarioId) continue;
+    byKey.set(`${diaSemana}:${bloqueHorarioId}`, { diaSemana, bloqueHorarioId });
+  }
+  return Array.from(byKey.values());
 }
 
 async function validatePayload(params: {
@@ -74,7 +90,6 @@ async function validatePayload(params: {
 }) {
   const { pool, institucionId, payload } = params;
   const anioLectivoId = positiveId(payload.anioLectivoId);
-  const periodoId = positiveId(payload.periodoId);
   const materiaId = positiveId(payload.materiaId);
   const grupoIdPrincipal = positiveId(payload.grupoIdPrincipal);
   const grupoIds = uniqueIds(payload.grupoIds);
@@ -82,6 +97,7 @@ async function validatePayload(params: {
   const usuarioIds = uniqueIds(payload.usuarioIds);
   const subEspecialidadIds = uniqueIds(payload.subEspecialidadIds);
   const horarioGrupoIds = uniqueIds(payload.horarioGrupoIds);
+  const leccionPatrones = uniqueLessonPatterns(payload.leccionPatrones);
   const usuarioPrincipalId = positiveId(payload.usuarioPrincipalId);
   const nombre = text(payload.nombre, 200);
   const modoSeleccion = ["MANUAL", "SUBESPECIALIDAD", "MIXTO"].includes(
@@ -95,8 +111,8 @@ async function validatePayload(params: {
 
   const errors: string[] = [];
   if (!nombre) errors.push("El nombre es obligatorio");
-  if (!anioLectivoId || !periodoId || !materiaId || !grupoIdPrincipal) {
-    errors.push("Debe indicar anio, periodo, materia y seccion principal");
+  if (!anioLectivoId || !materiaId || !grupoIdPrincipal) {
+    errors.push("Debe indicar anio, materia y seccion principal");
   }
   if (!grupoIds.length) errors.push("Debe seleccionar al menos una seccion");
   if (grupoIdPrincipal && !grupoIds.includes(grupoIdPrincipal)) {
@@ -107,7 +123,7 @@ async function validatePayload(params: {
     errors.push("El profesor principal debe estar entre los profesores seleccionados");
   }
   if (!matriculaIds.length) errors.push("Debe seleccionar al menos un estudiante");
-  if (!horarioGrupoIds.length) errors.push("Debe seleccionar al menos una leccion del horario");
+  if (!leccionPatrones.length) errors.push("Debe seleccionar al menos una leccion del horario");
 
   if (errors.length) {
     return { valid: false as const, errors };
@@ -116,13 +132,13 @@ async function validatePayload(params: {
   const result = await pool.request()
     .input("institucionId", sql.Int, institucionId)
     .input("anioLectivoId", sql.Int, anioLectivoId)
-    .input("periodoId", sql.Int, periodoId)
     .input("materiaId", sql.Int, materiaId)
     .input("grupoIds", sql.NVarChar(sql.MAX), csv(grupoIds))
     .input("matriculaIds", sql.NVarChar(sql.MAX), csv(matriculaIds))
     .input("usuarioIds", sql.NVarChar(sql.MAX), csv(usuarioIds))
     .input("subEspecialidadIds", sql.NVarChar(sql.MAX), csv(subEspecialidadIds))
     .input("horarioGrupoIds", sql.NVarChar(sql.MAX), csv(horarioGrupoIds))
+    .input("leccionPatrones", sql.NVarChar(sql.MAX), leccionPatrones.map((item) => `${item.diaSemana}:${item.bloqueHorarioId}`).join(","))
     .query(`
       SELECT
         CASE WHEN EXISTS (
@@ -130,22 +146,22 @@ async function validatePayload(params: {
           FROM dbo.AnioLectivo al
           WHERE al.AnioLectivoId = @anioLectivoId
             AND al.InstitucionId = @institucionId
+            AND al.Activo = 1
         ) THEN 1 ELSE 0 END AS AnioValido,
-        CASE WHEN EXISTS (
-          SELECT 1
-          FROM dbo.Periodo p
-          INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = p.AnioLectivoId
-          WHERE p.PeriodoId = @periodoId
-            AND p.AnioLectivoId = @anioLectivoId
-            AND al.InstitucionId = @institucionId
-        ) THEN 1 ELSE 0 END AS PeriodoValido,
         CASE WHEN EXISTS (
           SELECT 1
           FROM dbo.Materia m
           WHERE m.MateriaId = @materiaId
             AND m.InstitucionId = @institucionId
             AND m.Activa = 1
-        ) THEN 1 ELSE 0 END AS MateriaValida;
+        ) THEN 1 ELSE 0 END AS MateriaValida,
+        (
+          SELECT TOP 1 p.PeriodoId
+          FROM dbo.Periodo p
+          WHERE p.AnioLectivoId = @anioLectivoId
+            AND p.Activo = 1
+          ORDER BY p.NumeroOrden, p.PeriodoId
+        ) AS PeriodoAnclaId;
 
       SELECT COUNT(DISTINCT g.GrupoId) AS Total
       FROM dbo.Grupo g
@@ -190,6 +206,26 @@ async function validatePayload(params: {
       WHERE se.InstitucionId = @institucionId
         AND se.Activo = 1;
 
+      SELECT COUNT(DISTINCT CONCAT(hg.DiaSemana, N':', hg.BloqueHorarioId)) AS Total
+      FROM dbo.HorarioGrupo hg
+      INNER JOIN dbo.GrupoMateria gm ON gm.GrupoMateriaId = hg.GrupoMateriaId
+      INNER JOIN dbo.Grupo g ON g.GrupoId = gm.GrupoId
+      INNER JOIN STRING_SPLIT(@leccionPatrones, N',') patron
+        ON patron.value = CONCAT(hg.DiaSemana, N':', hg.BloqueHorarioId)
+      INNER JOIN STRING_SPLIT(@grupoIds, N',') sg
+        ON TRY_CONVERT(int, sg.value) = gm.GrupoId
+      WHERE g.InstitucionId = @institucionId
+        AND gm.MateriaId = @materiaId
+        AND (gm.PeriodoId IS NULL OR EXISTS (
+          SELECT 1
+          FROM dbo.Periodo p
+          WHERE p.PeriodoId = gm.PeriodoId
+            AND p.AnioLectivoId = @anioLectivoId
+            AND p.Activo = 1
+        ))
+        AND gm.Activo = 1
+        AND hg.Activo = 1;
+
       SELECT COUNT(DISTINCT hg.HorarioGrupoId) AS Total
       FROM dbo.HorarioGrupo hg
       INNER JOIN dbo.GrupoMateria gm ON gm.GrupoMateriaId = hg.GrupoMateriaId
@@ -199,15 +235,22 @@ async function validatePayload(params: {
       INNER JOIN STRING_SPLIT(@grupoIds, N',') sg
         ON TRY_CONVERT(int, sg.value) = gm.GrupoId
       WHERE g.InstitucionId = @institucionId
+        AND g.AnioLectivoId = @anioLectivoId
         AND gm.MateriaId = @materiaId
-        AND (gm.PeriodoId = @periodoId OR gm.PeriodoId IS NULL)
+        AND (gm.PeriodoId IS NULL OR EXISTS (
+          SELECT 1
+          FROM dbo.Periodo p
+          WHERE p.PeriodoId = gm.PeriodoId
+            AND p.AnioLectivoId = @anioLectivoId
+            AND p.Activo = 1
+        ))
         AND gm.Activo = 1
         AND hg.Activo = 1;
     `);
 
   const header = result.recordsets[0]?.[0] || {};
-  if (!header.AnioValido) errors.push("El anio no pertenece a la institucion");
-  if (!header.PeriodoValido) errors.push("El periodo no pertenece al anio seleccionado");
+  if (!header.AnioValido) errors.push("El anio lectivo no esta vigente o no pertenece a la institucion");
+  if (!header.PeriodoAnclaId) errors.push("El anio lectivo debe tener al menos un periodo activo");
   if (!header.MateriaValida) errors.push("La materia no pertenece a la institucion");
   if (Number(result.recordsets[1]?.[0]?.Total || 0) !== grupoIds.length) {
     errors.push("Hay secciones invalidas o de otro anio");
@@ -221,7 +264,10 @@ async function validatePayload(params: {
   if (Number(result.recordsets[4]?.[0]?.Total || 0) !== subEspecialidadIds.length) {
     errors.push("Hay subespecialidades invalidas");
   }
-  if (Number(result.recordsets[5]?.[0]?.Total || 0) !== horarioGrupoIds.length) {
+  if (Number(result.recordsets[5]?.[0]?.Total || 0) !== leccionPatrones.length) {
+    errors.push("Hay patrones de leccion que no corresponden a la materia y secciones seleccionadas");
+  }
+  if (horarioGrupoIds.length && Number(result.recordsets[6]?.[0]?.Total || 0) !== horarioGrupoIds.length) {
     errors.push("Hay horarios que no corresponden a la materia y secciones seleccionadas");
   }
 
@@ -232,7 +278,7 @@ async function validatePayload(params: {
       nombre,
       descripcion: text(payload.descripcion, 500) || null,
       anioLectivoId: anioLectivoId!,
-      periodoId: periodoId!,
+      periodoId: Number(header.PeriodoAnclaId),
       materiaId: materiaId!,
       grupoIdPrincipal: grupoIdPrincipal!,
       grupoIds,
@@ -241,6 +287,7 @@ async function validatePayload(params: {
       usuarioPrincipalId: usuarioPrincipalId || usuarioIds[0],
       subEspecialidadIds,
       horarioGrupoIds,
+      leccionPatrones,
       modoSeleccion,
       reglaCoincidencia,
       fechaInicio: text(payload.fechaInicio, 10) || null,
@@ -372,13 +419,12 @@ router.post("/horarios-disponibles", async (req, res) => {
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
     const anioLectivoId = positiveId(req.body.anioLectivoId);
-    const periodoId = positiveId(req.body.periodoId);
     const materiaId = positiveId(req.body.materiaId);
     const grupoIds = uniqueIds(req.body.grupoIds);
     const usuarioIds = uniqueIds(req.body.usuarioIds);
 
-    if (!anioLectivoId || !periodoId || !materiaId || !grupoIds.length) {
-      return badRequest(res, "Debe indicar ano, periodo, materia y secciones");
+    if (!anioLectivoId || !materiaId || !grupoIds.length) {
+      return badRequest(res, "Debe indicar ano, materia y secciones");
     }
 
     const pool = await getPool();
@@ -386,17 +432,27 @@ router.post("/horarios-disponibles", async (req, res) => {
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("anioLectivoId", sql.Int, anioLectivoId)
-      .input("periodoId", sql.Int, periodoId)
       .input("materiaId", sql.Int, materiaId)
       .input("grupoIds", sql.NVarChar(sql.MAX), csv(grupoIds))
       .input("usuarioIds", sql.NVarChar(sql.MAX), csv(usuarioIds))
       .query(`
-        WITH HorariosFiltrados AS (
+        WITH PeriodosActivos AS (
+          SELECT p.PeriodoId, p.Nombre, p.NumeroOrden
+          FROM dbo.Periodo p
+          INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = p.AnioLectivoId
+          WHERE p.AnioLectivoId = @anioLectivoId
+            AND p.Activo = 1
+            AND al.Activo = 1
+            AND al.InstitucionId = @institucionId
+        ),
+        HorariosFiltrados AS (
           SELECT
             hg.HorarioGrupoId,
             gm.GrupoId,
             gm.MateriaId,
-            gm.PeriodoId,
+            p.PeriodoId,
+            p.Nombre AS PeriodoNombre,
+            p.NumeroOrden AS PeriodoOrden,
             hg.DiaSemana,
             hg.BloqueHorarioId,
             bh.Nombre AS BloqueNombre,
@@ -414,13 +470,14 @@ router.post("/horarios-disponibles", async (req, res) => {
                 AND hd.Activo = 1
             ) THEN 1 ELSE 0 END AS bit) AS AsignadoProfesor,
             ROW_NUMBER() OVER (
-              PARTITION BY gm.GrupoId, gm.MateriaId, hg.DiaSemana, hg.BloqueHorarioId
+              PARTITION BY p.PeriodoId, gm.GrupoId, gm.MateriaId, hg.DiaSemana, hg.BloqueHorarioId
               ORDER BY
-                CASE WHEN gm.PeriodoId = @periodoId THEN 0 ELSE 1 END,
+                CASE WHEN gm.PeriodoId = p.PeriodoId THEN 0 ELSE 1 END,
                 hg.HorarioGrupoId DESC
             ) AS Posicion
           FROM dbo.HorarioGrupo hg
           INNER JOIN dbo.GrupoMateria gm ON gm.GrupoMateriaId = hg.GrupoMateriaId
+          INNER JOIN PeriodosActivos p ON gm.PeriodoId = p.PeriodoId OR gm.PeriodoId IS NULL
           INNER JOIN dbo.Grupo g ON g.GrupoId = gm.GrupoId
           INNER JOIN dbo.Materia m ON m.MateriaId = gm.MateriaId
           INNER JOIN dbo.BloqueHorario bh ON bh.BloqueHorarioId = hg.BloqueHorarioId
@@ -429,7 +486,6 @@ router.post("/horarios-disponibles", async (req, res) => {
           WHERE g.InstitucionId = @institucionId
             AND g.AnioLectivoId = @anioLectivoId
             AND gm.MateriaId = @materiaId
-            AND (gm.PeriodoId = @periodoId OR gm.PeriodoId IS NULL)
             AND hg.Activo = 1
             AND gm.Activo = 1
         )
@@ -438,6 +494,8 @@ router.post("/horarios-disponibles", async (req, res) => {
           GrupoId,
           MateriaId,
           PeriodoId,
+          PeriodoNombre,
+          PeriodoOrden,
           DiaSemana,
           BloqueHorarioId,
           BloqueNombre,
@@ -450,6 +508,7 @@ router.post("/horarios-disponibles", async (req, res) => {
         FROM HorariosFiltrados
         WHERE Posicion = 1
         ORDER BY
+          PeriodoOrden,
           CASE WHEN DiaSemana = 1 THEN 8 ELSE DiaSemana END,
           OrdenVisual,
           GrupoNombre;
@@ -766,7 +825,11 @@ router.get("/", async (req, res) => {
           gc.AnioLectivoId,
           al.Nombre AS AnioNombre,
           gc.PeriodoId,
-          p.Nombre AS PeriodoNombre,
+          CASE WHEN gc.AplicaTodosPeriodos = 1
+            THEN N'Aplica a todos los periodos activos'
+            ELSE p.Nombre
+          END AS PeriodoNombre,
+          gc.AplicaTodosPeriodos,
           gc.MateriaId,
           m.Nombre AS MateriaNombre,
           gc.GrupoIdPrincipal,
@@ -801,8 +864,16 @@ router.get("/", async (req, res) => {
         INNER JOIN dbo.Grupo gp ON gp.GrupoId = gc.GrupoIdPrincipal
         WHERE gc.InstitucionId = @institucionId
           AND (@incluirInactivos = 1 OR gc.Activo = 1)
-          AND (@anioLectivoId IS NULL OR gc.AnioLectivoId = @anioLectivoId)
-          AND (@periodoId IS NULL OR gc.PeriodoId = @periodoId)
+          AND gc.GrupoClaseCanonicoId IS NULL
+          AND (
+            (@anioLectivoId IS NULL AND al.Activo = 1)
+            OR gc.AnioLectivoId = @anioLectivoId
+          )
+          AND (
+            @periodoId IS NULL
+            OR gc.AplicaTodosPeriodos = 1
+            OR gc.PeriodoId = @periodoId
+          )
         ORDER BY al.FechaInicio DESC, p.NumeroOrden, gc.Nombre;
       `);
 
@@ -850,6 +921,11 @@ router.get("/:grupoClaseId", async (req, res) => {
         SELECT HorarioGrupoId, EsPrincipal
         FROM dbo.GrupoClaseHorario
         WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+
+        SELECT DiaSemana, BloqueHorarioId
+        FROM dbo.GrupoClaseLeccionPatron
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1
+        ORDER BY DiaSemana, BloqueHorarioId;
       `);
 
     const header = result.recordsets[0]?.[0];
@@ -861,7 +937,11 @@ router.get("/:grupoClaseId", async (req, res) => {
       matriculaIds: (result.recordsets[3] || []).map((row: any) => Number(row.MatriculaId)),
       usuarioIds: (result.recordsets[4] || []).map((row: any) => Number(row.UsuarioId)),
       usuarioPrincipalId: Number((result.recordsets[4] || []).find((row: any) => row.EsPrincipal)?.UsuarioId || 0) || null,
-      horarioGrupoIds: (result.recordsets[5] || []).map((row: any) => Number(row.HorarioGrupoId))
+      horarioGrupoIds: (result.recordsets[5] || []).map((row: any) => Number(row.HorarioGrupoId)),
+      leccionPatrones: (result.recordsets[6] || []).map((row: any) => ({
+        diaSemana: Number(row.DiaSemana),
+        bloqueHorarioId: Number(row.BloqueHorarioId)
+      }))
     });
   } catch (error) {
     console.error("Error cargando grupo de clase:", error);
@@ -882,6 +962,8 @@ async function saveChildren(transaction: any, grupoClaseId: number, data: any, u
     UPDATE dbo.GrupoClaseDocente SET Activo = 0, UpdatedAt = SYSDATETIME()
     WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
     UPDATE dbo.GrupoClaseHorario SET Activo = 0, UpdatedAt = SYSDATETIME()
+    WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+    UPDATE dbo.GrupoClaseLeccionPatron SET Activo = 0, UpdatedAt = SYSDATETIME()
     WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
   `);
 
@@ -938,6 +1020,18 @@ async function saveChildren(transaction: any, grupoClaseId: number, data: any, u
         VALUES (@grupoClaseId, @horarioGrupoId, @esPrincipal, 1);
       `);
   }
+  for (const patron of data.leccionPatrones) {
+    await new sql.Request(transaction)
+      .input("grupoClaseId", sql.Int, grupoClaseId)
+      .input("diaSemana", sql.Int, patron.diaSemana)
+      .input("bloqueHorarioId", sql.Int, patron.bloqueHorarioId)
+      .query(`
+        INSERT INTO dbo.GrupoClaseLeccionPatron
+          (GrupoClaseId, DiaSemana, BloqueHorarioId, Activo)
+        VALUES
+          (@grupoClaseId, @diaSemana, @bloqueHorarioId, 1);
+      `);
+  }
 }
 
 router.post("/", async (req, res) => {
@@ -969,12 +1063,12 @@ router.post("/", async (req, res) => {
         INSERT INTO dbo.GrupoClase
           (InstitucionId, AnioLectivoId, PeriodoId, MateriaId, GrupoIdPrincipal,
            Nombre, Descripcion, ModoSeleccion, ReglaCoincidencia, FechaInicio,
-           FechaFin, Activo, UsuarioCreadorId)
+           FechaFin, Activo, UsuarioCreadorId, AplicaTodosPeriodos)
         OUTPUT INSERTED.GrupoClaseId
         VALUES
           (@institucionId, @anioLectivoId, @periodoId, @materiaId, @grupoIdPrincipal,
            @nombre, @descripcion, @modoSeleccion, @reglaCoincidencia, @fechaInicio,
-           @fechaFin, 1, @usuarioId);
+           @fechaFin, 1, @usuarioId, 1);
       `);
     const grupoClaseId = Number(inserted.recordset[0].GrupoClaseId);
     await saveChildren(transaction, grupoClaseId, data, getUserId(req));
@@ -1040,6 +1134,10 @@ router.post("/:grupoClaseId/duplicar", async (req, res) => {
         SELECT HorarioGrupoId
         FROM dbo.GrupoClaseHorario
         WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+
+        SELECT DiaSemana, BloqueHorarioId
+        FROM dbo.GrupoClaseLeccionPatron
+        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
       `);
 
     const header = source.recordsets[0]?.[0];
@@ -1061,6 +1159,10 @@ router.post("/:grupoClaseId/duplicar", async (req, res) => {
       usuarioIds: profesores.map((row: any) => Number(row.UsuarioId)),
       usuarioPrincipalId: Number(profesores.find((row: any) => row.EsPrincipal)?.UsuarioId || 0) || null,
       horarioGrupoIds: (source.recordsets[5] || []).map((row: any) => Number(row.HorarioGrupoId)),
+      leccionPatrones: (source.recordsets[6] || []).map((row: any) => ({
+        diaSemana: Number(row.DiaSemana),
+        bloqueHorarioId: Number(row.BloqueHorarioId)
+      })),
       modoSeleccion: header.ModoSeleccion || "MIXTO",
       reglaCoincidencia: header.ReglaCoincidencia || "CUALQUIERA",
       fechaInicio: dateText(header.FechaInicio),
@@ -1089,12 +1191,12 @@ router.post("/:grupoClaseId/duplicar", async (req, res) => {
         INSERT INTO dbo.GrupoClase
           (InstitucionId, AnioLectivoId, PeriodoId, MateriaId, GrupoIdPrincipal,
            Nombre, Descripcion, ModoSeleccion, ReglaCoincidencia, FechaInicio,
-           FechaFin, Activo, UsuarioCreadorId)
+           FechaFin, Activo, UsuarioCreadorId, AplicaTodosPeriodos)
         OUTPUT INSERTED.GrupoClaseId
         VALUES
           (@institucionId, @anioLectivoId, @periodoId, @materiaId, @grupoIdPrincipal,
            @nombre, @descripcion, @modoSeleccion, @reglaCoincidencia, @fechaInicio,
-           @fechaFin, 1, @usuarioId);
+           @fechaFin, 1, @usuarioId, 1);
       `);
     const grupoClaseId = Number(inserted.recordset[0].GrupoClaseId);
     await saveChildren(transaction, grupoClaseId, data, getUserId(req));
@@ -1150,10 +1252,12 @@ router.put("/:grupoClaseId", async (req, res) => {
             ReglaCoincidencia = @reglaCoincidencia,
             FechaInicio = @fechaInicio,
             FechaFin = @fechaFin,
+            AplicaTodosPeriodos = 1,
             UpdatedAt = SYSDATETIME()
         OUTPUT INSERTED.GrupoClaseId
         WHERE GrupoClaseId = @grupoClaseId
-          AND InstitucionId = @institucionId;
+          AND InstitucionId = @institucionId
+          AND GrupoClaseCanonicoId IS NULL;
       `);
     if (!updated.recordset[0]) {
       await transaction.rollback();

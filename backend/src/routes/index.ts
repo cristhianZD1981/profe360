@@ -22,6 +22,7 @@ import eval360Routes from "../modules/eval360/eval360.routes";
 import seguimientoEvaluacionRoutes from "../modules/seguimiento-evaluacion/seguimiento-evaluacion.routes";
 import assistantRoutes from "../modules/assistant/assistant.routes";
 import gruposClaseRoutes from "../modules/grupos-clase/grupos-clase.routes";
+import periodosProfesorRoutes from "../modules/periodos-profesor/periodos-profesor.routes";
 
 const router = Router();
 
@@ -48,5 +49,6 @@ router.use("/eval360", eval360Routes);
 router.use("/seguimiento-evaluacion", seguimientoEvaluacionRoutes);
 router.use("/assistant", assistantRoutes);
 router.use("/grupos-clase", gruposClaseRoutes);
+router.use("/periodos-profesor", periodosProfesorRoutes);
 
 export default router;

@@ -23,6 +23,14 @@ function toggleId(list: number[], id: number) {
   return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
 }
 
+function lessonPatternKey(value: any) {
+  return `${Number(value?.DiaSemana ?? value?.diaSemana)}:${Number(value?.BloqueHorarioId ?? value?.bloqueHorarioId)}`;
+}
+
+function toggleText(list: string[], value: string) {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+}
+
 function normalizeSearch(value: unknown) {
   return String(value ?? "")
     .normalize("NFD")
@@ -35,7 +43,6 @@ const initialForm = {
   nombre: "",
   descripcion: "",
   anioLectivoId: 0,
-  periodoId: 0,
   materiaId: 0,
   grupoIdPrincipal: 0,
   grupoIds: [] as number[],
@@ -44,6 +51,7 @@ const initialForm = {
   usuarioIds: [] as number[],
   usuarioPrincipalId: 0,
   horarioGrupoIds: [] as number[],
+  leccionPatrones: [] as string[],
   modoSeleccion: "MIXTO",
   reglaCoincidencia: "CUALQUIERA"
 };
@@ -67,6 +75,7 @@ export default function GruposClasePage() {
   const [profesorSearch, setProfesorSearch] = useState("");
   const [estudianteSearch, setEstudianteSearch] = useState("");
   const horarioRequestKeyRef = useRef("");
+  const horarioContextKeyRef = useRef("");
 
   async function loadBase() {
     setError("");
@@ -98,7 +107,7 @@ export default function GruposClasePage() {
 
   const periodos = useMemo(
     () => (catalogos?.periodos || []).filter(
-      (item: any) => Number(item.AnioLectivoId) === Number(form.anioLectivoId)
+      (item: any) => Number(item.AnioLectivoId) === Number(form.anioLectivoId) && item.Activo
     ),
     [catalogos, form.anioLectivoId]
   );
@@ -137,6 +146,40 @@ export default function GruposClasePage() {
     ).includes(q));
   }, [candidatos, estudianteSearch]);
 
+  const horariosPorPatron = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const item of horarios) {
+      const key = lessonPatternKey(item);
+      const current = map.get(key) || {
+        key,
+        DiaSemana: Number(item.DiaSemana),
+        BloqueHorarioId: Number(item.BloqueHorarioId),
+        BloqueNombre: item.BloqueNombre,
+        HoraInicio: item.HoraInicio,
+        HoraFin: item.HoraFin,
+        periodos: new Set<string>(),
+        secciones: new Set<string>(),
+        AsignadoProfesor: false
+      };
+      current.periodos.add(String(item.PeriodoNombre || ""));
+      current.secciones.add(String(item.GrupoNombre || ""));
+      current.AsignadoProfesor = current.AsignadoProfesor || Boolean(item.AsignadoProfesor);
+      map.set(key, current);
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      const dayA = a.DiaSemana === 1 ? 8 : a.DiaSemana;
+      const dayB = b.DiaSemana === 1 ? 8 : b.DiaSemana;
+      return dayA - dayB || String(a.HoraInicio || "").localeCompare(String(b.HoraInicio || ""));
+    });
+  }, [horarios]);
+
+  const periodosSinHorario = useMemo(() => periodos.filter((periodo: any) => {
+    if (!form.leccionPatrones.length) return false;
+    return form.leccionPatrones.some((pattern) => !horarios.some(
+      (item: any) => Number(item.PeriodoId) === Number(periodo.PeriodoId) && lessonPatternKey(item) === pattern
+    ));
+  }), [periodos, horarios, form.leccionPatrones]);
+
   const materiaSubIds = useMemo(() => idsFrom(
     (catalogos?.materiasSubEspecialidad || [])
       .filter((item: any) => Number(item.MateriaId) === Number(form.materiaId))
@@ -157,7 +200,6 @@ export default function GruposClasePage() {
 
   async function loadHorarios(sourceForm = form) {
     const ready = sourceForm.anioLectivoId
-      && sourceForm.periodoId
       && sourceForm.materiaId
       && sourceForm.grupoIds.length;
     if (!ready) {
@@ -169,7 +211,6 @@ export default function GruposClasePage() {
 
     const requestKey = [
       sourceForm.anioLectivoId,
-      sourceForm.periodoId,
       sourceForm.materiaId,
       [...sourceForm.grupoIds].sort((a, b) => a - b).join(","),
       [...sourceForm.usuarioIds].sort((a, b) => a - b).join(",")
@@ -179,13 +220,27 @@ export default function GruposClasePage() {
     try {
       const response = await api.post("/grupos-clase/horarios-disponibles", {
         anioLectivoId: sourceForm.anioLectivoId,
-        periodoId: sourceForm.periodoId,
         materiaId: sourceForm.materiaId,
         grupoIds: sourceForm.grupoIds,
         usuarioIds: sourceForm.usuarioIds
       });
       if (horarioRequestKeyRef.current === requestKey) {
-        setHorarios(dataOf(response) || []);
+        const rows = dataOf(response) || [];
+        setHorarios(rows);
+        const contextKey = [
+          sourceForm.anioLectivoId,
+          sourceForm.materiaId,
+          [...sourceForm.grupoIds].sort((a: number, b: number) => a - b).join(",")
+        ].join("|");
+        const availablePatterns = Array.from(new Set(rows.map(lessonPatternKey))) as string[];
+        const contextChanged = horarioContextKeyRef.current !== contextKey;
+        horarioContextKeyRef.current = contextKey;
+        setForm((current) => ({
+          ...current,
+          leccionPatrones: contextChanged && !sourceForm.leccionPatrones.length
+            ? availablePatterns
+            : current.leccionPatrones.filter((key) => availablePatterns.includes(key))
+        }));
       }
     } catch (requestError: any) {
       if (horarioRequestKeyRef.current === requestKey) {
@@ -204,7 +259,6 @@ export default function GruposClasePage() {
     return () => window.clearTimeout(timer);
   }, [
     form.anioLectivoId,
-    form.periodoId,
     form.materiaId,
     form.grupoIds.join(","),
     form.usuarioIds.join(",")
@@ -269,7 +323,6 @@ export default function GruposClasePage() {
         nombre: detail.Nombre || "",
         descripcion: detail.Descripcion || "",
         anioLectivoId: Number(detail.AnioLectivoId),
-        periodoId: Number(detail.PeriodoId),
         materiaId: Number(detail.MateriaId),
         grupoIdPrincipal: Number(detail.GrupoIdPrincipal),
         grupoIds: idsFrom(detail.grupoIds || []),
@@ -278,6 +331,7 @@ export default function GruposClasePage() {
         usuarioIds: idsFrom(detail.usuarioIds || []),
         usuarioPrincipalId: Number(detail.usuarioPrincipalId || 0),
         horarioGrupoIds: idsFrom(detail.horarioGrupoIds || []),
+        leccionPatrones: (detail.leccionPatrones || []).map(lessonPatternKey),
         modoSeleccion: detail.ModoSeleccion || "MIXTO",
         reglaCoincidencia: detail.ReglaCoincidencia || "CUALQUIERA"
       };
@@ -299,6 +353,9 @@ export default function GruposClasePage() {
     setMessage("");
     try {
       const nombre = String(form.nombre || "").trim() || suggestedGroupName(form);
+      const selectedHorarioIds = horarios
+        .filter((item: any) => form.leccionPatrones.includes(lessonPatternKey(item)))
+        .map((item: any) => Number(item.HorarioGrupoId));
       const payload = {
         ...form,
         nombre,
@@ -306,7 +363,11 @@ export default function GruposClasePage() {
         matriculaIds: idsFrom(form.matriculaIds),
         usuarioIds: idsFrom(form.usuarioIds),
         subEspecialidadIds: idsFrom(form.subEspecialidadIds),
-        horarioGrupoIds: idsFrom(form.horarioGrupoIds)
+        horarioGrupoIds: idsFrom(selectedHorarioIds),
+        leccionPatrones: form.leccionPatrones.map((key) => {
+          const [diaSemana, bloqueHorarioId] = key.split(":").map(Number);
+          return { diaSemana, bloqueHorarioId };
+        })
       };
       if (editingId) {
         await api.put(`/grupos-clase/${editingId}`, payload);
@@ -467,7 +528,7 @@ export default function GruposClasePage() {
       <section style={{ ...panel, marginTop: 16 }}>
         <h2 style={{ marginTop: 0 }}>Grupos de clase</h2>
         <p>La pantalla está lista, pero primero debés ejecutar el script SQL entregado.</p>
-        <code>backend/sql/2026-07-25_grupos_clase_combinados.sql</code>
+        <code>backend/sql/2026-08-04_grupos_clase_anuales_periodos_profesor.sql</code>
       </section>
     );
   }
@@ -512,16 +573,18 @@ export default function GruposClasePage() {
             </small>
           </label>
           <label>Año lectivo
-            <select style={input} value={form.anioLectivoId} onChange={(e) => setForm({ ...form, anioLectivoId: Number(e.target.value), periodoId: 0, grupoIds: [], matriculaIds: [], horarioGrupoIds: [] })}>
+            <select style={input} value={form.anioLectivoId} onChange={(e) => {
+              horarioContextKeyRef.current = "";
+              setForm({ ...form, anioLectivoId: Number(e.target.value), grupoIds: [], matriculaIds: [], horarioGrupoIds: [], leccionPatrones: [] });
+            }}>
               <option value={0}>Seleccionar</option>
-              {(catalogos?.anios || []).map((item: any) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
+              {(catalogos?.anios || []).filter((item: any) => item.Activo).map((item: any) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
             </select>
           </label>
           <label>Período
-            <select style={input} value={form.periodoId} onChange={(e) => setForm({ ...form, periodoId: Number(e.target.value), horarioGrupoIds: [] })}>
-              <option value={0}>Seleccionar</option>
-              {periodos.map((item: any) => <option key={item.PeriodoId} value={item.PeriodoId}>{item.Nombre}</option>)}
-            </select>
+            <div style={{ ...input, display: "flex", alignItems: "center", background: "#eff6ff", borderColor: "#60a5fa" }}>
+              Aplica a todos los períodos activos
+            </div>
           </label>
           <label>Materia
             <input
@@ -534,7 +597,8 @@ export default function GruposClasePage() {
             <select style={input} value={form.materiaId} onChange={(e) => {
               const materiaId = Number(e.target.value);
               const suggested = idsFrom((catalogos?.materiasSubEspecialidad || []).filter((row: any) => Number(row.MateriaId) === materiaId).map((row: any) => row.SubEspecialidadId));
-              setForm({ ...form, materiaId, subEspecialidadIds: suggested, horarioGrupoIds: [] });
+              horarioContextKeyRef.current = "";
+              setForm({ ...form, materiaId, subEspecialidadIds: suggested, horarioGrupoIds: [], leccionPatrones: [] });
             }}>
               <option value={0}>Seleccionar</option>
               {materiasFiltradas.map((item: any) => <option key={item.MateriaId} value={item.MateriaId}>{item.Codigo ? `${item.Codigo} - ` : ""}{item.Nombre}</option>)}
@@ -557,7 +621,8 @@ export default function GruposClasePage() {
                       grupoIds,
                       grupoIdPrincipal: grupoIds.includes(form.grupoIdPrincipal) ? form.grupoIdPrincipal : (grupoIds[0] || 0),
                       matriculaIds: [],
-                      horarioGrupoIds: []
+                      horarioGrupoIds: [],
+                      leccionPatrones: []
                     });
                     setCandidatos([]);
                   }} />
@@ -635,44 +700,48 @@ export default function GruposClasePage() {
         <div style={{ marginTop: 14 }}>
           <strong style={sectionTitle}>4. Lecciones del grupo</strong>
           <p style={helpText}>
-            Se muestran únicamente las lecciones activas del período, materia y secciones seleccionadas.
-            Los días usan el mismo calendario que Gestión del Profe y Reportes.
+            Se muestran las lecciones equivalentes de todos los períodos activos. La selección por día y bloque
+            se aplica de forma común durante el año lectivo.
           </p>
-          {horarios.length ? (
+          {horariosPorPatron.length ? (
             <label style={{ ...checkboxRightRow(0), marginBottom: 6, background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6 }}>
-              <span>Seleccionar todas las lecciones mostradas ({horarios.length})</span>
+              <span>Seleccionar todas las lecciones mostradas ({horariosPorPatron.length})</span>
               <input
                 type="checkbox"
-                checked={horarios.every((item: any) => form.horarioGrupoIds.includes(Number(item.HorarioGrupoId)))}
+                checked={horariosPorPatron.every((item: any) => form.leccionPatrones.includes(item.key))}
                 onChange={(event) => {
-                  const idsVisibles = horarios.map((item: any) => Number(item.HorarioGrupoId));
-                  const visibles = new Set(idsVisibles);
-                  const otras = form.horarioGrupoIds.filter((id) => !visibles.has(id));
                   setForm({
                     ...form,
-                    horarioGrupoIds: event.target.checked ? [...otras, ...idsVisibles] : otras
+                    leccionPatrones: event.target.checked ? horariosPorPatron.map((item: any) => item.key) : []
                   });
                 }}
               />
             </label>
           ) : null}
+          {periodosSinHorario.length ? (
+            <div style={{ marginBottom: 8, padding: "9px 10px", border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", borderRadius: 6, fontWeight: 700 }}>
+              Sin horario: {periodosSinHorario.map((item: any) => item.Nombre).join(", ")}
+            </div>
+          ) : null}
           <div style={{ ...checklist, marginTop: 6, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
-            {loadingHorarios ? <span style={zebraRow(0)}>Cargando lecciones...</span> : horarios.length ? horarios.map((item: any, index: number) => {
-              const id = Number(item.HorarioGrupoId);
+            {loadingHorarios ? <span style={zebraRow(0)}>Cargando lecciones...</span> : horariosPorPatron.length ? horariosPorPatron.map((item: any, index: number) => {
               return (
-                <label key={id} style={zebraRow(index)}>
-                  <input type="checkbox" checked={form.horarioGrupoIds.includes(id)} onChange={() => setForm({ ...form, horarioGrupoIds: toggleId(form.horarioGrupoIds, id) })} />
+                <label key={item.key} style={zebraRow(index)}>
+                  <input type="checkbox" checked={form.leccionPatrones.includes(item.key)} onChange={() => setForm({ ...form, leccionPatrones: toggleText(form.leccionPatrones, item.key) })} />
                   <span>
-                    {dias[Number(item.DiaSemana)] || `Día ${item.DiaSemana}`} · {item.BloqueNombre} · {item.GrupoNombre}
+                    {dias[Number(item.DiaSemana)] || `Día ${item.DiaSemana}`} · {item.BloqueNombre}
+                    <small style={{ display: "block" }}>
+                      {Array.from(item.periodos).filter(Boolean).join(", ")} · {Array.from(item.secciones).filter(Boolean).join(", ")}
+                    </small>
                     {item.AsignadoProfesor ? <small style={{ display: "block", color: "#166534" }}>Asignada al profesor seleccionado</small> : null}
                   </span>
                 </label>
               );
             }) : (
               <span style={zebraRow(0)}>
-                {form.periodoId && form.materiaId && form.grupoIds.length
-                  ? "No se encontraron lecciones activas con esta combinación. Revisá el horario del período."
-                  : "Seleccioná período, materia y secciones para ver sus lecciones."}
+                {form.materiaId && form.grupoIds.length
+                  ? "No se encontraron lecciones activas con esta combinación. Revisá los horarios de los períodos activos."
+                  : "Seleccioná materia y secciones para ver sus lecciones."}
               </span>
             )}
           </div>

@@ -42,6 +42,10 @@ import {
   getSuspensionVigenteApplySql,
   suspensionVigenteSelectSql
 } from "../estudiantes/estudiante-suspension.utils";
+import {
+  hasProfesorPeriodoSchema,
+  isPeriodoProfesorHabilitado
+} from "../periodos-profesor/periodos-profesor.utils";
 
 
 
@@ -89,6 +93,27 @@ const SQL_COSTA_RICA_NOW = "CONVERT(datetime2(3), SYSUTCDATETIME() AT TIME ZONE 
 router.use(requireAuth);
 
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"));
+
+router.use(async (req: any, res: any, next: any) => {
+  try {
+    if (!isProfesor(req) || isInstitutionAdmin(req) || isSuperAdmin(req)) return next();
+    const periodoId = toOptionalNumber(req.body?.periodoId ?? req.query?.periodoId);
+    if (!periodoId) return next();
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const pool = await getPool();
+    const habilitado = await isPeriodoProfesorHabilitado({
+      pool,
+      institucionId,
+      usuarioId: getUserId(req),
+      periodoId
+    });
+    if (!habilitado) return forbidden(res, "El periodo esta inhabilitado para este profesor");
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.get("/progreso/:operacionId", (req, res) => {
 
@@ -4966,7 +4991,8 @@ async function getAsignacionPermitida(req: any, res: any, input: {
       grupoClaseId,
       institucionId,
       usuarioId: userId || null,
-      permitirAdministrativo: isSuperAdmin(req) || isInstitutionAdmin(req)
+      permitirAdministrativo: isSuperAdmin(req) || isInstitutionAdmin(req),
+      periodoId: input.periodoId
     });
 
     if (!grupoClase) {
@@ -4977,8 +5003,7 @@ async function getAsignacionPermitida(req: any, res: any, input: {
     if (
       Number(grupoClase.GrupoIdPrincipal) !== Number(input.grupoId) ||
       Number(grupoClase.MateriaId) !== Number(input.materiaId) ||
-      Number(grupoClase.AnioLectivoId) !== Number(input.anioLectivoId) ||
-      Number(grupoClase.PeriodoId) !== Number(input.periodoId)
+      Number(grupoClase.AnioLectivoId) !== Number(input.anioLectivoId)
     ) {
       forbidden(res, "El grupo de clase no coincide con el grupo, materia y periodo seleccionados");
       return null;
@@ -4995,7 +5020,7 @@ async function getAsignacionPermitida(req: any, res: any, input: {
       MateriaNombre: grupoClase.MateriaNombre,
       AnioLectivoId: Number(grupoClase.AnioLectivoId),
       AnioNombre: grupoClase.AnioNombre,
-      PeriodoId: Number(grupoClase.PeriodoId),
+      PeriodoId: Number(input.periodoId),
       PeriodoNombre: grupoClase.PeriodoNombre,
       GrupoClaseId: Number(grupoClase.GrupoClaseId)
     };
@@ -6022,7 +6047,7 @@ router.get("/estructuras/grupo", async (req, res) => {
 
           AND PeriodoId = @periodoId
 
-          AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
+          AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
 
           AND Activo = 1
 
@@ -6513,7 +6538,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
           AND PeriodoId = @periodoId
 
-          AND ISNULL(GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
+          AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
 
           AND Activo = 1
 
@@ -6601,7 +6626,7 @@ router.post("/estructuras/crear-desde-plantilla", async (req, res) => {
 
                  AND ar.PeriodoId = eg.PeriodoId
 
-                 AND ISNULL(ar.GrupoClaseId, 0) = ISNULL(eg.GrupoClaseId, 0)
+                 AND ISNULL(dbo.fn_GrupoClaseCanonicoId(ar.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(eg.GrupoClaseId), 0)
 
                 WHERE eg.EstructuraGrupoId = @estructuraGrupoId
 
@@ -7356,7 +7381,24 @@ async function getEstructuraPermitidaPorId(req: any, res: any, pool: any, estruc
 
 
 
-  const filtroProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req)
+  const esConsultaProfesor = isProfesor(req) && !isInstitutionAdmin(req) && !isSuperAdmin(req);
+  const filtroPeriodoProfesor = esConsultaProfesor && await hasProfesorPeriodoSchema(pool)
+    ? `
+      AND NOT EXISTS (
+        SELECT 1
+        FROM dbo.ProfesorPeriodoEstado ppe
+        WHERE ppe.InstitucionId = eg.InstitucionId
+          AND ppe.UsuarioId = @usuarioId
+          AND ppe.AnioLectivoId = eg.AnioLectivoId
+          AND ppe.PeriodoId = eg.PeriodoId
+          AND ppe.Habilitado = 0
+      )
+    `
+    : "";
+
+
+
+  const filtroProfesor = esConsultaProfesor
 
     ? `
 
@@ -7397,10 +7439,11 @@ async function getEstructuraPermitidaPorId(req: any, res: any, pool: any, estruc
               AND gc.GrupoIdPrincipal = eg.GrupoId
               AND gc.MateriaId = eg.MateriaId
               AND gc.AnioLectivoId = eg.AnioLectivoId
-              AND gc.PeriodoId = eg.PeriodoId
+              AND (gc.AplicaTodosPeriodos = 1 OR gc.PeriodoId = eg.PeriodoId)
           )
         )
       )
+      ${filtroPeriodoProfesor}
 
     `
 
@@ -15626,7 +15669,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
           AND eg.PeriodoId = @periodoId
 
-          AND ISNULL(eg.GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
+          AND ISNULL(dbo.fn_GrupoClaseCanonicoId(eg.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
 
           AND eg.Activo = 1
 
@@ -16712,7 +16755,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               AND ar.PeriodoId = @periodoId
 
-              AND ISNULL(ar.GrupoClaseId, 0) = ISNULL(@grupoClaseId, 0)
+              AND ISNULL(dbo.fn_GrupoClaseCanonicoId(ar.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
 
           `)) : Promise.resolve({ recordset: [] }),
 
