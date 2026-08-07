@@ -4,11 +4,14 @@ import JSZip from "jszip";
 import {
   analizarReferenciaDocxSemantica,
   aplicarReglasObligatoriasPlaneamiento,
+  ajustarIndicadoresPorHabilidad,
   construirAdecuacionSignificativa,
   construirPerfilEstrategiasReferencia,
+  debeAuditarPlaneamientoConIa,
   detectTemplateContentRole,
   extraerPaginasIndicadas,
   limpiarEncabezadoEstrategiaReferencia,
+  normalizarAuditoriaSemantica,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
   validarOrdenEncabezadosEstrategias,
@@ -209,6 +212,15 @@ test("clasifica criterios e indicadores como columnas distintas", () => {
   assert.equal(detectTemplateContentRole(cell(paragraph("Estrategias de mediacion"))), "estrategias");
 });
 
+test("clasifica encabezados de machotes de ingles conversacional", () => {
+  assert.equal(detectTemplateContentRole(cell(paragraph("Goals"))), "aprendizajes");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Task Mediation Activities"))), "estrategias");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Indicators of Learning"))), "indicadores");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Learner can"))), "aprendizajes");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Didactic Sequence Mediation"))), "estrategias");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Assessment Strategies & Evidences"))), "indicadores");
+});
+
 test("la auditoria excluye metadatos que completa el servidor", () => {
   const perfil = perfilDocumentoParaRevision({
     esDocx: true,
@@ -217,6 +229,9 @@ test("la auditoria excluye metadatos que completa el servidor", () => {
       { etiqueta: "Dirección Regional de Educación", valorAnterior: "No especificada" },
       { etiqueta: "Centro educativo", valorAnterior: "No especificado" },
       { etiqueta: "Nombre y apellidos del o la docente", valorAnterior: "No especificado" },
+      { etiqueta: "Institution", valorAnterior: "CTP Sabalito" },
+      { etiqueta: "Teacher", valorAnterior: "Docente anterior" },
+      { etiqueta: "Level", valorAnterior: "Seventh" },
       { etiqueta: "Mes", valorAnterior: "Mes anterior" },
       { etiqueta: "Eje temático Integrador", valorAnterior: "Tema anterior" },
       { etiqueta: "Unidad de trabajo", valorAnterior: "Unidad anterior" }
@@ -232,6 +247,276 @@ test("la auditoria excluye metadatos que completa el servidor", () => {
     perfil?.camposVariables.map((campo) => campo.etiqueta),
     ["Eje temático Integrador", "Unidad de trabajo"]
   );
+});
+
+test("extrae estrategias desde machote original de ingles conversacional", async () => {
+  const metadata = table(
+    row(
+      cell(paragraph("Institution: CTP Sabalito")),
+      cell(paragraph("CEFR: A1.1"))
+    ),
+    row(
+      cell(paragraph("Teacher: Docente anterior")),
+      cell(paragraph("Level: Seventh"))
+    )
+  );
+  const content = table(
+    row(
+      cell(paragraph("Goals")),
+      cell(paragraph("Task Mediation Activities")),
+      cell(paragraph("Indicators of Learning"))
+    ),
+    row(
+      cell(paragraph("Acquire knowledge, understand and think critically in a friendship environment.")),
+      cell(
+        paragraph("Pre-teaching Routine:", true),
+        paragraph("Teacher greets the class and checks attendance."),
+        paragraph("Participating:", true),
+        paragraph("Learners solve a classroom challenge and share responses.")
+      ),
+      cell(paragraph("Analyzes classroom responses in order to demonstrate understanding."))
+    )
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${metadata}${content}</w:body>
+</w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
+
+  const perfil = await analizarReferenciaDocxSemantica({
+    buffer,
+    originalname: "english-reference.docx",
+    mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  } as Express.Multer.File);
+
+  assert.deepEqual(
+    perfil.columnas.map((columna) => columna.rol),
+    ["aprendizajes", "estrategias", "indicadores"]
+  );
+  assert.match(perfil.estrategiasTexto, /Pre-teaching Routine/);
+  assert.doesNotMatch(perfil.estrategiasTexto, /Acquire knowledge/);
+  assert.doesNotMatch(perfil.estrategiasTexto, /Analyzes classroom responses/);
+  assert.deepEqual(
+    perfilDocumentoParaRevision(perfil)?.camposVariables.map((campo) => campo.etiqueta),
+    ["CEFR"]
+  );
+});
+
+test("extrae estrategias desde machote academico de ingles con secuencia didactica", async () => {
+  const content = table(
+    row(
+      cell(paragraph("Assessment Strategies & Evidences")),
+      cell(paragraph("Learner can")),
+      cell(paragraph("Didactic Sequence Mediation")),
+      cell(paragraph("Time Total: 120 min (3 lessons)"))
+    ),
+    row(
+      cell(paragraph("L.1. identifies expressions related to media.")),
+      cell(paragraph("L.1. understand the main idea and key details.")),
+      cell(
+        paragraph("CONNECTION/ Pre-teaching", true),
+        paragraph("Teacher calls attendance and introduces the topic."),
+        paragraph("CONNECTION/ Participating", true),
+        paragraph("Learners perform a warm-up activity related to social media logos.")
+      ),
+      cell(paragraph("120 min"))
+    )
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${content}</w:body>
+</w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
+
+  const perfil = await analizarReferenciaDocxSemantica({
+    buffer,
+    originalname: "ninth-reference.docx",
+    mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  } as Express.Multer.File);
+
+  assert.deepEqual(
+    perfil.columnas.map((columna) => columna.rol),
+    ["indicadores", "aprendizajes", "estrategias", null]
+  );
+  assert.match(perfil.estrategiasTexto, /CONNECTION\/ Pre-teaching/);
+  assert.doesNotMatch(perfil.estrategiasTexto, /identifies expressions/);
+  assert.doesNotMatch(perfil.estrategiasTexto, /120 min/);
+});
+
+test("infiere columna de mediacion por estructura cuando el alias no es exacto", async () => {
+  const content = table(
+    row(
+      cell(paragraph("Evidence")),
+      cell(paragraph("Learner profile")),
+      cell(paragraph("Classroom Mediation Flow")),
+      cell(paragraph("Time"))
+    ),
+    row(
+      cell(paragraph("Short assessment note.")),
+      cell(paragraph("Learners can exchange simple ideas.")),
+      cell(
+        paragraph("Opening mediation", true),
+        paragraph("Teacher presents a contextualized challenge and students respond with examples.")
+      ),
+      cell(paragraph("40 min"))
+    )
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${content}</w:body>
+</w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
+
+  const perfil = await analizarReferenciaDocxSemantica({
+    buffer,
+    originalname: "fallback-reference.docx",
+    mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  } as Express.Multer.File);
+
+  assert.match(perfil.estrategiasTexto, /Opening mediation/);
+  assert.doesNotMatch(perfil.estrategiasTexto, /Learners can exchange/);
+  assert.equal(perfil.cantidadSeccionesContenido, 1);
+});
+
+test("reemplaza indicadores copiados de habilidades por indicadores observables", () => {
+  const indicadores = ajustarIndicadoresPorHabilidad({
+    indicadoresEntrada: [
+      "1.1 Solve problems with family and friends, organize and self-regulate one's own learning.",
+      "2.1 Acquire knowledge, understand and think critically in a friendship environment."
+    ],
+    habilidades: [
+      { DescripcionHabilidad: "Solve problems with family and friends, organize and self-regulate one's own learning." },
+      { DescripcionHabilidad: "Acquire knowledge, understand and think critically in a friendship environment." }
+    ],
+    permitirMultiples: false,
+    indicacionesDocente: "Aplicar mediacion contextualizada, DUA e indicadores observables."
+  });
+
+  assert.equal(indicadores.length, 2);
+  assert.match(indicadores[0], /^1\.1 Describes and justifies/i);
+  assert.match(indicadores[1], /^2\.1 Describes and justifies/i);
+  assert.match(indicadores[1], /oral or written product|observable participation evidence/i);
+  assert.notEqual(
+    indicadores[1],
+    "2.1 Acquire knowledge, understand and think critically in a friendship environment."
+  );
+});
+
+test("no bloquea por falsos positivos tecnicos de la auditoria semantica", () => {
+  const auditoria = normalizarAuditoriaSemantica({
+    cumple: false,
+    incumplimientos: [
+      'El campo "estrategiasMediacion" no cumple el formato obligatorio: se presenta como un arreglo de textos, cuando la referencia y las indicaciones mandatorias exigen un único texto plano (string).',
+      'El resultado incorpora campos extra fuera de la estructura exacta obligatoria: "mes", "grado", "materiaNombre", "MateriaNombre", "criteriosEvaluacion", "camposReferencia" y "nombre".'
+    ],
+    fortalezas: []
+  });
+
+  assert.equal(auditoria.disponible, true);
+  assert.equal(auditoria.cumple, true);
+  assert.deepEqual(auditoria.incumplimientos, []);
+});
+
+test("la auditoria semantica puede quedar como alerta sin bloquear el planeamiento", () => {
+  const resultado = {
+    nombre: "Marzo - Noveno - Ingles",
+    aprendizajesEsperados: ["1: Learners understand information about media."],
+    criteriosEvaluacion: ["Understands information about media in classroom contexts."],
+    estrategiasMediacion: [
+      "Connection. Teacher presents a contextualized media situation and learners answer guided questions.",
+      "Practice. Learners work in pairs and produce short oral and written responses."
+    ],
+    indicadoresEvaluacion: ["1.1 Demonstrates understanding of media information through guided oral or written responses in a classroom activity."]
+  };
+  const auditoria = normalizarAuditoriaSemantica({
+    cumple: false,
+    incumplimientos: ["La revisión independiente considera que falta mayor profundidad pedagógica."],
+    fortalezas: []
+  });
+
+  const bloqueante = validarPlaneamientoGenerado(resultado, {
+    idiomaEsperado: "en",
+    indicadoresEsperadosPorHabilidad: [1],
+    auditoriaSemantica: auditoria,
+    auditoriaSemanticaBloqueante: true
+  });
+  assert.equal(bloqueante.puedeGuardar, false);
+
+  const noBloqueante = validarPlaneamientoGenerado(resultado, {
+    idiomaEsperado: "en",
+    indicadoresEsperadosPorHabilidad: [1],
+    auditoriaSemantica: auditoria,
+    auditoriaSemanticaBloqueante: false
+  });
+  const revision = noBloqueante.verificaciones.find((item) => item.codigo === "auditoria_semantica");
+  assert.equal(revision?.estado, "alerta");
+  assert.equal(noBloqueante.puedeGuardar, true);
+});
+
+test("la auditoria ia se omite solo cuando la validacion deterministica esta limpia", () => {
+  const resultado = {
+    nombre: "Marzo - Noveno - Ingles",
+    aprendizajesEsperados: ["1: Comprende informacion sobre medios de comunicacion."],
+    criteriosEvaluacion: ["Comprende informacion sobre medios de comunicacion en contextos de aula."],
+    estrategiasMediacion: [
+      "Conexion. La persona docente presenta una situacion contextualizada sobre medios y el estudiantado responde preguntas guiadas.",
+      "Practica. El estudiantado trabaja en parejas y produce respuestas orales y escritas breves."
+    ],
+    indicadoresEvaluacion: ["1.1 Demuestra comprension de informacion sobre medios mediante respuestas orales o escritas guiadas en una actividad de aula."]
+  };
+  const validacionLimpia = validarPlaneamientoGenerado(resultado, {
+    idiomaEsperado: "es",
+    indicadoresEsperadosPorHabilidad: [1]
+  });
+  assert.equal(validacionLimpia.puedeGuardar, true);
+  assert.equal(debeAuditarPlaneamientoConIa({ validacion: validacionLimpia }), false);
+
+  const validacionConError = validarPlaneamientoGenerado({
+    ...resultado,
+    indicadoresEvaluacion: []
+  }, {
+    idiomaEsperado: "es",
+    indicadoresEsperadosPorHabilidad: [1]
+  });
+  assert.equal(debeAuditarPlaneamientoConIa({ validacion: validacionConError }), true);
+});
+
+test("la auditoria ia se conserva para referencias amplias o indicaciones complejas", () => {
+  const validacion = validarPlaneamientoGenerado({
+    nombre: "Marzo - Noveno - Ingles",
+    aprendizajesEsperados: ["1: Learners understand information about media."],
+    estrategiasMediacion: [
+      "Connection. Teacher presents a contextualized media situation and learners answer guided questions.",
+      "Practice. Learners work in pairs and produce short oral and written responses."
+    ],
+    indicadoresEvaluacion: ["1.1 Demonstrates understanding of media information through guided oral or written responses in a classroom activity."]
+  }, {
+    idiomaEsperado: "en",
+    indicadoresEsperadosPorHabilidad: [1]
+  });
+
+  assert.equal(debeAuditarPlaneamientoConIa({
+    validacion,
+    indicacionesDocente: "Conservar exactamente la secuencia del machote y no copiar contenido sustantivo anterior.",
+    usaReferenciaEstrategias: true,
+    perfilEstrategiasReferencia: {
+      encabezados: ["Connection", "Practice"],
+      cantidadParrafos: 40,
+      cantidadCaracteres: 9500,
+      cantidadActividadesNumeradas: 0,
+      cantidadPreguntas: 0,
+      usaTemasNumerados: false,
+      usaActividadesNumeradas: false,
+      nivelDetalle: "amplio",
+      descripcion: "Referencia amplia."
+    }
+  }), true);
 });
 
 test("extrae solo la estrategia y conserva encabezados dinamicos repetidos", async () => {

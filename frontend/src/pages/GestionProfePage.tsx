@@ -397,6 +397,9 @@ export default function GestionProfePage() {
   const generatingPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [savingPlaneamientoIa, setSavingPlaneamientoIa] = useState(false);
   const [revisandoPlaneamientoIa, setRevisandoPlaneamientoIa] = useState(false);
+  const [corrigiendoPlaneamientoIaProgress, setCorrigiendoPlaneamientoIaProgress] = useState(0);
+  const [corrigiendoPlaneamientoIaEtapa, setCorrigiendoPlaneamientoIaEtapa] = useState("");
+  const corrigiendoPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [revisionPlaneamientoIaPendiente, setRevisionPlaneamientoIaPendiente] = useState(true);
   const [savingPlaneamientoIaProgress, setSavingPlaneamientoIaProgress] = useState(0);
   const [savingPlaneamientoIaEtapa, setSavingPlaneamientoIaEtapa] = useState("");
@@ -2616,7 +2619,18 @@ export default function GestionProfePage() {
       descargarBlob(blob, `planeamiento-${planeamiento.Nombre || planeamiento.PlaneamientoId}.docx`);
     } catch (error) {
       console.error("Error exportando planeamiento a Word:", error);
-      alert("No se pudo generar la plantilla Word del planeamiento");
+      const data = error?.response?.data;
+      let detalle = "";
+      if (data instanceof Blob) {
+        try {
+          const text = await data.text();
+          const parsed = JSON.parse(text);
+          detalle = parsed?.message || text;
+        } catch {
+          detalle = "";
+        }
+      }
+      alert(detalle || error?.response?.data?.message || "No se pudo generar la plantilla Word del planeamiento");
     }
   }
 
@@ -6965,14 +6979,12 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setErrorMessage("Completá materia, grado, al menos una sección y una habilidad antes de crear el prompt");
       return;
     }
-    const grupoBase = getGrupoPlaneamientoIa();
-    const materiaId = Number(selected?.MateriaId || grupoBase?.MateriaId || planeamientoIaForm.materiaId || 0);
-    const grupoId = Number(grupoBase?.GrupoId || selected?.GrupoId || 0);
     setPromptPlaneamientoIa(prompt);
     setPromptPlaneamientoIaConstruido(true);
     setPromptPlaneamientoIaMejorado(false);
     setErrorMessage("");
-    setMessage("");
+    setMessage("Prompt construido sin gastar IA. Podés generar el planeamiento o revisarlo con IA si necesitás una mejora adicional.");
+    return;
 
     if (!grupoBase || !materiaId || !grupoId) {
       setMessage("Prompt construido. Revisá el texto y generá el planeamiento.");
@@ -7395,23 +7407,33 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
 
       const revisionesInternas = Number(resultado.controlCalidad?.intentosRevision || 1) > 1 ? 1 : 0;
 
-      if (resultado.controlCalidad?.puedeGuardar !== true) {
+      setUltimoPlaneamientoIa(resultado);
+      const generadoListoParaGuardar = resultado.controlCalidad?.puedeGuardar === true;
+      setRevisionPlaneamientoIaPendiente(!generadoListoParaGuardar);
+      setGeneratingPlaneamientoIaProgress(100);
+      setGeneratingPlaneamientoIaEtapa(
+        generadoListoParaGuardar
+          ? "Planeamiento generado y validado"
+          : "Planeamiento generado con observaciones"
+      );
+      if (generadoListoParaGuardar) {
+        setMessage(
+          revisionesInternas > 0
+            ? "Planeamiento generado, mejorado y validado automáticamente. Ya está listo para guardar."
+            : "Planeamiento generado y validado automáticamente. Ya está listo para guardar."
+        );
+      } else {
         const pendientes = (resultado.controlCalidad?.verificaciones || [])
           .filter((item) => item.estado === "error")
           .map((item) => item.detalle)
           .join(" ");
-        throw new Error(`La IA no pudo completar la validación automática. ${pendientes}`.trim());
+        setMessage("Planeamiento generado con observaciones. Presioná \"Corregir con IA\" para aplicar los ajustes y habilitar el guardado.");
+        setErrorMessage(
+          pendientes
+            ? `La validación encontró ajustes pendientes: ${pendientes}`
+            : "La validación encontró ajustes pendientes antes de guardar."
+        );
       }
-
-      setUltimoPlaneamientoIa(resultado);
-      setRevisionPlaneamientoIaPendiente(false);
-      setGeneratingPlaneamientoIaProgress(100);
-      setGeneratingPlaneamientoIaEtapa("Planeamiento generado y validado");
-      setMessage(
-        revisionesInternas > 0
-          ? "Planeamiento generado, mejorado y validado automáticamente. Ya está listo para guardar."
-          : "Planeamiento generado y validado automáticamente. Ya está listo para guardar."
-      );
     } catch (error: any) {
       console.error("Error generando planeamiento con IA:", error);
       setGeneratingPlaneamientoIaEtapa("No se pudo completar la generación");
@@ -7576,30 +7598,48 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
   async function revisarPlaneamientoIaGenerado(mostrarMensaje = true): Promise<PlaneamientoIaResultado | null> {
     if (!ultimoPlaneamientoIa) return null;
 
+    const operacionId = crearOperacionIdPlaneamientoIa("corregir-planeamiento");
     setRevisandoPlaneamientoIa(true);
+    setCorrigiendoPlaneamientoIaProgress(0);
+    setCorrigiendoPlaneamientoIaEtapa("Preparando la corrección automática");
+    iniciarMonitoreoProgresoPlaneamientoIa(
+      operacionId,
+      setCorrigiendoPlaneamientoIaProgress,
+      setCorrigiendoPlaneamientoIaEtapa,
+      corrigiendoPlaneamientoIaTimerRef
+    );
     setErrorMessage("");
     if (mostrarMensaje) setMessage("");
 
     try {
-      const revisado = await solicitarRevisionPlaneamientoIa(ultimoPlaneamientoIa);
+      const revisado = await solicitarRevisionPlaneamientoIa(ultimoPlaneamientoIa, operacionId);
       setUltimoPlaneamientoIa(revisado);
-      setRevisionPlaneamientoIaPendiente(false);
+      const corregidoListoParaGuardar = revisado.controlCalidad?.puedeGuardar === true;
+      setRevisionPlaneamientoIaPendiente(!corregidoListoParaGuardar);
+      setCorrigiendoPlaneamientoIaProgress(corregidoListoParaGuardar ? 100 : 98);
+      setCorrigiendoPlaneamientoIaEtapa(
+        corregidoListoParaGuardar
+          ? "Planeamiento corregido y listo para guardar"
+          : "La corrección aún encontró datos pendientes"
+      );
 
-      if (revisado.controlCalidad?.puedeGuardar) {
-        if (mostrarMensaje) setMessage("Revisión completada. El planeamiento está listo para guardar.");
+      if (corregidoListoParaGuardar) {
+        if (mostrarMensaje) setMessage("Corregido con IA. Ya podés guardar el planeamiento.");
       } else {
         const pendientes = (revisado.controlCalidad?.verificaciones || [])
           .filter((item) => item.estado === "error")
           .map((item) => item.detalle)
           .join(" ");
-        setErrorMessage(`La IA todavía no completó todos los ajustes. Podés volver a presionar “Mejorar con IA”. ${pendientes}`.trim());
+        setErrorMessage(`La IA todavía no completó todos los ajustes. Podés volver a presionar “Corregir con IA”. ${pendientes}`.trim());
       }
       return revisado;
     } catch (error: any) {
       console.error("Error revisando planeamiento generado:", error);
-      setErrorMessage(error?.response?.data?.message || "No se pudo revisar nuevamente el planeamiento");
+      setCorrigiendoPlaneamientoIaEtapa("No se pudo completar la corrección");
+      setErrorMessage(error?.response?.data?.message || "No se pudo corregir el planeamiento con IA");
       return null;
     } finally {
+      detenerMonitoreoProgresoPlaneamientoIa(corrigiendoPlaneamientoIaTimerRef);
       setRevisandoPlaneamientoIa(false);
     }
   }
@@ -7628,7 +7668,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       revisionPlaneamientoIaPendiente
       || ultimoPlaneamientoIa.controlCalidad?.puedeGuardar !== true
     ) {
-      setErrorMessage("Usá “Mejorar planeamiento con IA” para corregir y validar todos los ajustes antes de guardar");
+      setErrorMessage("Usá “Corregir con IA” para corregir y validar todos los ajustes antes de guardar");
       return;
     }
 
@@ -7739,6 +7779,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     } catch (error: any) {
       console.error("Error guardando planeamiento generado:", error);
       setSavingPlaneamientoIaEtapa("No se pudo completar el guardado");
+      setRevisionPlaneamientoIaPendiente(true);
+      setMessage("El guardado encontró una validación pendiente. Corregí con IA y volvé a guardar.");
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar el planeamiento generado");
     } finally {
       detenerMonitoreoProgresoPlaneamientoIa(savingPlaneamientoIaTimerRef);
@@ -8594,6 +8636,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
   const planeamientoIaListoParaGuardar = Boolean(
     ultimoPlaneamientoIa
     && ultimoPlaneamientoIa.controlCalidad?.puedeGuardar === true
+    && !(ultimoPlaneamientoIa.controlCalidad?.verificaciones || []).some((item) => item.estado === "error")
     && !revisionPlaneamientoIaPendiente
   );
 
@@ -11516,7 +11559,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <strong>Paso a paso</strong>
                   <div>1. Completá los datos requeridos y adjuntá el planeamiento de referencia.</div>
                   <div>2. Presioná “Construir prompt” para crearlo y revisarlo con IA.</div>
-                  <div>3. Presioná “Generar planeamiento”. Podés mejorarlo o generarlo nuevamente cuando lo necesités.</div>
+                  <div>3. Presioná “Generar planeamiento”. Si aparece alguna observación, podés corregirla con IA antes de guardar.</div>
                   <div>4. Cuando el resultado esté correcto, guardalo y continuá con sus indicadores.</div>
                 </div>
 
@@ -11922,7 +11965,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <label style={{ color: "#e5eefb" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
                         <span>Planeamiento de referencia</span>
-                        <span style={optionalBadgeStyle}>Opcional</span>
+                        <span style={requiredBadgeStyle}>Requerido</span>
                       </span>
                       <input
                         type="file"
@@ -11972,7 +12015,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         </div>
                       )}
                       <small style={{ display: "block", color: "#a8b7c9", marginTop: "4px" }}>
-                        Marcá ejemplo para orientar el contenido. Marcá machote Word solo con un .docx para conservar su diseño, tablas y encabezados; sus datos anteriores se sustituyen por los del planeamiento nuevo.
+                        Recomendado: subí un archivo Word .docx para conservar diseño, tablas y encabezados. Marcá ejemplo para orientar el contenido; marcá machote Word para sustituir sus datos anteriores por los del planeamiento nuevo.
                       </small>
                       {plantillaFormatoIa && (
                         <small style={{ display: "block", color: "#67e8f9", marginTop: "4px" }}>
@@ -12308,14 +12351,25 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         disabled={!puedeConstruirPromptPlaneamientoIa}
                         title={ultimoPlaneamientoIa ? "Usá las acciones debajo del resultado" : (datosPromptPlaneamientoIaCompletos ? "Construir y revisar el prompt con IA" : "Completá primero los datos requeridos")}
                       >
-                        {mejorandoPromptPlaneamientoIa ? "Construyendo y revisando..." : "1. Construir prompt"}
+                        1. Construir prompt
                       </button>
+                      {promptPlaneamientoIaListo && !promptPlaneamientoIaMejorado ? (
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          onClick={() => { void mejorarPromptPlaneamientoIa(); }}
+                          disabled={mejorandoPromptPlaneamientoIa || generatingPlaneamientoIa || savingPlaneamientoIa || revisandoPlaneamientoIa}
+                          title="Opcional: usa IA para revisar el prompt antes de generar"
+                        >
+                          {mejorandoPromptPlaneamientoIa ? "Revisando prompt..." : "Revisar prompt con IA"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="primary-btn"
                         onClick={generarPlaneamientoConIa}
                         disabled={!puedeGenerarPlaneamientoIa}
-                        title={ultimoPlaneamientoIa ? "Usá “Generar nuevamente” debajo del resultado" : (promptPlaneamientoIaListo ? "Generar el planeamiento con el prompt actual" : "Construí primero el prompt")}
+                        title={ultimoPlaneamientoIa ? "Descartá el resultado actual si necesitás generar otro planeamiento" : (promptPlaneamientoIaListo ? "Generar el planeamiento con el prompt actual" : "Construí primero el prompt")}
                       >
                         {generatingPlaneamientoIa
                           ? "Generando planeamiento..."
@@ -12432,6 +12486,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                 El sistema detectó diferencias y corrigió automáticamente la primera propuesta.
                               </small>
                             )}
+                            {ultimoPlaneamientoIa.controlCalidad.usoIa ? (
+                              <small style={{ color: "#bfdbfe" }}>
+                                Tokens IA: entrada {Number(ultimoPlaneamientoIa.controlCalidad.usoIa.inputTokens || 0).toLocaleString("es-CR")}, salida {Number(ultimoPlaneamientoIa.controlCalidad.usoIa.outputTokens || 0).toLocaleString("es-CR")}, total {Number(ultimoPlaneamientoIa.controlCalidad.usoIa.totalTokens || 0).toLocaleString("es-CR")}.
+                              </small>
+                            ) : null}
                             {(ultimoPlaneamientoIa.controlCalidad.verificaciones || []).map((item) => (
                               <div
                                 key={item.codigo}
@@ -12698,35 +12757,26 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           }}
                         >
                           {planeamientoIaListoParaGuardar
-                            ? "Mejorado con IA. Ya podés guardar el planeamiento."
-                            : "Primero presioná “Mejorar planeamiento con IA”. Guardar se habilitará cuando todos los ajustes estén corregidos."}
+                            ? "Planeamiento validado. Ya podés guardar."
+                            : "Hay observaciones pendientes. Presioná “Corregir con IA” para aplicar los ajustes y habilitar el guardado."}
                         </div>
                         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                          <button
-                            type="button"
-                            className={planeamientoIaListoParaGuardar ? "ghost-btn" : "primary-btn"}
-                            onClick={() => { void revisarPlaneamientoIaGenerado(true); }}
-                            disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa}
-                          >
-                            {revisandoPlaneamientoIa
-                              ? "Mejorando planeamiento..."
-                              : (planeamientoIaListoParaGuardar ? "Mejorar nuevamente con IA" : "Mejorar planeamiento con IA")}
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost-btn"
-                            onClick={() => { void generarPlaneamientoConIa(); }}
-                            disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa || !promptPlaneamientoIaListo}
-                            title="Generar una nueva versión y validarla automáticamente"
-                          >
-                            {generatingPlaneamientoIa ? "Generando nuevamente..." : "Generar nuevamente"}
-                          </button>
+                          {!planeamientoIaListoParaGuardar ? (
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              onClick={() => { void revisarPlaneamientoIaGenerado(true); }}
+                              disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa}
+                            >
+                              {revisandoPlaneamientoIa ? "Corrigiendo con IA..." : "Corregir con IA"}
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="primary-btn"
                             onClick={guardarPlaneamientoIaGenerado}
                             disabled={savingPlaneamientoIa || revisandoPlaneamientoIa || generatingPlaneamientoIa || !planeamientoIaListoParaGuardar}
-                            title={planeamientoIaListoParaGuardar ? "Guardar el planeamiento validado" : "Mejorá primero el planeamiento con IA"}
+                            title={planeamientoIaListoParaGuardar ? "Guardar el planeamiento validado" : "Corregí primero el planeamiento con IA"}
                           >
                             {savingPlaneamientoIa
                               ? (revisandoPlaneamientoIa ? "Revisando antes de guardar..." : "Guardando...")
@@ -12736,6 +12786,24 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                             Descartar
                           </button>
                         </div>
+                        {revisandoPlaneamientoIa ? (
+                          <div style={{ width: "460px", maxWidth: "100%", display: "grid", gap: "5px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", color: "#dbeafe", fontSize: "0.86rem" }}>
+                              <span>{corrigiendoPlaneamientoIaEtapa || "Corrigiendo planeamiento"}</span>
+                              <strong>{Math.round(corrigiendoPlaneamientoIaProgress)}%</strong>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label="Avance de la corrección del planeamiento"
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(corrigiendoPlaneamientoIaProgress)}
+                              style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#1e293b", overflow: "hidden", border: "1px solid #334155" }}
+                            >
+                              <div style={{ width: `${corrigiendoPlaneamientoIaProgress}%`, height: "100%", background: "linear-gradient(90deg, #38bdf8 0%, #22c55e 100%)", transition: "width 240ms ease" }} />
+                            </div>
+                          </div>
+                        ) : null}
                         {savingPlaneamientoIa ? (
                           <div style={{ width: "460px", maxWidth: "100%", display: "grid", gap: "5px" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", color: "#dbeafe", fontSize: "0.86rem" }}>
