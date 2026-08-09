@@ -353,6 +353,17 @@ export default function Layout() {
                       style={adminMenuItemStyle}
                       onClick={() => {
                         setShowAdminMenu(false);
+                        navigate("/super-admin/habilidades-planeamiento");
+                      }}
+                    >
+                      Habilidades de Planeamiento
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={adminMenuItemStyle}
+                      onClick={() => {
+                        setShowAdminMenu(false);
                         if (canAccessGestionProfe) navigate("/gestion-profe");
                       }}
                     >

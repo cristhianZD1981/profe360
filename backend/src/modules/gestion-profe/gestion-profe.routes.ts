@@ -6060,6 +6060,69 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/bitacora", async (req, res
   }
 });
 
+router.put("/mis-grupos/:grupoId/materias/:materiaId/bitacora/:bitacoraId", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const grupoId = toOptionalNumber(req.params.grupoId);
+    const materiaId = toOptionalNumber(req.params.materiaId);
+    const bitacoraId = toOptionalNumber(req.params.bitacoraId);
+    const anioLectivoId = toOptionalNumber(req.body?.anioLectivoId);
+    const periodoId = toOptionalNumber(req.body?.periodoId);
+    const grupoClaseId = toOptionalGrupoClaseId(req.body?.grupoClaseId);
+    if (!grupoId || !materiaId || !bitacoraId || !anioLectivoId || !periodoId) return badRequest(res, "Faltan parÃ¡metros para actualizar bitÃ¡cora");
+
+    const temasDesarrollados = normalizeText(req.body?.temasDesarrollados);
+    const observaciones = normalizeText(req.body?.observaciones);
+    const hechosRelevantes = normalizeText(req.body?.hechosRelevantes);
+    if (!temasDesarrollados) return badRequest(res, "Temas desarrollados es obligatorio");
+
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
+    if (!asignacion) return forbidden(res, "No tenÃ©s permiso para este grupo/materia");
+
+    const pool = await getPool();
+    if (await responderSiCursoCerrado(res, pool, {
+      institucionId: Number(asignacion.InstitucionId),
+      grupoId,
+      materiaId,
+      anioLectivoId,
+      periodoId,
+      grupoClaseId
+    })) return;
+
+    await ensureBitacoraGrupoTable(pool);
+    const update = await pool.request()
+      .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+      .input("grupoId", sql.Int, grupoId)
+      .input("materiaId", sql.Int, materiaId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("periodoId", sql.Int, periodoId)
+      .input("grupoClaseId", sql.Int, grupoClaseId)
+      .input("bitacoraId", sql.Int, bitacoraId)
+      .input("temasDesarrollados", sql.NVarChar(sql.MAX), temasDesarrollados)
+      .input("observaciones", sql.NVarChar(sql.MAX), observaciones || null)
+      .input("hechosRelevantes", sql.NVarChar(sql.MAX), hechosRelevantes || null)
+      .query(`
+        UPDATE dbo.BitacoraGrupo
+        SET TemasDesarrollados = @temasDesarrollados,
+            Observaciones = @observaciones,
+            HechosRelevantes = @hechosRelevantes,
+            UpdatedAt = SYSDATETIME()
+        WHERE BitacoraGrupoId = @bitacoraId
+          AND InstitucionId = @institucionId
+          AND GrupoId = @grupoId
+          AND MateriaId = @materiaId
+          AND AnioLectivoId = @anioLectivoId
+          AND PeriodoId = @periodoId
+          AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
+      `);
+    if (!update.rowsAffected?.[0]) return res.status(404).json({ ok: false, message: "No se encontrÃ³ el registro de bitÃ¡cora" });
+    return ok(res, { bitacoraGrupoId: bitacoraId }, "BitÃ¡cora actualizada correctamente");
+  } catch (error) {
+    console.error("Error actualizando bitÃ¡cora:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la bitÃ¡cora" });
+  }
+});
+
 
 router.get("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) => {
   try {

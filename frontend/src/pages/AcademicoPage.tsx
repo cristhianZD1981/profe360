@@ -4,7 +4,6 @@ import api from "../lib/http";
 import { useAuth } from "../context/auth";
 import { getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 import EvaluacionParametrizacionPage from "./EvaluacionParametrizacionPage";
-import HabilidadesPlaneamientoAcademicoPage from "./HabilidadesPlaneamientoAcademicoPage";
 import PeriodosProfesorPanel from "./PeriodosProfesorPanel";
 
 type AnioLectivo = {
@@ -762,7 +761,6 @@ type TabKey =
   | "feriados"
   | "diasLectivos"
   | "configuracionCorreo"
-  | "habilidadesPlaneamiento"
   | "mensajes";
 
 
@@ -3832,7 +3830,6 @@ function resetMatriculaForm() {
     { key: "horarios", label: "Horario de clases", tone: "#f59e0b", help: "Cruce de grupo, materia y bloque" },
     { key: "fechasClase", label: "Fecha de clases", tone: "#f59e0b", help: "Generación o ajuste por fecha" },
     { key: "evaluacion", label: "Parametrización de Evaluaciones", tone: "#7c3aed", help: "Esquema de evaluación" },
-    { key: "habilidadesPlaneamiento", label: "Habilidades de Planeamiento", tone: "#7c3aed", help: "Base para planeamiento IA" },
     { key: "configuracionCorreo", label: "Correo Institucional", tone: "#db2777", help: "Plantillas y dominio" },
     { key: "mensajes", label: "Mensajes", tone: "#db2777", help: "Mensajería de seguimiento" }
   ];
@@ -3929,7 +3926,6 @@ function resetMatriculaForm() {
         )}
 
 
-        {tab === "habilidadesPlaneamiento" && <HabilidadesPlaneamientoAcademicoPage />}
         {tab === "periodosProfesor" && canManageTeacherPeriods && <PeriodosProfesorPanel />}
 
         {tab === "consecutivos" && (

@@ -24,6 +24,7 @@ import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage
 import AssistantAdminPage from "./pages/AssistantAdminPage";
 import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
 import SuperAdminConsecutivosPage from "./pages/SuperAdminConsecutivosPage";
+import HabilidadesPlaneamientoAcademicoPage from "./pages/HabilidadesPlaneamientoAcademicoPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
 import GruposClasePage from "./pages/GruposClasePage";
 
@@ -123,7 +124,6 @@ export default function App() {
                     "especialidades",
                     "rutasTransporte",
                     "materias",
-                    "habilidadesPlaneamiento",
                     "asignaciones",
                     "profesGuia12",
                     "bloques",
@@ -158,7 +158,6 @@ export default function App() {
                     "especialidades",
                     "rutasTransporte",
                     "materias",
-                    "habilidadesPlaneamiento",
                     "asignaciones",
                     "bloques",
                     "gruposMateria",
@@ -276,6 +275,16 @@ export default function App() {
                 allowedRoles={SUPER_ADMIN_ROLES}
               >
                 <SuperAdminConsecutivosPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="super-admin/habilidades-planeamiento"
+            element={
+              <ProtectedRoute
+                allowedRoles={SUPER_ADMIN_ROLES}
+              >
+                <HabilidadesPlaneamientoAcademicoPage />
               </ProtectedRoute>
             }
           />

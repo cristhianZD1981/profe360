@@ -460,6 +460,7 @@ export default function GestionProfePage() {
   const [bitacorasGrupo, setBitacorasGrupo] = useState<BitacoraGestion[]>([]);
   const [loadingBitacora, setLoadingBitacora] = useState(false);
   const [savingBitacora, setSavingBitacora] = useState(false);
+  const [editingBitacoraId, setEditingBitacoraId] = useState<number | null>(null);
   const [bitacoraForm, setBitacoraForm] = useState({
     temasDesarrollados: "",
     observaciones: "",
@@ -1511,8 +1512,9 @@ export default function GestionProfePage() {
 
     function ausenciaEquivalente(estado: string) {
       const key = normalizarSeguimientoKey(estado);
+      if (key.includes("AUSENTE_JUSTIFICADA")) return 0;
       if (key.includes("TARDIA_MENOR")) return 0.5;
-      if (key.includes("AUSENTE_INJUSTIFICADA") || key.includes("TARDIA_MAYOR") || key.includes("AUSENTE")) return 1;
+      if (key.includes("AUSENTE_INJUSTIFICADA") || key.includes("TARDIA_MAYOR")) return 1;
       return 0;
     }
 
@@ -1536,8 +1538,10 @@ export default function GestionProfePage() {
         const ausencias = registros.reduce((acc, item) => acc + ausenciaEquivalente(item.Estado), 0);
         const porcentajeAusencias = totalLecciones ? (ausencias / totalLecciones) * 100 : 0;
         const puntosArticulo = escalaArticulo37(porcentajeAusencias);
-        nota = totalLecciones ? (puntosArticulo / 5) * 100 : 0;
-        porcentajeGanado = (nota / 100) * porcentajeComponente;
+        porcentajeGanado = totalLecciones
+          ? Number((((puntosArticulo / 5) * porcentajeComponente).toFixed(2)))
+          : 0;
+        nota = porcentajeComponente ? (porcentajeGanado / porcentajeComponente) * 100 : 0;
         porcentajeEvaluado = totalLecciones > 0 ? porcentajeComponente : 0;
         evaluados = totalLecciones;
         pendientes = totalLecciones ? 0 : 1;
@@ -1578,7 +1582,12 @@ export default function GestionProfePage() {
         }
       } else if (tipoKey.includes("COTIDIAN") || tipoKey.includes("TAREA")) {
         const tipoUso = tipoKey.includes("TAREA") ? "TAREAS" : "COTIDIANO";
-        const indicadoresTipo = indicadores.filter((indicador) => normalizarSeguimientoKey(indicador.TipoUso) === tipoUso);
+        const indicadoresTipo = indicadores.filter((indicador) => {
+          const tipoIndicador = normalizarSeguimientoKey(indicador.TipoUso);
+          return tipoKey.includes("COTIDIAN")
+            ? tipoIndicador.includes("COTIDIAN")
+            : tipoIndicador.includes("TAREA");
+        });
         const seguimientosEstudiante = seguimientos.filter((item) => Number(item.EstudianteId) === Number(estudiante.EstudianteId));
         const actividadesDetalle = dedupeActividadesLogicas(
           actividades.filter((actividad) => Number(actividad.EstructuraGrupoDetalleId) === detalleId)
@@ -1648,6 +1657,49 @@ export default function GestionProfePage() {
         resumen = actividadesDetalle.length
           ? `${actividadesResumen.filter((item) => item.indicadoresEvaluados > 0).length}/${actividadesDetalle.length} actividades con indicadores`
           : `${evaluados}/${indicadoresTipo.length} indicadores calificados`;
+
+        // Tareas debe contar los mismos indicadores lógicos que su reporte.
+        // Así se evita que una tarea calificada aparezca como pendiente en Registro de Notas.
+        if (tipoKey.includes("TAREA")) {
+          const actividadIdsDetalle = new Set(actividadesDetalle.map((actividad) => Number(actividad.ActividadId)).filter((id) => id > 0));
+          const indicadorIdsAsignados = new Set(
+            actividadIndicadores
+              .filter((item) => actividadIdsDetalle.has(Number(item.ActividadId)) && item.Activo !== false && item.Activo !== 0)
+              .map((item) => Number(item.IndicadorGrupoId))
+              .filter((id) => id > 0)
+          );
+          const indicadorIdsConSeguimiento = new Set(
+            seguimientos
+              .filter((item) => Number(item.EstructuraGrupoDetalleId) === detalleId)
+              .map((item) => Number(item.IndicadorGrupoId))
+              .filter((id) => id > 0)
+          );
+          const indicadoresLogicos = agruparIndicadoresLogicos(
+            new Set<number>([...indicadorIdsAsignados, ...indicadorIdsConSeguimiento]),
+            indicadores,
+            "TAREAS"
+          );
+          const registrosTarea = dedupeSeguimientosActividadIndicadorLogico(
+            seguimientosEstudiante.filter((item) => Number(item.EstructuraGrupoDetalleId) === detalleId),
+            indicadoresTipo
+          );
+          const valoresTarea = indicadoresLogicos.map((columna) => {
+            const ids = new Set((columna.indicadorIds || []).map((id) => Number(id)).filter((id) => id > 0));
+            const registrosIndicador = registrosTarea.filter((item) => ids.has(Number(item.IndicadorGrupoId)));
+            if (!registrosIndicador.length) return null;
+            return (registrosIndicador.reduce((acc, item) => acc + Number(item.ValorSeleccionado || 0), 0) / registrosIndicador.length / 3) * 100;
+          }).filter((valor): valor is number => valor !== null);
+
+          if (indicadoresLogicos.length) {
+            evaluados = valoresTarea.length;
+            pendientes = Math.max(0, indicadoresLogicos.length - evaluados);
+            porcentajeEvaluado = Number(((evaluados / indicadoresLogicos.length) * porcentajeComponente).toFixed(2));
+            const promedioTarea = valoresTarea.length ? promedioNumeros(valoresTarea) : 0;
+            porcentajeGanado = Number(((promedioTarea / 100) * porcentajeEvaluado).toFixed(2));
+            nota = porcentajeComponente ? Math.min(100, (porcentajeGanado / porcentajeComponente) * 100) : 0;
+            resumen = `${evaluados}/${indicadoresLogicos.length} indicadores calificados`;
+          }
+        }
         detallesLista = actividadesResumen.map((item) => ({
           key: `act-ind-${item.actividad.ActividadId}`,
           titulo: item.actividad.Nombre || "Actividad",
@@ -2526,9 +2578,7 @@ export default function GestionProfePage() {
     const headers = [
       "Estudiante",
       "Identificación",
-      "Notas registradas",
       "Total actividades",
-      "% acumulado evaluación",
       "Lecciones registradas",
       "Ausencias equivalentes",
       "% ausencias",
@@ -2539,9 +2589,7 @@ export default function GestionProfePage() {
     const rows = resumenReportes.filas.map((fila) => [
       fila.NombreCompleto,
       fila.Identificacion,
-      String(fila.NotasRegistradas),
       String(fila.TotalActividades),
-      fila.AcumuladoEvaluacion.toFixed(2),
       String(fila.TotalLecciones),
       fila.AusenciasEquivalentes.toFixed(2),
       fila.PorcentajeAusencias.toFixed(2),
@@ -7979,17 +8027,24 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     try {
       setErrorMessage("");
       setMessage("");
-      await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/bitacora`, {
+      const payload = {
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
         ...getGrupoClaseParams(selected),
         temasDesarrollados: bitacoraForm.temasDesarrollados,
         observaciones: bitacoraForm.observaciones,
         hechosRelevantes: bitacoraForm.hechosRelevantes
-      });
+      };
+      if (editingBitacoraId !== null) {
+        await api.put(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/bitacora/${editingBitacoraId}`, payload);
+      } else {
+        await api.post(`/gestion-profe/mis-grupos/${selected.GrupoId}/materias/${selected.MateriaId}/bitacora`, payload);
+      }
       setBitacoraForm({ temasDesarrollados: "", observaciones: "", hechosRelevantes: "" });
+      const fueEdicion = editingBitacoraId !== null;
+      setEditingBitacoraId(null);
       await loadBitacora(selected);
-      setMessage("Bitácora guardada correctamente");
+      setMessage(fueEdicion ? "Bitácora actualizada correctamente" : "Bitácora guardada correctamente");
     } catch (error: any) {
       console.error("Error guardando bitácora:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo guardar la bitácora");
@@ -9695,7 +9750,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
               </button>
               <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitácora</button>
               <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true, incluirEnvios: true }); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); cargarCierreCurso(selected); }}>Reportes</button>
-              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadSeguimientoEvaluacion(selected); }}>Registro de Notas</button>
+              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true }); }}>Registro de Notas</button>
               <button
                 type="button"
                 className={activePanel === "examenes_tabla" && !panelBloqueadoPorCierre("examenes_tabla") ? "primary-btn" : undefined}
@@ -9753,12 +9808,16 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <div style={{ color: "#475569", fontWeight: 700, fontSize: "12px" }}>Fecha de inclusión: automática del sistema.</div>
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                     <button type="button" className="primary-btn" onClick={guardarBitacora} disabled={savingBitacora || !selected || cursoGestionCerrado}>
-                      {savingBitacora ? "Guardando..." : "Guardar bitácora"}
+                      {savingBitacora ? "Guardando..." : (editingBitacoraId !== null ? "Guardar cambios" : "Guardar bitácora")}
                     </button>
                     <button
                       type="button"
                       style={secondaryButtonStyle}
-                      onClick={() => setActivePanel("")}
+                      onClick={() => {
+                        setBitacoraForm({ temasDesarrollados: "", observaciones: "", hechosRelevantes: "" });
+                        setEditingBitacoraId(null);
+                        setActivePanel("");
+                      }}
                       disabled={savingBitacora}
                     >
                       Cancelar
@@ -9774,17 +9833,37 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Temas desarrollados</th>
                         <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Observaciones</th>
                         <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "left" }}>Hechos relevantes</th>
+                        <th style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "center" }}>Acción</th>
                       </tr>
                     </thead>
                     <tbody>
                       {!bitacorasGrupo.length ? (
-                        <tr><td colSpan={4} style={{ padding: "10px", textAlign: "center", color: "#64748b" }}>No hay registros de bitácora.</td></tr>
+                        <tr><td colSpan={5} style={{ padding: "10px", textAlign: "center", color: "#64748b" }}>No hay registros de bitácora.</td></tr>
                       ) : bitacorasGrupo.map((fila) => (
                         <tr key={fila.BitacoraGrupoId}>
                           <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{String(fila.FechaRegistro || "").slice(0, 10)}</td>
                           <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{fila.TemasDesarrollados || "-"}</td>
                           <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{fila.Observaciones || "-"}</td>
                           <td style={{ padding: "8px", border: "1px solid #e2e8f0" }}>{fila.HechosRelevantes || "-"}</td>
+                          <td style={{ padding: "8px", border: "1px solid #e2e8f0", textAlign: "center" }}>
+                            <button
+                              type="button"
+                              style={{ ...secondaryButtonStyle, padding: "5px 8px", fontSize: "12px" }}
+                              disabled={savingBitacora || cursoGestionCerrado}
+                              onClick={() => {
+                                setEditingBitacoraId(Number(fila.BitacoraGrupoId));
+                                setBitacoraForm({
+                                  temasDesarrollados: fila.TemasDesarrollados || "",
+                                  observaciones: fila.Observaciones || "",
+                                  hechosRelevantes: fila.HechosRelevantes || ""
+                                });
+                                setActivePanel("bitacora");
+                                window.scrollTo({ top: 0, behavior: "smooth" });
+                              }}
+                            >
+                              Editar
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -9894,7 +9973,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                   const palette = getComponentePalette(componente);
                                   return (
                                     <th key={`header-componente-${componente.EstructuraGrupoDetalleId}`} colSpan={2} style={{ ...thBase, background: palette.header }}>
-                                      {componente.Nombre || componente.ComponenteCatalogoNombre || "Componente"}
+                                      {`${componente.Nombre || componente.ComponenteCatalogoNombre || "Componente"} (${formatPercent(Number(componente.Porcentaje || 0))})`}
                                     </th>
                                   );
                                 })}
@@ -9948,7 +10027,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                         const valorActual = Number(componente?.porcentajeGanado || 0);
                                         return (
                                           <React.Fragment key={`valor-${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`}>
-                                            <td style={{ ...tdBase, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), palette.cell) }}>{formatPercent(Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0))}</td>
+                                            <td style={{ ...tdBase, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), palette.cell) }}>
+                                              {formatPercent(isTipoExamenSeguimiento(getTipoSeguimientoFromDetalle(detalleItem))
+                                                ? Number(componente?.porcentajeEvaluado ?? 0)
+                                                : Number(componente?.porcentajeComponente ?? detalleItem.Porcentaje ?? 0))}
+                                            </td>
                                             <td style={{ ...tdBase, color: "#166534", fontWeight: 900, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), palette.cell) }}>
                                               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
                                                 <span>{formatPercent(valorActual)}</span>
@@ -14427,9 +14510,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <p style={{ margin: 0, opacity: 0.75 }}>
                       Seleccioná el tipo de reporte por sección para consultar y exportar información.
                     </p>
-                    <div style={{ display: "grid", gap: "6px", minWidth: "300px" }}>
-                      <span style={{ fontWeight: 700 }}>Tipo de reporte</span>
-                      <select value={tipoReporteGestion} onChange={(e) => setTipoReporteGestion(e.target.value as TipoReporteGestion)}>
+                    <div className="gestion-report-type-selector">
+                      <span className="gestion-report-type-selector__label">Tipo de reporte</span>
+                      <select className="gestion-report-type-selector__select" value={tipoReporteGestion} onChange={(e) => setTipoReporteGestion(e.target.value as TipoReporteGestion)}>
                         <option value="ASISTENCIA">Reporte de Asistencia</option>
                         <option value="COTIDIANO">Reporte de Cotidiano</option>
                         <option value="TAREAS">Reporte de Tareas</option>
@@ -14437,7 +14520,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         <option value="MENSAJES">Reporte de mensajes enviados</option>
                         <option value="BITACORA">Reporte de Bitácora</option>
                         <option value="BOLETAS">Reporte de Boletas</option>
-                        <option value="NOTAS">Reporte de Notas</option>
+                        <option value="NOTAS">Reporte de Notas de Asistencia</option>
                       </select>
                     </div>
                   </div>
@@ -14559,8 +14642,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                     <thead>
                       <tr>
-                        <th
-                          colSpan={9}
+                        <th className="gestion-report-active-title"
+                          colSpan={7}
                           style={{
                             textAlign: "left",
                             background: "#ecfeff",
@@ -14576,8 +14659,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       <tr>
                         <th style={{ minWidth: "220px", background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
                         <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
-                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Notas registradas</th>
-                        <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% acumulado evaluación</th>
                         <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Lecciones registradas</th>
                         <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Ausencias equivalentes</th>
                         <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ausencias</th>
@@ -14595,8 +14676,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         >
                           <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", fontWeight: 700 }}>{fila.NombreCompleto}</td>
                           <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.Identificacion}</td>
-                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.NotasRegistradas} / {fila.TotalActividades}</td>
-                          <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{formatPercent(fila.AcumuladoEvaluacion)}</td>
                           <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.TotalLecciones}</td>
                           <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.AusenciasEquivalentes.toFixed(2)}</td>
                           <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{formatPercent(fila.PorcentajeAusencias)}</td>
@@ -14629,8 +14708,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th
-                            colSpan={8 + reporteAsistenciaDetallado.columnas.length}
+                          <th className="gestion-report-active-title"
+                            colSpan={7 + reporteAsistenciaDetallado.columnas.length}
                             style={{
                               textAlign: "left",
                               background: "#ecfeff",
@@ -14646,8 +14725,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         <tr>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Estudiante</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Identificación</th>
-                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Nota</th>
-                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
+                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Alerta temprana</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Tardías</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Ausencias justificadas</th>
@@ -14657,7 +14735,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           ))}
                         </tr>
                         <tr>
-                          <th colSpan={8} style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}></th>
+                          <th colSpan={7} style={{ background: "#eff6ff", border: "1px solid #bfdbfe" }}></th>
                           {reporteAsistenciaDetallado.columnasPlanas.map((c: any) => (
                             <th key={`bloque-head-${c.key}`} style={{ textAlign: "center", background: "#eff6ff", color: "#0f172a", border: "1px solid #bfdbfe", padding: "7px", fontWeight: 700 }}>{c.bloque}</th>
                           ))}
@@ -14666,7 +14744,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       <tbody>
                         {reporteAsistenciaDetallado.columnas.length === 0 ? (
                           <tr>
-                            <td colSpan={8} style={{ padding: "12px", border: "1px solid #cbd5e1", background: "#fff7ed", color: "#9a3412", fontWeight: 700 }}>
+                            <td colSpan={7} style={{ padding: "12px", border: "1px solid #cbd5e1", background: "#fff7ed", color: "#9a3412", fontWeight: 700 }}>
                               No hay listas de asistencia registradas para mostrar fechas y lecciones.
                             </td>
                           </tr>
@@ -14682,9 +14760,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.identificacion}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", background: "#ffffff", fontWeight: 800 }}>
                               <span style={{ color: "#0f172a", fontWeight: 900, opacity: 1 }}>{fila.nota.toFixed(2)}%</span>
-                            </td>
-                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a", background: "#ffffff", fontWeight: 800 }}>
-                              <span style={{ color: "#0f172a", fontWeight: 900, opacity: 1 }}>{fila.promedioFinal.toFixed(2)}%</span>
                             </td>
                             <td style={{ border: "1px solid #cbd5e1", padding: "7px", fontWeight: 800, color: fila.alertaColor, background: fila.alertaBg }}>{fila.alerta}</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{fila.tardias}</td>
@@ -14710,7 +14785,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th colSpan={6 + detalleReportesPorTipo.cotidiano.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                          <th className="gestion-report-active-title" colSpan={5 + detalleReportesPorTipo.cotidiano.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
                             Reporte de Cotidiano: {detalleReportesPorTipo.cotidiano.columns.length} columnas de evaluación
                           </th>
                         </tr>
@@ -14723,7 +14798,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           ))}
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% evaluado</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
-                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -14742,7 +14816,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                             ))}
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
-                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(promedioFinalPorEstudiante.get(Number(fila.EstudianteId)) || 0).toFixed(2)}%</td>
                           </tr>
                         ))}
                       </tbody>
@@ -14755,7 +14828,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th colSpan={6 + detalleReportesPorTipo.tareas.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                          <th className="gestion-report-active-title" colSpan={5 + detalleReportesPorTipo.tareas.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
                             Reporte de Tareas: {detalleReportesPorTipo.tareas.columns.length} columnas de evaluación
                           </th>
                         </tr>
@@ -14768,7 +14841,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           ))}
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% evaluado</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
-                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -14787,7 +14859,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                             ))}
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
-                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(promedioFinalPorEstudiante.get(Number(fila.EstudianteId)) || 0).toFixed(2)}%</td>
                           </tr>
                         ))}
                       </tbody>
@@ -14800,7 +14871,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
                       <thead>
                         <tr>
-                          <th colSpan={6 + detalleReportesPorTipo.examenes.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                          <th className="gestion-report-active-title" colSpan={5 + detalleReportesPorTipo.examenes.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
                             Reporte de Exámenes: {detalleReportesPorTipo.examenes.columns.length} columnas de evaluación
                           </th>
                         </tr>
@@ -14813,7 +14884,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           ))}
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% evaluado</th>
                           <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>% ganado</th>
-                          <th style={{ background: "#dbeafe", color: "#0f172a", border: "1px solid #93c5fd", padding: "8px" }}>Promedio final</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -14832,7 +14902,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                             ))}
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
                             <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
-                            <td style={{ textAlign: "center", border: "1px solid #cbd5e1", padding: "7px", color: "#0f172a" }}>{Number(promedioFinalPorEstudiante.get(Number(fila.EstudianteId)) || 0).toFixed(2)}%</td>
                           </tr>
                         ))}
                       </tbody>

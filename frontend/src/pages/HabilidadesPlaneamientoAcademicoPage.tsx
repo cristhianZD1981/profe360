@@ -21,7 +21,14 @@ type Habilidad = {
   DescripcionHabilidad: string;
   DocumentoReferencia?: string | null;
   UsuarioCreadorId?: number | null;
+  DisponibleTodos?: boolean;
+  InstitucionesDisponibles?: number[];
   Activo: boolean;
+};
+
+type Institucion = {
+  InstitucionId: number;
+  Nombre: string;
 };
 
 type Catalogos = {
@@ -53,6 +60,32 @@ const initialForm = {
   documentoReferencia: ""
 };
 
+type ResumenHabilidades = {
+  total: number;
+  activas: number;
+  inactivas: number;
+  materiasDistintas: number;
+  gradosDistintos: number;
+  tiposColegioDistintos: number;
+  porMateria: { label: string; cantidad: number }[];
+  porGrado: { label: string; cantidad: number }[];
+  porTipoColegio: { label: string; cantidad: number }[];
+};
+
+const gradosValidos = [
+  ...Array.from({ length: 12 }, (_, index) => String(index + 1)),
+  ...Array.from({ length: 6 }, (_, index) => `${index + 7} PN`)
+];
+
+function cicloPorGrado(valor: string) {
+  const grado = Number(String(valor || "").match(/^\d+/)?.[0] || 0);
+  if (grado >= 1 && grado <= 3) return "Primer Ciclo";
+  if (grado >= 4 && grado <= 6) return "Segundo Ciclo";
+  if (grado >= 7 && grado <= 9) return "Tercer Ciclo";
+  if (grado >= 10 && grado <= 12) return "Cuarto Ciclo";
+  return "";
+}
+
 const secondaryButtonStyle: React.CSSProperties = {
   border: "1px solid #d1d5db",
   borderRadius: "10px",
@@ -68,24 +101,27 @@ function getErrorMessage(error: any, fallback: string) {
 export default function HabilidadesPlaneamientoAcademicoPage() {
   const { user } = useAuth();
   const roles = user?.roles || [];
-  const currentUserId = Number(user?.userId || 0);
-  const isAdminRole = roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role));
-  const isProfesorRole = roles.some((role) => ["PROFESOR", "PROFESOR_GUIA"].includes(role));
-  const canCreateHabilidades = isAdminRole || isProfesorRole;
+  const isSuperAdmin = roles.includes("SUPER_ADMIN");
+  const canCreateHabilidades = isSuperAdmin;
 
   const [catalogos, setCatalogos] = useState<Catalogos>(emptyCatalogos);
+  const [resumen, setResumen] = useState<ResumenHabilidades | null>(null);
+  const [instituciones, setInstituciones] = useState<Institucion[]>([]);
   const [habilidades, setHabilidades] = useState<Habilidad[]>([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showRestoreGrados, setShowRestoreGrados] = useState(false);
   const [minimized, setMinimized] = useState(true);
   const [archivoExcel, setArchivoExcel] = useState<File | null>(null);
+  const [archivoRespaldoGrados, setArchivoRespaldoGrados] = useState<File | null>(null);
   const [importProgress, setImportProgress] = useState<number | null>(null);
   const [importResult, setImportResult] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [restoringGrados, setRestoringGrados] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [filters, setFilters] = useState({
@@ -97,13 +133,15 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     q: "",
     incluirInactivas: false
   });
+  const [disponibleTodos, setDisponibleTodos] = useState(true);
+  const [institucionesIds, setInstitucionesIds] = useState<number[]>([]);
 
   const selectedMateria = useMemo(
     () => catalogos.materias.find((materia) => String(materia.MateriaId) === String(form.materiaId)),
     [catalogos.materias, form.materiaId]
   );
 
-  const stats = useMemo(() => {
+  const statsLocal = useMemo(() => {
     const total = habilidades.length;
     const activas = habilidades.filter((item) => !!item.Activo).length;
     const inactivas = Math.max(0, total - activas);
@@ -143,20 +181,42 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     };
   }, [habilidades]);
 
+  const stats = resumen || statsLocal;
+
   function canEditHabilidad(item: Habilidad) {
-    if (isAdminRole) return true;
-    if (!isProfesorRole) return false;
-    return currentUserId > 0 && Number(item.UsuarioCreadorId || 0) === currentUserId;
+    return isSuperAdmin && !!item;
   }
 
   useEffect(() => {
     loadCatalogos();
+    loadInstituciones();
+    loadResumen();
     loadHabilidades();
   }, []);
 
   function clearMessages() {
     setMessage("");
     setErrorMessage("");
+  }
+
+  async function loadInstituciones() {
+    try {
+      const response = await api.get("/planeamiento-ia/habilidades/instituciones");
+      setInstituciones(Array.isArray(response.data?.data) ? response.data.data : []);
+    } catch (error: any) {
+      setErrorMessage(getErrorMessage(error, "No se pudieron cargar los colegios"));
+    }
+  }
+
+  async function loadResumen() {
+    try {
+      const response = await api.get("/planeamiento-ia/habilidades/resumen");
+      const data = response.data?.data;
+      if (data) setResumen(data);
+    } catch (error: any) {
+      // La lista sigue disponible aunque el resumen no pueda cargarse.
+      console.error("No se pudo cargar el resumen de habilidades", error);
+    }
   }
 
   async function loadCatalogos() {
@@ -199,7 +259,11 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
   }
 
   function updateForm(field: keyof typeof initialForm, value: string) {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [field]: value,
+      ...(field === "grado" && cicloPorGrado(value) ? { ciclo: cicloPorGrado(value) } : {})
+    }));
   }
 
   function openNewForm() {
@@ -210,6 +274,9 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     clearMessages();
     setEditingId(null);
     setForm(initialForm);
+    setDisponibleTodos(true);
+    setInstitucionesIds([]);
+    setMinimized(false);
     setShowForm(true);
   }
 
@@ -220,11 +287,13 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     }
     clearMessages();
     setEditingId(item.PlaneamientoHabilidadId);
+    setDisponibleTodos(item.DisponibleTodos !== false);
+    setInstitucionesIds(Array.isArray(item.InstitucionesDisponibles) ? item.InstitucionesDisponibles.map(Number).filter(Boolean) : []);
     setForm({
       materiaId: item.MateriaId ? String(item.MateriaId) : "",
       materiaNombre: item.MateriaNombre || "",
       tipoColegio: item.TipoColegio || "Académico",
-      ciclo: item.Ciclo || "",
+      ciclo: cicloPorGrado(item.Grado || "") || item.Ciclo || "",
       grado: item.Grado || "",
       mes: item.Mes || "",
       area: item.Area || "",
@@ -238,6 +307,8 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
   function closeForm() {
     setEditingId(null);
     setForm(initialForm);
+    setDisponibleTodos(true);
+    setInstitucionesIds([]);
     setShowForm(false);
   }
 
@@ -264,7 +335,9 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
         area: form.area || null,
         numeroHabilidad: form.numeroHabilidad || null,
         descripcionHabilidad: form.descripcionHabilidad,
-        documentoReferencia: form.documentoReferencia || null
+        documentoReferencia: form.documentoReferencia || null,
+        disponibleTodos,
+        institucionesIds
       };
 
       const response = editingId
@@ -337,6 +410,8 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     try {
       const data = new FormData();
       data.append("archivo", archivoExcel);
+      data.append("disponibleTodos", String(disponibleTodos));
+      data.append("institucionesIds", JSON.stringify(institucionesIds));
       const response = await api.post("/planeamiento-ia/habilidades/importar-excel", data, {
         headers: { "Content-Type": "multipart/form-data" }
       });
@@ -374,6 +449,94 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
     } catch (error: any) {
       setErrorMessage(getErrorMessage(error, "No se pudo descargar la plantilla"));
     }
+  }
+
+  async function handleRestoreGrados(e: FormEvent) {
+    e.preventDefault();
+    clearMessages();
+    if (!archivoRespaldoGrados) return setErrorMessage("Seleccioná el Excel descargado antes de la normalización");
+    if (!window.confirm("Se restaurarán únicamente los grados afectados que quedaron como 1. ¿Deseás continuar?")) return;
+    setRestoringGrados(true);
+    try {
+      const data = new FormData();
+      data.append("archivo", archivoRespaldoGrados);
+      const response = await api.post("/planeamiento-ia/habilidades/restaurar-grados-excel", data, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      const result = response.data?.data || {};
+      const registrosActualizados = result.actualizadas ?? result.recuperadas ?? 0;
+      setMessage(`${response.data?.message || "Grados actualizados"}. Registros actualizados: ${registrosActualizados}.`);
+      setArchivoRespaldoGrados(null);
+      setShowRestoreGrados(false);
+      await loadCatalogos();
+      await loadHabilidades();
+    } catch (error: any) {
+      setErrorMessage(getErrorMessage(error, "No se pudieron restaurar los grados"));
+    } finally {
+      setRestoringGrados(false);
+    }
+  }
+
+  async function handleDescargarHabilidades() {
+    clearMessages();
+    try {
+      const response = await api.get("/planeamiento-ia/habilidades/exportar", {
+        params: {
+          materiaId: filters.materiaId || undefined,
+          grado: filters.grado || undefined,
+          mes: filters.mes || undefined
+        },
+        responseType: "blob"
+      });
+      const blob = new Blob([response.data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "habilidades_planeamiento.xlsx";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      setErrorMessage(getErrorMessage(error, "No se pudieron descargar las habilidades"));
+    }
+  }
+
+  function toggleInstitucion(institucionId: number) {
+    setInstitucionesIds((prev) => prev.includes(institucionId)
+      ? prev.filter((id) => id !== institucionId)
+      : [...prev, institucionId]);
+  }
+
+  function renderDisponibilidad() {
+    return (
+      <fieldset style={{ margin: "12px 0", border: "1px solid #dbe4f0", borderRadius: "12px", padding: "12px" }}>
+        <legend style={{ fontWeight: 800 }}>Disponibilidad para colegios</legend>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+          <input type="radio" checked={disponibleTodos} onChange={() => setDisponibleTodos(true)} />
+          Todos los colegios
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <input type="radio" checked={!disponibleTodos} onChange={() => setDisponibleTodos(false)} />
+          Solo colegios seleccionados
+        </label>
+        {!disponibleTodos && (
+          <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "8px" }}>
+            {instituciones.map((institucion) => (
+              <label key={institucion.InstitucionId} style={{ display: "flex", gap: "8px", alignItems: "center", padding: "8px", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={institucionesIds.includes(institucion.InstitucionId)}
+                  onChange={() => toggleInstitucion(institucion.InstitucionId)}
+                />
+                {institucion.Nombre}
+              </label>
+            ))}
+            {!instituciones.length && <span>No hay colegios activos disponibles.</span>}
+          </div>
+        )}
+      </fieldset>
+    );
   }
 
   function descargarReporteImportacion() {
@@ -414,7 +577,9 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
             <button type="button" className="primary-btn" onClick={openNewForm} disabled={!canCreateHabilidades}>Agregar habilidad</button>
             <button type="button" style={secondaryButtonStyle} onClick={handleDescargarPlantilla}>Descargar plantilla</button>
-            <button type="button" style={secondaryButtonStyle} onClick={() => setShowImport((prev) => !prev)} disabled={!canCreateHabilidades}>Importar Excel</button>
+            <button type="button" style={secondaryButtonStyle} onClick={handleDescargarHabilidades}>Descargar habilidades</button>
+            <button type="button" style={secondaryButtonStyle} onClick={() => { setMinimized(false); setShowImport((prev) => !prev); }} disabled={!canCreateHabilidades}>Importar Excel</button>
+            <button type="button" style={secondaryButtonStyle} onClick={() => { setMinimized(false); setShowRestoreGrados((prev) => !prev); }} disabled={!canCreateHabilidades}>Actualizar grados desde Excel</button>
             <button type="button" style={secondaryButtonStyle} onClick={() => setMinimized(true)}>Minimizar</button>
             <button type="button" style={secondaryButtonStyle} onClick={() => setMinimized(false)}>Maximizar</button>
           </div>
@@ -499,6 +664,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
           <form onSubmit={handleImport} className="form" style={{ marginTop: "14px", border: "1px solid #e5e7eb", borderRadius: "14px", padding: "14px" }}>
             <h4>Importar habilidades desde Excel</h4>
             <input type="file" accept=".xlsx,.xls" onChange={(e) => setArchivoExcel(e.target.files?.[0] || null)} />
+            {renderDisponibilidad()}
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button className="primary-btn" disabled={importing}>{importing ? "Importando..." : "Importar"}</button>
               <button
@@ -547,6 +713,18 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
           </form>
         )}
 
+        {!minimized && showRestoreGrados && (
+          <form onSubmit={handleRestoreGrados} className="form" style={{ marginTop: "14px", border: "1px solid #f59e0b", borderRadius: "14px", padding: "14px", background: "#fffbeb", color: "#1e293b" }}>
+            <h4 style={{ margin: 0, color: "#92400e" }}>Actualizar habilidades desde Excel</h4>
+            <p style={{ margin: 0, color: "#334155" }}>Usá el mismo formato de la descarga. El ID identifica cada habilidad y el sistema actualiza los campos editados, incluyendo materia, tipo, ciclo, grado, mes, descripción, estado y disponibilidad.</p>
+            <input type="file" accept=".xlsx,.xls" onChange={(e) => setArchivoRespaldoGrados(e.target.files?.[0] || null)} />
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <button className="primary-btn" disabled={restoringGrados}>{restoringGrados ? "Actualizando..." : "Actualizar grados"}</button>
+              <button type="button" style={secondaryButtonStyle} disabled={restoringGrados} onClick={() => { setShowRestoreGrados(false); setArchivoRespaldoGrados(null); }}>Cancelar</button>
+            </div>
+          </form>
+        )}
+
         {!minimized && showForm && (
           <form onSubmit={handleSave} className="form" style={{ marginTop: "14px", border: "1px solid #e5e7eb", borderRadius: "14px", padding: "14px" }}>
             <h4>{editingId ? "Editar habilidad" : "Nueva habilidad"}</h4>
@@ -564,17 +742,23 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
               </label>
               <label>
                 Tipo de colegio
-                <input list="habilidades-tipos-colegio" value={form.tipoColegio} onChange={(e) => updateForm("tipoColegio", e.target.value)} />
-                <datalist id="habilidades-tipos-colegio">{catalogos.tiposColegio.map((item) => <option key={item} value={item} />)}</datalist>
+                <select value={form.tipoColegio} onChange={(e) => updateForm("tipoColegio", e.target.value)}>
+                  <option value="Académico">Académico</option>
+                  <option value="Técnico">Técnico</option>
+                  <option value="Plan Nacional">Plan Nacional</option>
+                </select>
               </label>
               <label>
                 Ciclo
-                <input value={form.ciclo} onChange={(e) => updateForm("ciclo", e.target.value)} placeholder="Ejemplo: Tercer ciclo" />
+                <input value={form.ciclo} readOnly placeholder="Se asigna según el grado" />
               </label>
               <label>
                 Grado
-                <input list="habilidades-grados" value={form.grado} onChange={(e) => updateForm("grado", e.target.value)} />
-                <datalist id="habilidades-grados">{catalogos.grados.map((item) => <option key={item} value={item} />)}</datalist>
+                <select value={form.grado} onChange={(e) => updateForm("grado", e.target.value)}>
+                  <option value="">Seleccionar grado</option>
+                  {!gradosValidos.includes(form.grado) && form.grado && <option value={form.grado}>{form.grado}</option>}
+                  {gradosValidos.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
               </label>
               <label>
                 Mes
@@ -599,6 +783,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
               Descripción de la habilidad
               <textarea rows={3} value={form.descripcionHabilidad} onChange={(e) => updateForm("descripcionHabilidad", e.target.value)} required />
             </label>
+            {renderDisponibilidad()}
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               <button className="primary-btn" disabled={saving}>{saving ? "Guardando..." : "Guardar habilidad"}</button>
               <button type="button" style={secondaryButtonStyle} onClick={closeForm}>Cancelar</button>
@@ -655,6 +840,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
             Incluir inactivas
           </label>
           <button className="primary-btn" type="submit">Buscar</button>
+          <button type="button" style={secondaryButtonStyle} onClick={handleDescargarHabilidades}>Descargar resultado</button>
         </form>
 
         <div className="table-wrap" style={{ marginTop: "14px" }}>
@@ -668,6 +854,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
                 <th>Área</th>
                 <th>Número</th>
                 <th>Habilidad</th>
+                <th>Disponible para</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
@@ -682,6 +869,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
                   <td>{item.Area || ""}</td>
                   <td>{item.NumeroHabilidad || ""}</td>
                   <td style={{ minWidth: "320px" }}>{item.DescripcionHabilidad}</td>
+                  <td>{item.DisponibleTodos !== false ? "Todos los colegios" : `${item.InstitucionesDisponibles?.length || 0} colegio(s)`}</td>
                   <td>{item.Activo ? "Activa" : "Inactiva"}</td>
                   <td>
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -721,7 +909,7 @@ export default function HabilidadesPlaneamientoAcademicoPage() {
               ))}
               {!habilidades.length && (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>
+                  <td colSpan={10} style={{ textAlign: "center", padding: "16px" }}>
                     {loading ? "Cargando habilidades..." : "No hay habilidades registradas con esos filtros"}
                   </td>
                 </tr>

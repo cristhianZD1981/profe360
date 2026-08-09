@@ -2469,3 +2469,64 @@ div[style*="background:#f8fafc"] textarea {
   font-weight: 800;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
+
+/* Selector principal de reportes en Gestion del profe. */
+.gestion-report-type-selector {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 520px);
+  min-width: 300px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 2px solid #f97316;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.18);
+}
+
+.gestion-report-type-selector__label {
+  color: #7c2d12;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.gestion-report-type-selector__select {
+  min-height: 46px;
+  margin-top: 0;
+  padding: 10px 14px;
+  border: 2px solid #fdba74;
+  border-radius: 11px;
+  background-color: #ffffff;
+  color: #172033 !important;
+  -webkit-text-fill-color: #172033;
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: 0 1px 4px rgba(124, 45, 18, 0.12);
+}
+
+.gestion-report-type-selector__select option {
+  color: #172033 !important;
+  background: #ffffff;
+}
+
+.gestion-report-type-selector__select:focus {
+  outline: 3px solid rgba(249, 115, 22, 0.25);
+  border-color: #ea580c;
+}
+
+.gestion-report-active-title {
+  border: 1px solid #fb923c !important;
+  border-left: 6px solid #ea580c !important;
+  background: linear-gradient(90deg, #fff7ed 0%, #ffedd5 100%) !important;
+  color: #7c2d12 !important;
+  font-size: 16px;
+  font-weight: 900 !important;
+  letter-spacing: 0.1px;
+  box-shadow: inset 0 -1px 0 rgba(194, 65, 12, 0.12);
+}
+
+@media (max-width: 520px) {
+  .gestion-report-type-selector {
+    min-width: 0;
+  }
+}

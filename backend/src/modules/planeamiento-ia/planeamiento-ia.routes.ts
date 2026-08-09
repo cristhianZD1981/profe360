@@ -231,6 +231,8 @@ type AuditoriaSemanticaPlaneamiento = {
 };
 
 let planeamientoHabilidadOwnershipColumnsEnsured = false;
+let planeamientoHabilidadDisponibilidadEnsured = false;
+let planeamientoHabilidadDisponibilidadPromise: Promise<void> | null = null;
 
 function getAuth(req: any): AuthUser {
   return req.auth || { roles: [] };
@@ -242,11 +244,11 @@ function hasAnyRole(req: any, roles: string[]) {
 }
 
 function canMaintainHabilidades(req: any) {
-  return hasAnyRole(req, ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR", "PROFESOR_GUIA"]);
+  return hasAnyRole(req, ["SUPER_ADMIN"]);
 }
 
 function canMaintainAnyHabilidad(req: any) {
-  return hasAnyRole(req, ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"]);
+  return hasAnyRole(req, ["SUPER_ADMIN"]);
 }
 
 function getUserId(req: any) {
@@ -384,6 +386,13 @@ function inferGradoNumero(value: any): number | null {
   if (normalized.includes("OCTAVO")) return 8;
   if (normalized.includes("NOVENO")) return 9;
 
+  if (normalized.includes("PRIMER")) return 1;
+  if (normalized.includes("SEGUND")) return 2;
+  if (normalized.includes("TERCER")) return 3;
+  if (normalized.includes("CUART")) return 4;
+  if (normalized.includes("QUINT")) return 5;
+  if (normalized.includes("SEXT")) return 6;
+
   // Importante: undécimo y duodécimo contienen la palabra "décimo".
   // Por eso se validan antes de décimo, para no cargar habilidades de 10°
   // cuando el grupo realmente es 11° o 12°.
@@ -444,6 +453,176 @@ async function ensurePlaneamientoHabilidadOwnershipColumns(pool: any) {
     END;
   `);
   planeamientoHabilidadOwnershipColumnsEnsured = true;
+}
+
+function cicloEsperadoPorGrado(gradoNumero: number | null) {
+  if (!gradoNumero) return null;
+  if (gradoNumero >= 1 && gradoNumero <= 3) return "Primer Ciclo";
+  if (gradoNumero >= 4 && gradoNumero <= 6) return "Segundo Ciclo";
+  if (gradoNumero >= 7 && gradoNumero <= 9) return "Tercer Ciclo";
+  if (gradoNumero >= 10 && gradoNumero <= 12) return "Cuarto Ciclo";
+  return null;
+}
+
+function normalizarGradoConCiclo(gradoValor: any, cicloValor: any) {
+  const gradoTexto = normalizeText(gradoValor);
+  const cicloTexto = normalizeText(cicloValor);
+  let gradoNumero = inferGradoNumero(gradoTexto);
+  const cicloClave = normalizeForCompare(cicloTexto);
+  // Los códigos históricos 4, 5 y 6 solo representan 10°, 11° y 12°
+  // cuando venían marcados explícitamente como Cuarto Ciclo.
+  if (cicloClave.includes("CUARTO") && gradoNumero && gradoNumero >= 4 && gradoNumero <= 6) {
+    gradoNumero += 6;
+  }
+  const ciclo = cicloEsperadoPorGrado(gradoNumero);
+  if (!gradoNumero || !ciclo) return { error: "El grado debe estar entre 1 y 12" };
+  if (cicloTexto && normalizeForCompare(cicloTexto) !== normalizeForCompare(ciclo)) {
+    return { error: `El grado ${gradoNumero} corresponde a ${ciclo}` };
+  }
+  const modalidadGrado = normalizeForCompare(gradoTexto).replace(/\s/g, "").includes("PN") ? "PN" : null;
+  return { gradoNumero, ciclo, modalidadGrado, grado: `${gradoNumero}${modalidadGrado ? " PN" : ""}` };
+}
+
+function normalizarTipoColegio(value: any) {
+  const clave = normalizeForCompare(value);
+  if (clave.includes("ACADEM") || clave.includes("CTPA")) return "Académico";
+  if (clave.includes("TECNIC")) return "Técnico";
+  return "Plan Nacional";
+}
+
+function normalizarGradoRespaldo(value: any, cicloValor: any = "") {
+  const original = normalizeForCompare(value);
+  if (!original) return null;
+  const clave = original.replace(/[\s°.]/g, "");
+  const modalidadGrado = clave.includes("PN") ? "PN" : null;
+  const palabras: Array<[number, string[]]> = [
+    [18, ["18"]], [17, ["17"]], [16, ["16"]], [15, ["15"]], [14, ["14"]], [13, ["13"]],
+    [12, ["12", "DUODEC", "DUIDEC"]], [11, ["11", "UNDEC"]], [10, ["10", "DECIM"]],
+    [9, ["9", "NOVEN"]], [8, ["8", "OCTAV"]], [7, ["7", "SETIM", "SEPTIM"]],
+    [6, ["6", "SEXT"]], [5, ["5", "QUINT"]], [4, ["4", "CUART"]],
+    [3, ["3", "TERCER"]], [2, ["2", "SEGUND"]], [1, ["1", "PRIMER"]]
+  ];
+  let gradoNumero = palabras.find(([, prefijos]) => prefijos.some((prefijo) => clave.startsWith(prefijo)))?.[0] || null;
+  if (normalizeForCompare(cicloValor).includes("CUARTO") && gradoNumero && gradoNumero >= 4 && gradoNumero <= 6) gradoNumero += 6;
+  if (!gradoNumero) return null;
+  return {
+    gradoNumero,
+    modalidadGrado,
+    grado: `${gradoNumero}${modalidadGrado ? ` ${modalidadGrado}` : ""}`
+  };
+}
+
+async function ensurePlaneamientoHabilidadDisponibilidad(pool: any) {
+  if (planeamientoHabilidadDisponibilidadEnsured) return;
+  if (planeamientoHabilidadDisponibilidadPromise) {
+    await planeamientoHabilidadDisponibilidadPromise;
+    return;
+  }
+
+  planeamientoHabilidadDisponibilidadPromise = (async () => {
+    await pool.request().query(`
+    IF COL_LENGTH('dbo.PlaneamientoHabilidad', 'DisponibleTodos') IS NULL
+    BEGIN
+      ALTER TABLE dbo.PlaneamientoHabilidad
+      ADD DisponibleTodos BIT NOT NULL
+        CONSTRAINT DF_PlaneamientoHabilidad_DisponibleTodos DEFAULT(1);
+    END;
+
+    IF OBJECT_ID('dbo.PlaneamientoHabilidadInstitucion', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.PlaneamientoHabilidadInstitucion (
+        PlaneamientoHabilidadId INT NOT NULL,
+        InstitucionId INT NOT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_PlaneamientoHabilidadInstitucion_CreatedAt DEFAULT(SYSDATETIME()),
+        CONSTRAINT PK_PlaneamientoHabilidadInstitucion PRIMARY KEY (PlaneamientoHabilidadId, InstitucionId),
+        CONSTRAINT FK_PlaneamientoHabilidadInstitucion_Habilidad FOREIGN KEY (PlaneamientoHabilidadId)
+          REFERENCES dbo.PlaneamientoHabilidad(PlaneamientoHabilidadId),
+        CONSTRAINT FK_PlaneamientoHabilidadInstitucion_Institucion FOREIGN KEY (InstitucionId)
+          REFERENCES dbo.Institucion(InstitucionId)
+      );
+    END;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM sys.indexes
+      WHERE name = 'IX_PlaneamientoHabilidadInstitucion_InstitucionId'
+        AND object_id = OBJECT_ID('dbo.PlaneamientoHabilidadInstitucion')
+    )
+    BEGIN
+      CREATE INDEX IX_PlaneamientoHabilidadInstitucion_InstitucionId
+      ON dbo.PlaneamientoHabilidadInstitucion (InstitucionId, PlaneamientoHabilidadId);
+    END;
+    `);
+    planeamientoHabilidadDisponibilidadEnsured = true;
+  })();
+
+  try {
+    await planeamientoHabilidadDisponibilidadPromise;
+  } catch (error) {
+    planeamientoHabilidadDisponibilidadPromise = null;
+    throw error;
+  }
+}
+
+function toPositiveIntList(value: any) {
+  let normalizedValue = value;
+  if (typeof value === "string") {
+    try {
+      normalizedValue = JSON.parse(value);
+    } catch {
+      normalizedValue = value.split(",");
+    }
+  }
+  const raw = Array.isArray(normalizedValue) ? normalizedValue : (normalizedValue === null || normalizedValue === undefined ? [] : [normalizedValue]);
+  return Array.from(new Set(raw.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+}
+
+async function guardarDisponibilidadHabilidad(pool: any, habilidadId: number, disponibleTodos: boolean, institucionesIds: number[]) {
+  if (!disponibleTodos && !institucionesIds.length) {
+    throw new Error("Seleccioná al menos un colegio o marcá la disponibilidad para todos");
+  }
+
+  if (institucionesIds.length) {
+    const request = pool.request();
+    institucionesIds.forEach((id, index) => request.input(`institucion${index}`, sql.Int, id));
+    const result = await request.query(`
+      SELECT COUNT(*) AS Cantidad
+      FROM dbo.Institucion
+      WHERE InstitucionId IN (${institucionesIds.map((_, index) => `@institucion${index}`).join(", ")})
+        AND Activo = 1
+    `);
+    if (Number(result.recordset[0]?.Cantidad || 0) !== institucionesIds.length) {
+      throw new Error("Uno o más colegios seleccionados no están disponibles");
+    }
+  }
+
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+  try {
+    await new sql.Request(transaction)
+      .input("habilidadId", sql.Int, habilidadId)
+      .input("disponibleTodos", sql.Bit, disponibleTodos ? 1 : 0)
+      .query(`
+        UPDATE dbo.PlaneamientoHabilidad
+        SET DisponibleTodos = @disponibleTodos, UpdatedAt = SYSDATETIME()
+        WHERE PlaneamientoHabilidadId = @habilidadId;
+
+        DELETE FROM dbo.PlaneamientoHabilidadInstitucion
+        WHERE PlaneamientoHabilidadId = @habilidadId;
+      `);
+
+    if (!disponibleTodos) {
+      const request = new sql.Request(transaction).input("habilidadId", sql.Int, habilidadId);
+      institucionesIds.forEach((id, index) => request.input(`institucion${index}`, sql.Int, id));
+      await request.query(`
+        INSERT INTO dbo.PlaneamientoHabilidadInstitucion (PlaneamientoHabilidadId, InstitucionId)
+        VALUES ${institucionesIds.map((_, index) => `(@habilidadId, @institucion${index})`).join(", ")};
+      `);
+    }
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
 }
 
 let plantillaPromptIAColumnsEnsured = false;
@@ -2389,15 +2568,23 @@ router.get("/catalogos", async (req, res) => {
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
     const pool = await getPool();
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
 
     const [materias, anios, periodos, grupos, filtros] = await Promise.all([
       pool.request()
         .input("institucionId", sql.Int, institucionId)
+        .input("esSuperAdmin", sql.Bit, canUseGlobalRows(req) ? 1 : 0)
         .query(`
-          SELECT MateriaId, Codigo, Nombre, Descripcion, Activa AS Activo
+          SELECT
+            MIN(MateriaId) AS MateriaId,
+            MIN(Codigo) AS Codigo,
+            Nombre,
+            MIN(Descripcion) AS Descripcion,
+            CAST(1 AS bit) AS Activo
           FROM dbo.Materia
-          WHERE InstitucionId = @institucionId
+          WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId)
             AND Activa = 1
+          GROUP BY Nombre
           ORDER BY Nombre
         `),
       pool.request()
@@ -2430,12 +2617,13 @@ router.get("/catalogos", async (req, res) => {
         `),
       pool.request()
         .input("institucionId", sql.Int, institucionId)
+        .input("esSuperAdmin", sql.Bit, canUseGlobalRows(req) ? 1 : 0)
         .query(`
           SELECT
-            (SELECT DISTINCT TipoColegio FROM dbo.PlaneamientoHabilidad WHERE (InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND TipoColegio IS NOT NULL FOR JSON PATH) AS TiposColegioJson,
-            (SELECT DISTINCT Grado FROM dbo.PlaneamientoHabilidad WHERE (InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND Grado IS NOT NULL FOR JSON PATH) AS GradosJson,
-            (SELECT DISTINCT Mes FROM dbo.PlaneamientoHabilidad WHERE (InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND Mes IS NOT NULL FOR JSON PATH) AS MesesJson,
-            (SELECT DISTINCT Area FROM dbo.PlaneamientoHabilidad WHERE (InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND Area IS NOT NULL FOR JSON PATH) AS AreasJson
+            (SELECT DISTINCT TipoColegio FROM dbo.PlaneamientoHabilidad WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND TipoColegio IS NOT NULL FOR JSON PATH) AS TiposColegioJson,
+            (SELECT DISTINCT Grado FROM dbo.PlaneamientoHabilidad WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND Grado IS NOT NULL FOR JSON PATH) AS GradosJson,
+            (SELECT DISTINCT Mes FROM dbo.PlaneamientoHabilidad WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND Mes IS NOT NULL FOR JSON PATH) AS MesesJson,
+            (SELECT DISTINCT Area FROM dbo.PlaneamientoHabilidad WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId OR InstitucionId IS NULL) AND Activo = 1 AND Area IS NOT NULL FOR JSON PATH) AS AreasJson
         `)
     ]);
 
@@ -2464,8 +2652,151 @@ router.get("/catalogos", async (req, res) => {
   }
 });
 
+router.get("/habilidades/instituciones", async (req, res) => {
+  if (!canMaintainHabilidades(req)) return forbidden(res, "Solo Super admin puede administrar la disponibilidad de habilidades");
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT InstitucionId, COALESCE(NULLIF(NombreComercial, N''), Nombre) AS Nombre
+      FROM dbo.Institucion
+      WHERE Activo = 1
+      ORDER BY COALESCE(NULLIF(NombreComercial, N''), Nombre)
+    `);
+    ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error cargando colegios para habilidades:", error);
+    res.status(500).json({ ok: false, message: "No se pudieron cargar los colegios" });
+  }
+});
+
+router.get("/habilidades/resumen", async (req, res) => {
+  if (!canMaintainHabilidades(req)) return forbidden(res, "Solo Super admin puede consultar el resumen de habilidades");
+  try {
+    const pool = await getPool();
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
+    const result = await pool.request().query(`
+      DECLARE @Resumen TABLE (
+        MateriaNombre NVARCHAR(200) NULL,
+        Grado NVARCHAR(100) NULL,
+        TipoColegio NVARCHAR(100) NULL,
+        Activo BIT NOT NULL
+      );
+
+      INSERT INTO @Resumen (MateriaNombre, Grado, TipoColegio, Activo)
+      SELECT
+        COALESCE(m.Nombre, h.MateriaNombre, N'Sin materia'),
+        COALESCE(NULLIF(h.Grado, N''), N'Sin grado'),
+        COALESCE(NULLIF(h.TipoColegio, N''), N'Sin tipo'),
+        h.Activo
+      FROM dbo.PlaneamientoHabilidad h
+      LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId;
+
+      SELECT
+        COUNT(*) AS Total,
+        SUM(CASE WHEN Activo = 1 THEN 1 ELSE 0 END) AS Activas,
+        SUM(CASE WHEN Activo = 0 THEN 1 ELSE 0 END) AS Inactivas,
+        COUNT(DISTINCT MateriaNombre) AS MateriasDistintas,
+        COUNT(DISTINCT Grado) AS GradosDistintos,
+        COUNT(DISTINCT TipoColegio) AS TiposColegioDistintos
+      FROM @Resumen;
+
+      SELECT TOP 6 MateriaNombre AS Label, COUNT(*) AS Cantidad
+      FROM @Resumen GROUP BY MateriaNombre
+      ORDER BY COUNT(*) DESC, MateriaNombre;
+
+      SELECT TOP 6 Grado AS Label, COUNT(*) AS Cantidad
+      FROM @Resumen GROUP BY Grado
+      ORDER BY COUNT(*) DESC, Grado;
+
+      SELECT TOP 6 TipoColegio AS Label, COUNT(*) AS Cantidad
+      FROM @Resumen GROUP BY TipoColegio
+      ORDER BY COUNT(*) DESC, TipoColegio;
+    `);
+    const totales = result.recordsets[0]?.[0] || {};
+    ok(res, {
+      total: Number(totales.Total || 0),
+      activas: Number(totales.Activas || 0),
+      inactivas: Number(totales.Inactivas || 0),
+      materiasDistintas: Number(totales.MateriasDistintas || 0),
+      gradosDistintos: Number(totales.GradosDistintos || 0),
+      tiposColegioDistintos: Number(totales.TiposColegioDistintos || 0),
+      porMateria: (result.recordsets[1] || []).map((row: any) => ({ label: row.Label, cantidad: Number(row.Cantidad || 0) })),
+      porGrado: (result.recordsets[2] || []).map((row: any) => ({ label: row.Label, cantidad: Number(row.Cantidad || 0) })),
+      porTipoColegio: (result.recordsets[3] || []).map((row: any) => ({ label: row.Label, cantidad: Number(row.Cantidad || 0) }))
+    });
+  } catch (error) {
+    console.error("Error cargando resumen de habilidades:", error);
+    res.status(500).json({ ok: false, message: "No se pudo cargar el resumen de habilidades" });
+  }
+});
+
+router.get("/habilidades/exportar", async (req, res) => {
+  if (!canMaintainHabilidades(req)) return forbidden(res, "Solo Super admin puede descargar las habilidades");
+  try {
+    const pool = await getPool();
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
+    const materiaId = toOptionalInt(req.query.materiaId);
+    const grado = normalizeNullableText(req.query.grado);
+    const mes = normalizeNullableText(req.query.mes);
+    const filters: string[] = ["1 = 1"];
+    const request = pool.request();
+    if (materiaId) {
+      request.input("materiaId", sql.Int, materiaId);
+      filters.push("h.MateriaId = @materiaId");
+    }
+    if (grado) {
+      request.input("grado", sql.NVarChar(100), grado);
+      filters.push("h.Grado = @grado");
+    }
+    if (mes) {
+      request.input("mes", sql.NVarChar(100), mes);
+      filters.push("h.Mes = @mes");
+    }
+    const result = await request.query(`
+      SELECT
+        h.PlaneamientoHabilidadId AS [ID de habilidad],
+        h.MateriaId,
+        COALESCE(m.Nombre, h.MateriaNombre) AS Materia,
+        h.TipoColegio AS [Tipo de colegio], h.Ciclo, h.Grado, h.Mes, h.Area,
+        h.NumeroHabilidad AS [Número de habilidad], h.DescripcionHabilidad AS [Descripción de la habilidad],
+        h.DocumentoReferencia AS [Documento de referencia],
+        CASE WHEN h.Activo = 1 THEN N'Activa' ELSE N'Inactiva' END AS Estado,
+        CASE WHEN h.DisponibleTodos = 1 THEN N'Todos los colegios' ELSE N'Colegios específicos' END AS Disponibilidad,
+        CASE WHEN h.DisponibleTodos = 1 THEN N'' ELSE STUFF((SELECT N',' + CONVERT(NVARCHAR(20), hi.InstitucionId)
+          FROM dbo.PlaneamientoHabilidadInstitucion hi
+          WHERE hi.PlaneamientoHabilidadId = h.PlaneamientoHabilidadId
+          ORDER BY hi.InstitucionId
+          FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, N'') END AS ColegiosIds,
+        STUFF((SELECT N', ' + COALESCE(NULLIF(i.NombreComercial, N''), i.Nombre)
+          FROM dbo.PlaneamientoHabilidadInstitucion hi
+          INNER JOIN dbo.Institucion i ON i.InstitucionId = hi.InstitucionId
+          WHERE hi.PlaneamientoHabilidadId = h.PlaneamientoHabilidadId
+          ORDER BY COALESCE(NULLIF(i.NombreComercial, N''), i.Nombre)
+          FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, N'') AS Colegios
+      FROM dbo.PlaneamientoHabilidad h
+      LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
+      WHERE ${filters.join(" AND ")}
+      ORDER BY COALESCE(m.Nombre, h.MateriaNombre), h.Grado, ${monthOrderExpression("h")}, h.Area, h.NumeroHabilidad
+    `);
+    const sheet = XLSX.utils.json_to_sheet(result.recordset);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "Habilidades");
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="habilidades_planeamiento.xlsx"');
+    res.send(buffer);
+  } catch (error) {
+    console.error("Error exportando habilidades:", error);
+    res.status(500).json({ ok: false, message: "No se pudieron descargar las habilidades" });
+  }
+});
+
 router.get("/habilidades", async (req, res) => {
   try {
+    const esSuperAdmin = canUseGlobalRows(req);
+    if (!esSuperAdmin && !isProfesorOnly(req)) {
+      return forbidden(res, "Las habilidades solo están disponibles para docentes durante el planeamiento");
+    }
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
 
@@ -2478,12 +2809,23 @@ router.get("/habilidades", async (req, res) => {
     const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
 
     const pool = await getPool();
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
 
     const request = pool.request()
       .input("institucionId", sql.Int, institucionId)
-      .input("globalPermitido", sql.Bit, canUseGlobalRows(req) ? 1 : 0);
+      .input("esSuperAdmin", sql.Bit, esSuperAdmin ? 1 : 0)
+      .input("incluirInactivas", sql.Bit, incluirInactivas ? 1 : 0);
 
-    const filters: string[] = ["(h.InstitucionId = @institucionId OR (@globalPermitido = 1 AND h.InstitucionId IS NULL))"];
+    const filters: string[] = [`(
+      @esSuperAdmin = 1
+      OR h.DisponibleTodos = 1
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.PlaneamientoHabilidadInstitucion hi
+        WHERE hi.PlaneamientoHabilidadId = h.PlaneamientoHabilidadId
+          AND hi.InstitucionId = @institucionId
+      )
+    )`];
 
     if (!incluirInactivas) filters.push("h.Activo = 1");
     if (materiaId) {
@@ -2557,6 +2899,13 @@ router.get("/habilidades", async (req, res) => {
         h.DescripcionHabilidad,
         h.DocumentoReferencia,
         h.UsuarioCreadorId,
+        h.DisponibleTodos,
+        (
+          SELECT hi.InstitucionId
+          FROM dbo.PlaneamientoHabilidadInstitucion hi
+          WHERE hi.PlaneamientoHabilidadId = h.PlaneamientoHabilidadId
+          FOR JSON PATH
+        ) AS InstitucionesDisponiblesJson,
         h.Activo,
         h.CreatedAt,
         h.UpdatedAt
@@ -2564,12 +2913,25 @@ router.get("/habilidades", async (req, res) => {
       LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
       ${materiaId ? "CROSS JOIN (SELECT TOP 1 Nombre FROM dbo.Materia WHERE MateriaId = @materiaId) mref" : ""}
       WHERE ${filters.join(" AND ")}
-      ORDER BY COALESCE(m.Nombre, h.MateriaNombre), h.Grado, ${monthOrderExpression("h")}, h.Area, TRY_CONVERT(INT, h.NumeroHabilidad), h.NumeroHabilidad
+      ORDER BY
+        CASE WHEN @incluirInactivas = 1 AND h.Activo = 0 THEN 0 ELSE 1 END,
+        COALESCE(m.Nombre, h.MateriaNombre), h.Grado, ${monthOrderExpression("h")}, h.Area, TRY_CONVERT(INT, h.NumeroHabilidad), h.NumeroHabilidad
       OPTION (RECOMPILE)
     `);
 
     const habilidadesUnicas = Array.from(new Map(
-      result.recordset.map((item: any) => [Number(item.PlaneamientoHabilidadId), item])
+      result.recordset.map((item: any) => [Number(item.PlaneamientoHabilidadId), {
+        ...item,
+        InstitucionesDisponibles: (() => {
+          try {
+            return JSON.parse(item.InstitucionesDisponiblesJson || "[]")
+              .map((row: any) => Number(row.InstitucionId))
+              .filter(Boolean);
+          } catch {
+            return [];
+          }
+        })()
+      }])
     ).values());
 
     ok(res, habilidadesUnicas);
@@ -2588,23 +2950,32 @@ router.post("/habilidades", async (req, res) => {
 
     const materiaId = toOptionalInt(req.body.materiaId);
     const materiaNombre = normalizeText(req.body.materiaNombre);
-    const tipoColegio = normalizeText(req.body.tipoColegio);
-    const ciclo = normalizeNullableText(req.body.ciclo);
-    const grado = normalizeText(req.body.grado);
+    const tipoColegioEntrada = normalizeText(req.body.tipoColegio);
+    const cicloSolicitado = normalizeNullableText(req.body.ciclo);
+    const gradoEntrada = normalizeText(req.body.grado);
     const mes = normalizeText(req.body.mes);
     const area = normalizeNullableText(req.body.area);
     const numeroHabilidad = normalizeNullableText(req.body.numeroHabilidad);
     const descripcionHabilidad = normalizeText(req.body.descripcionHabilidad);
     const documentoReferencia = normalizeNullableText(req.body.documentoReferencia);
+    const disponibleTodos = String(req.body.disponibleTodos ?? "true") !== "false";
+    const institucionesIds = toPositiveIntList(req.body.institucionesIds);
 
     if (!materiaId && !materiaNombre) return badRequest(res, "Debés indicar la materia");
-    if (!tipoColegio) return badRequest(res, "Debés indicar el tipo de colegio");
-    if (!grado) return badRequest(res, "Debés indicar el grado");
+    if (!tipoColegioEntrada) return badRequest(res, "Debés indicar el tipo de colegio");
+    if (!gradoEntrada) return badRequest(res, "Debés indicar el grado");
     if (!mes) return badRequest(res, "Debés indicar el mes");
     if (!descripcionHabilidad) return badRequest(res, "Debés indicar la descripción de la habilidad");
 
+    const gradoNormalizado = normalizarGradoConCiclo(gradoEntrada, cicloSolicitado);
+    if ("error" in gradoNormalizado) return badRequest(res, gradoNormalizado.error);
+    const tipoColegio = normalizarTipoColegio(tipoColegioEntrada);
+    const ciclo = gradoNormalizado.ciclo;
+    const grado = gradoNormalizado.grado;
     const pool = await getPool();
     await ensurePlaneamientoHabilidadOwnershipColumns(pool);
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
+    if (!disponibleTodos && !institucionesIds.length) return badRequest(res, "Seleccioná al menos un colegio o habilitá la habilidad para todos");
     const usuarioId = getUserId(req);
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -2614,6 +2985,8 @@ router.post("/habilidades", async (req, res) => {
       .input("tipoColegio", sql.NVarChar(100), tipoColegio)
       .input("ciclo", sql.NVarChar(100), ciclo)
       .input("grado", sql.NVarChar(100), grado)
+      .input("gradoNumero", sql.SmallInt, gradoNormalizado.gradoNumero)
+      .input("modalidadGrado", sql.NVarChar(20), gradoNormalizado.modalidadGrado)
       .input("mes", sql.NVarChar(100), mes)
       .input("area", sql.NVarChar(150), area)
       .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
@@ -2639,14 +3012,15 @@ router.post("/habilidades", async (req, res) => {
         ELSE
         BEGIN
           INSERT INTO dbo.PlaneamientoHabilidad
-            (InstitucionId, UsuarioCreadorId, MateriaId, MateriaNombre, TipoColegio, Ciclo, Grado, Mes, Area, NumeroHabilidad, DescripcionHabilidad, DocumentoReferencia, Activo, CreatedAt)
+            (InstitucionId, UsuarioCreadorId, MateriaId, MateriaNombre, TipoColegio, Ciclo, Grado, GradoNumero, ModalidadGrado, Mes, Area, NumeroHabilidad, DescripcionHabilidad, DocumentoReferencia, Activo, CreatedAt)
           OUTPUT INSERTED.*, CAST(0 AS bit) AS Duplicado
           VALUES
-            (@institucionId, @usuarioId, @materiaId, @materiaNombre, @tipoColegio, @ciclo, @grado, @mes, @area, @numeroHabilidad, @descripcionHabilidad, @documentoReferencia, 1, SYSDATETIME())
+            (@institucionId, @usuarioId, @materiaId, @materiaNombre, @tipoColegio, @ciclo, @grado, @gradoNumero, @modalidadGrado, @mes, @area, @numeroHabilidad, @descripcionHabilidad, @documentoReferencia, 1, SYSDATETIME())
         END
       `);
 
     if (result.recordset[0]?.Duplicado) return badRequest(res, "Ya existe una habilidad igual para esa materia, grado, mes y área");
+    await guardarDisponibilidadHabilidad(pool, Number(result.recordset[0].PlaneamientoHabilidadId), disponibleTodos, institucionesIds);
     created(res, result.recordset[0], "Habilidad creada correctamente");
   } catch (error) {
     console.error("Error creando habilidad:", error);
@@ -2665,23 +3039,32 @@ router.put("/habilidades/:id", async (req, res) => {
 
     const materiaId = toOptionalInt(req.body.materiaId);
     const materiaNombre = normalizeText(req.body.materiaNombre);
-    const tipoColegio = normalizeText(req.body.tipoColegio);
-    const ciclo = normalizeNullableText(req.body.ciclo);
-    const grado = normalizeText(req.body.grado);
+    const tipoColegioEntrada = normalizeText(req.body.tipoColegio);
+    const cicloSolicitado = normalizeNullableText(req.body.ciclo);
+    const gradoEntrada = normalizeText(req.body.grado);
     const mes = normalizeText(req.body.mes);
     const area = normalizeNullableText(req.body.area);
     const numeroHabilidad = normalizeNullableText(req.body.numeroHabilidad);
     const descripcionHabilidad = normalizeText(req.body.descripcionHabilidad);
     const documentoReferencia = normalizeNullableText(req.body.documentoReferencia);
+    const disponibleTodos = String(req.body.disponibleTodos ?? "true") !== "false";
+    const institucionesIds = toPositiveIntList(req.body.institucionesIds);
 
     if (!materiaId && !materiaNombre) return badRequest(res, "Debés indicar la materia");
-    if (!tipoColegio) return badRequest(res, "Debés indicar el tipo de colegio");
-    if (!grado) return badRequest(res, "Debés indicar el grado");
+    if (!tipoColegioEntrada) return badRequest(res, "Debés indicar el tipo de colegio");
+    if (!gradoEntrada) return badRequest(res, "Debés indicar el grado");
     if (!mes) return badRequest(res, "Debés indicar el mes");
     if (!descripcionHabilidad) return badRequest(res, "Debés indicar la descripción de la habilidad");
 
+    const gradoNormalizado = normalizarGradoConCiclo(gradoEntrada, cicloSolicitado);
+    if ("error" in gradoNormalizado) return badRequest(res, gradoNormalizado.error);
+    const tipoColegio = normalizarTipoColegio(tipoColegioEntrada);
+    const ciclo = gradoNormalizado.ciclo;
+    const grado = gradoNormalizado.grado;
     const pool = await getPool();
     await ensurePlaneamientoHabilidadOwnershipColumns(pool);
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
+    if (!disponibleTodos && !institucionesIds.length) return badRequest(res, "Seleccioná al menos un colegio o habilitá la habilidad para todos");
     const usuarioId = getUserId(req);
     const esAdminHabilidades = canMaintainAnyHabilidad(req);
     const result = await pool.request()
@@ -2694,6 +3077,8 @@ router.put("/habilidades/:id", async (req, res) => {
       .input("tipoColegio", sql.NVarChar(100), tipoColegio)
       .input("ciclo", sql.NVarChar(100), ciclo)
       .input("grado", sql.NVarChar(100), grado)
+      .input("gradoNumero", sql.SmallInt, gradoNormalizado.gradoNumero)
+      .input("modalidadGrado", sql.NVarChar(20), gradoNormalizado.modalidadGrado)
       .input("mes", sql.NVarChar(100), mes)
       .input("area", sql.NVarChar(150), area)
       .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
@@ -2704,7 +3089,6 @@ router.put("/habilidades/:id", async (req, res) => {
           SELECT 1
           FROM dbo.PlaneamientoHabilidad
           WHERE PlaneamientoHabilidadId <> @id
-            AND InstitucionId = @institucionId
             AND ISNULL(MateriaId, 0) = ISNULL(@materiaId, 0)
             AND UPPER(ISNULL(MateriaNombre, N'')) = UPPER(ISNULL(@materiaNombre, N''))
             AND UPPER(ISNULL(TipoColegio, N'')) = UPPER(ISNULL(@tipoColegio, N''))
@@ -2725,6 +3109,8 @@ router.put("/habilidades/:id", async (req, res) => {
             TipoColegio = @tipoColegio,
             Ciclo = @ciclo,
             Grado = @grado,
+            GradoNumero = @gradoNumero,
+            ModalidadGrado = @modalidadGrado,
             Mes = @mes,
             Area = @area,
             NumeroHabilidad = @numeroHabilidad,
@@ -2733,14 +3119,14 @@ router.put("/habilidades/:id", async (req, res) => {
             UpdatedAt = SYSDATETIME()
         OUTPUT INSERTED.*
         WHERE PlaneamientoHabilidadId = @id
-          AND InstitucionId = @institucionId
-          AND (@esAdmin = 1 OR UsuarioCreadorId = @usuarioId)
+          AND @esAdmin = 1
       `);
 
     if (result.recordset[0]?.Duplicado) return badRequest(res, "Ya existe una habilidad igual para esa materia, grado, mes y área");
     if (!result.recordset.length) {
       return forbidden(res, "Solo podés modificar habilidades creadas por vos. Para otras, usá un perfil administrativo.");
     }
+    await guardarDisponibilidadHabilidad(pool, id, disponibleTodos, institucionesIds);
     ok(res, result.recordset[0], "Habilidad actualizada correctamente");
   } catch (error) {
     console.error("Error actualizando habilidad:", error);
@@ -2770,8 +3156,7 @@ router.delete("/habilidades/:id", async (req, res) => {
         UPDATE dbo.PlaneamientoHabilidad
         SET Activo = 0, UpdatedAt = SYSDATETIME()
         WHERE PlaneamientoHabilidadId = @id
-          AND InstitucionId = @institucionId
-          AND (@esAdmin = 1 OR UsuarioCreadorId = @usuarioId)
+          AND @esAdmin = 1
       `);
 
     if (!result.rowsAffected?.[0]) {
@@ -2806,8 +3191,7 @@ router.patch("/habilidades/:id/reactivar", async (req, res) => {
         UPDATE dbo.PlaneamientoHabilidad
         SET Activo = 1, UpdatedAt = SYSDATETIME()
         WHERE PlaneamientoHabilidadId = @id
-          AND InstitucionId = @institucionId
-          AND (@esAdmin = 1 OR UsuarioCreadorId = @usuarioId)
+          AND @esAdmin = 1
       `);
 
     if (!result.rowsAffected?.[0]) {
@@ -2825,8 +3209,8 @@ router.get("/habilidades/plantilla", async (_req, res) => {
     const rows = [
       {
         Materia: "Matematica",
-        Colegio: "Academico",
-        Ciclo: "Tercer ciclo",
+        Colegio: "Académico",
+        Ciclo: "Tercer Ciclo",
         Grado: "7",
         Mes: "Febrero",
         Area: "Numeros",
@@ -2846,17 +3230,17 @@ router.get("/habilidades/plantilla", async (_req, res) => {
       {
         Columna: "Colegio",
         Requerido: "SI",
-        Descripcion: "Tipo de colegio. Ejemplo: Academico, Tecnico."
+        Descripcion: "Tipo de colegio. Valores permitidos: Académico, Técnico o Plan Nacional."
       },
       {
         Columna: "Ciclo",
         Requerido: "NO",
-        Descripcion: "Texto libre. Ejemplo: Tercer ciclo."
+        Descripcion: "Se asigna automáticamente según el grado. Si se indica, debe coincidir exactamente: 1-3 Primer Ciclo; 4-6 Segundo Ciclo; 7-9 Tercer Ciclo; 10-12 Cuarto Ciclo."
       },
       {
         Columna: "Grado",
         Requerido: "SI",
-        Descripcion: "Grado. Ejemplo: 7, Octavo, Duodecimo."
+        Descripcion: "Usá los valores normalizados 1 a 12. Para modalidad PN, usá por ejemplo: 7 PN, 10 PN o 12 PN. El sistema valida el ciclo correspondiente."
       },
       {
         Columna: "Mes",
@@ -2882,6 +3266,11 @@ router.get("/habilidades/plantilla", async (_req, res) => {
         Columna: "Documento de referencia",
         Requerido: "NO",
         Descripcion: "Fuente de respaldo. Ejemplo: Programa de estudio MEP."
+      },
+      {
+        Columna: "Disponibilidad de colegios",
+        Requerido: "NO ES COLUMNA",
+        Descripcion: "La disponibilidad para todos los colegios o colegios específicos se selecciona en la pantalla antes de importar el archivo."
       }
     ]);
     const workbook = XLSX.utils.book_new();
@@ -2915,6 +3304,10 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
 
     const pool = await getPool();
     await ensurePlaneamientoHabilidadOwnershipColumns(pool);
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
+    const disponibleTodos = String(req.body.disponibleTodos ?? "true") !== "false";
+    const institucionesIds = toPositiveIntList(req.body.institucionesIds);
+    if (!disponibleTodos && !institucionesIds.length) return badRequest(res, "Seleccioná al menos un colegio o habilitá las habilidades para todos");
     const usuarioId = getUserId(req);
 
     let insertados = 0;
@@ -2928,16 +3321,16 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
 
       try {
         const materiaNombre = limitRequiredText(row.Materia, 200);
-        const tipoColegio = limitRequiredText(row.Colegio, 100);
-        const ciclo = limitNullableText(row.Ciclo, 100);
-        const grado = limitRequiredText(row.Grado, 100);
+        const tipoColegioEntrada = limitRequiredText(row.Colegio, 100);
+        const cicloSolicitado = limitNullableText(row.Ciclo, 100);
+        const gradoEntrada = limitRequiredText(row.Grado, 100);
         const mes = limitRequiredText(row.mes || row.Mes, 100);
         const area = limitNullableText(row.Area, 150);
         const numeroHabilidad = limitNullableText(row["Numero de Habilidad"] || row.NumeroHabilidad, 50);
         const descripcionHabilidad = limitRequiredText(row["Descripcion de la Habilidad"] || row.DescripcionHabilidad, 4000);
         const documentoReferencia = limitNullableText(row["Documento de referencia"] || row.DocumentoReferencia, 300);
 
-        if (!materiaNombre || !tipoColegio || !grado || !mes || !descripcionHabilidad) {
+        if (!materiaNombre || !tipoColegioEntrada || !gradoEntrada || !mes || !descripcionHabilidad) {
           omitidos += 1;
           resultados.push({
             fila,
@@ -2946,6 +3339,16 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
           });
           continue;
         }
+
+        const gradoNormalizado = normalizarGradoConCiclo(gradoEntrada, cicloSolicitado);
+        if ("error" in gradoNormalizado) {
+          omitidos += 1;
+          resultados.push({ fila, estado: "Omitido", motivo: gradoNormalizado.error });
+          continue;
+        }
+        const tipoColegio = normalizarTipoColegio(tipoColegioEntrada);
+        const ciclo = gradoNormalizado.ciclo;
+        const grado = gradoNormalizado.grado;
 
         const materiaId = await findMateriaId(pool, institucionId, materiaNombre);
 
@@ -2991,6 +3394,8 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
           .input("tipoColegio", sql.NVarChar(100), tipoColegio)
           .input("ciclo", sql.NVarChar(100), ciclo)
           .input("grado", sql.NVarChar(100), grado)
+          .input("gradoNumero", sql.SmallInt, gradoNormalizado.gradoNumero)
+          .input("modalidadGrado", sql.NVarChar(20), gradoNormalizado.modalidadGrado)
           .input("mes", sql.NVarChar(100), mes)
           .input("area", sql.NVarChar(150), area)
           .input("numeroHabilidad", sql.NVarChar(50), numeroHabilidad)
@@ -2998,11 +3403,18 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
           .input("documentoReferencia", sql.NVarChar(300), documentoReferencia)
           .query(`
             INSERT INTO dbo.PlaneamientoHabilidad
-              (InstitucionId, UsuarioCreadorId, MateriaId, MateriaNombre, TipoColegio, Ciclo, Grado, Mes, Area, NumeroHabilidad, DescripcionHabilidad, DocumentoReferencia, Activo, CreatedAt)
+              (InstitucionId, UsuarioCreadorId, MateriaId, MateriaNombre, TipoColegio, Ciclo, Grado, GradoNumero, ModalidadGrado, Mes, Area, NumeroHabilidad, DescripcionHabilidad, DocumentoReferencia, Activo, CreatedAt)
             OUTPUT INSERTED.PlaneamientoHabilidadId
             VALUES
-              (@institucionId, @usuarioId, @materiaId, @materiaNombre, @tipoColegio, @ciclo, @grado, @mes, @area, @numeroHabilidad, @descripcionHabilidad, @documentoReferencia, 1, SYSDATETIME())
+              (@institucionId, @usuarioId, @materiaId, @materiaNombre, @tipoColegio, @ciclo, @grado, @gradoNumero, @modalidadGrado, @mes, @area, @numeroHabilidad, @descripcionHabilidad, @documentoReferencia, 1, SYSDATETIME())
           `);
+
+        await guardarDisponibilidadHabilidad(
+          pool,
+          Number(insertResult.recordset[0]?.PlaneamientoHabilidadId),
+          disponibleTodos,
+          institucionesIds
+        );
 
         insertados += 1;
         resultados.push({
@@ -3035,6 +3447,206 @@ router.post("/habilidades/importar-excel", upload.single("archivo"), async (req,
   } catch (error) {
     console.error("Error importando habilidades desde Excel:", error);
     res.status(500).json({ ok: false, message: "No se pudo importar el archivo de habilidades" });
+  }
+});
+
+router.post("/habilidades/restaurar-grados-excel", upload.single("archivo"), async (req, res) => {
+  if (!canMaintainHabilidades(req)) return forbidden(res, "Solo Super admin puede restaurar grados de habilidades");
+  try {
+    if (!req.file?.buffer) return badRequest(res, "Debés adjuntar el Excel de respaldo");
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) return badRequest(res, "El Excel no contiene hojas");
+    const rows = XLSX.utils.sheet_to_json<any>(workbook.Sheets[firstSheetName], { defval: "" });
+    if (!rows.length) return badRequest(res, "El Excel no contiene registros");
+
+    const filasConId = rows.map((row) => {
+      const id = Number(row["ID de habilidad"] || row.PlaneamientoHabilidadId || 0);
+      if (!Number.isInteger(id) || id <= 0) return null;
+      const gradoNormalizado = normalizarGradoConCiclo(row.Grado, row.Ciclo);
+      if ("error" in gradoNormalizado) return null;
+      const disponibilidad = normalizeForCompare(row.Disponibilidad);
+      const colegiosIds = toPositiveIntList(row.ColegiosIds);
+      return {
+        id,
+        materiaId: toOptionalInt(row.MateriaId),
+        materia: normalizeText(row.Materia),
+        tipoColegio: normalizarTipoColegio(row["Tipo de colegio"] || row.Colegio),
+        ciclo: gradoNormalizado.ciclo,
+        grado: gradoNormalizado.grado,
+        gradoNumero: gradoNormalizado.gradoNumero,
+        modalidadGrado: gradoNormalizado.modalidadGrado,
+        mes: normalizeText(row.Mes || row.mes),
+        area: normalizeText(row.Area),
+        numeroHabilidad: normalizeText(row["Número de habilidad"] || row["Numero de Habilidad"] || row.NumeroHabilidad),
+        descripcion: normalizeText(row["Descripción de la habilidad"] || row["Descripcion de la Habilidad"] || row.DescripcionHabilidad),
+        documento: normalizeText(row["Documento de referencia"] || row.DocumentoReferencia),
+        activo: normalizeForCompare(row.Estado) !== "INACTIVA",
+        disponibleTodos: !disponibilidad || disponibilidad.includes("TODOS"),
+        colegiosIds: colegiosIds.join(",")
+      };
+    }).filter(Boolean);
+
+    if (filasConId.length) {
+      const filasInvalidas = rows.length - filasConId.length;
+      if (filasInvalidas) return badRequest(res, `Hay ${filasInvalidas} fila(s) sin ID o con grado/ciclo inválido`);
+      const pool = await getPool();
+      await ensurePlaneamientoHabilidadDisponibilidad(pool);
+      const transaction = new sql.Transaction(pool);
+      await transaction.begin();
+      try {
+        const request = new sql.Request(transaction)
+          .input("filasJson", sql.NVarChar(sql.MAX), JSON.stringify(filasConId));
+        const result = await request.query(`
+          DECLARE @Actualizadas INT = 0;
+          ;WITH Cambios AS (
+            SELECT *
+            FROM OPENJSON(@filasJson)
+            WITH (
+              Id INT '$.id', MateriaId INT '$.materiaId', Materia NVARCHAR(200) '$.materia',
+              TipoColegio NVARCHAR(100) '$.tipoColegio', Ciclo NVARCHAR(100) '$.ciclo', Grado NVARCHAR(100) '$.grado',
+              GradoNumero SMALLINT '$.gradoNumero', ModalidadGrado NVARCHAR(20) '$.modalidadGrado',
+              Mes NVARCHAR(100) '$.mes', Area NVARCHAR(150) '$.area', NumeroHabilidad NVARCHAR(50) '$.numeroHabilidad',
+              Descripcion NVARCHAR(MAX) '$.descripcion', Documento NVARCHAR(300) '$.documento',
+              Activo BIT '$.activo', DisponibleTodos BIT '$.disponibleTodos', ColegiosIds NVARCHAR(MAX) '$.colegiosIds'
+            )
+          )
+          UPDATE h
+          SET MateriaId = COALESCE(c.MateriaId, h.MateriaId),
+              MateriaNombre = NULLIF(c.Materia, N''), TipoColegio = c.TipoColegio, Ciclo = c.Ciclo,
+              Grado = c.Grado, GradoNumero = c.GradoNumero, ModalidadGrado = c.ModalidadGrado,
+              Mes = c.Mes, Area = NULLIF(c.Area, N''), NumeroHabilidad = NULLIF(c.NumeroHabilidad, N''),
+              DescripcionHabilidad = c.Descripcion, DocumentoReferencia = NULLIF(c.Documento, N''),
+              Activo = c.Activo, UpdatedAt = SYSDATETIME()
+          FROM dbo.PlaneamientoHabilidad h
+          INNER JOIN Cambios c ON c.Id = h.PlaneamientoHabilidadId;
+          SET @Actualizadas = @@ROWCOUNT;
+
+          DELETE hi
+          FROM dbo.PlaneamientoHabilidadInstitucion hi
+          INNER JOIN OPENJSON(@filasJson)
+          WITH (Id INT '$.id') c ON c.Id = hi.PlaneamientoHabilidadId;
+
+          INSERT INTO dbo.PlaneamientoHabilidadInstitucion (PlaneamientoHabilidadId, InstitucionId)
+          SELECT c.Id, TRY_CONVERT(INT, value)
+          FROM OPENJSON(@filasJson)
+          WITH (Id INT '$.id', DisponibleTodos BIT '$.disponibleTodos', ColegiosIds NVARCHAR(MAX) '$.colegiosIds') c
+          CROSS APPLY STRING_SPLIT(ISNULL(c.ColegiosIds, N''), N',')
+          WHERE c.DisponibleTodos = 0 AND TRY_CONVERT(INT, value) IS NOT NULL;
+
+          SELECT @Actualizadas AS Actualizadas;
+        `);
+        await transaction.commit();
+        return ok(res, { leidas: rows.length, actualizadas: Number(result.recordset[0]?.Actualizadas || 0) }, "Habilidades actualizadas desde el Excel");
+      } catch (error) {
+        await transaction.rollback();
+        throw error;
+      }
+    }
+
+    // Si el archivo incluye "Grado correguido", la descripción (columna H) es la llave
+    // indicada por el usuario y ese valor es la fuente definitiva del grado.
+    const correcciones = rows.map((row) => {
+      const grado = normalizarGradoRespaldo(row["Grado correguido"], row.Ciclo);
+      const descripcion = normalizeText(row["Descripción de la habilidad"]);
+      return grado && descripcion ? { descripcion, ...grado } : null;
+    }).filter(Boolean);
+
+    if (correcciones.length) {
+      const pool = await getPool();
+      await ensurePlaneamientoHabilidadDisponibilidad(pool);
+      const result = await pool.request()
+        .input("correccionesJson", sql.NVarChar(sql.MAX), JSON.stringify(correcciones))
+        .query(`
+          ;WITH Correcciones AS (
+            SELECT Descripcion, Grado, GradoNumero, ModalidadGrado
+            FROM OPENJSON(@correccionesJson)
+            WITH (
+              Descripcion NVARCHAR(MAX) '$.descripcion', Grado NVARCHAR(100) '$.grado',
+              GradoNumero SMALLINT '$.gradoNumero', ModalidadGrado NVARCHAR(20) '$.modalidadGrado'
+            )
+          ),
+          CorreccionesUnicas AS (
+            SELECT Descripcion, MIN(Grado) AS Grado, MIN(GradoNumero) AS GradoNumero, MIN(ModalidadGrado) AS ModalidadGrado
+            FROM Correcciones
+            GROUP BY Descripcion
+            HAVING COUNT(DISTINCT Grado) = 1
+          )
+          UPDATE h
+          SET Grado = c.Grado, GradoNumero = c.GradoNumero, ModalidadGrado = c.ModalidadGrado, UpdatedAt = SYSDATETIME()
+          FROM dbo.PlaneamientoHabilidad h
+          INNER JOIN CorreccionesUnicas c
+            ON UPPER(LTRIM(RTRIM(h.DescripcionHabilidad))) COLLATE Latin1_General_100_CI_AI
+             = UPPER(LTRIM(RTRIM(c.Descripcion))) COLLATE Latin1_General_100_CI_AI;
+
+          SELECT @@ROWCOUNT AS Actualizadas;
+        `);
+      return ok(res, {
+        leidas: rows.length,
+        correcciones: correcciones.length,
+        actualizadas: Number(result.recordset[0]?.Actualizadas || 0)
+      }, "Grados actualizados desde el archivo de correcciones");
+    }
+
+    const respaldo = rows.map((row) => {
+      const grado = normalizarGradoRespaldo(row.Grado, row.Ciclo);
+      return grado ? {
+        materia: normalizeText(row.Materia),
+        tipoColegio: normalizeText(row["Tipo de colegio"]),
+        ciclo: normalizeText(row.Ciclo),
+        mes: normalizeText(row.Mes),
+        area: normalizeText(row.Area),
+        numeroHabilidad: normalizeText(row["Número de habilidad"]),
+        descripcion: normalizeText(row["Descripción de la habilidad"]),
+        documento: normalizeText(row["Documento de referencia"]),
+        ...grado
+      } : null;
+    }).filter(Boolean);
+    if (!respaldo.length) return badRequest(res, "El Excel no contiene grados que se puedan normalizar");
+
+    const pool = await getPool();
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
+    const result = await pool.request()
+      .input("respaldoJson", sql.NVarChar(sql.MAX), JSON.stringify(respaldo))
+      .query(`
+        ;WITH RespaldoGrados AS (
+          SELECT Materia, TipoColegio, Ciclo, Mes, Area, NumeroHabilidad, Descripcion, Documento, Grado, GradoNumero, ModalidadGrado
+          FROM OPENJSON(@respaldoJson)
+          WITH (
+            Materia NVARCHAR(200) '$.materia', TipoColegio NVARCHAR(100) '$.tipoColegio', Ciclo NVARCHAR(100) '$.ciclo',
+            Mes NVARCHAR(100) '$.mes', Area NVARCHAR(150) '$.area', NumeroHabilidad NVARCHAR(50) '$.numeroHabilidad',
+            Descripcion NVARCHAR(MAX) '$.descripcion', Documento NVARCHAR(300) '$.documento', Grado NVARCHAR(100) '$.grado',
+            GradoNumero SMALLINT '$.gradoNumero', ModalidadGrado NVARCHAR(20) '$.modalidadGrado'
+          )
+        ),
+        RespaldoUnico AS (
+          SELECT Materia, TipoColegio, Ciclo, Mes, Area, NumeroHabilidad, Descripcion, Documento,
+            MIN(Grado) AS Grado, MIN(GradoNumero) AS GradoNumero, MIN(ModalidadGrado) AS ModalidadGrado
+          FROM RespaldoGrados
+          GROUP BY Materia, TipoColegio, Ciclo, Mes, Area, NumeroHabilidad, Descripcion, Documento
+          HAVING COUNT(DISTINCT Grado) = 1
+        )
+        UPDATE h
+        SET Grado = r.Grado, GradoNumero = r.GradoNumero, ModalidadGrado = r.ModalidadGrado, UpdatedAt = SYSDATETIME()
+        FROM dbo.PlaneamientoHabilidad h
+        LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
+        INNER JOIN RespaldoUnico r
+          ON UPPER(LTRIM(RTRIM(COALESCE(m.Nombre, h.MateriaNombre, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.Materia) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.TipoColegio, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.TipoColegio) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.Ciclo, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.Ciclo) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.Mes, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.Mes) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.Area, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.Area) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.NumeroHabilidad, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.NumeroHabilidad) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.DescripcionHabilidad, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.Descripcion) COLLATE Latin1_General_100_CI_AI
+          AND UPPER(LTRIM(RTRIM(ISNULL(h.DocumentoReferencia, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(r.Documento) COLLATE Latin1_General_100_CI_AI
+        WHERE h.Grado = N'1' AND h.GradoNumero = 1 AND r.GradoNumero <> 1;
+
+        SELECT @@ROWCOUNT AS Recuperadas;
+      `);
+    ok(res, { leidas: rows.length, normalizables: respaldo.length, recuperadas: Number(result.recordset[0]?.Recuperadas || 0) }, "Grados restaurados desde el respaldo");
+  } catch (error) {
+    console.error("Error restaurando grados desde respaldo:", error);
+    res.status(500).json({ ok: false, message: "No se pudieron restaurar los grados desde el respaldo" });
   }
 });
 
@@ -4674,8 +5286,10 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
 
     actualizarProgresoOperacion(operacionId, 15, "Cargando habilidades seleccionadas");
     const ids = habilidadesIds.join(",");
+    await ensurePlaneamientoHabilidadDisponibilidad(pool);
     const habilidades = await pool.request()
       .input("institucionId", sql.Int, institucionId)
+      .input("esSuperAdmin", sql.Bit, canUseGlobalRows(req) ? 1 : 0)
       .query(`
         SELECT
           h.PlaneamientoHabilidadId,
@@ -4692,7 +5306,16 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
         FROM dbo.PlaneamientoHabilidad h
         LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
         WHERE h.PlaneamientoHabilidadId IN (${ids})
-          AND (h.InstitucionId = @institucionId OR h.InstitucionId IS NULL)
+          AND (
+            @esSuperAdmin = 1
+            OR h.DisponibleTodos = 1
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.PlaneamientoHabilidadInstitucion hi
+              WHERE hi.PlaneamientoHabilidadId = h.PlaneamientoHabilidadId
+                AND hi.InstitucionId = @institucionId
+            )
+          )
           AND h.Activo = 1
       `);
 
