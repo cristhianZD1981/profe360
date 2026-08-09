@@ -19,7 +19,7 @@ import { appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Document, Header, ImageRun, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
-import { sendEmail } from "../../services/email.service";
+import { sendEmail, sendEmailsBatch } from "../../services/email.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 import {
@@ -5793,6 +5793,9 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     const resumen = await buildResumenAsistencia(grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
 
     const notificaciones: any[] = [];
+    const correosPendientes: Array<{ estudianteId: number; input: Parameters<typeof sendEmailsBatch>[0][number] }> = [];
+    const correoEnviadoPorEstudiante = new Map<number, boolean>();
+    const waEnviadoPorEstudiante = new Map<number, boolean>();
     const registrosNotificar = normalizadosSolicitados.filter((item: any) => item.notificarEncargado);
     const porEstudiante = new Map<number, any[]>();
     for (const item of registrosNotificar) {
@@ -5807,7 +5810,6 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     const institucionNombre = String(institucionNombreResult.recordset[0]?.Nombre || "");
 
     for (const [estudianteId, items] of porEstudiante.entries()) {
-      let correoEnviado = false;
       let waEnviado = false;
       try {
         const estudianteResult = await pool.request()
@@ -5872,16 +5874,15 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
         const correoProfesorCopia = resolveNotificationCc(req);
 
         if (estudiante.Correo) {
-          const correo = await sendEmail({
+          correosPendientes.push({ estudianteId, input: {
             from: String(correoCfg?.FromEmail || ""),
             to: estudiante.Correo,
             cc: correoProfesorCopia || undefined,
             subject,
             text: texto,
-            html: `<p>${toHtmlWithLineBreaks(texto)}</p>`
-          });
-          notificaciones.push({ estudianteId, canal: "correo", ...correo });
-          if (correo?.enviado === true) correoEnviado = true;
+            html: `<p>${toHtmlWithLineBreaks(texto)}</p>`,
+            idempotencyKey: `asistencia-${grupoId}-${materiaId}-${periodoId}-${fecha}-${estudianteId}`
+          }});
         }
 
         {
@@ -5907,6 +5908,29 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
         console.error("No se pudo notificar asistencia:", notifyError);
         notificaciones.push({ estudianteId, enviado: false, error: notifyError?.message || "Error notificando" });
       }
+      waEnviadoPorEstudiante.set(estudianteId, waEnviado);
+    }
+
+    if (correosPendientes.length) {
+      try {
+        const resultadosCorreo = await sendEmailsBatch(correosPendientes.map((item) => item.input));
+        correosPendientes.forEach((pendiente, index) => {
+          const correo = resultadosCorreo[index] || { enviado: false, motivo: "No se recibió respuesta del proveedor" };
+          correoEnviadoPorEstudiante.set(pendiente.estudianteId, correo.enviado === true);
+          notificaciones.push({ estudianteId: pendiente.estudianteId, canal: "correo", ...correo });
+        });
+      } catch (emailError: any) {
+        console.error("No se pudo enviar el lote de correos de asistencia:", emailError);
+        correosPendientes.forEach((pendiente) => {
+          correoEnviadoPorEstudiante.set(pendiente.estudianteId, false);
+          notificaciones.push({ estudianteId: pendiente.estudianteId, canal: "correo", enviado: false, error: emailError?.message || "Error enviando correo" });
+        });
+      }
+    }
+
+    for (const [estudianteId, items] of porEstudiante.entries()) {
+      const correoEnviado = correoEnviadoPorEstudiante.get(estudianteId) === true;
+      const waEnviado = waEnviadoPorEstudiante.get(estudianteId) === true;
       for (const item of items) {
         const registroClave = `ASIS|${grupoId}|${materiaId}|${periodoId}|${fecha}|${estudianteId}|${Number(item.horarioGrupoId || 0)}`;
         await upsertReporteEnvioBitacora(pool, {

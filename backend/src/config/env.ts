@@ -55,7 +55,11 @@ export const env = {
   mail: {
     resendApiKey: process.env.RESEND_API_KEY || "",
     fromEmail: process.env.MAIL_FROM || "",
-    fromName: process.env.MAIL_FROM_NAME || "Profe360"
+    fromName: process.env.MAIL_FROM_NAME || "Profe360",
+    resendMaxRetries: Number(process.env.RESEND_MAX_RETRIES || 3),
+    resendRetryBaseDelayMs: Number(process.env.RESEND_RETRY_BASE_DELAY_MS || 1000),
+    resendBatchSize: Math.min(100, Math.max(1, Number(process.env.RESEND_BATCH_SIZE || 100))),
+    resendWebhookSigningSecret: process.env.RESEND_WEBHOOK_SIGNING_SECRET || ""
   }
 };
 

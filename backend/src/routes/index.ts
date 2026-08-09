@@ -23,6 +23,7 @@ import seguimientoEvaluacionRoutes from "../modules/seguimiento-evaluacion/segui
 import assistantRoutes from "../modules/assistant/assistant.routes";
 import gruposClaseRoutes from "../modules/grupos-clase/grupos-clase.routes";
 import periodosProfesorRoutes from "../modules/periodos-profesor/periodos-profesor.routes";
+import webhooksRoutes from "../modules/webhooks/webhooks.routes";
 
 const router = Router();
 
@@ -50,5 +51,6 @@ router.use("/seguimiento-evaluacion", seguimientoEvaluacionRoutes);
 router.use("/assistant", assistantRoutes);
 router.use("/grupos-clase", gruposClaseRoutes);
 router.use("/periodos-profesor", periodosProfesorRoutes);
+router.use("/webhooks", webhooksRoutes);
 
 export default router;

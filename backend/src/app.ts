@@ -52,7 +52,14 @@ export function createApp() {
     })
   );
 
-  app.use(express.json({ limit: "10mb" }));
+  app.use(express.json({
+    limit: "10mb",
+    verify: (req, _res, buffer) => {
+      if ((req as any).path === "/api/webhooks/resend") {
+        (req as any).rawBody = Buffer.from(buffer);
+      }
+    }
+  }));
   app.use(express.urlencoded({ extended: true }));
   app.use(morgan("dev"));
 
