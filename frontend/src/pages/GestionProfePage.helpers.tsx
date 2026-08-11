@@ -202,7 +202,6 @@ export type PlaneamientoValidacionItem = {
 export type PlaneamientoControlCalidad = {
   valido?: boolean;
   puedeGuardar?: boolean;
-  puntuacion?: number;
   verificaciones?: PlaneamientoValidacionItem[];
   nombreSolicitado?: string | null;
   idiomaEsperado?: "es" | "en";
@@ -210,8 +209,6 @@ export type PlaneamientoControlCalidad = {
   indicacionesDocente?: string | null;
   indicadoresEsperadosPorHabilidad?: number[];
   referenciaObligatoria?: boolean;
-  reparadoAutomaticamente?: boolean;
-  intentosRevision?: number;
   auditoriaSemantica?: {
     disponible: boolean;
     cumple: boolean;
@@ -270,6 +267,13 @@ export type PlaneamientoReferenciaAnalisis = {
     descripcion: string;
   };
   perfilDocumento?: PlaneamientoPerfilDocumentoReferencia;
+  seccionesModelo?: Array<{
+    id: string;
+    etiqueta: string;
+    indiceTabla: number;
+    indiceFilaEncabezado: number;
+  }>;
+  seccionModeloPredeterminadaId?: string | null;
   usaComoEjemplo: boolean;
   puedeUsarseComoMachote: boolean;
   advertencias: string[];
@@ -291,6 +295,16 @@ export type PlaneamientoIaResultado = {
   criteriosEvaluacion?: string[];
   camposReferencia?: Record<string, string>;
   documentoReferenciaNombre?: string | null;
+  plantillaFormatoNombre?: string | null;
+  plantillaFormatoDocx?: {
+    nombre?: string;
+    mimeType?: string;
+    base64?: string;
+  } | null;
+  estructuraEstrategiasReferencia?: string[];
+  perfilEstrategiasReferencia?: unknown;
+  seccionModeloReferenciaId?: string | null;
+  usaReferenciaEstrategias?: boolean;
   perfilDocumentoReferencia?: PlaneamientoPerfilDocumentoReferencia;
   estrategiasMediacion?: string[] | string;
   estrategiasMediacionEstructuradas?: Array<{

@@ -409,10 +409,9 @@ export default function GestionProfePage() {
   const deletingPlaneamientoTimerRef = useRef<number | null>(null);
   const [ultimoPlaneamientoIa, setUltimoPlaneamientoIa] = useState<PlaneamientoIaResultado | null>(null);
   const [editingPlaneamientoIaId, setEditingPlaneamientoIaId] = useState<number | null>(null);
+  const indicadoresOriginalesPlaneamientoIaRef = useRef<string[]>([]);
   const [documentoApoyoIa, setDocumentoApoyoIa] = useState<File[]>([]);
   const [plantillaFormatoIa, setPlantillaFormatoIa] = useState<File | null>(null);
-  const [usarPlantillaComoEjemploIa, setUsarPlantillaComoEjemploIa] = useState(true);
-  const [usarPlantillaComoMachoteIa, setUsarPlantillaComoMachoteIa] = useState(true);
   const [promptPlaneamientoIa, setPromptPlaneamientoIa] = useState("");
   const [promptPlaneamientoIaConstruido, setPromptPlaneamientoIaConstruido] = useState(false);
   const [promptPlaneamientoIaMejorado, setPromptPlaneamientoIaMejorado] = useState(false);
@@ -422,6 +421,7 @@ export default function GestionProfePage() {
   const mejorandoPromptPlaneamientoIaTimerRef = useRef<number | null>(null);
   const [analizandoReferenciaIa, setAnalizandoReferenciaIa] = useState(false);
   const [analisisReferenciaIa, setAnalisisReferenciaIa] = useState<PlaneamientoReferenciaAnalisis | null>(null);
+  const [seccionModeloReferenciaIaId, setSeccionModeloReferenciaIaId] = useState("");
   const [plantillasPlaneamientoIa, setPlantillasPlaneamientoIa] = useState<PlantillaPromptIA[]>([]);
   const [plantillaPlaneamientoIaId, setPlantillaPlaneamientoIaId] = useState<string>("");
   const [loadingPlantillasPlaneamientoIa, setLoadingPlantillasPlaneamientoIa] = useState(false);
@@ -2057,9 +2057,7 @@ export default function GestionProfePage() {
     archivosApoyo: documentoApoyoIa.map((file) => `${file.name}:${file.size}:${file.lastModified}`),
     referencia: plantillaFormatoIa
       ? `${plantillaFormatoIa.name}:${plantillaFormatoIa.size}:${plantillaFormatoIa.lastModified}`
-      : "",
-    usarComoEjemplo: usarPlantillaComoEjemploIa,
-    usarComoMachote: usarPlantillaComoMachoteIa
+      : ""
   }), [
     planeamientoIaForm.nombre,
     planeamientoIaForm.materiaId,
@@ -2077,9 +2075,7 @@ export default function GestionProfePage() {
     selected?.MateriaId,
     selected?.GrupoId,
     documentoApoyoIa,
-    plantillaFormatoIa,
-    usarPlantillaComoEjemploIa,
-    usarPlantillaComoMachoteIa
+    plantillaFormatoIa
   ]);
 
   useEffect(() => {
@@ -6520,6 +6516,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
           ? JSON.parse(planeamiento.ResultadoIAJson)
           : planeamiento.ResultadoIAJson;
 
+        indicadoresOriginalesPlaneamientoIaRef.current = indicadoresActivosPlaneamiento;
+
         setUltimoPlaneamientoIa(normalizePlaneamientoIaResultado({
           ...(parsed || {}),
           indicadoresEvaluacion: indicadoresActivosPlaneamiento,
@@ -6969,18 +6967,18 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       .map((grupo) => getNombreSeccionPlaneamiento(grupo))
       .filter(Boolean)
       .join(", ");
+    const nombreSugerido = `${mesesSeleccionadosTextoIa || "Mes"} - ${grado || "Grado"} - ${materia?.MateriaNombre || "Materia"}`;
     const archivos = [
       ...documentoApoyoIa.map((file) => `- Archivo de apoyo: ${file.name}`),
-      ...(plantillaFormatoIa && usarPlantillaComoEjemploIa ? [`- Planeamiento de referencia como ejemplo: ${plantillaFormatoIa.name}`] : []),
-      ...(plantillaFormatoIa && usarPlantillaComoMachoteIa ? [`- Planeamiento de referencia como machote Word: ${plantillaFormatoIa.name}`] : [])
+      ...(plantillaFormatoIa ? [`- Referencia obligatoria de estructura, idioma y diseño Word: ${plantillaFormatoIa.name}`] : [])
     ];
     const habilidades = habilidadesSeleccionadas.map((habilidad, index) => (
       `${index + 1}. ${habilidad.DescripcionHabilidad}`
     )).join("\n");
 
     return [
-      "Generar un planeamiento didáctico listo para revisión docente.",
-      `Nombre del planeamiento: ${planeamientoIaForm.nombre.trim() || "Proponer un nombre claro según el mes, grado y materia."}`,
+      "Generar un planeamiento didáctico completo, listo para guardar si supera las validaciones del sistema.",
+      `Nombre del planeamiento: ${planeamientoIaForm.nombre.trim() || nombreSugerido}.`,
       `Materia: ${materia?.MateriaCodigo ? `${materia.MateriaCodigo} - ` : ""}${materia?.MateriaNombre || "Materia"}.`,
       `Grado: ${grado}.`,
       `Secciones asignadas al docente: ${secciones}. El mismo planeamiento se guardará solo en estas secciones.`,
@@ -6995,7 +6993,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         : "Indicaciones del docente: aplicar mediación contextualizada, DUA e indicadores observables.",
       archivos.length ? `Archivos disponibles:\n${archivos.join("\n")}` : "No se adjuntaron archivos adicionales.",
       "Las instrucciones escritas por la persona docente son obligatorias y tienen prioridad sobre ejemplos, plantillas o reglas genéricas.",
-      "Cuando se use un machote Word, conservá solo su diseño, tablas y encabezados: eliminá todo dato del plan anterior y llenalo únicamente con la información nueva.",
+      "La referencia Word es obligatoria y única: conservá solo su diseño, tablas y encabezados; eliminá todo dato del plan anterior y llenalo únicamente con la información nueva. No la tratés como un segundo ejemplo ni combines estructuras.",
       "Revisá las Estrategias de mediación del planeamiento de referencia y usalas obligatoriamente como guía de estructura, encabezados, orden y secuencia pedagógica. Conservá sus tipos pedagógicos generales, pero redactá nuevamente los nombres de actividades, consignas, preguntas, ejercicios, ejemplos, recursos concretos y productos para las habilidades actuales. No copiés contenido sustantivo anterior ni interpretés números internos del Word como encabezados.",
       "Si el machote, ejemplo o material de referencia está en inglés, toda la salida nueva debe quedar en inglés."
     ].join("\n\n");
@@ -7013,7 +7011,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         timeout: 40000
       });
       const data = response.data?.data || response.data || {};
-      setAnalisisReferenciaIa(data as PlaneamientoReferenciaAnalisis);
+      const analisis = data as PlaneamientoReferenciaAnalisis;
+      setAnalisisReferenciaIa(analisis);
+      setSeccionModeloReferenciaIaId(analisis.seccionModeloPredeterminadaId || analisis.seccionesModelo?.[0]?.id || "");
     } catch (error: any) {
       setErrorMessage(error?.response?.data?.message || "No se pudo analizar el planeamiento de referencia");
     } finally {
@@ -7022,6 +7022,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
   }
 
   async function crearPromptPlaneamientoIa() {
+    if (analizandoReferenciaIa || !analisisReferenciaIa?.esDocx) {
+      setErrorMessage("Esperá a que el Word de referencia termine de analizarse antes de construir el prompt");
+      return;
+    }
     const prompt = construirPromptPlaneamientoIa();
     if (!prompt) {
       setErrorMessage("Completá materia, grado, al menos una sección y una habilidad antes de crear el prompt");
@@ -7385,6 +7389,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       return;
     }
 
+    if (analizandoReferenciaIa || !analisisReferenciaIa?.esDocx) {
+      setErrorMessage("Esperá a que el Word de referencia termine de analizarse antes de generar el planeamiento");
+      return;
+    }
+
     if (!planeamientoIaForm.periodicidad) {
       setErrorMessage("Seleccioná la periodicidad del planeamiento");
       return;
@@ -7424,6 +7433,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       const formData = new FormData();
       formData.append("operacionId", operacionId);
       formData.append("nombrePlaneamiento", planeamientoIaForm.nombre.trim());
+      formData.append("periodicidad", planeamientoIaForm.periodicidad);
       formData.append("materiaId", String(materiaId));
       formData.append("materiaNombre", materia?.MateriaNombre || "");
       formData.append("tipoColegio", planeamientoIaForm.tipoColegio || "Académico");
@@ -7436,11 +7446,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       formData.append("referenciaObligatoria", "true");
       formData.append("semanas", String(Number(planeamientoIaForm.semanas || 4)));
       if (plantillaPlaneamientoIaId) formData.append("plantillaPromptIAId", plantillaPlaneamientoIaId);
+      if (seccionModeloReferenciaIaId) formData.append("seccionModeloReferenciaId", seccionModeloReferenciaIaId);
       habilidadesIds.forEach((id) => formData.append("habilidadesIds[]", String(id)));
       documentoApoyoIa.forEach((file) => formData.append("documentoApoyo", file));
       formData.append("archivoReferencia", plantillaFormatoIa);
-      if (plantillaFormatoIa && usarPlantillaComoEjemploIa) formData.append("documentoApoyo", plantillaFormatoIa);
-      if (plantillaFormatoIa && usarPlantillaComoMachoteIa) formData.append("plantillaFormato", plantillaFormatoIa);
 
       const generarResponse = await api.post("/planeamiento-ia/generar-planeamiento", formData, {
         timeout: 300000
@@ -7453,8 +7462,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       resultado.competenciaGeneral = planeamientoIaForm.competenciaGeneral;
       resultado.competenciasGenerales = planeamientoIaForm.competenciaGeneral ? [planeamientoIaForm.competenciaGeneral] : [];
 
-      const revisionesInternas = Number(resultado.controlCalidad?.intentosRevision || 1) > 1 ? 1 : 0;
-
       setUltimoPlaneamientoIa(resultado);
       const generadoListoParaGuardar = resultado.controlCalidad?.puedeGuardar === true;
       setRevisionPlaneamientoIaPendiente(!generadoListoParaGuardar);
@@ -7465,11 +7472,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
           : "Planeamiento generado con observaciones"
       );
       if (generadoListoParaGuardar) {
-        setMessage(
-          revisionesInternas > 0
-            ? "Planeamiento generado, mejorado y validado automáticamente. Ya está listo para guardar."
-            : "Planeamiento generado y validado automáticamente. Ya está listo para guardar."
-        );
+        setMessage("Planeamiento generado y validado. Ya está listo para guardar.");
       } else {
         const pendientes = (resultado.controlCalidad?.verificaciones || [])
           .filter((item) => item.estado === "error")
@@ -7712,14 +7715,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setErrorMessage("Seleccioná una competencia general antes de guardar");
       return;
     }
-    if (
-      revisionPlaneamientoIaPendiente
-      || ultimoPlaneamientoIa.controlCalidad?.puedeGuardar !== true
-    ) {
-      setErrorMessage("Usá “Corregir con IA” para corregir y validar todos los ajustes antes de guardar");
-      return;
-    }
-
     const operacionId = crearOperacionIdPlaneamientoIa("guardar-planeamiento");
     setSavingPlaneamientoIa(true);
     setSavingPlaneamientoIaProgress(0);
@@ -7734,7 +7729,30 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     setErrorMessage("");
 
     try {
-      const resultadoRevisado = ultimoPlaneamientoIa;
+      let resultadoRevisado = ultimoPlaneamientoIa;
+      // Recupera resultados generados antes de que la referencia se conservara
+      // correctamente: si el DOCX aún está adjunto, se incorpora sin llamar a
+      // la IA para que el backend pueda reanalizarlo y guardar el plan.
+      if (!resultadoRevisado.plantillaFormatoDocx?.base64 && plantillaFormatoIa) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error("No se pudo leer el Word de referencia adjunto"));
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.readAsDataURL(plantillaFormatoIa);
+        });
+        const base64 = dataUrl.split(",", 2)[1] || "";
+        if (!base64) throw new Error("No se pudo conservar el Word de referencia adjunto");
+        resultadoRevisado = {
+          ...resultadoRevisado,
+          plantillaFormatoNombre: plantillaFormatoIa.name,
+          documentoReferenciaNombre: resultadoRevisado.documentoReferenciaNombre || plantillaFormatoIa.name,
+          plantillaFormatoDocx: {
+            nombre: plantillaFormatoIa.name,
+            mimeType: plantillaFormatoIa.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            base64
+          }
+        };
+      }
 
       const nombreMateriaSeleccionada = selected?.MateriaNombre || grupoSeleccionado?.MateriaNombre || "Materia";
       const gradoSeleccionado = getGradoPlaneamientoFromGrupo(selected) || getGradoPlaneamientoFromGrupo(grupoSeleccionado) || normalizarGradoPlaneamiento(planeamientoIaForm.grado);
@@ -7781,20 +7799,74 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         };
       };
 
+      // La exportación prepara y persiste el Word en el servidor. Se invoca sin
+      // descargarlo para que el botón de descarga esté disponible al terminar.
+      const prepararWordInterno = async (planeamientoId: number) => {
+        if (!planeamientoId) return false;
+        try {
+          await api.get(`/planeamiento-ia/planeamientos/${planeamientoId}/exportar-word`, {
+            responseType: "blob",
+            timeout: 120000
+          });
+          return true;
+        } catch (error) {
+          console.error("No se pudo preparar el Word interno del planeamiento:", error);
+          return false;
+        }
+      };
+      const wordsPendientes: number[] = [];
+
+      const totalValidacion = gruposSeleccionados.length;
+      const validacionPrevia = await api.post("/planeamiento-ia/validar-guardado-planeamiento", {
+        resultado: crearPayload(grupoSeleccionado, 0, totalValidacion).resultado,
+        nombre: nombrePlaneamientoCorrecto
+      });
+      const datosValidacion = validacionPrevia.data?.data || validacionPrevia.data || {};
+      const resultadoValidado = normalizePlaneamientoIaResultado(datosValidacion.resultado || resultadoRevisado);
+      setUltimoPlaneamientoIa(resultadoValidado);
+      if (datosValidacion.listoParaGuardar !== true) {
+        setRevisionPlaneamientoIaPendiente(true);
+        const pendientes = (datosValidacion.verificaciones || [])
+          .filter((item: any) => item.estado === "error")
+          .map((item: any) => item.detalle)
+          .join(" ");
+        setSavingPlaneamientoIaEtapa("El planeamiento requiere ajustes antes de guardar");
+        setErrorMessage(`El guardado no se inició. ${pendientes || "Revisá los ajustes pendientes."}`.trim());
+        return;
+      }
+      resultadoRevisado = resultadoValidado;
+
       if (editingPlaneamientoIaId) {
+        const normalizarIndicadoresParaComparar = (items: string[]) => items
+          .map((item) => String(item || "").trim().replace(/\s+/g, " ").toLocaleLowerCase())
+          .filter(Boolean);
+        const indicadoresCambiaron = JSON.stringify(normalizarIndicadoresParaComparar(indicadoresEditados))
+          !== JSON.stringify(normalizarIndicadoresParaComparar(indicadoresOriginalesPlaneamientoIaRef.current));
+        if (indicadoresCambiaron) {
+          const confirmaReemplazoIndicadores = window.confirm(
+            "Los indicadores asociados cambiarán para coincidir con esta actualización del planeamiento. ¿Deseás continuar?"
+          );
+          if (!confirmaReemplazoIndicadores) {
+            setSavingPlaneamientoIaEtapa("Actualización cancelada por la persona docente");
+            return;
+          }
+        }
         const gruposExtras = gruposSeleccionados.filter((grupo) => Number(grupo.GrupoId) !== Number(grupoSeleccionado.GrupoId));
         const totalGuardados = 1 + gruposExtras.length;
         await api.put(
           `/planeamiento-ia/planeamientos/${editingPlaneamientoIaId}/resultado`,
           crearPayload(grupoSeleccionado, 0, totalGuardados)
         );
+        if (!await prepararWordInterno(editingPlaneamientoIaId)) wordsPendientes.push(editingPlaneamientoIaId);
 
         if (gruposExtras.length > 0) {
           for (let index = 0; index < gruposExtras.length; index += 1) {
-            await api.post(
+            const respuestaGuardado = await api.post(
               "/planeamiento-ia/guardar-planeamiento",
               crearPayload(gruposExtras[index], index + 1, totalGuardados)
             );
+            const planeamientoId = Number(respuestaGuardado.data?.data?.planeamientoId || respuestaGuardado.data?.planeamientoId || 0);
+            if (!await prepararWordInterno(planeamientoId)) wordsPendientes.push(planeamientoId);
           }
           setMessage(`Planeamiento actualizado y copiado en ${gruposExtras.length} sección(es) adicional(es)`);
         } else {
@@ -7802,15 +7874,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         }
       } else {
         for (let index = 0; index < gruposSeleccionados.length; index += 1) {
-          await api.post(
+          const respuestaGuardado = await api.post(
             "/planeamiento-ia/guardar-planeamiento",
             crearPayload(gruposSeleccionados[index], index, gruposSeleccionados.length)
           );
+          const planeamientoId = Number(respuestaGuardado.data?.data?.planeamientoId || respuestaGuardado.data?.planeamientoId || 0);
+          if (!await prepararWordInterno(planeamientoId)) wordsPendientes.push(planeamientoId);
         }
         setMessage(`Planeamiento generado con IA y guardado en ${gruposSeleccionados.length} sección(es)`);
       }
+      if (wordsPendientes.length) {
+        setErrorMessage("El planeamiento se guardó, pero el Word interno no pudo prepararse. Podés usar el botón Descargar Word para intentarlo nuevamente.");
+      }
       setUltimoPlaneamientoIa(null);
       setEditingPlaneamientoIaId(null);
+      indicadoresOriginalesPlaneamientoIaRef.current = [];
       setDocumentoApoyoIa([]);
       setPlantillaFormatoIa(null);
       setAnalisisReferenciaIa(null);
@@ -8674,7 +8752,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     !planeamientoIaForm.periodicidad ? "periodicidad" : "",
     !planeamientoIaForm.competenciaGeneral ? "competencia general" : "",
     !planeamientoIaForm.habilidadesIds.length ? "habilidades" : "",
-    !plantillaFormatoIa ? "planeamiento de referencia" : ""
+    !plantillaFormatoIa ? "planeamiento de referencia" : "",
+    !analisisReferenciaIa?.esDocx ? "análisis de la referencia" : ""
   ].filter(Boolean);
   const datosPromptPlaneamientoIaCompletos = faltantesPromptPlaneamientoIa.length === 0
     && !loadingHabilidadesIa
@@ -8694,6 +8773,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     && !(ultimoPlaneamientoIa.controlCalidad?.verificaciones || []).some((item) => item.estado === "error")
     && !revisionPlaneamientoIaPendiente
   );
+  const verificacionesPlaneamientoIa = ultimoPlaneamientoIa?.controlCalidad?.verificaciones || [];
+  const planeamientoIaTieneErrores = verificacionesPlaneamientoIa.some((item) => item.estado === "error");
+  const planeamientoIaTieneAdvertencias = verificacionesPlaneamientoIa.some((item) => item.estado === "alerta");
+  const estadoPlaneamientoIa = planeamientoIaListoParaGuardar
+    ? "listo"
+    : planeamientoIaTieneErrores || revisionPlaneamientoIaPendiente
+      ? "error"
+      : planeamientoIaTieneAdvertencias
+        ? "advertencias"
+        : "error";
+  const etiquetaEstadoPlaneamientoIa = estadoPlaneamientoIa === "listo"
+    ? "Listo para guardar"
+    : estadoPlaneamientoIa === "advertencias"
+      ? "Advertencias: confirmación docente requerida"
+      : "Error: requiere ajustes";
 
   return (
     <div className="stack">
@@ -11615,8 +11709,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           setDocumentoApoyoIa([]);
                           setPlantillaFormatoIa(null);
                           setAnalisisReferenciaIa(null);
-                          setUsarPlantillaComoEjemploIa(true);
-                          setUsarPlantillaComoMachoteIa(true);
                           setPromptPlaneamientoIa("");
                           setPromptPlaneamientoIaConstruido(false);
                           setPromptPlaneamientoIaMejorado(false);
@@ -12052,53 +12144,30 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       </span>
                       <input
                         type="file"
-                        accept=".docx,.txt,.csv,.json,.md,.pdf,image/*,.png,.jpg,.jpeg,.gif,.webp"
+                        accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         onChange={(e) => {
                           const file = e.target.files?.[0] || null;
                           if (file && file.size > 20 * 1024 * 1024) {
                             setPlantillaFormatoIa(null);
-                            setUsarPlantillaComoEjemploIa(false);
-                            setUsarPlantillaComoMachoteIa(false);
                             setAnalisisReferenciaIa(null);
+                            setSeccionModeloReferenciaIaId("");
                             e.target.value = "";
                             setErrorMessage("El planeamiento de referencia no puede superar 20 MB");
                             return;
                           }
                           setPlantillaFormatoIa(file);
-                          setUsarPlantillaComoEjemploIa(Boolean(file));
-                          setUsarPlantillaComoMachoteIa(Boolean(file && /\.docx$/i.test(file.name)));
                           if (file) {
                             setErrorMessage("");
                             void analizarReferenciaPlaneamientoIa(file);
                           } else {
                             setAnalisisReferenciaIa(null);
+                            setSeccionModeloReferenciaIaId("");
                           }
                         }}
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
                       />
-                      {plantillaFormatoIa && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "8px" }}>
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#e5eefb", fontSize: "13px" }}>
-                            <input
-                              type="checkbox"
-                              checked={usarPlantillaComoEjemploIa}
-                              onChange={(e) => setUsarPlantillaComoEjemploIa(e.target.checked)}
-                            />
-                            Usar como ejemplo para la IA
-                          </label>
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#e5eefb", fontSize: "13px" }}>
-                            <input
-                              type="checkbox"
-                              checked={usarPlantillaComoMachoteIa}
-                              disabled={!/\.docx$/i.test(plantillaFormatoIa.name)}
-                              onChange={(e) => setUsarPlantillaComoMachoteIa(e.target.checked)}
-                            />
-                            Usar como machote del Word
-                          </label>
-                        </div>
-                      )}
                       <small style={{ display: "block", color: "#a8b7c9", marginTop: "4px" }}>
-                        Recomendado: subí un archivo Word .docx para conservar diseño, tablas y encabezados. Marcá ejemplo para orientar el contenido; marcá machote Word para sustituir sus datos anteriores por los del planeamiento nuevo.
+                        El Word de referencia define obligatoriamente idioma, diseño, tablas, encabezados y estructura pedagógica. El contenido anterior se sustituye por el nuevo.
                       </small>
                       {plantillaFormatoIa && (
                         <small style={{ display: "block", color: "#67e8f9", marginTop: "4px" }}>
@@ -12148,6 +12217,22 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                               Secuencia detectada: {analisisReferenciaIa.estructuraEstrategias.join(" → ")}
                             </small>
                           )}
+                          {(analisisReferenciaIa.seccionesModelo?.length ?? 0) > 1 && (
+                            <label style={{ display: "grid", gap: "4px", color: "#dcfce7", fontSize: "13px" }}>
+                              Sección del Word que se usará como modelo
+                              <select
+                                value={seccionModeloReferenciaIaId}
+                                onChange={(event) => setSeccionModeloReferenciaIaId(event.target.value)}
+                                style={{ background: "#163c31", color: "#dcfce7", border: "1px solid #4b8c72" }}
+                              >
+                                {(analisisReferenciaIa.seccionesModelo || []).map((seccion) => (
+                                  <option key={seccion.id} value={seccion.id}>
+                                    Tabla {seccion.indiceTabla}: {seccion.etiqueta}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
                           {analisisReferenciaIa.advertencias.map((advertencia, index) => (
                             <small key={`${advertencia}-${index}`} style={{ color: "#fde68a" }}>{advertencia}</small>
                           ))}
@@ -12187,7 +12272,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       <input
                         type="number"
                         min={1}
-                        max={8}
+                        max={20}
                         value={planeamientoIaForm.semanas}
                         onChange={(e) => updatePlaneamientoIaField("semanas", e.target.value)}
                         style={{ background: "#1f324a", color: "#e5eefb", border: "1px solid #4b6583" }}
@@ -12547,28 +12632,18 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         <div
                           style={{
                             padding: "12px",
-                            border: planeamientoIaListoParaGuardar ? "1px solid #3f8f6b" : "1px solid #dc665f",
-                            background: planeamientoIaListoParaGuardar ? "#102a24" : "#3a1f24",
+                            border: estadoPlaneamientoIa === "listo" ? "1px solid #3f8f6b" : estadoPlaneamientoIa === "advertencias" ? "1px solid #b58928" : "1px solid #dc665f",
+                            background: estadoPlaneamientoIa === "listo" ? "#102a24" : estadoPlaneamientoIa === "advertencias" ? "#3b3117" : "#3a1f24",
                             display: "grid",
                             gap: "8px"
                           }}
                         >
                           <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                             <strong>
-                              {planeamientoIaListoParaGuardar
-                                ? "Mejorado con IA. Listo para guardar"
-                                : "La IA debe completar ajustes"}
+                              {etiquetaEstadoPlaneamientoIa}
                             </strong>
-                            <span style={{ fontSize: "13px", fontWeight: 800 }}>
-                              Calidad: {ultimoPlaneamientoIa.controlCalidad.puntuacion ?? 0}/100
-                            </span>
                           </div>
                           <div style={{ display: "grid", gap: "6px" }}>
-                            {ultimoPlaneamientoIa.controlCalidad.reparadoAutomaticamente && (
-                              <small style={{ color: "#bfdbfe" }}>
-                                El sistema detectó diferencias y corrigió automáticamente la primera propuesta.
-                              </small>
-                            )}
                             {ultimoPlaneamientoIa.controlCalidad.usoIa ? (
                               <small style={{ color: "#bfdbfe" }}>
                                 Tokens IA: entrada {Number(ultimoPlaneamientoIa.controlCalidad.usoIa.inputTokens || 0).toLocaleString("es-CR")}, salida {Number(ultimoPlaneamientoIa.controlCalidad.usoIa.outputTokens || 0).toLocaleString("es-CR")}, total {Number(ultimoPlaneamientoIa.controlCalidad.usoIa.totalTokens || 0).toLocaleString("es-CR")}.

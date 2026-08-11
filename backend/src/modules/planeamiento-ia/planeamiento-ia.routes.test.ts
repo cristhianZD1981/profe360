@@ -2,21 +2,132 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
 import {
+  alinearMomentosConReferencia,
   analizarReferenciaDocxSemantica,
   aplicarReglasObligatoriasPlaneamiento,
   ajustarIndicadoresPorHabilidad,
   construirAdecuacionSignificativa,
   construirPerfilEstrategiasReferencia,
+  completarCamposReferenciaDeterministicamente,
+  conservarReferenciaWordEnResultado,
+  construirContenidoSeccionesPlantilla,
+  construirReferenciaEstructuralParaPrompt,
   debeAuditarPlaneamientoConIa,
   detectTemplateContentRole,
+  detectarCopiaSustantivaReferencia,
   extraerPaginasIndicadas,
   limpiarEncabezadoEstrategiaReferencia,
   normalizarAuditoriaSemantica,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
+  resolverArchivoMachoteObligatorio,
+  estructuraReferenciaConfiable,
+  validarPeriodicidadPlaneamiento,
   validarOrdenEncabezadosEstrategias,
   validarPlaneamientoGenerado
 } from "./planeamiento-ia.routes.js";
+
+test("rechaza una periodicidad que contradice los meses seleccionados", () => {
+  assert.match(
+    validarPeriodicidadPlaneamiento("Junio, Julio y Agosto", "bimestre") || "",
+    /abarcan 3 meses/i
+  );
+  assert.equal(validarPeriodicidadPlaneamiento("Junio, Julio y Agosto", "trimestre"), null);
+});
+
+test("usa archivoReferencia como machote aunque no llegue el campo antiguo plantillaFormato", () => {
+  const referencia = { originalname: "07 SETIMO MUSICA.docx" };
+  assert.equal(resolverArchivoMachoteObligatorio(referencia, null), referencia);
+  assert.equal(resolverArchivoMachoteObligatorio(null, referencia), referencia);
+});
+
+test("completa Unit Domain y Scenario con datos nuevos sin otra llamada de IA", () => {
+  const resultado: any = {
+    nombre: "August - Eighth - English",
+    materiaNombre: "English",
+    grado: "Eighth",
+    mes: "August",
+    camposReferencia: {},
+    controlCalidad: { contextoGeneracion: { tema: "Communication and listening" } }
+  };
+  completarCamposReferenciaDeterministicamente(resultado, {
+    esDocx: true,
+    columnas: [],
+    camposVariables: [
+      { etiqueta: "Unit", valorAnterior: "Old unit" },
+      { etiqueta: "Domain", valorAnterior: "Old domain" },
+      { etiqueta: "Scenario", valorAnterior: "Old scenario" }
+    ],
+    estrategiasTexto: "",
+    encabezadosEstrategias: [],
+    valoresContenidoAnterior: [],
+    cantidadSeccionesContenido: 1,
+    seccionesModelo: [],
+    descripcion: "English template"
+  }, [
+    { DescripcionHabilidad: "Interacts using listening and speaking strategies." }
+  ]);
+
+  assert.equal(resultado.camposReferencia.Unit, "Communication and listening");
+  assert.equal(resultado.camposReferencia.Domain, "English");
+  assert.match(resultado.camposReferencia.Scenario, /listening and speaking/i);
+});
+
+test("la corrección conserva el machote y reemplaza Momentos por la secuencia del Word", () => {
+  const resultadoInicial = {
+    plantillaFormatoDocx: {
+      nombre: "07 SETIMO MUSICA.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      base64: "machote-binario-prueba"
+    },
+    plantillaFormatoNombre: "07 SETIMO MUSICA.docx",
+    estructuraEstrategiasReferencia: [],
+    perfilEstrategiasReferencia: {
+      encabezados: ["Conexión - Inicio", "Construcción", "Cierre - Clarificación"],
+      cantidadParrafos: 3,
+      cantidadCaracteres: 400,
+      cantidadActividadesNumeradas: 0,
+      cantidadPreguntas: 0,
+      usaTemasNumerados: false,
+      usaActividadesNumeradas: false,
+      nivelDetalle: "breve",
+      descripcion: "Modelo de Música"
+    }
+  };
+  const respuestaCorregida = {
+    estrategiasMediacion: [
+      "Momento 1: inicio\nEscucha activa de recursos musicales.",
+      "Momento 2: desarrollo\nCreación de una secuencia sonora.",
+      "Momento 3: cierre\nReflexión sobre el producto."
+    ]
+  };
+
+  const conservado = conservarReferenciaWordEnResultado(respuestaCorregida, resultadoInicial);
+  const estructura = estructuraReferenciaConfiable(
+    conservado.estructuraEstrategiasReferencia,
+    conservado.perfilEstrategiasReferencia
+  );
+  conservado.estrategiasMediacion = alinearMomentosConReferencia(
+    conservado.estrategiasMediacion,
+    estructura
+  );
+
+  assert.equal(conservado.plantillaFormatoDocx?.base64, "machote-binario-prueba");
+  assert.deepEqual(estructura, ["Conexión - Inicio", "Construcción", "Cierre - Clarificación"]);
+  assert.doesNotMatch(conservado.estrategiasMediacion.join("\n"), /momento\s+[1-4]/i);
+  assert.match(conservado.estrategiasMediacion.join("\n"), /Conexión - Inicio/i);
+});
+
+test("sustituye Momentos genéricos por los encabezados de la referencia", () => {
+  const estrategias = alinearMomentosConReferencia([
+    "Momento 1: Propuesta del problema\nActividad contextualizada.",
+    "Momento 2: Trabajo independiente\nPráctica guiada."
+  ], ["Primera etapa: aprendizaje de conocimientos", "Segunda etapa: aplicación"]);
+
+  assert.doesNotMatch(estrategias.join("\n"), /momento\s+[1-4]\s*:/i);
+  assert.match(estrategias[0], /Primera etapa/i);
+  assert.match(estrategias[1], /Segunda etapa/i);
+});
 
 test("descarta códigos internos y limpia encabezados pedagógicos del Word", () => {
   assert.equal(limpiarEncabezadoEstrategiaReferencia("66709646701 00"), "");
@@ -221,6 +332,45 @@ test("clasifica encabezados de machotes de ingles conversacional", () => {
   assert.equal(detectTemplateContentRole(cell(paragraph("Assessment Strategies & Evidences"))), "indicadores");
 });
 
+test("clasifica las columnas exactas del machote de Musica", () => {
+  assert.equal(detectTemplateContentRole(cell(paragraph("Aprendizaje esperado"))), "aprendizajes");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Estrategias didácticas sugeridas"))), "estrategias");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Indicador del aprendizaje esperado"))), "indicadores");
+});
+
+test("el resumen estructural para la IA no expone actividades del plan anterior", () => {
+  const resumen = construirReferenciaEstructuralParaPrompt({
+    esDocx: true,
+    columnas: [
+      { indice: 0, encabezado: "Aprendizaje esperado", rol: "aprendizajes" },
+      { indice: 1, encabezado: "Estrategias didácticas sugeridas", rol: "estrategias" },
+      { indice: 2, encabezado: "Indicador del aprendizaje esperado", rol: "indicadores" }
+    ],
+    camposVariables: [],
+    estrategiasTexto: "Actividad anterior sobre culturas milenarias que nunca debe llegar al prompt.",
+    encabezadosEstrategias: ["Conexión – Inicio"],
+    valoresContenidoAnterior: ["Pregunta anterior concreta"],
+    cantidadSeccionesContenido: 1,
+    cantidadBloquesContenido: 12,
+    seccionesModelo: [],
+    descripcion: "Referencia de Música"
+  }, {
+    encabezados: ["Conexión – Inicio"],
+    cantidadParrafos: 40,
+    cantidadCaracteres: 8000,
+    cantidadActividadesNumeradas: 4,
+    cantidadPreguntas: 3,
+    usaTemasNumerados: false,
+    usaActividadesNumeradas: true,
+    nivelDetalle: "amplio",
+    descripcion: "Secuencia amplia"
+  });
+
+  assert.match(resumen, /Bloques o filas de desarrollo: 12/i);
+  assert.match(resumen, /Conexión – Inicio/i);
+  assert.doesNotMatch(resumen, /culturas milenarias|Pregunta anterior concreta/i);
+});
+
 test("la auditoria excluye metadatos que completa el servidor", () => {
   const perfil = perfilDocumentoParaRevision({
     esDocx: true,
@@ -240,6 +390,7 @@ test("la auditoria excluye metadatos que completa el servidor", () => {
     encabezadosEstrategias: [],
     valoresContenidoAnterior: [],
     cantidadSeccionesContenido: 0,
+    seccionesModelo: [],
     descripcion: "Referencia de prueba"
   });
 
@@ -539,6 +690,12 @@ test("extrae solo la estrategia y conserva encabezados dinamicos repetidos", asy
     "Construccion colaborativa",
     "Preparacion del escenario"
   ]);
+  assert.equal(perfil.seccionesModelo.length, 1);
+  assert.equal(perfil.seccionesModelo[0]?.indiceTabla, 2);
+  assert.deepEqual(
+    perfil.seccionesModelo[0]?.roles,
+    ["criterios", "estrategias", "indicadores"]
+  );
   assert.ok(perfil.camposVariables.some((campo) => campo.etiqueta === "Eje tematico"));
 });
 
@@ -586,7 +743,7 @@ test("reconoce contenido en etapas repetidas aunque el texto anterior tenga tild
   assert.ok(validacion.estrategiasEstructuradas.every((item) => item.contenido.length >= 20));
 });
 
-test("rechaza estrategias resumidas cuando la referencia tiene muchos parrafos", () => {
+test("advierte estrategias resumidas sin bloquear si tienen contenido útil", () => {
   const etapa = "PRIMERA ETAPA: APRENDIZAJE DE CONOCIMIENTOS";
   const referencia = [
     etapa,
@@ -613,7 +770,7 @@ test("rechaza estrategias resumidas cuando la referencia tiene muchos parrafos",
   });
 
   const fidelidad = validacion.verificaciones.find((item) => item.codigo === "fidelidad_referencia");
-  assert.equal(fidelidad?.estado, "error");
+  assert.equal(fidelidad?.estado, "alerta");
   assert.match(fidelidad?.detalle || "", /párrafos/i);
 });
 
@@ -647,6 +804,33 @@ test("acepta estrategias con margen minimo de parrafos si conservan profundidad 
 
   const fidelidad = validacion.verificaciones.find((item) => item.codigo === "fidelidad_referencia");
   assert.equal(fidelidad?.estado, "ok");
+});
+
+test("no exige el volumen completo de un machote trimestral amplio para pocas habilidades", () => {
+  const estrategiaSustantiva = "Construcción\n" + "Actividad musical contextualizada con escucha, exploración, producción sonora, retroalimentación y evidencia del aprendizaje. ".repeat(75);
+  const validacion = validarPlaneamientoGenerado({
+    nombre: "Junio, Julio y Agosto - Octavo - Música",
+    aprendizajesEsperados: ["Aprendizaje musical"],
+    criteriosEvaluacion: ["Criterio musical"],
+    estrategiasMediacion: Array.from({ length: 42 }, (_, i) => `${estrategiaSustantiva} ${i + 1}`),
+    indicadoresEvaluacion: ["1.1 Indicador musical"]
+  }, {
+    perfilEstrategias: {
+      encabezados: [],
+      cantidadParrafos: 248,
+      cantidadCaracteres: 25754,
+      cantidadActividadesNumeradas: 0,
+      cantidadPreguntas: 18,
+      usaTemasNumerados: false,
+      usaActividadesNumeradas: false,
+      nivelDetalle: "amplio",
+      descripcion: "Machote trimestral amplio."
+    },
+    habilidades: [{ DescripcionHabilidad: "Habilidad musical" }],
+    indicadoresEsperadosPorHabilidad: [1]
+  });
+
+  assert.equal(validacion.verificaciones.find((item) => item.codigo === "fidelidad_referencia")?.estado, "ok");
 });
 
 test("el perfil no impone momentos cuando la referencia usa otra secuencia", () => {
@@ -753,6 +937,7 @@ test("bloquea columnas vacias y estructura ajena aunque la auditoria no disponib
       encabezadosEstrategias: ["Preparacion del escenario", "Construccion colaborativa"],
       valoresContenidoAnterior: [],
       cantidadSeccionesContenido: 1,
+      seccionesModelo: [],
       descripcion: "Referencia de prueba."
     },
     auditoriaSemantica: {
@@ -771,12 +956,53 @@ test("bloquea columnas vacias y estructura ajena aunque la auditoria no disponib
       .map((item) => item.codigo)
   );
   assert.ok(errores.has("criterios_referencia"));
-  assert.ok(errores.has("estructura_estrategias"));
-  assert.ok(errores.has("fidelidad_referencia"));
   assert.ok(errores.has("campos_machote"));
+  const alertas = new Set(
+    validacion.verificaciones
+      .filter((item) => item.estado === "alerta")
+      .map((item) => item.codigo)
+  );
+  assert.ok(alertas.has("estructura_estrategias"));
   assert.equal(
     validacion.verificaciones.find((item) => item.codigo === "auditoria_semantica")?.estado,
     "alerta"
+  );
+});
+
+test("rechaza etapas genéricas ajenas al machote de referencia", () => {
+  const validacion = validarPlaneamientoGenerado({
+    nombre: "Plan de Música",
+    aprendizajesEsperados: ["Explora recursos de música digital."],
+    criteriosEvaluacion: ["Aplica recursos digitales con intención musical."],
+    estrategiasMediacion: [
+      "PRIMERA ETAPA: APRENDIZAJE DE CONOCIMIENTOS\nEl grupo escucha ejemplos y completa una guía.",
+      "SEGUNDA ETAPA: MOVILIZACIÓN Y APLICACIÓN\nEl grupo crea una secuencia sonora breve."
+    ],
+    indicadoresEvaluacion: ["1.1 Clasifica recursos de música digital."],
+    camposReferencia: {}
+  }, {
+    nombreSolicitado: "Plan de Música",
+    estructuraEstrategias: ["Conexión - Inicio", "Construcción", "Cierre - Clarificación"],
+    perfilEstrategias: {
+      encabezados: ["Conexión - Inicio", "Construcción", "Cierre - Clarificación"],
+      cantidadParrafos: 2,
+      cantidadCaracteres: 100,
+      cantidadActividadesNumeradas: 0,
+      cantidadPreguntas: 0,
+      usaTemasNumerados: false,
+      usaActividadesNumeradas: false,
+      nivelDetalle: "breve",
+      descripcion: "Secuencia propia de Música."
+    }
+  });
+
+  assert.equal(
+    validacion.verificaciones.find((item) => item.codigo === "fidelidad_referencia")?.estado,
+    "error"
+  );
+  assert.match(
+    validacion.verificaciones.find((item) => item.codigo === "fidelidad_referencia")?.detalle || "",
+    /etapas genéricas/i
   );
 });
 
@@ -822,6 +1048,7 @@ test("permite guardar si solo falla la disponibilidad de la auditoria independie
       encabezadosEstrategias: [etapa, "Construccion colaborativa"],
       valoresContenidoAnterior: [],
       cantidadSeccionesContenido: 1,
+      seccionesModelo: [],
       descripcion: "Referencia de prueba."
     },
     auditoriaSemantica: {
@@ -896,4 +1123,230 @@ test("el Word coloca criterios, estrategias e indicadores en sus columnas correc
   assert.ok(indicadorIndex > estrategiaIndex);
   assert.doesNotMatch(xml, /Criterio anterior del plan/);
   assert.doesNotMatch(xml, /Indicador anterior del plan/);
+});
+
+test("distribuye el contenido global entre varias tablas sin copiar el bloque completo", () => {
+  const sections = construirContenidoSeccionesPlantilla({}, {
+    aprendizajes: ["Aprendizaje 1", "Aprendizaje 2"],
+    criterios: ["Criterio 1", "Criterio 2"],
+    estrategias: ["Actividad 1", "Actividad 2", "Actividad 3", "Actividad 4"],
+    indicadores: ["1.1 Indicador 1", "2.1 Indicador 2"]
+  }, 2);
+
+  assert.deepEqual(sections[0].estrategias, ["Actividad 1", "Actividad 2"]);
+  assert.deepEqual(sections[1].estrategias, ["Actividad 3", "Actividad 4"]);
+  assert.notDeepEqual(sections[0], sections[1]);
+});
+
+test("el Word usa un bloque semanal distinto por tabla y elimina contenido pedagogico anterior", async () => {
+  const weeklyTable = (suffix: string) => table(
+    row(cell(
+      paragraph("Grammar & Sentence Frames"),
+      paragraph(`Old grammar ${suffix}`),
+      paragraph("Vocabulary"),
+      paragraph(`Old social networks ${suffix}`),
+      paragraph("Phonology"),
+      paragraph(`Old phonology ${suffix}`)
+    )),
+    row(
+      cell(paragraph("Assessment Strategies & Evidences")),
+      cell(paragraph("Learner can")),
+      cell(paragraph("Didactic Sequence Mediation"))
+    ),
+    row(
+      cell(paragraph(`Old indicator ${suffix}`)),
+      cell(paragraph(`Old learning ${suffix}`)),
+      cell(paragraph(`Old mediation ${suffix}`))
+    )
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${weeklyTable("one")}${weeklyTable("two")}</w:body>
+</w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const templateBuffer = await zip.generateAsync({ type: "nodebuffer" });
+
+  const output = await renderPlaneamientoEnPlantillaDocx({
+    resultado: {
+      plantillaFormatoDocx: { base64: templateBuffer.toString("base64") },
+      semanas: [
+        {
+          semana: 1,
+          habilidadBase: "Learning week one",
+          proposito: "Purpose week one",
+          mediacionPedagogica: ["Activity week one"],
+          indicadores: ["1.1 Indicator week one"],
+          camposPedagogicos: [
+            { campo: "Grammar & Sentence Frames", valores: ["Present simple week one"] },
+            { campo: "Vocabulary", valores: ["Wildlife week one"] },
+            { campo: "Phonology", valores: ["Animal sounds week one"] }
+          ]
+        },
+        {
+          semana: 2,
+          habilidadBase: "Learning week two",
+          proposito: "Purpose week two",
+          mediacionPedagogica: ["Activity week two"],
+          indicadores: ["2.1 Indicator week two"],
+          camposPedagogicos: [{ campo: "Vocabulary", valores: ["Conservation week two"] }]
+        }
+      ]
+    },
+    row: { MateriaNombre: "English", Observaciones: "" },
+    contenido: {
+      periodicidad: "month",
+      competenciaGeneral: "",
+      aprendizajes: ["Global learning"],
+      criterios: ["Global criterion one", "Global criterion two"],
+      estrategias: ["Global activity one", "Global activity two"],
+      indicadores: ["Global indicator"],
+      reflexiones: {},
+      observaciones: ""
+    },
+    docente: "Teacher",
+    direccionRegional: "Regional",
+    centroEducativo: "School",
+    anioEscolar: "2026",
+    cursoLectivo: "Ninth",
+    periodoTexto: "March"
+  });
+
+  assert.ok(output);
+  const outputZip = await JSZip.loadAsync(output!);
+  const outputXml = await outputZip.file("word/document.xml")!.async("string");
+  assert.equal((outputXml.match(/Activity week one/g) || []).length, 1);
+  assert.equal((outputXml.match(/Activity week two/g) || []).length, 1);
+  assert.match(outputXml, /Wildlife week one/);
+  assert.match(outputXml, /Conservation week two/);
+  assert.match(outputXml, /Grammar &amp; Sentence Frames/);
+  assert.match(outputXml, /Phonology/);
+  assert.doesNotMatch(outputXml, /Old grammar|Old social networks|Old phonology|Old mediation|Old learning|Old indicator/);
+});
+
+test("el machote de Musica renueva cada fila de una misma tabla sin copiar el trimestre anterior", async () => {
+  const musicTable = table(
+    row(
+      cell(paragraph("Aprendizaje esperado")),
+      cell(paragraph("Estrategias didácticas sugeridas")),
+      cell(paragraph("Indicador del aprendizaje esperado"))
+    ),
+    row(
+      cell(paragraph("Aprendizaje anterior uno")),
+      cell(paragraph("JUNIO semana 1"), paragraph("Actividad anterior sobre culturas milenarias uno.")),
+      cell(paragraph("Se anota en las observaciones del proyecto."))
+    ),
+    row(
+      cell(paragraph("Aprendizaje anterior dos")),
+      cell(paragraph("JUNIO semana 2"), paragraph("Actividad anterior sobre culturas milenarias dos.")),
+      cell(paragraph("Indicador anterior dos"))
+    )
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${musicTable}</w:body></w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const templateBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  const output = await renderPlaneamientoEnPlantillaDocx({
+    resultado: {
+      plantillaFormatoDocx: { base64: templateBuffer.toString("base64") },
+      semanas: [
+        {
+          semana: 1,
+          habilidadBase: "Analiza recursos de producción musical.",
+          proposito: "Reconocer recursos.",
+          mediacionPedagogica: ["Setiembre semana 1", "Explora una estación de producción sonora y registra hallazgos nuevos."],
+          indicadores: ["1.1 Reconoce recursos en una estación sonora."],
+          camposPedagogicos: []
+        },
+        {
+          semana: 2,
+          habilidadBase: "Aplica recursos de producción musical.",
+          proposito: "Producir una secuencia.",
+          mediacionPedagogica: ["Setiembre semana 2", "Crea una secuencia sonora inédita y explica las decisiones técnicas."],
+          indicadores: ["2.1 Produce una secuencia sonora verificable."],
+          camposPedagogicos: []
+        }
+      ]
+    },
+    row: { MateriaNombre: "Música", Observaciones: "" },
+    contenido: {
+      periodicidad: "trimestre",
+      competenciaGeneral: "",
+      aprendizajes: ["Aprendizaje global uno", "Aprendizaje global dos"],
+      criterios: ["Criterio uno", "Criterio dos"],
+      estrategias: ["Estrategia global uno", "Estrategia global dos"],
+      indicadores: ["1.1 Indicador global uno", "2.1 Indicador global dos"],
+      reflexiones: {},
+      observaciones: ""
+    },
+    docente: "Docente",
+    direccionRegional: "Coto",
+    centroEducativo: "Colegio",
+    anioEscolar: "2026",
+    cursoLectivo: "Octavo",
+    periodoTexto: "II trimestre"
+  });
+
+  assert.ok(output);
+  const outputZip = await JSZip.loadAsync(output!);
+  const outputXml = await outputZip.file("word/document.xml")!.async("string");
+  assert.equal((outputXml.match(/Setiembre semana 1/g) || []).length, 1);
+  assert.equal((outputXml.match(/Setiembre semana 2/g) || []).length, 1);
+  assert.match(outputXml, /Explora una estación de producción sonora/);
+  assert.match(outputXml, /Crea una secuencia sonora inédita/);
+  assert.doesNotMatch(outputXml, /JUNIO|culturas milenarias|Aprendizaje anterior|Indicador anterior/);
+});
+
+test("detecta una copia sustantiva de las estrategias de referencia", () => {
+  const copiadoUno = "La persona docente proyecta un video sobre culturas milenarias y solicita comparar sus paisajes sonoros mediante preguntas concretas. Después organiza una plenaria y registra las respuestas del grupo en una guía de observación detallada.";
+  const copiadoDos = "El estudiantado recopila información bibliográfica, prepara una muestra musical y presenta los hallazgos obtenidos ante el grupo. Finalmente construye réplicas de instrumentos, documenta el procedimiento y evalúa colectivamente los productos elaborados.";
+  const deteccion = detectarCopiaSustantivaReferencia({
+    estrategiasMediacion: [copiadoUno, copiadoDos, "Cierre nuevo y breve."]
+  }, {
+    esDocx: true,
+    columnas: [],
+    camposVariables: [],
+    estrategiasTexto: `${copiadoUno}\n${copiadoDos}`,
+    encabezadosEstrategias: [],
+    valoresContenidoAnterior: [],
+    cantidadSeccionesContenido: 1,
+    cantidadBloquesContenido: 2,
+    seccionesModelo: [],
+    descripcion: "Referencia"
+  });
+
+  assert.equal(deteccion.copiaSustantiva, true);
+  assert.equal(deteccion.coincidencias.length, 2);
+});
+
+test("el contrato estructurado exige cobertura verificable para cada habilidad", () => {
+  const resultado = {
+    contratoGeneracion: "planeamiento-estructurado-v1",
+    aprendizajesEsperados: ["Resuelve ecuaciones de primer grado."],
+    criteriosEvaluacion: ["Aplica procedimientos algebraicos."],
+    estrategiasMediacion: ["El estudiantado modela y resuelve ecuaciones en parejas."],
+    indicadoresEvaluacion: [
+      "1.1 Comprueba la solución de una ecuación de primer grado.",
+      "2.1 Plantea una ecuación a partir de un problema contextualizado."
+    ],
+    coberturaHabilidades: [
+      { habilidadIndice: 1, aprendizajesIndices: [1], indicadoresIndices: [1] },
+      { habilidadIndice: 2, aprendizajesIndices: [], indicadoresIndices: [2] }
+    ]
+  };
+
+  const validacion = validarPlaneamientoGenerado(resultado, {
+    habilidades: [
+      { DescripcionHabilidad: "Comprueba ecuaciones de primer grado." },
+      { DescripcionHabilidad: "Plantea problemas con ecuaciones." }
+    ],
+    indicadoresEsperadosPorHabilidad: [1, 1]
+  });
+
+  assert.equal(validacion.puedeGuardar, false);
+  assert.equal(
+    validacion.verificaciones.find((item) => item.codigo === "cobertura_habilidades")?.estado,
+    "error"
+  );
 });
