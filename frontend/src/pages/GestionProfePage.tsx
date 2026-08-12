@@ -7631,9 +7631,15 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       MateriaNombre: materiaNombre
     } as PlaneamientoIaResultado;
 
+    // El Word ya fue analizado al generar el resultado. Reenviarlo en cada
+    // corrección convertía el JSON en una carga de 25+ MB sin aportar nada a
+    // la IA; el archivo se conserva localmente y se adjunta de nuevo solo al
+    // guardar si el resultado revisado aún no lo incluye.
+    const { plantillaFormatoDocx: _plantillaFormatoDocx, documentoWordInterno: _documentoWordInterno, ...resultadoLigero } = resultadoParaRevision as any;
+
     const response = await api.post("/planeamiento-ia/revisar-planeamiento", {
       operacionId,
-      resultado: resultadoParaRevision,
+      resultado: resultadoLigero,
       nombre,
       materiaNombre,
       grado,

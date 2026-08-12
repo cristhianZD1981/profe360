@@ -20,6 +20,7 @@ import {
   normalizarAuditoriaSemantica,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
+  validarWordExportadoContraReferencia,
   resolverArchivoMachoteObligatorio,
   estructuraReferenciaConfiable,
   validarPeriodicidadPlaneamiento,
@@ -90,7 +91,9 @@ test("completa campos particulares de cualquier machote con el contexto actual",
     columnas: [],
     camposVariables: [
       { etiqueta: "Tiempo estimado", valorAnterior: "6 semanas" },
-      { etiqueta: "Eje de la política educativa", valorAnterior: "Valor anterior" },
+      { etiqueta: "Eje de la política educativa", valorAnterior: "Educación para el desarrollo sostenible" },
+      { etiqueta: "Carrera técnica", valorAnterior: "Organización de empresas de turismo rural" },
+      { etiqueta: "Competencias para el desarrollo humano", valorAnterior: "Proactividad" },
       { etiqueta: "Contexto disciplinar particular", valorAnterior: "Tema anterior" }
     ],
     estrategiasTexto: "",
@@ -102,9 +105,14 @@ test("completa campos particulares de cualquier machote con el contexto actual",
     descripcion: "Machote variable"
   }, [{ DescripcionHabilidad: "Analiza relaciones en los ecosistemas." }]);
 
-  assert.equal(resultado.camposReferencia["Tiempo estimado"], "4 semanas");
+  assert.equal(resultado.camposReferencia["Tiempo estimado"], "6 semanas");
   assert.equal(
     resultado.camposReferencia["Eje de la política educativa"],
+    "Educación para el desarrollo sostenible"
+  );
+  assert.equal(resultado.camposReferencia["Carrera técnica"], "Organización de empresas de turismo rural");
+  assert.equal(
+    resultado.camposReferencia["Competencias para el desarrollo humano"],
     "Competencias para la ciudadanía responsable y solidaria"
   );
   assert.equal(resultado.camposReferencia["Contexto disciplinar particular"], "Ecosistemas");
@@ -382,6 +390,14 @@ test("clasifica las columnas exactas del machote de Musica", () => {
   assert.equal(detectTemplateContentRole(cell(paragraph("Aprendizaje esperado"))), "aprendizajes");
   assert.equal(detectTemplateContentRole(cell(paragraph("Estrategias didácticas sugeridas"))), "estrategias");
   assert.equal(detectTemplateContentRole(cell(paragraph("Indicador del aprendizaje esperado"))), "indicadores");
+});
+
+test("clasifica por separado las cinco columnas de un plan tecnico", () => {
+  assert.equal(detectTemplateContentRole(cell(paragraph("Resultados de aprendizaje"))), "aprendizajes");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Saberes esenciales"))), "saberes");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Estrategias para la mediación pedagógica"))), "estrategias");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Evidencias de aprendizaje"))), "indicadores");
+  assert.equal(detectTemplateContentRole(cell(paragraph("Tiempo estimado (horas)"))), "tiempo");
 });
 
 test("el resumen estructural para la IA no expone actividades del plan anterior", () => {
@@ -1182,6 +1198,172 @@ test("distribuye el contenido global entre varias tablas sin copiar el bloque co
   assert.deepEqual(sections[0].estrategias, ["Actividad 1", "Actividad 2"]);
   assert.deepEqual(sections[1].estrategias, ["Actividad 3", "Actividad 4"]);
   assert.notDeepEqual(sections[0], sections[1]);
+});
+
+test("no convierte nueve filas tecnicas en nueve semanas ni repite habilidades", () => {
+  const sections = construirContenidoSeccionesPlantilla({
+    semanas: Array.from({ length: 4 }, (_, index) => ({
+      semana: index + 1,
+      habilidadBase: index % 2 ? "Habilidad semanal B" : "Habilidad semanal A",
+      mediacionPedagogica: [`Mediación semanal ${index + 1}`],
+      indicadores: [`Indicador semanal ${index + 1}`]
+    }))
+  }, {
+    aprendizajes: ["Aprendizaje A", "Aprendizaje B"],
+    saberes: ["Saber A", "Saber B"],
+    criterios: ["Criterio A", "Criterio B"],
+    estrategias: Array.from({ length: 9 }, (_, index) => `Actividad técnica ${index + 1}`),
+    indicadores: ["1.1 Evidencia A", "2.1 Evidencia B"]
+  }, 9);
+
+  assert.equal(sections.length, 9);
+  assert.equal(sections.flatMap((section) => section.aprendizajes).filter((item) => item === "Aprendizaje A").length, 1);
+  assert.equal(sections.flatMap((section) => section.aprendizajes).filter((item) => item === "Aprendizaje B").length, 1);
+  assert.equal(sections.flatMap((section) => section.estrategias).length, 9);
+  assert.equal(sections.flatMap((section) => section.estrategias).some((item) => /Mediación semanal/.test(item)), false);
+});
+
+test("el Word tecnico separa saberes y conserva tiempos sin copiar contenido anterior", async () => {
+  const technicalTable = table(
+    row(
+      cell(paragraph("Resultados de aprendizaje")),
+      cell(paragraph("Saberes esenciales")),
+      cell(paragraph("Estrategias para la mediación pedagógica")),
+      cell(paragraph("Evidencias de aprendizaje")),
+      cell(paragraph("Tiempo estimado (horas)"))
+    ),
+    ...Array.from({ length: 9 }, (_, index) => row(
+      cell(paragraph(`Aprendizaje anterior ${index + 1}`)),
+      cell(paragraph(`Saber anterior ${index + 1}`)),
+      cell(paragraph(`Actividad anterior ${index + 1}`)),
+      cell(paragraph(`Evidencia anterior ${index + 1}`)),
+      cell(paragraph(`${index + 1} Horas`))
+    ))
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${technicalTable}</w:body></w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const templateBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  const output = await renderPlaneamientoEnPlantillaDocx({
+    resultado: {
+      plantillaFormatoDocx: { base64: templateBuffer.toString("base64") },
+      semanas: Array.from({ length: 4 }, (_, index) => ({
+        semana: index + 1,
+        habilidadBase: index % 2 ? "Habilidad B" : "Habilidad A",
+        mediacionPedagogica: [`Mediación semanal ${index + 1}`],
+        indicadores: [`Indicador semanal ${index + 1}`]
+      }))
+    },
+    row: { MateriaNombre: "Turismo rural", Observaciones: "" },
+    contenido: {
+      periodicidad: "mes",
+      competenciaGeneral: "",
+      aprendizajes: ["Aprendizaje nuevo A", "Aprendizaje nuevo B"],
+      saberes: ["Saber esencial nuevo A", "Saber esencial nuevo B"],
+      criterios: ["Criterio nuevo A", "Criterio nuevo B"],
+      estrategias: Array.from({ length: 9 }, (_, index) => `Actividad técnica nueva ${index + 1}`),
+      indicadores: ["1.1 Evidencia nueva A", "2.1 Evidencia nueva B"],
+      reflexiones: {},
+      observaciones: ""
+    },
+    docente: "Docente",
+    direccionRegional: "Coto",
+    centroEducativo: "CTP",
+    anioEscolar: "2026",
+    cursoLectivo: "Décimo",
+    periodoTexto: "Mayo"
+  });
+
+  assert.ok(output);
+  const outputZip = await JSZip.loadAsync(output!);
+  const outputXml = await outputZip.file("word/document.xml")!.async("string");
+  assert.equal((outputXml.match(/Aprendizaje nuevo A/g) || []).length, 1);
+  assert.equal((outputXml.match(/Aprendizaje nuevo B/g) || []).length, 1);
+  assert.equal((outputXml.match(/Saber esencial nuevo A/g) || []).length, 1);
+  assert.equal((outputXml.match(/Saber esencial nuevo B/g) || []).length, 1);
+  assert.equal((outputXml.match(/Actividad técnica nueva/g) || []).length, 9);
+  assert.doesNotMatch(outputXml, /Aprendizaje anterior|Saber anterior|Actividad anterior|Evidencia anterior/);
+  assert.match(outputXml, /1 Horas/);
+  assert.match(outputXml, /9 Horas/);
+});
+
+test("verifica el Word final por estructura universal sin depender de la materia", async () => {
+  const universalTable = table(
+    row(
+      cell(paragraph("Resultados de aprendizaje")),
+      cell(paragraph("Saberes esenciales")),
+      cell(paragraph("Estrategias para la mediación pedagógica")),
+      cell(paragraph("Evidencias de aprendizaje")),
+      cell(paragraph("Tiempo estimado (horas)"))
+    ),
+    row(
+      cell(paragraph("Aprendizaje anterior extenso que debe desaparecer por completo.")),
+      cell(paragraph("Saber anterior extenso que debe desaparecer por completo.")),
+      cell(paragraph("Estrategia anterior extensa que debe desaparecer por completo y no corresponde a la materia nueva.")),
+      cell(paragraph("Evidencia anterior extensa que debe desaparecer por completo.")),
+      cell(paragraph("8 horas"))
+    )
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${universalTable}</w:body></w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const templateBuffer = await zip.generateAsync({ type: "nodebuffer" });
+  const contenido = {
+    periodicidad: "mes",
+    competenciaGeneral: "",
+    aprendizajes: ["Aprendizaje nuevo aplicable a cualquier área curricular."],
+    saberes: ["Saber nuevo conceptual y procedimental de la materia actual."],
+    criterios: ["Criterio nuevo observable."],
+    estrategias: ["Estrategia nueva con acciones de la persona docente y del estudiantado para la habilidad actual."],
+    indicadores: ["1.1 Evidencia nueva observable del aprendizaje actual."],
+    reflexiones: {},
+    observaciones: ""
+  };
+  const output = await renderPlaneamientoEnPlantillaDocx({
+    resultado: { plantillaFormatoDocx: { base64: templateBuffer.toString("base64") } },
+    row: { MateriaNombre: "Materia nueva", Observaciones: "" }, contenido,
+    docente: "Docente", direccionRegional: "Regional", centroEducativo: "Centro",
+    anioEscolar: "2026", cursoLectivo: "Décimo", periodoTexto: "Mayo"
+  });
+  assert.ok(output);
+  const verificacion = await validarWordExportadoContraReferencia({
+    referencia: templateBuffer,
+    generado: output!,
+    contenido,
+    nombreReferencia: "plantilla-desconocida.docx"
+  });
+  assert.equal(verificacion.valido, true, verificacion.errores.join(" | "));
+
+  const plantillaSinRenovar = await validarWordExportadoContraReferencia({
+    referencia: templateBuffer,
+    generado: templateBuffer,
+    contenido,
+    nombreReferencia: "plantilla-desconocida.docx"
+  });
+  assert.equal(plantillaSinRenovar.valido, false);
+  assert.ok(plantillaSinRenovar.errores.length > 0);
+});
+
+test("no cuenta observaciones repetidas por celdas combinadas como fila pedagogica", async () => {
+  const tableWithClosingRow = table(
+    row(
+      cell(paragraph("Resultados de aprendizaje")),
+      cell(paragraph("Estrategias para la mediación pedagógica")),
+      cell(paragraph("Evidencias de aprendizaje"))
+    ),
+    row(cell(paragraph("Aprendizaje anterior 1")), cell(paragraph("Estrategia anterior 1")), cell(paragraph("Evidencia anterior 1"))),
+    row(cell(paragraph("Aprendizaje anterior 2")), cell(paragraph("Estrategia anterior 2")), cell(paragraph("Evidencia anterior 2"))),
+    row(cell(paragraph("Observaciones:")), cell(paragraph("Observaciones:")), cell(paragraph("Observaciones:")))
+  );
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${tableWithClosingRow}</w:body></w:document>`;
+  const zip = new JSZip();
+  zip.file("word/document.xml", xml);
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
+  const perfil = await analizarReferenciaDocxSemantica({ buffer, originalname: "cierre-repetido.docx" } as any);
+  assert.equal(perfil.cantidadBloquesContenido, 2);
 });
 
 test("el Word usa un bloque semanal distinto por tabla y elimina contenido pedagogico anterior", async () => {

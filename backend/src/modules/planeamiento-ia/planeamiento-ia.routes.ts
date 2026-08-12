@@ -198,7 +198,7 @@ type PerfilEstrategiasReferencia = {
   descripcion: string;
 };
 
-type TemplateContentRole = "aprendizajes" | "criterios" | "estrategias" | "indicadores";
+type TemplateContentRole = "aprendizajes" | "saberes" | "criterios" | "estrategias" | "indicadores" | "tiempo";
 
 type ColumnaReferencia = {
   indice: number;
@@ -224,6 +224,11 @@ export type SeccionModeloReferencia = {
 
 export type PerfilDocumentoReferencia = {
   esDocx: boolean;
+  cantidadTablas?: number;
+  // Topología física del documento. Esta es la fuente de verdad para saber
+  // si la exportación agregó o eliminó filas; el conteo semántico puede variar
+  // por celdas combinadas o rótulos de cierre repetidos por Word.
+  filasFisicasPorTabla?: number[];
   columnas: ColumnaReferencia[];
   camposVariables: CampoVariableReferencia[];
   estrategiasTexto: string;
@@ -975,6 +980,9 @@ Devolvé SOLO JSON válido, sin markdown, con esta estructura exacta:
     "1: ...",
     "2: ..."
   ],
+  "saberesEsenciales": [
+    "Conceptos, procedimientos y actitudes nuevos vinculados con cada aprendizaje..."
+  ],
   "criteriosEvaluacion": [
     "Criterio directamente relacionado con cada aprendizaje o habilidad..."
   ],
@@ -1182,6 +1190,7 @@ ${clampPromptText(row.FormatoRespuesta, 8000)}
 
 CAMPOS JSON ADICIONALES OBLIGATORIOS:
 - "criteriosEvaluacion": arreglo de criterios nuevos, separado de "indicadoresEvaluacion".
+- "saberesEsenciales": arreglo de contenidos conceptuales, procedimentales y actitudinales propios de las habilidades actuales. No repitás literalmente los aprendizajes; usalo cuando el machote incluya Saberes esenciales, contenidos u objetos de conocimiento.
 - "semanas": generá exactamente ${input.semanas || 4} bloques semanales distintos y progresivos. Cada bloque contiene "semana", "habilidadBase", "proposito", "mediacionPedagogica", "indicadores" y "camposPedagogicos". No repitás literalmente el mismo bloque en semanas diferentes.
 - "camposPedagogicos": arreglo de objetos { "campo", "valores" } dentro de cada semana. Completá con contenido nuevo los rótulos pedagógicos variables observados en el machote (por ejemplo Grammar & Sentence Frames, Vocabulary, Phonology, Function, Discourse Markers, Psychosocial y Sociocultural). Si no existen rótulos adicionales, devolvé un arreglo vacío.
 - "camposReferencia": arreglo de objetos { "campo", "valor" }; cada campo corresponde a un rótulo variable del machote.
@@ -1317,6 +1326,7 @@ const PLANEAMIENTO_GENERACION_SCHEMA: Record<string, any> = {
   required: [
     "nombre",
     "aprendizajesEsperados",
+    "saberesEsenciales",
     "criteriosEvaluacion",
     "estrategiasMediacion",
     "indicadoresEvaluacion",
@@ -1328,6 +1338,7 @@ const PLANEAMIENTO_GENERACION_SCHEMA: Record<string, any> = {
   properties: {
     nombre: { type: "string" },
     aprendizajesEsperados: { type: "array", items: { type: "string" } },
+    saberesEsenciales: { type: "array", items: { type: "string" } },
     criteriosEvaluacion: { type: "array", items: { type: "string" } },
     estrategiasMediacion: { type: "array", items: { type: "string" } },
     indicadoresEvaluacion: { type: "array", items: { type: "string" } },
@@ -2691,6 +2702,13 @@ export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, inp
   });
 
   resultado.aprendizajesEsperados = corregirErroresOrtograficosLista(splitLines(resultado.aprendizajesEsperados));
+  resultado.saberesEsenciales = corregirErroresOrtograficosLista(
+    splitLines(resultado.saberesEsenciales).length
+      ? splitLines(resultado.saberesEsenciales)
+      : splitLines(resultado.criteriosEvaluacion).length
+        ? splitLines(resultado.criteriosEvaluacion)
+        : input.habilidades.map((habilidad) => String(habilidad?.DescripcionHabilidad || "").trim()).filter(Boolean)
+  );
   resultado.criteriosEvaluacion = corregirErroresOrtograficosLista(
     splitLines(resultado.criteriosEvaluacion).length
       ? splitLines(resultado.criteriosEvaluacion)
@@ -4009,13 +4027,14 @@ function mensajeMachoteWordFaltante() {
 
 function crearHuellaDocumentoWord(resultado: any, row: any, contenido: any) {
   const fuente = {
-    version: "word-con-machote-v4-filas-semanticas-sin-copia",
+    version: "word-con-machote-v5-columnas-tecnicas-sin-repeticion",
     referencia: String(resultado?.plantillaFormatoDocx?.base64 || ""),
     nombre: String(row?.Nombre || contenido?.nombre || ""),
     materia: String(row?.MateriaNombre || resultado?.materiaNombre || ""),
     grupo: String(row?.GrupoId || ""),
     resultado: {
       aprendizajes: splitLines(resultado?.aprendizajesEsperados),
+      saberes: splitLines(resultado?.saberesEsenciales),
       criterios: splitLines(resultado?.criteriosEvaluacion),
       estrategias: splitLines(resultado?.estrategiasMediacion),
       indicadores: splitLines(resultado?.indicadoresEvaluacion),
@@ -4437,9 +4456,30 @@ function extraerCampoVariableReferencia(cellXml: string): CampoVariableReferenci
   return { etiqueta, valorAnterior };
 }
 
+// Word puede repetir el texto de una celda combinada al serializarla. Por eso
+// no basta con mirar el texto completo de la fila: identificamos los rótulos
+// de cierre por celda, sin confundir una frase pedagógica que solo mencione
+// "observaciones" dentro de un indicador.
+function esFilaCierreContenido(cells: string[]) {
+  const textos = cells.map((cell) => normalizarParaBusqueda(cell)).filter(Boolean);
+  if (!textos.length) return false;
+  const esEtiqueta = (texto: string) => /^(?:reflexiones docentes|teacher reflections|observaciones|observations)\s*:?$/.test(texto);
+  if (textos.every(esEtiqueta)) return true;
+  // En una fila combinada Word puede repetir también el valor que sigue al
+  // rótulo (por ejemplo, "Observaciones: Pendiente"). Si todas las celdas
+  // son esa misma clase de rótulo, sigue siendo una fila de cierre, no una
+  // fila pedagógica adicional.
+  if (textos.every((texto) => /^(?:reflexiones docentes|teacher reflections|observaciones|observations)\s*:/i.test(texto))) return true;
+  // También aceptamos una sola celda rotulada con un valor vacío o texto
+  // breve de docente; las demás celdas deben estar vacías para ser cierre.
+  return textos.length === 1 && /^(?:reflexiones docentes|teacher reflections|observaciones|observations)\s*:/i.test(textos[0]);
+}
+
 export async function analizarReferenciaDocxSemantica(file?: Express.Multer.File): Promise<PerfilDocumentoReferencia> {
   const vacio: PerfilDocumentoReferencia = {
     esDocx: false,
+    cantidadTablas: 0,
+    filasFisicasPorTabla: [],
     columnas: [],
     camposVariables: [],
     estrategiasTexto: "",
@@ -4457,6 +4497,7 @@ export async function analizarReferenciaDocxSemantica(file?: Express.Multer.File
     const documentXml = await zip.file("word/document.xml")?.async("string");
     if (!documentXml) return { ...vacio, esDocx: true, descripcion: "El DOCX no contiene word/document.xml." };
 
+    const tablasDocumento = getDirectXmlElements(documentXml, "w:tbl");
     const columnas: ColumnaReferencia[] = [];
     const camposVariables: CampoVariableReferencia[] = [];
     const estrategiasPartes: string[] = [];
@@ -4466,7 +4507,7 @@ export async function analizarReferenciaDocxSemantica(file?: Express.Multer.File
     let cantidadSeccionesContenido = 0;
     let cantidadBloquesContenido = 0;
 
-    for (const [indiceTabla, tableXml] of getDirectXmlElements(documentXml, "w:tbl").entries()) {
+    for (const [indiceTabla, tableXml] of tablasDocumento.entries()) {
       const rows = getDirectXmlElements(tableXml, "w:tr");
       let rolesActivos: Array<TemplateContentRole | null> | null = null;
 
@@ -4480,11 +4521,7 @@ export async function analizarReferenciaDocxSemantica(file?: Express.Multer.File
           && cells.length >= 3
           && roles.includes("estrategias")
           && tieneColumnaContenido;
-        const rowText = normalizarParaBusqueda(xmlWordToText(rowXml));
-        const terminaContenido = rowText.includes("reflexiones docentes")
-          || rowText.includes("teacher reflections")
-          || rowText.startsWith("observaciones")
-          || rowText.startsWith("observations");
+        const terminaContenido = esFilaCierreContenido(cells.map((cellXml) => xmlWordToText(cellXml)));
 
         if (esCabeceraContenido) {
           rolesActivos = roles;
@@ -4604,6 +4641,8 @@ export async function analizarReferenciaDocxSemantica(file?: Express.Multer.File
 
     return {
       esDocx: true,
+      cantidadTablas: tablasDocumento.length,
+      filasFisicasPorTabla: tablasDocumento.map((tablaXml) => getDirectXmlElements(tablaXml, "w:tr").length),
       columnas: columnasUnicas,
       camposVariables: camposUnicos,
       estrategiasTexto,
@@ -4864,6 +4903,11 @@ function instruccionPerfilDocumentoReferencia(perfil?: PerfilDocumentoReferencia
   const campos = perfil.camposVariables
     .filter((campo) => !esCampoMetadataFijo(campo.etiqueta))
     .map((campo) => campo.etiqueta);
+  const reglaFilasContenido = perfil.cantidadBloquesContenido
+    && perfil.cantidadBloquesContenido >= 2
+    && perfil.cantidadBloquesContenido <= 20
+      ? `- El Word contiene ${perfil.cantidadBloquesContenido} filas físicas de desarrollo. Generá al menos ${perfil.cantidadBloquesContenido} bloques globales de Estrategias de mediación distintos y sustantivos para renovar cada fila. Esas filas no son semanas: mantené en "semanas" únicamente la cantidad solicitada por el formulario.`
+      : "";
   return `
 PERFIL SEMÁNTICO OBLIGATORIO DEL DOCUMENTO DE REFERENCIA:
 - ${perfil.descripcion}
@@ -4872,6 +4916,7 @@ PERFIL SEMÁNTICO OBLIGATORIO DEL DOCUMENTO DE REFERENCIA:
 - La estructura nace de este documento específico. No apliqués fases, momentos, apartados ni secuencias predeterminadas de otra materia.
 - "Criterios de Evaluación" y "Indicadores" son columnas distintas. Nunca coloqués los indicadores numerados dentro de Criterios.
 - En "camposReferencia" devolvé una propiedad para cada campo variable detectado, usando exactamente su rótulo y un valor nuevo coherente con los datos actuales.
+${reglaFilasContenido}
 - Todo dato sustantivo anterior del machote debe desaparecer, salvo que también forme parte explícita de las habilidades, tema o indicaciones actuales.
 `.trim();
 }
@@ -5109,6 +5154,7 @@ function esCampoMetadataFijo(etiqueta: string) {
     "academic year",
     "school year",
     "grado",
+    "nivel",
     "nivel educativo",
     "level",
     "grade level",
@@ -5121,6 +5167,21 @@ function esCampoMetadataFijo(etiqueta: string) {
     "periodicidad",
     "periodicity",
     "frequency"
+  ].some((alias) => text.startsWith(alias));
+}
+
+function esCampoTecnicoConservable(etiqueta: string) {
+  const text = normalizarParaBusqueda(etiqueta);
+  return [
+    "carrera tecnica",
+    "modalidad",
+    "technical program",
+    "technical career",
+    "modality",
+    "tiempo estimado",
+    "estimated time",
+    "eje de la politica educativa",
+    "educational policy axis"
   ].some((alias) => text.startsWith(alias));
 }
 
@@ -5185,11 +5246,22 @@ export function completarCamposReferenciaDeterministicamente(
     );
     const valorExistente = String(existente?.[1] || "").trim();
     const esMarcadorGenerico = /^(?:valor nuevo|new value|por definir|pendiente|n\/a|no aplica)(?:\b|\s)/i.test(valorExistente);
+    // PROFE360 no dispone de estos datos técnicos en todos los centros. En
+    // ausencia de una fuente institucional autoritativa se conserva el valor
+    // del machote, en lugar de inventarlo a partir de las habilidades.
+    if (esCampoTecnicoConservable(etiqueta) && campo.valorAnterior) {
+      actuales[etiqueta] = campo.valorAnterior;
+      continue;
+    }
     if (valorExistente && !esMarcadorGenerico) continue;
 
     const clave = normalizarParaBusqueda(etiqueta);
     let valor = "";
-    if (clave === "unit" || clave === "unidad") valor = tema || nombre;
+    if (/subarea|sub area|campo detallado|detailed field/.test(clave)) valor = materia || tema || nombre;
+    else if (/competencias? para el desarrollo humano|human development competenc/.test(clave)) {
+      valor = competenciaGeneral || campo.valorAnterior;
+    }
+    if (/^(?:unit|unidad)(?: de estudio| of study)?$/.test(clave)) valor = tema || materia || nombre;
     else if (clave === "domain" || clave === "dominio") valor = materia || tema || nombre;
     else if (clave === "scenario" || clave === "escenario") {
       valor = habilidadesTexto || [materia, grado, mes].filter(Boolean).join(" - ") || tema || nombre;
@@ -5199,7 +5271,7 @@ export function completarCamposReferenciaDeterministicamente(
         ? `${semanas} ${idiomaIngles ? (semanas === 1 ? "week" : "weeks") : (semanas === 1 ? "semana" : "semanas")}`
         : periodicidad || mes || (idiomaIngles ? "According to the selected period" : "Según el período seleccionado");
     }
-    else if (/politica educativa|educational policy|eje transversal|transversal axis|competencia general/.test(clave)) {
+    else if (/competencia general/.test(clave)) {
       valor = competenciaGeneral
         || (idiomaIngles ? "Learning and responsible citizenship" : "Aprendizaje y ciudadanía responsable");
     }
@@ -5211,6 +5283,7 @@ export function completarCamposReferenciaDeterministicamente(
         || habilidadesTexto
         || [materia, grado, mes].filter(Boolean).join(" - ")
         || nombre
+        || campo.valorAnterior
         || (idiomaIngles ? "Current planning context" : "Contexto del planeamiento actual");
     }
     if (valor) actuales[etiqueta] = valor;
@@ -5242,6 +5315,7 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
   );
 
   const aprendizajes = splitLines(resultado?.aprendizajesEsperados);
+  const saberes = splitLines(resultado?.saberesEsenciales);
   const criterios = splitLines(resultado?.criteriosEvaluacion);
   const indicadores = splitLines(resultado?.indicadoresEvaluacion);
   if (aprendizajes.length && indicadores.length) {
@@ -5273,6 +5347,16 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
       detalle: criterios.length
         ? `${criterios.length} criterio(s) preparado(s) para su columna específica.`
         : "La referencia contiene una columna de Criterios de Evaluación y quedó vacía."
+    });
+  }
+  if (rolesReferencia.has("saberes")) {
+    verificaciones.push({
+      codigo: "saberes_referencia",
+      etiqueta: "Saberes esenciales",
+      estado: saberes.length ? "ok" : "alerta",
+      detalle: saberes.length
+        ? `${saberes.length} saber(es) esencial(es) preparados para su columna específica.`
+        : "La referencia contiene Saberes esenciales; se completarán desde los contenidos actuales antes de exportar."
     });
   }
   if (rolesReferencia.has("indicadores") && !indicadores.length) {
@@ -5975,12 +6059,10 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
 
     const referencia = await extractPlantillaFormatoText(referenciaFile);
     const perfilDocumentoReferencia = await analizarReferenciaDocxSemantica(referenciaFile);
-    if ((perfilDocumentoReferencia.cantidadBloquesContenido || 0) > 1) {
-      // Si el machote contiene una fila por semana/bloque, esa topología manda
-      // sobre el valor predeterminado del formulario para poder renovar todas
-      // las filas y no dejar contenido viejo oculto en las restantes.
-      semanas = Math.min(20, perfilDocumentoReferencia.cantidadBloquesContenido || semanas);
-    }
+    // Las filas físicas del Word no equivalen necesariamente a semanas. En
+    // machotes técnicos pueden representar resultados, contenidos, etapas o
+    // evidencias. La cantidad solicitada por el formulario se conserva y el
+    // exportador distribuye el contenido entre todas las filas disponibles.
     const seccionModeloReferenciaId = normalizeText(req.body.seccionModeloReferenciaId);
     if (perfilDocumentoReferencia.seccionesModelo.length > 1 && !seccionModeloReferenciaId) {
       marcarErrorProgreso(operacionId, "Falta seleccionar la sección modelo de la referencia");
@@ -7190,6 +7272,21 @@ function replaceMetadataTemplateCell(cellXml: string, values: {
 
 export function detectTemplateContentRole(cellXml: string): TemplateContentRole | null {
   const text = normalizarParaBusqueda(xmlWordToText(cellXml));
+  if (
+    text.includes("saber esencial")
+    || text.includes("saberes esenciales")
+    || text === "contenidos"
+    || text === "contenido"
+    || text.includes("essential knowledge")
+    || text.includes("core knowledge")
+    || text.includes("learning contents")
+  ) return "saberes";
+  if (
+    text.includes("tiempo estimado")
+    || text.includes("duracion estimada")
+    || text.includes("estimated time")
+    || text.includes("estimated duration")
+  ) return "tiempo";
   if (!text.includes("indicador") && !text.includes("indicator") && (
     text.includes("aprendizaje esperado")
     || text.includes("aprendizajes esperados")
@@ -7197,8 +7294,6 @@ export function detectTemplateContentRole(cellXml: string): TemplateContentRole 
     || text.includes("resultados de aprendizaje")
     || text.includes("aprendizaje por lograr")
     || text.includes("aprendizajes por lograr")
-    || text.includes("saber esencial")
-    || text.includes("saberes esenciales")
     || text.includes("habilidad especifica")
     || text.includes("habilidades especificas")
     || text.includes("learner can")
@@ -7449,17 +7544,12 @@ function templateTableContentRowCount(tableXml: string) {
       activeRoles = roles;
       continue;
     }
-    const rowText = normalizarParaBusqueda(xmlWordToText(rowXml));
-    if (
-      rowText.includes("reflexiones docentes")
-      || rowText.includes("teacher reflections")
-      || rowText.startsWith("observaciones")
-      || rowText.startsWith("observations")
-    ) {
+    const cells = getDirectXmlElements(rowXml, "w:tc");
+    if (esFilaCierreContenido(cells.map((cellXml) => xmlWordToText(cellXml)))) {
       activeRoles = null;
       continue;
     }
-    if (activeRoles && getDirectXmlElements(rowXml, "w:tc").length) count += 1;
+    if (activeRoles && cells.length) count += 1;
   }
   return count;
 }
@@ -7484,18 +7574,26 @@ function distributeItemsAcrossSections(items: any[], sectionCount: number) {
 export function construirContenidoSeccionesPlantilla(resultado: any, contenido: any, sectionCount: number) {
   const count = Math.max(1, sectionCount);
   const weeks = Array.isArray(resultado?.semanas) ? resultado.semanas : [];
+  // Solo hay correspondencia uno-a-uno cuando el machote realmente ofrece la
+  // misma cantidad de bloques que semanas. Si tiene más filas, se trata como
+  // una tabla de contenido y se distribuyen los apartados globales sin repetir.
+  const usarSemanasDirectamente = weeks.length === count;
   const fallbackLearnings = distributeItemsAcrossSections(contenido?.aprendizajes, count);
+  const fallbackKnowledge = distributeItemsAcrossSections(contenido?.saberes, count);
   const fallbackCriteria = distributeItemsAcrossSections(contenido?.criterios, count);
   const fallbackStrategies = distributeItemsAcrossSections(contenido?.estrategias, count);
   const fallbackIndicators = distributeItemsAcrossSections(contenido?.indicadores, count);
 
   return Array.from({ length: count }, (_, index) => {
-    const week = weeks[index] && typeof weeks[index] === "object" ? weeks[index] : null;
+    const week = usarSemanasDirectamente && weeks[index] && typeof weeks[index] === "object" ? weeks[index] : null;
     const weeklyLearnings = splitLines(week?.habilidadBase || week?.proposito);
     const weeklyStrategies = splitLines(week?.mediacionPedagogica);
     const weeklyIndicators = splitLines(week?.indicadores);
     return {
       aprendizajes: weeklyLearnings.length ? weeklyLearnings : fallbackLearnings[index],
+      saberes: fallbackKnowledge[index].length
+        ? fallbackKnowledge[index]
+        : fallbackCriteria[index],
       criterios: fallbackCriteria[index].length
         ? fallbackCriteria[index]
         : splitLines(week?.proposito),
@@ -7527,15 +7625,17 @@ function renderSemanticTemplateTable(tableXml: string, input: {
   return replaceDirectXmlElements(tableXml, "w:tr", (originalRowXml) => {
     const currentHeaderRoles = headerRoles[rowIndex++] || null;
     const rowText = normalizarParaBusqueda(xmlWordToText(originalRowXml));
-    const isReflectionSection = rowText.startsWith("reflexiones docentes") || rowText.startsWith("teacher reflections");
+    const rowCells = getDirectXmlElements(originalRowXml, "w:tc");
+    const isClosingRow = esFilaCierreContenido(rowCells.map((cellXml) => xmlWordToText(cellXml)));
+    const isReflectionSection = isClosingRow && /reflexiones docentes|teacher reflections/.test(rowText);
     const isReflectionQuestions = rowText.startsWith("que funciono")
       || rowText.startsWith("que no funciono")
       || rowText.startsWith("que puedo mejorar")
       || rowText.startsWith("what worked")
       || rowText.startsWith("what can i improve");
-    const isObservations = /^observaciones\s*:|^observations\s*:|^observaciones$|^observations$/.test(rowText);
+    const isObservations = isClosingRow && /observaciones|observations/.test(rowText);
     const defaultSection = input.seccionesContenido[0] || {
-      aprendizajes: [], criterios: [], estrategias: [], indicadores: [], camposPedagogicos: new Map()
+      aprendizajes: [], saberes: [], criterios: [], estrategias: [], indicadores: [], camposPedagogicos: new Map()
     };
     const currentSection = activeRoles && !currentHeaderRoles
       ? input.seccionesContenido[Math.min(contentRowIndex, input.seccionesContenido.length - 1)] || defaultSection
@@ -7557,6 +7657,11 @@ function renderSemanticTemplateTable(tableXml: string, input: {
       if (role === "aprendizajes") {
         return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(currentSection.aprendizajes));
       }
+      if (role === "saberes") {
+        return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(
+          currentSection.saberes.length ? currentSection.saberes : currentSection.criterios
+        ));
+      }
       if (role === "criterios") {
         return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(
           currentSection.criterios.length ? currentSection.criterios : currentSection.aprendizajes
@@ -7567,6 +7672,11 @@ function renderSemanticTemplateTable(tableXml: string, input: {
           currentSection.estrategias,
           input.encabezadosEstrategias
         ));
+      }
+      if (role === "tiempo") {
+        // PROFE360 todavía no administra horas por resultado de aprendizaje.
+        // Se conserva el tiempo del machote como dato técnico de respaldo.
+        return next;
       }
       return replaceCellBodyPreservingFormatting(next, buildListParagraphSpecs(currentSection.indicadores));
     });
@@ -7654,6 +7764,72 @@ export async function renderPlaneamientoEnPlantillaDocx(input: {
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
+// Verificación posterior a la exportación: la IA genera contenido, pero el
+// Word final debe demostrar que aún respeta el machote concreto que se subió.
+// No contiene reglas de materias ni nombres de plantillas: compara únicamente
+// topología, roles detectados y contenido nuevo que el propio sistema entregó.
+export async function validarWordExportadoContraReferencia(input: {
+  referencia: Buffer;
+  generado: Buffer;
+  contenido: any;
+  nombreReferencia?: string;
+}) {
+  const referencia = await analizarReferenciaDocxSemantica({
+    buffer: input.referencia,
+    originalname: input.nombreReferencia || "referencia.docx"
+  } as Express.Multer.File);
+  const generado = await analizarReferenciaDocxSemantica({
+    buffer: input.generado,
+    originalname: "planeamiento-generado.docx"
+  } as Express.Multer.File);
+  const errores: string[] = [];
+  if (!referencia.esDocx || !generado.esDocx) {
+    errores.push("No fue posible leer la estructura DOCX de referencia o del documento generado.");
+  }
+  if (referencia.cantidadTablas !== generado.cantidadTablas) {
+    errores.push(`El Word generado tiene ${generado.cantidadTablas || 0} tabla(s) y la referencia tiene ${referencia.cantidadTablas || 0}.`);
+  }
+  const filasReferencia = referencia.filasFisicasPorTabla || [];
+  const filasGenerado = generado.filasFisicasPorTabla || [];
+  if (filasReferencia.join(",") !== filasGenerado.join(",")) {
+    errores.push(`El Word generado no conserva la misma cantidad de filas por tabla que la referencia (generado: ${filasGenerado.join(", ") || "ninguna"}; referencia: ${filasReferencia.join(", ") || "ninguna"}).`);
+  }
+  const firmaRoles = (perfil: PerfilDocumentoReferencia) => perfil.seccionesModelo
+    .map((seccion) => seccion.roles.map((rol) => rol || "adicional").join("|"))
+    .join(";");
+  if (firmaRoles(referencia) !== firmaRoles(generado)) {
+    errores.push("Las columnas pedagógicas detectadas no conservan los mismos roles que la referencia.");
+  }
+
+  const textoGenerado = normalizarParaBusqueda(obtenerTextoResultadoPlaneamiento({
+    aprendizajesEsperados: generado.valoresContenidoAnterior.filter(Boolean),
+    estrategiasMediacion: generado.estrategiasTexto
+  }));
+  const rolesReferencia = new Set(referencia.columnas.map((columna) => columna.rol).filter(Boolean));
+  const valoresEsperados = [
+    ...(rolesReferencia.has("aprendizajes") ? splitLines(input.contenido?.aprendizajes) : []),
+    ...(rolesReferencia.has("saberes") ? splitLines(input.contenido?.saberes) : []),
+    ...(rolesReferencia.has("criterios") ? splitLines(input.contenido?.criterios) : []),
+    ...(rolesReferencia.has("estrategias") ? splitLines(input.contenido?.estrategias) : []),
+    ...(rolesReferencia.has("indicadores") ? splitLines(input.contenido?.indicadores) : [])
+  ]
+    .map((valor) => normalizarParaBusqueda(valor))
+    .filter((valor) => valor.length >= 24);
+  const valoresAusentes = valoresEsperados.filter((valor) => !textoGenerado.includes(valor));
+  if (valoresAusentes.length) {
+    errores.push(`Faltan ${valoresAusentes.length} contenido(s) nuevos previstos en el Word exportado.`);
+  }
+
+  const valoresAnteriores = referencia.valoresContenidoAnterior
+    .map((valor) => normalizarParaBusqueda(valor))
+    .filter((valor) => valor.length >= 100 && !valoresEsperados.includes(valor));
+  const residuos = valoresAnteriores.filter((valor) => textoGenerado.includes(valor));
+  if (residuos.length) {
+    errores.push(`Se detectaron ${residuos.length} fragmento(s) sustantivo(s) de la referencia dentro del Word exportado.`);
+  }
+  return { valido: errores.length === 0, errores, referencia, generado };
+}
+
 function tableRow(values: { text: string; bold?: boolean; width?: number }[]) {
   return new TableRow({
     children: values.map((value) => cell([p(value.text, { bold: value.bold, size: value.bold ? 21 : 20 })], value.width))
@@ -7663,6 +7839,7 @@ function tableRow(values: { text: string; bold?: boolean; width?: number }[]) {
 function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[]) {
   const aprendizajes = splitLines(resultado?.aprendizajesEsperados).map(limpiarPrefijoAprendizaje).filter(Boolean);
   const criterios = splitLines(resultado?.criteriosEvaluacion).map(limpiarPrefijoAprendizaje).filter(Boolean);
+  const saberes = splitLines(resultado?.saberesEsenciales).map(limpiarPrefijoAprendizaje).filter(Boolean);
   const estrategiasBase = splitLines(resultado?.estrategiasMediacion);
   const estrategiaAdecuacion = resultado?.estrategiaAdecuacionSignificativa;
   const textoAdecuacionVisible = estrategiaAdecuacion?.aplica && estrategiaAdecuacion?.textoVisible
@@ -7719,6 +7896,7 @@ function normalizeResultadoForDoc(resultado: any, indicadoresFallback: string[])
     periodicidad: String(resultado?.periodicidad || ""),
     competenciaGeneral: String(resultado?.competenciaGeneral || ""),
     aprendizajes: aprendizajes.length ? aprendizajes : semanas.map((s: any) => limpiarPrefijoAprendizaje(s?.habilidadBase || s?.proposito || "")).filter(Boolean),
+    saberes: saberes.length ? saberes : criterios,
     criterios: criterios.length ? criterios : aprendizajes,
     estrategias: estrategias.length ? estrategias : estrategiasFromWeeks,
     indicadores: indicadores.length ? indicadores : indicadoresFromWeeks.map(limpiarPrefijoIndicador).filter(Boolean),
@@ -8095,6 +8273,21 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
     });
 
     if (plantillaBuffer) {
+      if (!wordInterno && resultado?.plantillaFormatoDocx?.base64) {
+        const verificacionWord = await validarWordExportadoContraReferencia({
+          referencia: Buffer.from(String(resultado.plantillaFormatoDocx.base64), "base64"),
+          generado: plantillaBuffer,
+          contenido,
+          nombreReferencia: resultado.plantillaFormatoDocx.nombre
+        });
+        if (!verificacionWord.valido) {
+          console.error("El Word generado no superó la verificación estructural:", verificacionWord.errores);
+          return res.status(500).json({
+            ok: false,
+            message: `No se pudo verificar el Word generado contra la estructura de referencia. ${verificacionWord.errores.join(" ")}`
+          });
+        }
+      }
       if (!wordInterno) {
         resultado.documentoWordInterno = {
           base64: plantillaBuffer.toString("base64"),

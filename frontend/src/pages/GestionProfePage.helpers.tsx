@@ -292,6 +292,7 @@ export type PlaneamientoIaResultado = {
   competenciaGeneral?: string;
   competenciasGenerales?: string[];
   aprendizajesEsperados?: string[];
+  saberesEsenciales?: string[];
   criteriosEvaluacion?: string[];
   camposReferencia?: Record<string, string>;
   documentoReferenciaNombre?: string | null;

@@ -53,7 +53,11 @@ export function createApp() {
   );
 
   app.use(express.json({
-    limit: "10mb",
+    // Un planeamiento conserva el DOCX de referencia como base64 para poder
+    // exportar exactamente el mismo machote. Algunos Word institucionales
+    // superan los 10 MB al codificarse; 40 MB cubre ese flujo sin abrir un
+    // límite indefinido para el resto de la API.
+    limit: "40mb",
     verify: (req, _res, buffer) => {
       if ((req as any).path === "/api/webhooks/resend") {
         (req as any).rawBody = Buffer.from(buffer);
