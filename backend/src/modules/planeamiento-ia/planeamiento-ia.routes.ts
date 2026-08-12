@@ -1646,8 +1646,15 @@ async function repararPlaneamientoConIa(input: {
   if (fallasSonSoloDeEstrategias) {
     const parrafosReferencia = Math.max(1, Number(input.perfilEstrategiasReferencia?.cantidadParrafos || 0));
     const caracteresReferencia = Math.max(1, Number(input.perfilEstrategiasReferencia?.cantidadCaracteres || 0));
-    const minimoParrafos = Math.max(encabezadosEsperados.length * 3, Math.ceil(parrafosReferencia * 0.75));
-    const minimoCaracteres = Math.max(1200, Math.ceil(caracteresReferencia * 0.6));
+    const minimoParrafos = Math.max(
+      encabezadosEsperados.length * 2,
+      input.habilidades.length * 4,
+      Math.min(40, Math.ceil(parrafosReferencia * 0.35))
+    );
+    const minimoCaracteres = Math.max(
+      1200,
+      Math.min(9000, Math.ceil(caracteresReferencia * 0.4))
+    );
     const secuenciaNumerada = encabezadosEsperados.map(
       (encabezado, index) => `${index + 1}. ${encabezado}`
     ).join("\n");
@@ -2098,8 +2105,21 @@ function deduplicarEncabezadosPedagogicos(encabezados: any) {
 
 export function estructuraReferenciaConfiable(estructura: any, perfil?: PerfilEstrategiasReferencia | null) {
   const directa = deduplicarEncabezadosPedagogicos(estructura);
+  // Un único rótulo de actor en negrita (por ejemplo, "El docente:") suele
+  // ser parte de la redacción de una actividad, no una secuencia pedagógica.
+  // Tratarlo como estructura obligatoria producía falsos rechazos en machotes
+  // de materias y niveles muy distintos.
+  if (
+    directa.length === 1
+    && /^(?:el |la )?(?:docente|estudiantado|estudiante|teacher|students?)\s*:?$/i.test(directa[0])
+  ) return [];
   if (directa.length) return directa;
-  return deduplicarEncabezadosPedagogicos(perfil?.encabezados);
+  const inferida = deduplicarEncabezadosPedagogicos(perfil?.encabezados);
+  if (
+    inferida.length === 1
+    && /^(?:el |la )?(?:docente|estudiantado|estudiante|teacher|students?)\s*:?$/i.test(inferida[0])
+  ) return [];
+  return inferida;
 }
 
 export function conservarReferenciaWordEnResultado(resultado: any, resultadoAnterior: any) {
@@ -4823,18 +4843,16 @@ No se adjuntó una referencia utilizable para Estrategias de mediación. Aplicá
   }
 
   const perfil = input.perfilEstrategiasReferencia || construirPerfilEstrategiasReferencia(input.estrategiasReferencia || "");
-  const minimoParrafos = Math.max(3, Math.ceil(perfil.cantidadParrafos * 0.6));
-  const minimoCaracteres = Math.max(1200, Math.ceil(perfil.cantidadCaracteres * 0.6));
   return `
 REGLA DINÁMICA Y PRIORITARIA PARA ESTRATEGIAS DE MEDIACIÓN:
-- El planeamiento adjunto es la autoridad para la lógica, jerarquía, secuencia, cantidad aproximada de bloques y nivel de detalle.
+- El planeamiento adjunto es la autoridad para la lógica, jerarquía, secuencia y nivel de detalle, adaptados al alcance real de las habilidades, semanas, materia y grado solicitados.
 - Perfil detectado: ${perfil.descripcion}
 - Encabezados y orden que deben conservarse: ${perfil.encabezados.join(" → ") || "los observados en el documento adjunto"}.
 - No uses "Momento 1", "Momento 2", "Momento 3", "Momento 4" ni otra secuencia predeterminada, salvo que esos rótulos aparezcan realmente en la referencia.
 - No copies temas, autores, obras, ejemplos, preguntas ni actividades anteriores. Conservá el patrón pedagógico y redactá contenido completamente nuevo con las habilidades, materia, grado, meses e indicaciones actuales.
 - Si la referencia usa actividades numeradas, generá actividades numeradas con una densidad y profundidad semejantes, ajustadas al alcance solicitado.
 - Cada actividad nueva debe conservar la lógica observable de la referencia: propósito, acción docente, acción del estudiantado, recurso o dinámica, evidencia/producto y forma de retroalimentación cuando corresponda.
-- No resumás una referencia amplia. Desarrollá al menos ${minimoParrafos} párrafos útiles y aproximadamente ${minimoCaracteres} caracteres en Estrategias de mediación, distribuidos entre todos sus bloques.
+- No copies la longitud bruta del documento anterior. Generá desarrollo sustantivo y equilibrado para cada bloque solicitado; una referencia trimestral o con muchas habilidades puede ser más extensa que el planeamiento actual sin que eso implique pérdida de calidad.
 `.trim();
 }
 
@@ -5145,6 +5163,15 @@ export function completarCamposReferenciaDeterministicamente(
   const grado = normalizeText(resultado.grado || contexto.grado);
   const mes = normalizeText(resultado.mes || contexto.mes);
   const tema = normalizeText(contexto.tema);
+  const periodicidad = normalizeText(resultado.periodicidad || contexto.periodicidad);
+  const competenciaGeneral = normalizeText(
+    resultado.competenciaGeneral
+    || (Array.isArray(resultado.competenciasGenerales) ? resultado.competenciasGenerales[0] : "")
+    || contexto.competenciaGeneral
+  );
+  const semanas = Math.max(0, Number(resultado?.semanas?.length || contexto.semanas || 0));
+  const idiomaIngles = resultado?.idiomaSalida === "en"
+    || resultado?.controlCalidad?.idiomaEsperado === "en";
   const habilidadesTexto = habilidades
     .map((habilidad) => normalizeText(habilidad?.DescripcionHabilidad || habilidad))
     .filter(Boolean)
@@ -5156,7 +5183,9 @@ export function completarCamposReferenciaDeterministicamente(
     const existente = Object.entries(actuales).find(
       ([key]) => normalizarParaBusqueda(key) === normalizarParaBusqueda(etiqueta)
     );
-    if (String(existente?.[1] || "").trim()) continue;
+    const valorExistente = String(existente?.[1] || "").trim();
+    const esMarcadorGenerico = /^(?:valor nuevo|new value|por definir|pendiente|n\/a|no aplica)(?:\b|\s)/i.test(valorExistente);
+    if (valorExistente && !esMarcadorGenerico) continue;
 
     const clave = normalizarParaBusqueda(etiqueta);
     let valor = "";
@@ -5164,6 +5193,25 @@ export function completarCamposReferenciaDeterministicamente(
     else if (clave === "domain" || clave === "dominio") valor = materia || tema || nombre;
     else if (clave === "scenario" || clave === "escenario") {
       valor = habilidadesTexto || [materia, grado, mes].filter(Boolean).join(" - ") || tema || nombre;
+    }
+    else if (/tiempo|duracion|duration|estimated time|time estimate/.test(clave)) {
+      valor = semanas
+        ? `${semanas} ${idiomaIngles ? (semanas === 1 ? "week" : "weeks") : (semanas === 1 ? "semana" : "semanas")}`
+        : periodicidad || mes || (idiomaIngles ? "According to the selected period" : "Según el período seleccionado");
+    }
+    else if (/politica educativa|educational policy|eje transversal|transversal axis|competencia general/.test(clave)) {
+      valor = competenciaGeneral
+        || (idiomaIngles ? "Learning and responsible citizenship" : "Aprendizaje y ciudadanía responsable");
+    }
+    // Los machotes pueden incorporar cualquier rótulo adicional. Si no existe
+    // una regla semántica específica, lo completamos con el contexto actual en
+    // vez de bloquear el guardado o conservar el dato del plan anterior.
+    if (!valor) {
+      valor = tema
+        || habilidadesTexto
+        || [materia, grado, mes].filter(Boolean).join(" - ")
+        || nombre
+        || (idiomaIngles ? "Current planning context" : "Contexto del planeamiento actual");
     }
     if (valor) actuales[etiqueta] = valor;
   }
@@ -5331,7 +5379,10 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
   const perfilEstrategias = input.perfilEstrategias;
   if (perfilEstrategias) {
     const estrategiasTexto = splitLines(resultado?.estrategiasMediacion).join("\n");
-    const encabezadosPerfil = deduplicarEncabezadosPedagogicos(perfilEstrategias.encabezados);
+    const encabezadosPerfil = estructuraReferenciaConfiable(
+      perfilEstrategias.encabezados,
+      perfilEstrategias
+    );
     const referenciaUsaMomentos = encabezadosPerfil.some((encabezado) =>
       /^momento\s+\d+/i.test(encabezado)
     );
@@ -5400,7 +5451,7 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
           : !validacionOrden.cumple
             ? `No se respetó la secuencia de la referencia. Faltantes: ${validacionOrden.faltantes.join(", ") || "ninguno"}. Fuera de orden: ${validacionOrden.fueraDeOrden.join(", ") || "ninguno"}.`
             : incumpleProfundidad
-              ? `Las estrategias tienen ${parrafosGenerados} párrafos y ${estrategiasTexto.length} caracteres; deben alcanzar al menos ${minimoParrafos} párrafos y ${minimoCaracteres} caracteres para conservar la profundidad de la referencia.`
+              ? `La referencia es más extensa (${perfilEstrategias.cantidadParrafos} párrafos y ${perfilEstrategias.cantidadCaracteres} caracteres) que el resultado actual (${parrafosGenerados} párrafos y ${estrategiasTexto.length} caracteres). El resultado conserva contenido útil y esta diferencia proporcional no impide guardar; conviene revisarla según el alcance solicitado.`
               : `Se respetó el patrón dinámico de la referencia (${perfilEstrategias.nivelDetalle}, ${actividadesGeneradas || "sin"} actividades numeradas).`
     });
   }
@@ -5429,9 +5480,13 @@ export function validarPlaneamientoGenerado(resultado: any, input: {
     verificaciones.push({
       codigo: "campos_machote",
       etiqueta: "Limpieza y llenado del machote",
-      estado: faltantes.length ? "error" : "ok",
+      // Un rótulo adicional del Word nunca debe impedir guardar contenido
+      // pedagógico válido. La mayoría se completa arriba de forma
+      // determinística; cualquier formato imposible de inferir queda visible
+      // como advertencia editable.
+      estado: faltantes.length ? "alerta" : "ok",
       detalle: faltantes.length
-        ? `Faltan valores nuevos para: ${faltantes.map((campo) => campo.etiqueta).join(", ")}.`
+        ? `No fue posible inferir automáticamente estos campos opcionales del machote: ${faltantes.map((campo) => campo.etiqueta).join(", ")}. Podés editarlos, pero no bloquean el planeamiento.`
         : "Todos los campos variables detectados tienen un valor nuevo."
     });
   }
@@ -5613,6 +5668,7 @@ async function revalidarResultadoPlaneamiento(resultado: any, nombreActual: stri
     perfilEstrategias,
     perfilDocumentoReferencia: controlAnterior.perfilDocumentoReferencia || resultado?.perfilDocumentoReferencia,
     auditoriaSemantica: controlAnterior.auditoriaSemantica || undefined,
+    auditoriaSemanticaBloqueante: false,
     referenciaObligatoria: Boolean(controlAnterior.referenciaObligatoria)
   });
   const validacion = agregarVerificacionReferenciaWordPersistida(
@@ -5820,6 +5876,7 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
     const tema = normalizeText(req.body.tema);
     const nombrePlaneamiento = normalizeText(req.body.nombrePlaneamiento);
     const periodicidad = normalizarPeriodicidadSeleccionada(req.body.periodicidad);
+    const competenciaGeneral = normalizarCompetenciaGeneralSeleccionada(req.body.competenciaGeneral);
     const indicacionesDocente = normalizeText(req.body.indicacionesDocente);
     const promptDocente = normalizeText(req.body.promptDocente);
     const referenciaObligatoria = String(req.body.referenciaObligatoria || "").toLowerCase() === "true";
@@ -6050,13 +6107,15 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
 
     let resultadoBase = prepararResultado(resultadoBaseSinReglas);
     resultadoBase.periodicidad = periodicidad;
+    resultadoBase.competenciaGeneral = competenciaGeneral;
+    resultadoBase.competenciasGenerales = competenciaGeneral ? [competenciaGeneral] : [];
     let auditoriaSemantica: AuditoriaSemanticaPlaneamiento | undefined;
     actualizarProgresoOperacion(operacionId, 70, "Evaluando la calidad del planeamiento");
 
     const crearValidacion = (auditoriaSemanticaBloqueante = true) => validarPlaneamientoGenerado(resultadoBase, {
       nombreSolicitado: nombrePlaneamiento,
       idiomaEsperado: idiomaSalida,
-      estructuraEstrategias: estructuraEstrategiasReferencia,
+      estructuraEstrategias: estructuraAplicable,
       indicacionesDocente,
       habilidades: habilidades.recordset,
       indicadoresEsperadosPorHabilidad,
@@ -6110,6 +6169,9 @@ router.post("/generar-planeamiento", planeamientoUpload, async (req, res) => {
           grado,
           mes,
           tema,
+          semanas,
+          periodicidad,
+          competenciaGeneral,
           habilidades: habilidades.recordset.map((habilidad: any) => ({
             Area: habilidad.Area,
             Mes: habilidad.Mes,
@@ -6317,7 +6379,7 @@ router.post("/revisar-planeamiento", async (req, res) => {
     const validar = (auditoriaSemanticaBloqueante = true) => validarPlaneamientoGenerado(resultado, {
       nombreSolicitado: nombrePlaneamiento,
       idiomaEsperado: idiomaSalida,
-      estructuraEstrategias: estructuraEstrategiasReferencia,
+      estructuraEstrategias: estructuraAplicable,
       indicacionesDocente,
       habilidades,
       indicadoresEsperadosPorHabilidad,
@@ -6427,7 +6489,10 @@ router.post("/revisar-planeamiento", async (req, res) => {
         "Comprobando las mejoras"
       );
     }
-    validacion = validar();
+    // La auditoría semántica aporta una segunda opinión y puede orientar la
+    // corrección, pero no vuelve a bloquear un resultado que ya satisface las
+    // verificaciones determinísticas obligatorias.
+    validacion = validar(false);
 
     resultado.estrategiasMediacionEstructuradas = validacion.estrategiasEstructuradas;
     resultado.estructuraEstrategiasReferencia = estructuraEstrategiasReferencia;

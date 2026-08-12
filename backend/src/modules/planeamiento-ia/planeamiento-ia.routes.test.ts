@@ -73,6 +73,52 @@ test("completa Unit Domain y Scenario con datos nuevos sin otra llamada de IA", 
   assert.match(resultado.camposReferencia.Scenario, /listening and speaking/i);
 });
 
+test("completa campos particulares de cualquier machote con el contexto actual", () => {
+  const resultado: any = {
+    nombre: "Abril - Octavo - Ciencias",
+    materiaNombre: "Ciencias",
+    grado: "Octavo",
+    mes: "Abril",
+    periodicidad: "mes",
+    competenciaGeneral: "Competencias para la ciudadanía responsable y solidaria",
+    semanas: [{ semana: 1 }, { semana: 2 }, { semana: 3 }, { semana: 4 }],
+    camposReferencia: {},
+    controlCalidad: { contextoGeneracion: { tema: "Ecosistemas" } }
+  };
+  completarCamposReferenciaDeterministicamente(resultado, {
+    esDocx: true,
+    columnas: [],
+    camposVariables: [
+      { etiqueta: "Tiempo estimado", valorAnterior: "6 semanas" },
+      { etiqueta: "Eje de la política educativa", valorAnterior: "Valor anterior" },
+      { etiqueta: "Contexto disciplinar particular", valorAnterior: "Tema anterior" }
+    ],
+    estrategiasTexto: "",
+    encabezadosEstrategias: [],
+    valoresContenidoAnterior: [],
+    cantidadSeccionesContenido: 1,
+    cantidadBloquesContenido: 1,
+    seccionesModelo: [],
+    descripcion: "Machote variable"
+  }, [{ DescripcionHabilidad: "Analiza relaciones en los ecosistemas." }]);
+
+  assert.equal(resultado.camposReferencia["Tiempo estimado"], "4 semanas");
+  assert.equal(
+    resultado.camposReferencia["Eje de la política educativa"],
+    "Competencias para la ciudadanía responsable y solidaria"
+  );
+  assert.equal(resultado.camposReferencia["Contexto disciplinar particular"], "Ecosistemas");
+});
+
+test("no convierte un unico rotulo de actor en secuencia obligatoria", () => {
+  assert.deepEqual(estructuraReferenciaConfiable(["EL DOCENTE:"]), []);
+  assert.deepEqual(estructuraReferenciaConfiable(["Teacher:"]), []);
+  assert.deepEqual(
+    estructuraReferenciaConfiable(["Conexión", "Construcción", "Cierre"]),
+    ["Conexión", "Construcción", "Cierre"]
+  );
+});
+
 test("la corrección conserva el machote y reemplaza Momentos por la secuencia del Word", () => {
   const resultadoInicial = {
     plantillaFormatoDocx: {
@@ -956,7 +1002,7 @@ test("bloquea columnas vacias y estructura ajena aunque la auditoria no disponib
       .map((item) => item.codigo)
   );
   assert.ok(errores.has("criterios_referencia"));
-  assert.ok(errores.has("campos_machote"));
+  assert.equal(errores.has("campos_machote"), false);
   const alertas = new Set(
     validacion.verificaciones
       .filter((item) => item.estado === "alerta")
