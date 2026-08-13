@@ -580,6 +580,14 @@ async function ensurePlaneamientoHabilidadDisponibilidad(pool: any) {
   }
 }
 
+// La modalidad forma parte del grado. "8" y "8 PN" no son equivalentes:
+// mezclar ambas hacía que una habilidad de Plan Nacional apareciera en un
+// grupo regular solo porque los dos comparten el número de nivel.
+export function normalizarModalidadGrado(value: any): "PN" | null {
+  const normalized = normalizeForCompare(value).replace(/\s/g, "");
+  return /PN(?:$|[^A-Z])/.test(normalized) ? "PN" : null;
+}
+
 function toPositiveIntList(value: any) {
   let normalizedValue = value;
   if (typeof value === "string") {
@@ -3127,22 +3135,37 @@ router.get("/habilidades", async (req, res) => {
       request.input("grado", sql.NVarChar(100), grado);
       const gradoNumero = inferGradoNumero(grado);
       const gradoPrefijo = getGradoPrefijo(gradoNumero);
+      const modalidadGrado = normalizarModalidadGrado(grado);
       request.input("gradoNumero", sql.Int, gradoNumero);
       request.input("gradoPrefijo", sql.NVarChar(20), gradoPrefijo ? `${gradoPrefijo}%` : null);
+      request.input("modalidadGrado", sql.NVarChar(20), modalidadGrado);
       filters.push(`
         (
-          UPPER(LTRIM(RTRIM(ISNULL(h.Grado, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(LTRIM(RTRIM(@grado))) COLLATE Latin1_General_100_CI_AI
-          OR (
+          (
             @gradoNumero IS NOT NULL
             AND (
-              LTRIM(RTRIM(ISNULL(h.Grado, N''))) LIKE CAST(@gradoNumero AS NVARCHAR(10)) + N'%'
+              h.GradoNumero = @gradoNumero
               OR (
-                @gradoPrefijo IS NOT NULL
-                AND UPPER(LTRIM(RTRIM(ISNULL(h.Grado, N'')))) COLLATE Latin1_General_100_CI_AI LIKE @gradoPrefijo COLLATE Latin1_General_100_CI_AI
+                h.GradoNumero IS NULL
+                AND (
+                  UPPER(LTRIM(RTRIM(ISNULL(h.Grado, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(LTRIM(RTRIM(@grado))) COLLATE Latin1_General_100_CI_AI
+                  OR LTRIM(RTRIM(ISNULL(h.Grado, N''))) LIKE CAST(@gradoNumero AS NVARCHAR(10)) + N'%'
+                  OR (
+                    @gradoPrefijo IS NOT NULL
+                    AND UPPER(LTRIM(RTRIM(ISNULL(h.Grado, N'')))) COLLATE Latin1_General_100_CI_AI LIKE @gradoPrefijo COLLATE Latin1_General_100_CI_AI
+                  )
+                )
               )
             )
           )
+          OR (
+            @gradoNumero IS NULL
+            AND UPPER(LTRIM(RTRIM(ISNULL(h.Grado, N'')))) COLLATE Latin1_General_100_CI_AI = UPPER(LTRIM(RTRIM(@grado))) COLLATE Latin1_General_100_CI_AI
+          )
         )
+        AND ISNULL(NULLIF(UPPER(LTRIM(RTRIM(h.ModalidadGrado))) COLLATE Latin1_General_100_CI_AI, N''),
+          CASE WHEN UPPER(REPLACE(ISNULL(h.Grado, N''), N' ', N'')) COLLATE Latin1_General_100_CI_AI LIKE N'%PN%' THEN N'PN' ELSE N'' END
+        ) = ISNULL(@modalidadGrado, N'')
       `);
     }
     if (mes) {

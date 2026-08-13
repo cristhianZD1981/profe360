@@ -17,6 +17,7 @@ import {
   detectarCopiaSustantivaReferencia,
   extraerPaginasIndicadas,
   limpiarEncabezadoEstrategiaReferencia,
+  normalizarModalidadGrado,
   normalizarAuditoriaSemantica,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
@@ -34,6 +35,13 @@ test("rechaza una periodicidad que contradice los meses seleccionados", () => {
     /abarcan 3 meses/i
   );
   assert.equal(validarPeriodicidadPlaneamiento("Junio, Julio y Agosto", "trimestre"), null);
+});
+
+test("distingue estrictamente el grado regular del grado PN", () => {
+  assert.equal(normalizarModalidadGrado("8"), null);
+  assert.equal(normalizarModalidadGrado("Octavo"), null);
+  assert.equal(normalizarModalidadGrado("8 PN"), "PN");
+  assert.equal(normalizarModalidadGrado("Octavo PN"), "PN");
 });
 
 test("usa archivoReferencia como machote aunque no llegue el campo antiguo plantillaFormato", () => {
