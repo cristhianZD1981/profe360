@@ -1908,6 +1908,15 @@ function normalizarParaBusqueda(value: any) {
     .toLowerCase();
 }
 
+// Word puede partir una misma frase en varios runs, párrafos o celdas. Para
+// verificar que el contenido llegó al DOCX no se debe exigir que conserve el
+// mismo salto de línea interno que tenía el texto de entrada.
+export function normalizarTextoWordParaComparacion(value: any) {
+  return normalizarParaBusqueda(value)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function normalizarParaBusquedaConMapa(value: any) {
   const original = repararMojibakeTexto(value);
   let texto = "";
@@ -7824,10 +7833,24 @@ export async function validarWordExportadoContraReferencia(input: {
     errores.push("Las columnas pedagógicas detectadas no conservan los mismos roles que la referencia.");
   }
 
-  const textoGenerado = normalizarParaBusqueda(obtenerTextoResultadoPlaneamiento({
+  // El análisis semántico se usa para entender la plantilla, pero Word puede
+  // serializar celdas combinadas y párrafos de una forma que deje contenido
+  // válido fuera de valoresContenidoAnterior. Para confirmar que el texto
+  // nuevo llegó al archivo final, la fuente de verdad es el XML completo.
+  const textoGeneradoSemantico = normalizarParaBusqueda(obtenerTextoResultadoPlaneamiento({
     aprendizajesEsperados: generado.valoresContenidoAnterior.filter(Boolean),
     estrategiasMediacion: generado.estrategiasTexto
   }));
+  let textoGenerado = normalizarTextoWordParaComparacion(textoGeneradoSemantico);
+  try {
+    const zipGenerado = await JSZip.loadAsync(input.generado);
+    const documentXmlGenerado = await zipGenerado.file("word/document.xml")?.async("string");
+    if (documentXmlGenerado) textoGenerado = normalizarTextoWordParaComparacion(xmlWordToText(documentXmlGenerado));
+  } catch (error) {
+    // Si el XML no pudiera releerse, conservamos la validación semántica; la
+    // estructura DOCX ya fue comprobada antes de llegar a este punto.
+    console.warn("No se pudo leer el texto completo del Word exportado:", error);
+  }
   const rolesReferencia = new Set(referencia.columnas.map((columna) => columna.rol).filter(Boolean));
   const valoresEsperados = [
     ...(rolesReferencia.has("aprendizajes") ? splitLines(input.contenido?.aprendizajes) : []),
@@ -7836,7 +7859,7 @@ export async function validarWordExportadoContraReferencia(input: {
     ...(rolesReferencia.has("estrategias") ? splitLines(input.contenido?.estrategias) : []),
     ...(rolesReferencia.has("indicadores") ? splitLines(input.contenido?.indicadores) : [])
   ]
-    .map((valor) => normalizarParaBusqueda(valor))
+    .map((valor) => normalizarTextoWordParaComparacion(valor))
     .filter((valor) => valor.length >= 24);
   const valoresAusentes = valoresEsperados.filter((valor) => !textoGenerado.includes(valor));
   if (valoresAusentes.length) {
@@ -7846,11 +7869,22 @@ export async function validarWordExportadoContraReferencia(input: {
   const valoresAnteriores = referencia.valoresContenidoAnterior
     .map((valor) => normalizarParaBusqueda(valor))
     .filter((valor) => valor.length >= 100 && !valoresEsperados.includes(valor));
-  const residuos = valoresAnteriores.filter((valor) => textoGenerado.includes(valor));
+  const residuos = valoresAnteriores.filter((valor) => textoGeneradoSemantico.includes(valor));
   if (residuos.length) {
     errores.push(`Se detectaron ${residuos.length} fragmento(s) sustantivo(s) de la referencia dentro del Word exportado.`);
   }
-  return { valido: errores.length === 0, errores, referencia, generado };
+  const diagnostico = {
+    tablas: { referencia: referencia.cantidadTablas || 0, generado: generado.cantidadTablas || 0 },
+    filasPorTabla: { referencia: filasReferencia, generado: filasGenerado },
+    firmaColumnas: { referencia: firmaRoles(referencia), generado: firmaRoles(generado) },
+    contenido: {
+      esperados: valoresEsperados.length,
+      encontrados: valoresEsperados.length - valoresAusentes.length,
+      faltantes: valoresAusentes.slice(0, 5).map((valor) => valor.slice(0, 160))
+    },
+    residuosReferencia: residuos.length
+  };
+  return { valido: errores.length === 0, errores, diagnostico, referencia, generado };
 }
 
 function tableRow(values: { text: string; bold?: boolean; width?: number }[]) {
@@ -8304,7 +8338,10 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
           nombreReferencia: resultado.plantillaFormatoDocx.nombre
         });
         if (!verificacionWord.valido) {
-          console.error("El Word generado no superó la verificación estructural:", verificacionWord.errores);
+          console.error("El Word generado no superó la verificación estructural:", {
+            errores: verificacionWord.errores,
+            diagnostico: verificacionWord.diagnostico
+          });
           return res.status(500).json({
             ok: false,
             message: `No se pudo verificar el Word generado contra la estructura de referencia. ${verificacionWord.errores.join(" ")}`

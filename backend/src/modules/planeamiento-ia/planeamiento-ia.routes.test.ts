@@ -19,6 +19,7 @@ import {
   limpiarEncabezadoEstrategiaReferencia,
   normalizarModalidadGrado,
   normalizarAuditoriaSemantica,
+  normalizarTextoWordParaComparacion,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
   validarWordExportadoContraReferencia,
@@ -42,6 +43,15 @@ test("distingue estrictamente el grado regular del grado PN", () => {
   assert.equal(normalizarModalidadGrado("Octavo"), null);
   assert.equal(normalizarModalidadGrado("8 PN"), "PN");
   assert.equal(normalizarModalidadGrado("Octavo PN"), "PN");
+});
+
+test("la biblioteca de regresion Word ignora cortes internos de espacios y renglones", () => {
+  const esperado = "Cierre – Colaboración - Clarificación. Cada equipo presenta una tarjeta de clasificación.";
+  const serializadoPorWord = "Cierre\n\t– Colaboración - Clarificación. Cada equipo presenta una tarjeta\n de clasificación.";
+  assert.equal(
+    normalizarTextoWordParaComparacion(serializadoPorWord),
+    normalizarTextoWordParaComparacion(esperado)
+  );
 });
 
 test("usa archivoReferencia como machote aunque no llegue el campo antiguo plantillaFormato", () => {
