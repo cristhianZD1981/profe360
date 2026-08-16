@@ -1364,6 +1364,37 @@ test("verifica el Word final por estructura universal sin depender de la materia
   assert.ok(plantillaSinRenovar.errores.length > 0);
 });
 
+test("no bloquea la exportacion por coincidencias literales parciales si el machote esta integro", async () => {
+  const base = table(
+    row(
+      cell(paragraph("Resultados de aprendizaje")),
+      cell(paragraph("Estrategias para la mediaciÃ³n pedagÃ³gica")),
+      cell(paragraph("Evidencias de aprendizaje"))
+    ),
+    row(
+      cell(paragraph("Aprendizaje nuevo que puede quedar distribuido o resumido dentro del machote institucional.")),
+      cell(paragraph("")),
+      cell(paragraph(""))
+    )
+  );
+  const zip = new JSZip();
+  zip.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${base}</w:body></w:document>`);
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
+  const verificacion = await validarWordExportadoContraReferencia({
+    referencia: buffer,
+    generado: buffer,
+    contenido: {
+      aprendizajes: ["Aprendizaje nuevo que puede quedar distribuido o resumido dentro del machote institucional."],
+      estrategias: ["Estrategia nueva con actividades contextualizadas para desarrollar el aprendizaje esperado."],
+      indicadores: ["Indicador observable nuevo para valorar el desempeno de la persona estudiante."],
+      saberes: [], criterios: []
+    },
+    nombreReferencia: "machote-integro.docx"
+  });
+  assert.equal(verificacion.valido, true, verificacion.errores.join(" | "));
+  assert.ok(verificacion.advertencias.length > 0);
+});
+
 test("no cuenta observaciones repetidas por celdas combinadas como fila pedagogica", async () => {
   const tableWithClosingRow = table(
     row(

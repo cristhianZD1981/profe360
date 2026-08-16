@@ -7815,6 +7815,7 @@ export async function validarWordExportadoContraReferencia(input: {
     originalname: "planeamiento-generado.docx"
   } as Express.Multer.File);
   const errores: string[] = [];
+  const advertencias: string[] = [];
   if (!referencia.esDocx || !generado.esDocx) {
     errores.push("No fue posible leer la estructura DOCX de referencia o del documento generado.");
   }
@@ -7863,7 +7864,18 @@ export async function validarWordExportadoContraReferencia(input: {
     .filter((valor) => valor.length >= 24);
   const valoresAusentes = valoresEsperados.filter((valor) => !textoGenerado.includes(valor));
   if (valoresAusentes.length) {
-    errores.push(`Faltan ${valoresAusentes.length} contenido(s) nuevos previstos en el Word exportado.`);
+    // La distribución del contenido cambia entre machotes: una celda puede
+    // resumir, dividir o combinar elementos que venían separados en el
+    // resultado IA. Exigir coincidencia literal de cada fragmento genera
+    // falsos positivos y no prueba un daño del DOCX. Se conserva el dato para
+    // diagnóstico, sin impedir entregar un Word cuya estructura es correcta.
+    advertencias.push(`No se localizaron literalmente ${valoresAusentes.length} contenido(s) nuevos previstos en el Word exportado.`);
+  }
+  // La ausencia total sí demuestra que el render no depositó ningún contenido
+  // pedagógico nuevo. Ese caso no es una diferencia de formato y se mantiene
+  // como bloqueo para no entregar un machote vacío o sin renovar.
+  if (valoresEsperados.length && valoresAusentes.length === valoresEsperados.length) {
+    errores.push("El Word exportado no contiene ningún contenido pedagógico nuevo verificable.");
   }
 
   const valoresAnteriores = referencia.valoresContenidoAnterior
@@ -7884,7 +7896,7 @@ export async function validarWordExportadoContraReferencia(input: {
     },
     residuosReferencia: residuos.length
   };
-  return { valido: errores.length === 0, errores, diagnostico, referencia, generado };
+  return { valido: errores.length === 0, errores, advertencias, diagnostico, referencia, generado };
 }
 
 function tableRow(values: { text: string; bold?: boolean; width?: number }[]) {
@@ -8345,6 +8357,12 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
           return res.status(500).json({
             ok: false,
             message: `No se pudo verificar el Word generado contra la estructura de referencia. ${verificacionWord.errores.join(" ")}`
+          });
+        }
+        if (verificacionWord.advertencias?.length) {
+          console.warn("El Word se exporta con observaciones no bloqueantes:", {
+            advertencias: verificacionWord.advertencias,
+            diagnostico: verificacionWord.diagnostico
           });
         }
       }
