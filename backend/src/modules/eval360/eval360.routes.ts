@@ -3270,7 +3270,7 @@ function buildQuestionsBlockByType(items: any[], tipo: string) {
 
   filtered.forEach((it, idx) => lines.push(formatQuestionFromItem(it, idx)));
 
-  return lines.join("\n");
+  return lines.join("\n\n");
 
 }
 
@@ -3518,11 +3518,11 @@ function hasUsableCorrespondenceShape(item: any) {
 
 function formatQuestionFromItem(item: any, index: number) {
 
-  const puntaje = Number(item?.puntaje || 0);
-
   const enunciado = String(item?.enunciado || "").trim();
 
-  const base = `${index + 1}. ${enunciado}${puntaje > 0 ? ` (${Math.round(puntaje)} pts)` : ""}`;
+  // El puntaje ya está definido por la tabla de especificaciones; no se repite
+  // dentro del enunciado de cada pregunta.
+  const base = `${index + 1}. ${enunciado}`;
 
   const opciones = Array.isArray(item?.opciones) ? item.opciones : [];
 
@@ -3534,7 +3534,15 @@ function formatQuestionFromItem(item: any, index: number) {
 
       const letra = String.fromCharCode(65 + i);
 
-      lines.push(`   ${letra}) ${String(op || "").trim()}`);
+      // La IA a veces incluye su propia letra ("A) respuesta"). Al rotular la
+      // opción en la exportación, se limpia ese prefijo para evitar "A) A)".
+      const opcionSinLetra = String(op || "")
+
+        .trim()
+
+        .replace(/^(?:[A-Z]\s*[.)\-:]\s*)+/i, "");
+
+      lines.push(`   ${letra}) ${opcionSinLetra}`);
 
     });
 
@@ -3626,7 +3634,14 @@ function buildExamContentFromItems(items: any[]) {
 
     lines.push(labels[tipo]);
 
-    filtered.forEach((it, idx) => lines.push(formatQuestionFromItem(it, idx)));
+    filtered.forEach((it, idx) => {
+
+      lines.push(formatQuestionFromItem(it, idx));
+
+      // Deja un salto de carro entre la última opción y la siguiente pregunta.
+      lines.push("");
+
+    });
 
     lines.push("");
 
@@ -3962,7 +3977,7 @@ function hasWeakExamPlaceholderText(value: any) {
 
     /identificacion correcta segun/,
 
-    /indicador a evaluar/,
+    /^indicador a evaluar[.:;!?]*$/,
 
     /desarrolla la produccion escrita \d+ relacionada con/,
 
@@ -3980,9 +3995,11 @@ function isWeakExamPayload(items: any[]) {
 
   if (!Array.isArray(items) || !items.length) return true;
 
-  let weakSignals = 0;
+  let weakItems = 0;
 
   for (const item of items) {
+
+    let weakSignals = 0;
 
     if (hasWeakExamPlaceholderText(item?.enunciado)) weakSignals += 2;
 
@@ -3996,9 +4013,45 @@ function isWeakExamPayload(items: any[]) {
 
     if (!hasUsableCorrespondenceShape(item)) weakSignals += 2;
 
+    // Una pregunta defectuosa no invalida las preguntas reales del examen.
+    if (weakSignals >= 2) weakItems += 1;
+
   }
 
-  return weakSignals >= Math.max(2, Math.ceil(items.length / 3));
+  return weakItems === items.length;
+
+}
+
+
+
+function getExamPayloadQuality(items: any[]) {
+
+  const normalizedItems = Array.isArray(items) ? items : [];
+
+  if (!normalizedItems.length) return 0;
+
+  let usableItems = 0;
+
+  for (const item of normalizedItems) {
+
+    const hasCoreFields = [item?.tipoItem, item?.enunciado, item?.respuestaCorrecta, item?.criterioCorreccion]
+
+      .every((value) => String(value || "").trim().length > 0);
+
+    const hasPlaceholder = hasWeakExamPlaceholderText(item?.enunciado)
+
+      || hasWeakExamPlaceholderText(item?.respuestaCorrecta)
+
+      || hasWeakExamPlaceholderText(item?.criterioCorreccion)
+
+      || (Array.isArray(item?.opciones) && item.opciones.some((option: any) => hasWeakExamPlaceholderText(option)));
+
+    if (hasCoreFields && !hasPlaceholder && hasUsableCorrespondenceShape(item)) usableItems += 1;
+
+  }
+
+  // Primero se priorizan preguntas utilizables y luego una respuesta más completa.
+  return (usableItems * 10000) + normalizedItems.length;
 
 }
 
@@ -9157,7 +9210,7 @@ No cambies la distribucion de tipos ni el puntaje total. Devolve un JSON valido 
 
     const promptUltraEstricto = `
 
-Sos un asistente experto en construccion de pruebas escritas de Matematica para secundaria en Costa Rica.
+Sos un asistente experto en construccion de pruebas escritas de ${normalizeText(ctx.Materia) || "la asignatura indicada"} para el nivel de secundaria indicado en Costa Rica.
 
 Debes construir preguntas reales, concretas y resolubles por estudiantes. Esta prohibido devolver texto generico o de relleno.
 
@@ -9179,11 +9232,11 @@ Obligaciones:
 
 - Usa exactamente la distribucion de la tabla de especificaciones
 
-- Cada pregunta debe ser concreta, comprensible y tener sentido matematico real
+- Cada pregunta debe ser concreta, comprensible y evaluable con contenido real de la asignatura
 
 - Si el tipo es SR, usa exactamente 3 opciones y una sola correcta
 
-- Redacta numeros, operaciones, expresiones o mini contextos reales segun el indicador
+- Redacta consignas, datos, procedimientos o mini contextos reales según el indicador y la asignatura
 
 - No agregues tipos de item con cantidad 0
 
@@ -9321,6 +9374,32 @@ Estructura de salida obligatoria:
 
     let parsed = parseExamPayload(respuestaIATexto);
 
+    let mejorRespuestaTexto = respuestaIATexto;
+
+    let mejorRespuestaParseada = parsed;
+
+    let mejorCalidadRespuesta = getExamPayloadQuality(parsed.items);
+
+    const conservarSiMejora = (texto: string) => {
+
+      const candidata = parseExamPayload(texto);
+
+      const calidadCandidata = getExamPayloadQuality(candidata.items);
+
+      if (calidadCandidata > mejorCalidadRespuesta) {
+
+        mejorRespuestaTexto = texto;
+
+        mejorRespuestaParseada = candidata;
+
+        mejorCalidadRespuesta = calidadCandidata;
+
+      }
+
+      return candidata;
+
+    };
+
     if (!respuestaIATexto || isWeakExamPayload(parsed.items)) {
 
       console.error("OpenAI Eval360 examenes: reintentando con prompt ultra estricto", JSON.stringify({
@@ -9341,13 +9420,17 @@ Estructura de salida obligatoria:
 
       respuestaIA = await callOpenAiGeneric(promptUltraEstricto, openAiAttempts);
 
-      respuestaIATexto = String(respuestaIA || "").trim();
+      const respuestaUltraEstrica = String(respuestaIA || "").trim();
 
-      parsed = parseExamPayload(respuestaIATexto);
+      parsed = conservarSiMejora(respuestaUltraEstrica);
+
+      respuestaIATexto = mejorRespuestaTexto;
+
+      parsed = mejorRespuestaParseada;
 
     }
 
-    if (!respuestaIATexto || !Array.isArray(parsed.items) || !parsed.items.length) {
+    if (!respuestaIATexto || isWeakExamPayload(parsed.items)) {
 
       console.error("OpenAI Eval360 examenes: reintentando con json estricto", JSON.stringify({
 
@@ -9363,17 +9446,11 @@ Estructura de salida obligatoria:
 
       const respuestaJsonEstricta = String(await callOpenAiGenericJsonStrict(promptUltraEstricto, openAiAttempts) || "").trim();
 
-      if (respuestaJsonEstricta) {
+      if (respuestaJsonEstricta) conservarSiMejora(respuestaJsonEstricta);
 
-        respuestaIATexto = respuestaJsonEstricta;
+      respuestaIATexto = mejorRespuestaTexto;
 
-        parsed = parseExamPayload(respuestaIATexto);
-
-      } else if (respuestaIATexto) {
-
-        parsed = parseExamPayload(respuestaIATexto);
-
-      }
+      parsed = mejorRespuestaParseada;
 
     }
 
