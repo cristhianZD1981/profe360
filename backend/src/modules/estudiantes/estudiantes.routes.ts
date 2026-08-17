@@ -2565,6 +2565,77 @@ router.delete(
   }
 );
 
+router.get("/:id/boletas-conducta", async (req, res) => {
+  try {
+    const estudianteId = Number(req.params.id);
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const usuarioId = Number(req.auth?.usuarioId || req.auth?.userId || 0);
+    const roles = req.auth?.roles || [];
+    const esDocente = roles.includes("PROFESOR") || roles.includes("PROFESOR_GUIA");
+
+    if (!Number.isFinite(estudianteId) || estudianteId <= 0) return badRequest(res, "Id de estudiante inválido");
+    if (!institucionId) return badRequest(res, "El usuario no tiene institución asignada");
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("estudianteId", sql.Int, estudianteId)
+      .input("institucionId", sql.Int, institucionId)
+      .input("usuarioId", sql.Int, usuarioId || null)
+      .input("esDocente", sql.Bit, esDocente ? 1 : 0)
+      .query(`
+        SELECT
+          b.BoletaConductaId,
+          b.CodigoBoleta,
+          b.Consecutivo,
+          b.Fecha,
+          CONVERT(varchar(10), b.Fecha, 103) AS FechaTexto,
+          b.Seccion,
+          b.DetalleHechos,
+          b.LugarAcontecimiento,
+          b.NombreFuncionario,
+          ISNULL(envio.CorreoEnviado, 0) AS CorreoEnviado,
+          ISNULL(envio.WhatsAppEnviado, 0) AS WhatsAppEnviado
+        FROM dbo.BoletaConducta b
+        OUTER APPLY (
+          SELECT TOP 1
+            CorreoEnviado = CASE
+              WHEN COL_LENGTH('dbo.BoletaConductaEnvio', 'CorreoEnviado') IS NOT NULL THEN ISNULL(be.CorreoEnviado, 0)
+              WHEN ISNULL(be.Enviado, 0) = 1 THEN 1
+              ELSE 0
+            END,
+            WhatsAppEnviado = CASE
+              WHEN COL_LENGTH('dbo.BoletaConductaEnvio', 'WhatsAppEnviado') IS NOT NULL THEN ISNULL(be.WhatsAppEnviado, 0)
+              ELSE 0
+            END
+          FROM dbo.BoletaConductaEnvio be
+          WHERE be.BoletaConductaId = b.BoletaConductaId
+          ORDER BY be.CreatedAt DESC, be.BoletaConductaEnvioId DESC
+        ) envio
+        WHERE b.EstudianteId = @estudianteId
+          AND b.InstitucionId = @institucionId
+          -- El docente conserva el mismo alcance del reporte de boletas:
+          -- consulta solo las boletas que él o ella reportó.
+          AND (@esDocente = 0 OR b.UsuarioReportaId = @usuarioId)
+        ORDER BY b.Fecha DESC, b.Consecutivo DESC, b.BoletaConductaId DESC
+      `);
+
+    return ok(res, result.recordset.map((item: any) => ({
+      boletaConductaId: Number(item.BoletaConductaId || 0),
+      numeroBoleta: String(item.CodigoBoleta || "").trim() || String(Number(item.Consecutivo || 0)).padStart(3, "0"),
+      fecha: String(item.FechaTexto || ""),
+      seccion: String(item.Seccion || ""),
+      detalleHechos: String(item.DetalleHechos || ""),
+      lugarAcontecimiento: String(item.LugarAcontecimiento || ""),
+      nombreFuncionario: String(item.NombreFuncionario || ""),
+      envioCorreo: Boolean(item.CorreoEnviado),
+      envioWhatsApp: Boolean(item.WhatsAppEnviado)
+    })));
+  } catch (error) {
+    console.error("Error consultando boletas del estudiante:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar las boletas del estudiante" });
+  }
+});
+
 router.get("/:id/detalle", async (req, res) => {
   try {
     const id = Number(req.params.id);

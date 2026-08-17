@@ -5034,7 +5034,12 @@ router.delete("/planeamientos/:planeamientoId/eliminar-definitivo", async (req, 
               !!baseResultadoIA
               && !!item.ResultadoIAJson
               && String(item.ResultadoIAJson) === baseResultadoIA;
-            return Number(item.PlaneamientoId) === Number(base.PlaneamientoId) || sameByNameAndDates || sameByIaJson;
+            // El alcance "todas" debe reunir únicamente copias del mismo
+            // planeamiento entre secciones. Coincidir solo por el nombre y
+            // fechas, o solo por un JSON reutilizado, podía incluir versiones
+            // ajenas y bloquear la eliminación por indicadores de otra copia.
+            return Number(item.PlaneamientoId) === Number(base.PlaneamientoId)
+              || (sameByNameAndDates && sameByIaJson);
           })
           .map((item: any) => {
             const id = Number(item.PlaneamientoId);

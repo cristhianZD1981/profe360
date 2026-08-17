@@ -182,6 +182,18 @@ type BoletaConductaContexto = {
   };
 };
 
+type BoletaConductaResumen = {
+  boletaConductaId: number;
+  numeroBoleta: string;
+  fecha: string;
+  seccion: string;
+  detalleHechos: string;
+  lugarAcontecimiento: string;
+  nombreFuncionario: string;
+  envioCorreo: boolean;
+  envioWhatsApp: boolean;
+};
+
 const STUDENTS_PAGE_SIZE = 100;
 
 const emptyEncargado = (
@@ -435,6 +447,9 @@ export default function EstudiantesPage() {
   const [boletaConductaContexto, setBoletaConductaContexto] = useState<BoletaConductaContexto | null>(null);
   const [boletaConductaDetalleHechos, setBoletaConductaDetalleHechos] = useState("");
   const [boletaConductaLugar, setBoletaConductaLugar] = useState("");
+  const [boletasVisibleItem, setBoletasVisibleItem] = useState<Student | null>(null);
+  const [boletasConducta, setBoletasConducta] = useState<BoletaConductaResumen[]>([]);
+  const [boletasConductaLoading, setBoletasConductaLoading] = useState(false);
   const [suspensionItem, setSuspensionItem] = useState<Student | null>(null);
   const [suspensionForm, setSuspensionForm] = useState(initialSuspensionForm);
   const [savingSuspension, setSavingSuspension] = useState(false);
@@ -834,6 +849,29 @@ export default function EstudiantesPage() {
           item.direccionExacta
         )
       );
+  }
+
+  async function handleVerBoletasConducta(item: Student) {
+    if (boletasVisibleItem?.EstudianteId === item.EstudianteId) {
+      setBoletasVisibleItem(null);
+      setBoletasConducta([]);
+      return;
+    }
+    clearMessages();
+    setBoletasVisibleItem(item);
+    setBoletasConducta([]);
+    setBoletasConductaLoading(true);
+    try {
+      const response = await api.get(`/estudiantes/${item.EstudianteId}/boletas-conducta`);
+      const data = response.data?.data || [];
+      setBoletasConducta(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      console.error("Error cargando boletas del estudiante:", error);
+      setErrorMessage(error?.response?.data?.message || "No se pudieron cargar las boletas del estudiante");
+      setBoletasVisibleItem(null);
+    } finally {
+      setBoletasConductaLoading(false);
+    }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -2355,6 +2393,25 @@ export default function EstudiantesPage() {
                           </button>
                         )}
 
+                        {isProfesorRole && (
+                          <button
+                            type="button"
+                            disabled={profesorBloqueado}
+                            onClick={() => handleVerBoletasConducta(item)}
+                            title={profesorBloqueado ? suspensionTooltip : undefined}
+                            style={{
+                              border: "1px solid #bae6fd",
+                              background: profesorBloqueado ? "#e5e7eb" : "#f0f9ff",
+                              color: profesorBloqueado ? "#64748b" : "#0369a1",
+                              borderRadius: "8px",
+                              padding: "6px 10px",
+                              cursor: profesorBloqueado ? "not-allowed" : "pointer"
+                            }}
+                          >
+                            {boletasVisibleItem?.EstudianteId === item.EstudianteId ? "Ocultar boletas" : "Ver boletas"}
+                          </button>
+                        )}
+
                         {canManageStudents && item.Activo && (
                           <button
                             type="button"
@@ -2515,6 +2572,65 @@ export default function EstudiantesPage() {
                       </td>
                     </tr>
                   )}
+
+                  {boletasVisibleItem?.EstudianteId === item.EstudianteId && (
+                    <tr>
+                      <td colSpan={studentsTableColSpan} style={{ padding: "14px" }}>
+                        <div style={{ border: "1px solid rgba(255,255,255,0.12)", borderRadius: "16px", padding: "16px", display: "grid", gap: "14px", background: "rgba(255,255,255,0.03)" }}>
+                          <div>
+                            <SectionTitle>Boletas de reporte de conducta</SectionTitle>
+                            <div style={{ color: "#cbd5e1", fontWeight: 700 }}>{getStudentFullName(item)}</div>
+                          </div>
+                          {boletasConductaLoading ? (
+                            <div style={{ color: "#cbd5e1" }}>Cargando boletas...</div>
+                          ) : !boletasConducta.length ? (
+                            <div style={{ padding: "14px", borderRadius: "10px", background: "rgba(255,255,255,0.05)", color: "#cbd5e1" }}>
+                              No tenés boletas registradas para este estudiante.
+                            </div>
+                          ) : (
+                            <div className="table-wrap">
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>N° de boleta</th>
+                                    <th>Fecha</th>
+                                    <th>Sección</th>
+                                    <th>Detalle</th>
+                                    <th>Lugar</th>
+                                    <th>Envío correo</th>
+                                    <th>Envío WhatsApp</th>
+                                    <th>Acción</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {boletasConducta.map((boleta) => (
+                                    <tr key={boleta.boletaConductaId}>
+                                      <td>{boleta.numeroBoleta}</td>
+                                      <td>{boleta.fecha}</td>
+                                      <td>{boleta.seccion}</td>
+                                      <td style={{ minWidth: "280px", whiteSpace: "pre-wrap" }}>{boleta.detalleHechos || ""}</td>
+                                      <td>{boleta.lugarAcontecimiento || ""}</td>
+                                      <td>{boleta.envioCorreo ? "Sí" : "No"}</td>
+                                      <td>{boleta.envioWhatsApp ? "Sí" : "No"}</td>
+                                      <td>
+                                        <button
+                                          type="button"
+                                          onClick={() => window.open(`/boletas/conducta/${boleta.boletaConductaId}`, "_blank", "noopener,noreferrer")}
+                                          style={{ border: "1px solid #bae6fd", borderRadius: "8px", padding: "6px 10px", background: "#f0f9ff", color: "#0369a1", cursor: "pointer" }}
+                                        >
+                                          Ver boleta
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 </Fragment>
                 );
               })}
@@ -2636,6 +2752,7 @@ export default function EstudiantesPage() {
             </div>
           </div>
         )}
+
       </section>
     </div>
   );
