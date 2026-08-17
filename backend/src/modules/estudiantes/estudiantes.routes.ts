@@ -2569,9 +2569,6 @@ router.get("/:id/boletas-conducta", async (req, res) => {
   try {
     const estudianteId = Number(req.params.id);
     const institucionId = Number(req.auth?.institucionId || 0);
-    const usuarioId = Number(req.auth?.usuarioId || req.auth?.userId || 0);
-    const roles = req.auth?.roles || [];
-    const esDocente = roles.includes("PROFESOR") || roles.includes("PROFESOR_GUIA");
 
     if (!Number.isFinite(estudianteId) || estudianteId <= 0) return badRequest(res, "Id de estudiante inválido");
     if (!institucionId) return badRequest(res, "El usuario no tiene institución asignada");
@@ -2580,8 +2577,6 @@ router.get("/:id/boletas-conducta", async (req, res) => {
     const result = await pool.request()
       .input("estudianteId", sql.Int, estudianteId)
       .input("institucionId", sql.Int, institucionId)
-      .input("usuarioId", sql.Int, usuarioId || null)
-      .input("esDocente", sql.Bit, esDocente ? 1 : 0)
       .query(`
         SELECT
           b.BoletaConductaId,
@@ -2613,9 +2608,6 @@ router.get("/:id/boletas-conducta", async (req, res) => {
         ) envio
         WHERE b.EstudianteId = @estudianteId
           AND b.InstitucionId = @institucionId
-          -- El docente conserva el mismo alcance del reporte de boletas:
-          -- consulta solo las boletas que él o ella reportó.
-          AND (@esDocente = 0 OR b.UsuarioReportaId = @usuarioId)
         ORDER BY b.Fecha DESC, b.Consecutivo DESC, b.BoletaConductaId DESC
       `);
 
