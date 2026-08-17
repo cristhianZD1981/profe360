@@ -3121,20 +3121,11 @@ router.get("/habilidades", async (req, res) => {
     if (!incluirInactivas) filters.push("h.Activo = 1");
     if (materiaId) {
       request.input("materiaId", sql.Int, materiaId);
-      filters.push(`
-        (
-          h.MateriaId = @materiaId
-          OR (
-            LEN(LTRIM(RTRIM(COALESCE(NULLIF(h.MateriaNombre, N''), m.Nombre, N'')))) >= 4
-            AND (
-              UPPER(LTRIM(RTRIM(COALESCE(NULLIF(h.MateriaNombre, N''), m.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI
-                LIKE N'%' + UPPER(LTRIM(RTRIM(mref.Nombre))) COLLATE Latin1_General_100_CI_AI + N'%'
-              OR UPPER(LTRIM(RTRIM(mref.Nombre))) COLLATE Latin1_General_100_CI_AI
-                LIKE N'%' + UPPER(LTRIM(RTRIM(COALESCE(NULLIF(h.MateriaNombre, N''), m.Nombre, N'')))) COLLATE Latin1_General_100_CI_AI + N'%'
-            )
-          )
-        )
-      `);
+      // La materia es una relación, no una búsqueda textual. Una coincidencia
+      // parcial mezclaba, por ejemplo, Inglés con Inglés conversacional para
+      // cualquier grado o docente. Solo se muestran habilidades asignadas al
+      // MateriaId seleccionado.
+      filters.push("h.MateriaId = @materiaId");
     }
     if (tipoColegio) {
       request.input("tipoColegio", sql.NVarChar(100), tipoColegio);
@@ -3217,7 +3208,6 @@ router.get("/habilidades", async (req, res) => {
         h.UpdatedAt
       FROM dbo.PlaneamientoHabilidad h
       LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
-      ${materiaId ? "CROSS JOIN (SELECT TOP 1 Nombre FROM dbo.Materia WHERE MateriaId = @materiaId) mref" : ""}
       WHERE ${filters.join(" AND ")}
       ORDER BY
         CASE WHEN @incluirInactivas = 1 AND h.Activo = 0 THEN 0 ELSE 1 END,
