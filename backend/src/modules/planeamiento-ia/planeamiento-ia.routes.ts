@@ -8324,12 +8324,12 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
     const anioEscolar = row.AnioNombre || "";
     const cursoLectivo = row.GrupoNivel || row.GrupoNombre || "";
     const periodoTexto = row.PeriodoNombre || "";
-    const huellaDocumento = crearHuellaDocumentoWord(resultado, row, contenido);
-    const wordInterno = resultado?.documentoWordInterno?.base64
-      && resultado.documentoWordInterno?.huella === huellaDocumento
-      ? Buffer.from(String(resultado.documentoWordInterno.base64), "base64")
-      : null;
-    const plantillaBuffer = wordInterno || await renderPlaneamientoEnPlantillaDocx({
+    // No persistimos el DOCX dentro de ResultadoIAJson. Un machote con imágenes
+    // o muchas tablas se duplica al serializarse a Base64 y puede reiniciar la
+    // instancia en producción antes de alcanzar a responder la descarga.
+    // Se genera bajo demanda para conservar el uso de memoria acotado.
+    delete resultado.documentoWordInterno;
+    const plantillaBuffer = await renderPlaneamientoEnPlantillaDocx({
       resultado,
       row,
       contenido,
@@ -8342,7 +8342,7 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
     });
 
     if (plantillaBuffer) {
-      if (!wordInterno && resultado?.plantillaFormatoDocx?.base64) {
+      if (resultado?.plantillaFormatoDocx?.base64) {
         const verificacionWord = await validarWordExportadoContraReferencia({
           referencia: Buffer.from(String(resultado.plantillaFormatoDocx.base64), "base64"),
           generado: plantillaBuffer,
@@ -8365,23 +8365,6 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
             diagnostico: verificacionWord.diagnostico
           });
         }
-      }
-      if (!wordInterno) {
-        resultado.documentoWordInterno = {
-          base64: plantillaBuffer.toString("base64"),
-          generadoEn: new Date().toISOString(),
-          nombre: `${safeFileName(row.Nombre || contenido.nombre)}.docx`,
-          huella: huellaDocumento
-        };
-        await pool.request()
-          .input("planeamientoId", sql.Int, planeamientoId)
-          .input("resultadoIAJson", sql.NVarChar(sql.MAX), JSON.stringify(resultado))
-          .query(`
-            UPDATE dbo.Planeamiento
-            SET ResultadoIAJson = @resultadoIAJson,
-                UpdatedAt = ${SQL_COSTA_RICA_NOW}
-            WHERE PlaneamientoId = @planeamientoId
-          `);
       }
       const filename = `${safeFileName(row.Nombre || contenido.nombre)}.docx`;
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
