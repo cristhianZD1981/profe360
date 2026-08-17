@@ -8264,7 +8264,14 @@ router.get("/planeamientos/:id/exportar-word", async (req, res) => {
           p.FechaInicio,
           p.FechaFin,
           p.Observaciones,
-          TRY_CAST(p.ResultadoIAJson AS NVARCHAR(MAX)) AS ResultadoIAJson,
+          -- Ignora cachés DOCX de versiones antiguas antes de enviarlos al
+          -- proceso Node. Así un planeamiento ya exportado tampoco puede
+          -- volver a cargar una copia Base64 grande en memoria.
+          TRY_CAST(CASE
+            WHEN ISJSON(p.ResultadoIAJson) = 1
+              THEN JSON_MODIFY(p.ResultadoIAJson, '$.documentoWordInterno', NULL)
+            ELSE p.ResultadoIAJson
+          END AS NVARCHAR(MAX)) AS ResultadoIAJson,
           i.Nombre AS InstitucionNombre,
           i.NombreComercial AS InstitucionNombreComercial,
           i.NombreOficialBoleta AS InstitucionNombreOficialBoleta,
