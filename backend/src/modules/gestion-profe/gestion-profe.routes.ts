@@ -4437,6 +4437,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
     const materiaId = Number(req.params.materiaId);
     const anioLectivoId = toOptionalNumber(req.query.anioLectivoId);
     const periodoId = toOptionalNumber(req.query.periodoId);
+    const grupoClaseId = toOptionalNumber(req.query.grupoClaseId);
 
     if (!Number.isFinite(grupoId) || !Number.isFinite(materiaId)) {
       return badRequest(res, "Grupo o materia inválida");
@@ -4446,7 +4447,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
       return badRequest(res, "Debés indicar año lectivo y periodo");
     }
 
-    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId);
+    const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
     if (!asignacion) return forbidden(res, "No tenés permisos para consultar planeamientos de este grupo y materia");
 
     const pool = await getPool();
@@ -4471,6 +4472,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
       .input("grupoId", sql.Int, grupoId)
       .input("materiaId", sql.Int, materiaId)
       .input("usuarioId", sql.Int, Number(asignacion.UsuarioId))
+      .input("grupoClaseId", sql.Int, grupoClaseId || null)
       .query(`
         SELECT
           p.PlaneamientoId,
@@ -4498,6 +4500,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
             AND eg.PeriodoId = p.PeriodoId
             AND eg.GrupoId = p.GrupoId
             AND eg.MateriaId = p.MateriaId
+            AND ISNULL(dbo.fn_GrupoClaseCanonicoId(eg.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
             AND eg.Activo = 1
           ORDER BY eg.EstructuraGrupoId DESC
         ) estructuraActual
@@ -4515,6 +4518,24 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           AND p.MateriaId = @materiaId
           AND p.UsuarioId = @usuarioId
           AND p.Activo = 1
+          -- Los planeamientos creados desde habilidades pertenecen a la
+          -- clase que tiene sus indicadores Eval360. Sin este filtro, una
+          -- clase paralela A/B veía un planeamiento de la otra clase porque
+          -- ambas comparten GrupoId en la tabla Planeamiento.
+          AND (
+            @grupoClaseId IS NULL
+            OR ISNULL(p.Observaciones, N'') NOT LIKE N'Indicadores creados desde habilidades con IA%'
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.Eval360_IndicadorGrupo ih
+              INNER JOIN dbo.Eval360_EstructuraGrupo eh
+                ON eh.EstructuraGrupoId = ih.EstructuraGrupoId
+              WHERE ih.PlaneamientoId = p.PlaneamientoId
+                AND ISNULL(ih.Activo, 1) = 1
+                AND eh.Activo = 1
+                AND ISNULL(dbo.fn_GrupoClaseCanonicoId(eh.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
+            )
+          )
         ORDER BY p.FechaInicio DESC, p.PlaneamientoId DESC
       `);
 
@@ -4555,6 +4576,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
       .input("grupoId", sql.Int, grupoId)
       .input("materiaId", sql.Int, materiaId)
       .input("usuarioId", sql.Int, Number(asignacion.UsuarioId))
+      .input("grupoClaseId", sql.Int, grupoClaseId || null)
       .query(`
         SELECT
           i.*,
@@ -4569,6 +4591,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
           AND eg.PeriodoId = @periodoId
           AND eg.GrupoId = @grupoId
           AND eg.MateriaId = @materiaId
+          AND ISNULL(dbo.fn_GrupoClaseCanonicoId(eg.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
           AND eg.Activo = 1
           AND eg.EstructuraGrupoId = (
             SELECT TOP 1 egActual.EstructuraGrupoId
@@ -4578,6 +4601,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/planeamientos", async (req,
               AND egActual.PeriodoId = @periodoId
               AND egActual.GrupoId = @grupoId
               AND egActual.MateriaId = @materiaId
+              AND ISNULL(dbo.fn_GrupoClaseCanonicoId(egActual.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
               AND egActual.Activo = 1
             ORDER BY egActual.EstructuraGrupoId DESC
           )

@@ -268,6 +268,14 @@ function dedupeApoyoEducativoEstudiantes(items: ApoyoEducativoResumenItem[]) {
 const MIS_GRUPOS_TODOS_KEY = "__TODOS__";
 const DEFAULT_TIPOS_USO_INDICADORES = ["Cotidiano", "Tareas", "TablaEspecificaciones"];
 
+function getIndicadoresDestinoKey(grupo?: GrupoProfesor | null) {
+  if (!grupo) return "";
+  const grupoId = Number(grupo.GrupoId || 0);
+  if (!grupoId) return "";
+  const grupoClaseId = Number(grupo.GrupoClaseId || 0);
+  return `${grupoId}|${grupoClaseId > 0 ? grupoClaseId : 0}`;
+}
+
 const initialIndicadoresHabilidadesForm = {
   nombre: "",
   meses: [],
@@ -1953,13 +1961,14 @@ export default function GestionProfePage() {
     if (!selected) return [] as GrupoProfesor[];
     const materiaId = Number(selected.MateriaId || 0);
     const grado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(selected) || "");
-    const seccionesUnicas = new Map<number, GrupoProfesor>();
+    const seccionesUnicas = new Map<string, GrupoProfesor>();
     for (const grupo of grupos) {
       if (Number(grupo.MateriaId || 0) !== materiaId) continue;
       const grupoGrado = normalizarGradoPlaneamiento(getGradoPlaneamientoFromGrupo(grupo) || "");
       const grupoId = Number(grupo.GrupoId || 0);
-      if ((!grado || grupoGrado === grado) && grupoId > 0 && !seccionesUnicas.has(grupoId)) {
-        seccionesUnicas.set(grupoId, grupo);
+      const destinoKey = getIndicadoresDestinoKey(grupo);
+      if ((!grado || grupoGrado === grado) && grupoId > 0 && destinoKey && !seccionesUnicas.has(destinoKey)) {
+        seccionesUnicas.set(destinoKey, grupo);
       }
     }
     return Array.from(seccionesUnicas.values())
@@ -5679,7 +5688,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       const response = await api.get("/eval360/indicadores", {
         params: {
           estructuraGrupoId: id || undefined,
-          planeamientoId: planId || undefined
+          planeamientoId: planId || undefined,
+          ...getGrupoClaseParams(selected)
         }
       });
       const data = unwrapApiData(response) || [];
@@ -5769,7 +5779,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setIndicadoresHabilidadesForm((prev) => ({
         ...initialIndicadoresHabilidadesForm,
         plantillaPromptIAId: prev.plantillaPromptIAId || eval360PlantillaIaIndicadorId || "",
-        grupoIds: [String(selected.GrupoId || "")].filter(Boolean),
+        grupoIds: [getIndicadoresDestinoKey(selected)].filter(Boolean),
         tiposUso: [...DEFAULT_TIPOS_USO_INDICADORES]
       }));
     }
@@ -5807,12 +5817,12 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     });
   }
 
-  function toggleIndicadoresHabilidadesGrupo(grupoId: string) {
+  function toggleIndicadoresHabilidadesGrupo(destinoKey: string) {
     setIndicadoresHabilidadesForm((prev) => {
-      const exists = prev.grupoIds.includes(grupoId);
+      const exists = prev.grupoIds.includes(destinoKey);
       const next = exists
-        ? prev.grupoIds.filter((item) => item !== grupoId)
-        : Array.from(new Set([...prev.grupoIds, grupoId]));
+        ? prev.grupoIds.filter((item) => item !== destinoKey)
+        : Array.from(new Set([...prev.grupoIds, destinoKey]));
       return { ...prev, grupoIds: next.length ? next : prev.grupoIds };
     });
   }
@@ -5832,9 +5842,19 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     }
 
     const cantidadPorHabilidad = Number(indicadoresHabilidadesForm.cantidadPorHabilidad || 1);
-    const grupoIdsDestino = indicadoresHabilidadesForm.grupoIds
-      .map((item) => Number(item))
-      .filter((id) => Number.isFinite(id) && id > 0);
+    const destinosDisponibles = new Map<string, GrupoProfesor>();
+    [selected, ...seccionesMismoGradoMateriaSeleccionado].filter(Boolean).forEach((grupo: GrupoProfesor) => {
+      const key = getIndicadoresDestinoKey(grupo);
+      if (key) destinosDisponibles.set(key, grupo);
+    });
+    const destinos = indicadoresHabilidadesForm.grupoIds
+      .map((key) => destinosDisponibles.get(key))
+      .filter((grupo): grupo is GrupoProfesor => !!grupo)
+      .map((grupo) => ({
+        grupoId: Number(grupo.GrupoId),
+        grupoClaseId: Number(grupo.GrupoClaseId || 0) || null
+      }));
+    const grupoIdsDestino = Array.from(new Set(destinos.map((item) => item.grupoId)));
 
     if (!indicadoresHabilidadesForm.habilidadesIds.length) {
       setErrorMessage("Seleccioná al menos una habilidad");
@@ -5873,6 +5893,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         materiaId: selected.MateriaId,
         anioLectivoId: selected.AnioLectivoId,
         periodoId: selected.PeriodoId,
+        ...getGrupoClaseParams(selected),
         plantillaPromptIAId: indicadoresHabilidadesForm.plantillaPromptIAId || eval360PlantillaIaIndicadorId || null,
         nombre: indicadoresHabilidadesForm.nombre,
         meses: indicadoresHabilidadesForm.meses,
@@ -5880,6 +5901,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         cantidadPorHabilidad,
         indicacionesDocente: indicadoresHabilidadesForm.indicacionesDocente,
         grupoIds: grupoIdsDestino,
+        destinos,
         tiposUso: indicadoresHabilidadesForm.tiposUso
       });
 
@@ -5895,13 +5917,14 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       }
 
       await loadPlaneamientos(selected, { mostrarLoading: false });
+      await loadSeguimientoEvaluacion(selected);
       setIndicadoresHabilidadesOpen(false);
       setIndicadoresHabilidadesForm({
         ...initialIndicadoresHabilidadesForm,
-        grupoIds: [String(selected.GrupoId || "")].filter(Boolean),
+        grupoIds: [getIndicadoresDestinoKey(selected)].filter(Boolean),
         tiposUso: [...DEFAULT_TIPOS_USO_INDICADORES]
       });
-      setMessage(response?.data?.message || `Indicadores creados desde habilidades para ${Number(data.estructurasAplicadas || 0)}/${grupoIdsDestino.length} sección(es).`);
+      setMessage(response?.data?.message || `Indicadores creados desde habilidades para ${Number(data.estructurasAplicadas || 0)}/${destinos.length} sección(es).`);
     } catch (error: any) {
       console.error("Error generando indicadores desde habilidades:", error);
       setGeneratingIndicadoresHabilidadesEtapa("No se pudieron generar los indicadores");
@@ -6377,6 +6400,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
         params: {
           anioLectivoId: item.AnioLectivoId,
           periodoId: item.PeriodoId,
+          ...getGrupoClaseParams(item),
           sincronizar: options.sincronizar === true ? true : false,
           _ts: Date.now()
         }
@@ -6741,7 +6765,47 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       await loadPlaneamientos(selected, { mostrarLoading: false });
     } catch (error: any) {
       console.error("Error eliminando planeamiento:", error);
-      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el planeamiento");
+      const dataError = error?.response?.data?.data || {};
+      const bloqueados = Array.isArray(dataError.bloqueados) ? dataError.bloqueados : [];
+      const totalIndicadores = bloqueados.reduce((total: number, item: any) => total + Number(item.totalIndicadoresIA || 0), 0);
+
+      if (error?.response?.status === 409 && alcance === "seccion" && totalIndicadores > 0) {
+        const eliminarIndicadores = window.confirm(
+          `Este planeamiento tiene ${totalIndicadores} indicador(es) activos. ¿Deseás eliminarlos también para borrar el planeamiento?\n\nSi ya tienen calificaciones o registros, la aplicación conservará el bloqueo de seguridad.`
+        );
+
+        if (eliminarIndicadores) {
+          try {
+            const indicadoresResponse = await api.delete(`/eval360/indicadores/planeamiento/${id}`, {
+              data: {
+                grupoIds: [Number(selected.GrupoId)],
+                ...getGrupoClaseParams(selected)
+              }
+            });
+            const indicadoresEliminados = Number(unwrapApiData(indicadoresResponse)?.eliminados || 0);
+            if (!indicadoresEliminados) {
+              setErrorMessage("Este planeamiento no tiene indicadores en la sección actual; pertenece a otra sección paralela y no se eliminará desde aquí.");
+              setDeletingPlaneamientoProgress(0);
+              return;
+            }
+            await api.delete(`/gestion-profe/planeamientos/${id}/eliminar-definitivo`, {
+              params: { alcance }
+            });
+            setMessage("Se eliminaron los indicadores y el planeamiento correctamente.");
+            setDeletingPlaneamientoProgress(100);
+            if (editingPlaneamientoId === id) resetPlaneamientoForm();
+            await loadPlaneamientos(selected, { mostrarLoading: false });
+            return;
+          } catch (errorIndicadores: any) {
+            console.error("Error eliminando indicadores antes del planeamiento:", errorIndicadores);
+            setErrorMessage(errorIndicadores?.response?.data?.message || "No se pudieron eliminar los indicadores asociados al planeamiento");
+          }
+        } else {
+          setErrorMessage("Primero eliminá los indicadores asociados al planeamiento desde la opción “Ver indicadores a partir de habilidades”.");
+        }
+      } else {
+        setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el planeamiento");
+      }
       setDeletingPlaneamientoProgress(0);
     } finally {
       if (deletingPlaneamientoTimerRef.current !== null) {
@@ -11848,22 +11912,30 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           <input
                             type="checkbox"
                             checked={seccionesMismoGradoMateriaSeleccionado.length > 0 && indicadoresHabilidadesForm.grupoIds.length === seccionesMismoGradoMateriaSeleccionado.length}
-                            onChange={(event) => updateIndicadoresHabilidadesField("grupoIds", event.target.checked ? seccionesMismoGradoMateriaSeleccionado.map((grupo) => String(grupo.GrupoId)) : [String(selected?.GrupoId || "")].filter(Boolean))}
+                            onChange={(event) => updateIndicadoresHabilidadesField(
+                              "grupoIds",
+                              event.target.checked
+                                ? seccionesMismoGradoMateriaSeleccionado.map(getIndicadoresDestinoKey).filter(Boolean)
+                                : [getIndicadoresDestinoKey(selected)].filter(Boolean)
+                            )}
                             style={{ width: "16px", height: "16px", margin: 0, flexShrink: 0 }}
                           />
                         </label>
                         <div style={{ display: "flex", gap: "8px 14px", flexWrap: "wrap", alignItems: "center" }}>
-                          {seccionesMismoGradoMateriaSeleccionado.map((grupo) => (
-                            <label key={`hab-sec-${grupo.GrupoId}`} style={{ display: "inline-flex", gap: "8px", alignItems: "center", color: "#ecfeff", fontWeight: 800, width: "fit-content", maxWidth: "100%" }}>
-                              <span>{grupo.GrupoNombre}</span>
-                              <input
-                                type="checkbox"
-                                checked={indicadoresHabilidadesForm.grupoIds.includes(String(grupo.GrupoId))}
-                                onChange={() => toggleIndicadoresHabilidadesGrupo(String(grupo.GrupoId))}
-                                style={{ width: "16px", height: "16px", margin: 0, flexShrink: 0 }}
-                              />
-                            </label>
-                          ))}
+                          {seccionesMismoGradoMateriaSeleccionado.map((grupo) => {
+                            const destinoKey = getIndicadoresDestinoKey(grupo);
+                            return (
+                              <label key={`hab-sec-${destinoKey}`} style={{ display: "inline-flex", gap: "8px", alignItems: "center", color: "#ecfeff", fontWeight: 800, width: "fit-content", maxWidth: "100%" }}>
+                                <span>{grupo.GrupoNombre}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={indicadoresHabilidadesForm.grupoIds.includes(destinoKey)}
+                                  onChange={() => toggleIndicadoresHabilidadesGrupo(destinoKey)}
+                                  style={{ width: "16px", height: "16px", margin: 0, flexShrink: 0 }}
+                                />
+                              </label>
+                            );
+                          })}
                         </div>
                       </div>
 

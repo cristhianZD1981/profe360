@@ -8190,6 +8190,7 @@ async function getOrCreateEstructuraIndicadoresHabilidades(executor: any, params
   materiaId: number;
   anioLectivoId: number;
   periodoId: number;
+  grupoClaseId?: number | null;
   usuarioId?: number | null;
   plantillaBaseId?: number | null;
   nombre: string;
@@ -8200,14 +8201,16 @@ async function getOrCreateEstructuraIndicadoresHabilidades(executor: any, params
     .input("materiaId", sql.Int, params.materiaId)
     .input("anioLectivoId", sql.Int, params.anioLectivoId)
     .input("periodoId", sql.Int, params.periodoId)
+    .input("grupoClaseId", sql.Int, params.grupoClaseId || null)
     .query(`
-      SELECT TOP 1 EstructuraGrupoId, GrupoId, PlantillaBaseId
+      SELECT TOP 1 EstructuraGrupoId, GrupoId, GrupoClaseId, PlantillaBaseId
       FROM dbo.Eval360_EstructuraGrupo
       WHERE InstitucionId = @institucionId
         AND GrupoId = @grupoId
         AND MateriaId = @materiaId
         AND AnioLectivoId = @anioLectivoId
         AND PeriodoId = @periodoId
+        AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
         AND Activo = 1
       ORDER BY EstructuraGrupoId DESC
     `);
@@ -8220,15 +8223,16 @@ async function getOrCreateEstructuraIndicadoresHabilidades(executor: any, params
     .input("materiaId", sql.Int, params.materiaId)
     .input("anioLectivoId", sql.Int, params.anioLectivoId)
     .input("periodoId", sql.Int, params.periodoId)
+    .input("grupoClaseId", sql.Int, params.grupoClaseId || null)
     .input("usuarioId", sql.Int, params.usuarioId || null)
     .input("plantillaBaseId", sql.Int, params.plantillaBaseId || null)
     .input("nombre", sql.NVarChar(200), `Estructura de evaluacion - ${params.nombre}`)
     .query(`
       INSERT INTO dbo.Eval360_EstructuraGrupo
-        (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, UsuarioId, PlantillaBaseId, Nombre, TotalPorcentaje, Activo, CreatedAt)
-      OUTPUT INSERTED.EstructuraGrupoId, INSERTED.GrupoId, INSERTED.PlantillaBaseId
+        (InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, GrupoClaseId, UsuarioId, PlantillaBaseId, Nombre, TotalPorcentaje, Activo, CreatedAt)
+      OUTPUT INSERTED.EstructuraGrupoId, INSERTED.GrupoId, INSERTED.GrupoClaseId, INSERTED.PlantillaBaseId
       VALUES
-        (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @usuarioId, @plantillaBaseId, @nombre, 100, 1, ${SQL_COSTA_RICA_NOW})
+        (@institucionId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @grupoClaseId, @usuarioId, @plantillaBaseId, @nombre, 100, 1, ${SQL_COSTA_RICA_NOW})
     `);
 
   const estructura = creada.recordset[0];
@@ -11253,6 +11257,8 @@ router.get("/indicadores", async (req, res) => {
 
     const planeamientoId = toOptionalNumber(req.query.planeamientoId);
 
+    const grupoClaseId = toOptionalGrupoClaseId(req.query.grupoClaseId);
+
     const tipoUso = normalizeText(req.query.tipoUso);
 
     const pool = await getPool();
@@ -11265,7 +11271,7 @@ router.get("/indicadores", async (req, res) => {
 
     if (planeamientoId && !estructuraIdFinal) {
 
-      const contexto = await getEstructuraDesdePlaneamiento(req, res, pool, planeamientoId, null);
+      const contexto = await getEstructuraDesdePlaneamiento(req, res, pool, planeamientoId, null, grupoClaseId);
 
       if (!contexto) return;
 
@@ -11368,7 +11374,7 @@ router.get("/indicadores", async (req, res) => {
 
 
 
-async function getEstructuraDesdePlaneamiento(req: any, res: any, pool: any, planeamientoId: number, estructuraGrupoId?: number | null) {
+async function getEstructuraDesdePlaneamiento(req: any, res: any, pool: any, planeamientoId: number, estructuraGrupoId?: number | null, grupoClaseId?: number | null) {
 
   const institucionId = getInstitutionId(req, res);
 
@@ -11528,6 +11534,8 @@ async function getEstructuraDesdePlaneamiento(req: any, res: any, pool: any, pla
 
     .input("periodoId", sql.Int, Number(planeamiento.PeriodoId))
 
+    .input("grupoClaseId", sql.Int, toOptionalGrupoClaseId(grupoClaseId) || null)
+
     .query(`
 
       SELECT TOP 1 *
@@ -11543,6 +11551,8 @@ async function getEstructuraDesdePlaneamiento(req: any, res: any, pool: any, pla
         AND AnioLectivoId = @anioLectivoId
 
         AND PeriodoId = @periodoId
+
+        AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
 
         AND Activo = 1
 
@@ -12330,7 +12340,9 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
     const cantidadPorHabilidad = Math.max(1, Math.min(10, Number(req.body.cantidadPorHabilidad || 1) || 1));
 
-    const nombrePlaneamiento = normalizarNombreSinPlaneamiento(req.body.nombre);
+    const nombreSolicitado = normalizeText(req.body.nombre);
+    const nombrePlaneamiento = normalizarNombreSinPlaneamiento(nombreSolicitado);
+    const grupoClaseIdBase = toOptionalGrupoClaseId(req.body.grupoClaseId);
 
     const indicacionesDocente = normalizeText(req.body.indicacionesDocente);
 
@@ -12354,29 +12366,53 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       grupoId: Number(grupoId),
       materiaId: Number(materiaId),
       anioLectivoId: Number(anioLectivoId),
-      periodoId: Number(periodoId)
+      periodoId: Number(periodoId),
+      grupoClaseId: grupoClaseIdBase
     });
 
     if (!asignacionBase) return;
 
-    const grupoIdsDestino = Array.from(new Set([
-      Number(grupoId),
-      ...toNumberList(req.body.grupoIds)
-    ])).filter((item) => Number.isFinite(item) && item > 0);
+    // Cada destino incluye su GrupoClaseId. Un mismo GrupoId puede representar
+    // varias secciones/materias (por ejemplo A y B), por lo que no se puede
+    // reducir la selección solamente al GrupoId.
+    const destinosPorClave = new Map<string, { grupoId: number; grupoClaseId: number | null }>();
+    const registrarDestino = (grupoDestinoId: number, grupoClaseDestinoId: number | null) => {
+      if (!Number.isFinite(grupoDestinoId) || grupoDestinoId <= 0) return;
+      const grupoClaseNormalizado = Number(grupoClaseDestinoId || 0) || null;
+      const clave = `${grupoDestinoId}|${grupoClaseNormalizado || 0}`;
+      destinosPorClave.set(clave, { grupoId: grupoDestinoId, grupoClaseId: grupoClaseNormalizado });
+    };
+
+    registrarDestino(Number(grupoId), grupoClaseIdBase);
+
+    for (const destino of (Array.isArray(req.body.destinos) ? req.body.destinos : [])) {
+      registrarDestino(Number(destino?.grupoId), toOptionalGrupoClaseId(destino?.grupoClaseId));
+    }
+
+    // Compatibilidad con clientes anteriores que aún envían solamente grupoIds.
+    for (const grupoDestinoId of toNumberList(req.body.grupoIds)) {
+      const yaIncluido = Array.from(destinosPorClave.values())
+        .some((destino) => destino.grupoId === Number(grupoDestinoId));
+      if (!yaIncluido) registrarDestino(Number(grupoDestinoId), null);
+    }
+
+    const destinosSolicitados = Array.from(destinosPorClave.values());
+    const grupoIdsDestino = Array.from(new Set(destinosSolicitados.map((destino) => destino.grupoId)));
 
     const asignacionesDestino: any[] = [];
 
-    for (const grupoDestinoId of grupoIdsDestino) {
+    for (const destino of destinosSolicitados) {
 
-      const avanceAsignacion = 8 + ((asignacionesDestino.length / Math.max(1, grupoIdsDestino.length)) * 8);
+      const avanceAsignacion = 8 + ((asignacionesDestino.length / Math.max(1, destinosSolicitados.length)) * 8);
 
-      actualizarProgresoEval360(operacionId, avanceAsignacion, `Validando seccion ${asignacionesDestino.length + 1} de ${grupoIdsDestino.length}`);
+      actualizarProgresoEval360(operacionId, avanceAsignacion, `Validando seccion ${asignacionesDestino.length + 1} de ${destinosSolicitados.length}`);
 
       const asignacion = await getAsignacionPermitida(req, res, {
-        grupoId: Number(grupoDestinoId),
+        grupoId: destino.grupoId,
         materiaId: Number(materiaId),
         anioLectivoId: Number(anioLectivoId),
-        periodoId: Number(periodoId)
+        periodoId: Number(periodoId),
+        grupoClaseId: destino.grupoClaseId
       });
 
       if (!asignacion) return;
@@ -12555,6 +12591,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       .input("materiaId", sql.Int, Number(materiaId))
       .input("anioLectivoId", sql.Int, Number(anioLectivoId))
       .input("periodoId", sql.Int, Number(periodoId))
+      .input("grupoClaseId", sql.Int, grupoClaseIdBase || null)
       .query(`
         SELECT TOP 1 EstructuraGrupoId, PlantillaBaseId
         FROM dbo.Eval360_EstructuraGrupo
@@ -12563,6 +12600,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
           AND MateriaId = @materiaId
           AND AnioLectivoId = @anioLectivoId
           AND PeriodoId = @periodoId
+          AND ISNULL(dbo.fn_GrupoClaseCanonicoId(GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)
           AND Activo = 1
         ORDER BY EstructuraGrupoId DESC
       `);
@@ -12573,7 +12611,9 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
     await transaction.begin();
 
-    const planeamientosPorGrupo = new Map<number, number>();
+    const claveDestinoIndicadores = (grupoDestinoId: number, grupoClaseDestinoId?: number | null) =>
+      `${grupoDestinoId}|${Number(grupoClaseDestinoId || 0) || 0}`;
+    const planeamientosPorGrupo = new Map<string, number>();
 
     const estructurasDestino: any[] = [];
 
@@ -12586,6 +12626,41 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       actualizarProgresoEval360(operacionId, avanceGuardado, `Guardando seccion ${indiceAsignacion + 1} de ${asignacionesDestino.length}`);
 
       const grupoDestinoId = Number(asignacion.GrupoId);
+      const grupoClaseDestinoId = Number(asignacion.GrupoClaseId || 0) || null;
+
+      let nombrePlaneamientoDestino = nombrePlaneamiento;
+      if (!nombreSolicitado) {
+        const nombresExistentes = await new sql.Request(transaction)
+          .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+          .input("grupoId", sql.Int, grupoDestinoId)
+          .input("materiaId", sql.Int, Number(materiaId))
+          .input("anioLectivoId", sql.Int, Number(anioLectivoId))
+          .input("periodoId", sql.Int, Number(periodoId))
+          .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req) || 0) || null)
+          .input("nombreBase", sql.NVarChar(200), `${nombrePlaneamiento} - %`)
+          .query(`
+            SELECT Nombre
+            FROM dbo.Planeamiento
+            WHERE InstitucionId = @institucionId
+              AND GrupoId = @grupoId
+              AND MateriaId = @materiaId
+              AND AnioLectivoId = @anioLectivoId
+              AND PeriodoId = @periodoId
+              AND UsuarioId = @usuarioId
+              AND Activo = 1
+              AND (
+                LTRIM(RTRIM(ISNULL(Nombre, N''))) = @nombreBase
+                OR LTRIM(RTRIM(ISNULL(Nombre, N''))) LIKE @nombreBase
+              )
+          `);
+
+        const ocupados = new Set((nombresExistentes.recordset || []).map((item: any) => String(item.Nombre || "").trim()));
+        let consecutivo = 1;
+        do {
+          nombrePlaneamientoDestino = `${nombrePlaneamiento} - ${consecutivo}`;
+          consecutivo += 1;
+        } while (ocupados.has(nombrePlaneamientoDestino));
+      }
 
       const estructuraDestino = await getOrCreateEstructuraIndicadoresHabilidades(transaction, {
         institucionId: Number(asignacion.InstitucionId),
@@ -12593,9 +12668,10 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
         materiaId: Number(materiaId),
         anioLectivoId: Number(anioLectivoId),
         periodoId: Number(periodoId),
+        grupoClaseId: grupoClaseDestinoId,
         usuarioId: Number(asignacion.UsuarioId || getUserId(req) || 0) || null,
         plantillaBaseId,
-        nombre: nombrePlaneamiento
+        nombre: nombrePlaneamientoDestino
       });
 
       if (!estructuraDestino) continue;
@@ -12609,7 +12685,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
         .input("anioLectivoId", sql.Int, Number(anioLectivoId))
         .input("periodoId", sql.Int, Number(periodoId))
         .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req) || 0) || null)
-        .input("nombre", sql.NVarChar(200), nombrePlaneamiento)
+        .input("nombre", sql.NVarChar(200), nombrePlaneamientoDestino)
         .query(`
           SELECT TOP 1 PlaneamientoId
           FROM dbo.Planeamiento
@@ -12635,7 +12711,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
           .input("grupoId", sql.Int, grupoDestinoId)
           .input("materiaId", sql.Int, Number(materiaId))
           .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req) || 0) || null)
-          .input("nombre", sql.NVarChar(200), nombrePlaneamiento)
+          .input("nombre", sql.NVarChar(200), nombrePlaneamientoDestino)
           .input("observaciones", sql.NVarChar(sql.MAX), "Indicadores creados desde habilidades con IA")
           .query(`
             INSERT INTO dbo.Planeamiento
@@ -12651,7 +12727,10 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
       if (!planeamientoDestinoId) continue;
 
-      planeamientosPorGrupo.set(grupoDestinoId, planeamientoDestinoId);
+      planeamientosPorGrupo.set(
+        claveDestinoIndicadores(grupoDestinoId, grupoClaseDestinoId),
+        planeamientoDestinoId
+      );
 
       const basesPermitidas = new Set(indicadoresBase.map((base) => normalizeKey(base)));
 
@@ -12803,9 +12882,14 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
 
     }
 
-    const planeamientoIdBase = Number(planeamientosPorGrupo.get(Number(grupoId)) || 0);
+    const planeamientoIdBase = Number(
+      planeamientosPorGrupo.get(claveDestinoIndicadores(Number(grupoId), grupoClaseIdBase)) || 0
+    );
 
-    const estructuraBase = estructurasDestino.find((item: any) => Number(item.GrupoId) === Number(grupoId)) || estructurasDestino[0];
+    const estructuraBase = estructurasDestino.find((item: any) =>
+      Number(item.GrupoId) === Number(grupoId) &&
+      Number(item.GrupoClaseId || 0) === Number(grupoClaseIdBase || 0)
+    ) || estructurasDestino[0];
 
     if (!planeamientoIdBase || !estructuraBase) {
 
@@ -12820,6 +12904,22 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
     actualizarProgresoEval360(operacionId, 96, "Confirmando cambios");
 
     await transaction.commit();
+
+    // Seguimiento Diario puede tener el contexto de la sección en memoria.
+    // Al guardar indicadores se invalida tanto el contexto como el listado de
+    // planeamientos para que las rúbricas los vean de inmediato.
+    for (const estructuraDestino of estructurasDestino) {
+      const contextoPartes = {
+        institucionId: Number(estructuraDestino.InstitucionId || asignacionBase.InstitucionId),
+        grupoId: Number(estructuraDestino.GrupoId),
+        materiaId: Number(materiaId),
+        anioLectivoId: Number(anioLectivoId),
+        periodoId: Number(periodoId),
+        grupoClaseId: Number(estructuraDestino.GrupoClaseId || 0) || null
+      };
+      clearContextCacheByParts(contextoPartes);
+      contextoSectionCache.delete(`planeamientos|${contextoPartes.institucionId}|${contextoPartes.grupoId}|${contextoPartes.materiaId}|${contextoPartes.anioLectivoId}|${contextoPartes.periodoId}`);
+    }
 
     actualizarProgresoEval360(operacionId, 98, "Cargando indicadores generados");
 
@@ -13426,6 +13526,7 @@ router.delete("/indicadores/planeamiento/:planeamientoId", async (req, res) => {
     if (planeamientoId === null) return;
 
     const grupoIdsSolicitados = toNumberList((req as any).body?.grupoIds);
+    const grupoClaseIdSolicitado = toOptionalGrupoClaseId((req as any).body?.grupoClaseId);
 
 
 
@@ -13458,6 +13559,10 @@ router.delete("/indicadores/planeamiento/:planeamientoId", async (req, res) => {
       .input("periodoId", sql.Int, Number(estructuraBase.PeriodoId))
 
       .input("usuarioId", sql.Int, getUserId(req) || null);
+
+    if (grupoClaseIdSolicitado) {
+      requestEstructuras.input("grupoClaseId", sql.Int, grupoClaseIdSolicitado);
+    }
 
     grupoIdsDestino.forEach((grupoId, index) => requestEstructuras.input(`gid${index}`, sql.Int, grupoId));
 
@@ -13512,6 +13617,10 @@ router.delete("/indicadores/planeamiento/:planeamientoId", async (req, res) => {
         AND eg.Activo = 1
 
         AND eg.GrupoId IN (${placeholdersGrupos})
+
+        ${grupoClaseIdSolicitado
+          ? "AND ISNULL(dbo.fn_GrupoClaseCanonicoId(eg.GrupoClaseId), 0) = ISNULL(dbo.fn_GrupoClaseCanonicoId(@grupoClaseId), 0)"
+          : ""}
 
         ${filtroProfesor}
 

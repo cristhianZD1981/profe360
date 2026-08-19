@@ -1090,13 +1090,19 @@ export function normalizarGradoPlaneamiento(value: any) {
   if (!original) return "";
 
   const limpio = normalizarTextoOrden(original);
+  // La modalidad es parte de la llave del catálogo de habilidades: 8 y 8 PN
+  // no son equivalentes. Las secciones se llaman, por ejemplo, "8-1 PN", por
+  // lo que se debe conservar PN aun cuando el texto visible del grado se
+  // normalice a Octavo.
+  const esPlanNacional = /\bpn\b/.test(limpio);
+  const conModalidad = (grado: string) => esPlanNacional ? `${grado} PN` : grado;
 
-  const matchNivelSeccion = limpio.match(/^(7|8|9|10|11|12)(?:\s*[-_. ]\s*\d+)?/);
+  const matchNivelSeccion = limpio.match(/^(7|8|9|10|11|12)(?:\s*[-_. ]\s*\d+)?(?:\b|$)/);
   const nivelNumerico = matchNivelSeccion ? Number(matchNivelSeccion[1]) : null;
 
-  if (nivelNumerico === 7 || limpio.includes("setimo") || limpio.includes("septimo")) return "Séptimo";
-  if (nivelNumerico === 8 || limpio.includes("octavo")) return "Octavo";
-  if (nivelNumerico === 9 || limpio.includes("noveno")) return "Noveno";
+  if (nivelNumerico === 7 || limpio.includes("setimo") || limpio.includes("septimo")) return conModalidad("Séptimo");
+  if (nivelNumerico === 8 || limpio.includes("octavo")) return conModalidad("Octavo");
+  if (nivelNumerico === 9 || limpio.includes("noveno")) return conModalidad("Noveno");
 
   // Undécimo y duodécimo contienen "décimo". Se validan antes de décimo
   // para evitar que 11- o 12- se carguen como décimo.
@@ -1108,10 +1114,10 @@ export function normalizarGradoPlaneamiento(value: any) {
     limpio.includes("duo decima") ||
     limpio.includes("duidecimo") ||
     limpio.includes("duidecima")
-  ) return "Duodécimo";
+  ) return conModalidad("Duodécimo");
 
-  if (nivelNumerico === 11 || limpio.includes("undecimo") || limpio.includes("undecima")) return "Undécimo";
-  if (nivelNumerico === 10 || limpio === "decimo" || limpio === "decima") return "Décimo";
+  if (nivelNumerico === 11 || limpio.includes("undecimo") || limpio.includes("undecima")) return conModalidad("Undécimo");
+  if (nivelNumerico === 10 || limpio === "decimo" || limpio === "decima") return conModalidad("Décimo");
 
   return original;
 }
