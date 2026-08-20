@@ -458,6 +458,14 @@ export default function GestionProfePage() {
   const [horarioVisible, setHorarioVisible] = useState(false);
   const [horarioBloques, setHorarioBloques] = useState<HorarioBloque[]>([]);
   const [horarioEntradas, setHorarioEntradas] = useState<HorarioEntrada[]>([]);
+  const [alertaTempranaOpen, setAlertaTempranaOpen] = useState(false);
+  const [alertaTempranaLoading, setAlertaTempranaLoading] = useState(false);
+  const [alertaTempranaGenerating, setAlertaTempranaGenerating] = useState(false);
+  const [alertaTempranaProgress, setAlertaTempranaProgress] = useState(0);
+  const [alertaTempranaStudents, setAlertaTempranaStudents] = useState<any[]>([]);
+  const [alertaTempranaSelectedIds, setAlertaTempranaSelectedIds] = useState<number[]>([]);
+  const [alertaTempranaGenerated, setAlertaTempranaGenerated] = useState<any[]>([]);
+  const alertaTempranaGeneratedRef = useRef<HTMLDivElement | null>(null);
   const [auditoriaEnviosDesde, setAuditoriaEnviosDesde] = useState(() => getCostaRicaIsoDateWithOffset(-30));
   const [auditoriaEnviosHasta, setAuditoriaEnviosHasta] = useState(() => getCostaRicaIsoDate());
   const [auditoriaEnvios, setAuditoriaEnvios] = useState<AuditoriaEnvioFila[]>([]);
@@ -2565,11 +2573,6 @@ export default function GestionProfePage() {
     });
     return { gruposFecha, columnas, columnasPlanas, rows };
   }, [detalle?.estudiantes, seguimientoContexto?.asistenciaRegistros, seguimientoContexto?.detalles, promedioFinalPorEstudiante]);
-
-  const ultimaBitacora = useMemo(() => {
-    if (!bitacorasGrupo.length) return null;
-    return bitacorasGrupo[0];
-  }, [bitacorasGrupo]);
 
   const boletasConductaFiltradas = useMemo(() => {
     const grupoNombre = String(selected?.GrupoNombre || "").trim().toUpperCase();
@@ -8608,6 +8611,100 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     }
   }
 
+  function esGrupoGuia(item = selected) {
+    return String(item?.TipoAsignacion || "").toUpperCase().includes("GUIA");
+  }
+
+  async function cargarAlertaTemprana(item = selected) {
+    if (!item || !esGrupoGuia(item)) return;
+    setAlertaTempranaLoading(true);
+    try {
+      const response = await api.get(`/gestion-profe/mis-grupos/${item.GrupoId}/materias/${item.MateriaId}/alerta-temprana/bootstrap`, {
+        params: { anioLectivoId: item.AnioLectivoId, periodoId: item.PeriodoId, ...getGrupoClaseParams(item) }
+      });
+      const data = response.data?.data || response.data || {};
+      setAlertaTempranaStudents(Array.isArray(data.estudiantes) ? data.estudiantes : []);
+      setAlertaTempranaGenerated(Array.isArray(data.generated) ? data.generated : []);
+      setAlertaTempranaSelectedIds([]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar Alerta Temprana");
+    } finally {
+      setAlertaTempranaLoading(false);
+    }
+  }
+
+  async function abrirAlertaTemprana(item = selected) {
+    if (!item || !esGrupoGuia(item)) {
+      setErrorMessage("Alerta Temprana solo está disponible para grupos de Guía");
+      return;
+    }
+    setAlertaTempranaOpen(true);
+    await cargarAlertaTemprana(item);
+  }
+
+  async function generarAlertaTemprana() {
+    if (!selected || !alertaTempranaStudents.length || !alertaTempranaSelectedIds.length) {
+      setErrorMessage("Seleccioná al menos un estudiante para generar la Alerta Temprana");
+      return;
+    }
+    setAlertaTempranaGenerating(true);
+    setAlertaTempranaProgress(0);
+    const selectedIds = [...alertaTempranaSelectedIds];
+    const generatedForRequest: any[] = [];
+    let firstError = "";
+    try {
+      for (let index = 0; index < selectedIds.length; index += 1) {
+        try {
+          const response = await api.post("/gestion-profe/alerta-temprana/generar", {
+            grupoId: selected.GrupoId,
+            materiaId: selected.MateriaId,
+            anioLectivoId: selected.AnioLectivoId,
+            periodoId: selected.PeriodoId,
+            estudianteIds: [selectedIds[index]],
+            ...getGrupoClaseParams(selected)
+          });
+          const data = response.data?.data || response.data || {};
+          if (Array.isArray(data.generated)) generatedForRequest.push(...data.generated);
+        } catch (error: any) {
+          firstError ||= error?.response?.data?.message || "No se pudo generar uno de los registros";
+        }
+        setAlertaTempranaProgress(Math.round(((index + 1) / selectedIds.length) * 100));
+      }
+      setAlertaTempranaGenerated((prev) => [...generatedForRequest, ...prev]);
+      setAlertaTempranaSelectedIds([]);
+      if (generatedForRequest.length) {
+        setMessage(firstError ? `Proceso completado con observaciones: ${firstError}` : "Alerta Temprana generada correctamente");
+        setTimeout(() => alertaTempranaGeneratedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+      } else if (firstError) {
+        setErrorMessage(firstError);
+      }
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo generar Alerta Temprana");
+    } finally {
+      setAlertaTempranaGenerating(false);
+    }
+  }
+
+  async function abrirDocumentoAlertaTemprana(id: number, nombreArchivo = "alerta-temprana.xlsx") {
+    try {
+      const response = await api.get(`/gestion-profe/alerta-temprana/documentos/${id}/excel`, { responseType: "blob" });
+      const url = URL.createObjectURL(response.data);
+      const disposition = String(response.headers?.["content-disposition"] || "");
+      const headerName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+      const anchor = document.createElement("a"); anchor.href = url; anchor.download = headerName || nombreArchivo; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error: any) { setErrorMessage(error?.response?.data?.message || "No se pudo descargar el archivo Excel"); }
+  }
+
+  async function eliminarDocumentoAlertaTemprana(id: number) {
+    if (!window.confirm("¿Eliminar este documento de Alerta Temprana? También se eliminará el archivo Excel.")) return;
+    try {
+      await api.delete(`/gestion-profe/alerta-temprana/documentos/${id}`);
+      setAlertaTempranaGenerated((prev) => prev.filter((item) => Number(item.AlertaTempranaDocumentoId) !== Number(id)));
+      setMessage("Documento de Alerta Temprana eliminado");
+    } catch (error: any) { setErrorMessage(error?.response?.data?.message || "No se pudo eliminar el documento"); }
+  }
+
   function getHorarioEntradas(bloqueId: number, diaSemana: number) {
     return horarioEntradas.filter((item) => Number(item.BloqueHorarioId) === Number(bloqueId) && Number(item.DiaSemana) === Number(diaSemana));
   }
@@ -9925,22 +10022,97 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
               >
                 Tabla de Especificaciones y Exámenes
               </button>
+              {esGrupoGuia() ? (
+                <button
+                  type="button"
+                  className={alertaTempranaOpen ? "primary-btn" : undefined}
+                  style={alertaTempranaOpen ? undefined : getGestionPanelButtonStyle("reportes")}
+                  onClick={() => { void abrirAlertaTemprana(selected); }}
+                >
+                  Alerta Temprana
+                </button>
+              ) : null}
             </div>
 
-            <div style={{ marginTop: "10px", padding: "10px 12px", borderRadius: "12px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a" }}>
-              <strong style={{ display: "block", marginBottom: "6px" }}>Último registro de Bitácora incluido</strong>
-              {!ultimaBitacora ? (
-                <span style={{ color: "#64748b" }}>No hay registros de bitácora para esta sección.</span>
-              ) : (
-                <div style={{ display: "grid", gap: "4px" }}>
-                  <span><strong>Fecha:</strong> {String(ultimaBitacora.FechaRegistro || "").slice(0, 10)}</span>
-                  <span><strong>Tema desarrollado:</strong> {ultimaBitacora.TemasDesarrollados || "-"}</span>
-                  <span><strong>Observaciones:</strong> {ultimaBitacora.Observaciones || "-"}</span>
-                  <span><strong>Hechos relevantes:</strong> {ultimaBitacora.HechosRelevantes || "-"}</span>
+            {alertaTempranaOpen && esGrupoGuia() ? (
+              <div style={{ marginTop: "12px", padding: "14px", border: "1px solid #93c5fd", borderRadius: "14px", background: "#eff6ff", color: "#0f172a", display: "grid", gap: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+                  <div>
+                    <strong style={{ display: "block", fontSize: "18px" }}>Asistente de Alerta Temprana</strong>
+                    <span style={{ color: "#334155" }}>Seleccioná estudiantes del período {selected?.AnioNombre} / {selected?.PeriodoNombre}. Sus notificaciones enviadas se incluirán automáticamente.</span>
+                  </div>
+                  <button type="button" style={secondaryButtonStyle} onClick={() => setAlertaTempranaOpen(false)}>Cerrar</button>
                 </div>
-              )}
-            </div>
-
+                {alertaTempranaLoading ? <p>Cargando estudiantes y documentos...</p> : (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                      <button
+                        type="button"
+                        style={secondaryButtonStyle}
+                        onClick={() => setAlertaTempranaSelectedIds(alertaTempranaStudents.map((student: any) => Number(student.EstudianteId)))}
+                        disabled={!alertaTempranaStudents.length}
+                      >
+                        Agregar todos
+                      </button>
+                      <button
+                        type="button"
+                        style={secondaryButtonStyle}
+                        onClick={() => setAlertaTempranaSelectedIds([])}
+                        disabled={!alertaTempranaSelectedIds.length}
+                      >
+                        Quitar todos
+                      </button>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "6px", maxHeight: "260px", overflowY: "auto", padding: "8px", background: "#ffffff", borderRadius: "10px", border: "1px solid #bfdbfe" }}>
+                      {[...alertaTempranaStudents].sort((a: any, b: any) => {
+                        const apellidoA = `${a.PrimerApellido || ""} ${a.SegundoApellido || ""} ${a.Nombre || ""}`.trim();
+                        const apellidoB = `${b.PrimerApellido || ""} ${b.SegundoApellido || ""} ${b.Nombre || ""}`.trim();
+                        return apellidoA.localeCompare(apellidoB, "es", { sensitivity: "base" });
+                      }).map((student: any) => {
+                        const checked = alertaTempranaSelectedIds.includes(Number(student.EstudianteId));
+                        const nombre = getFullName(student);
+                        return (
+                          <label key={`at-student-${student.EstudianteId}`} style={{ display: "flex", justifyContent: "flex-start", gap: "8px", alignItems: "center", padding: "8px", borderRadius: "8px", background: checked ? "#dbeafe" : "#f8fafc", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                            <input type="checkbox" checked={checked} onChange={() => setAlertaTempranaSelectedIds((prev) => checked ? prev.filter((id) => id !== Number(student.EstudianteId)) : [...prev, Number(student.EstudianteId)])} style={{ width: "18px", height: "18px", minWidth: "18px", margin: 0, flex: "0 0 auto" }} />
+                            <span style={{ textAlign: "left", whiteSpace: "nowrap" }}>{nombre}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                      <button type="button" className="primary-btn" onClick={generarAlertaTemprana} disabled={alertaTempranaGenerating || !alertaTempranaSelectedIds.length}>
+                        {alertaTempranaGenerating ? "Generando..." : "Generar"}
+                      </button>
+                      <span style={{ color: "#475569", fontWeight: 700 }}>{alertaTempranaSelectedIds.length} estudiante(s) seleccionado(s)</span>
+                    </div>
+                    {alertaTempranaGenerating ? (
+                      <div style={{ display: "grid", gap: "5px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#1e3a8a", fontWeight: 800 }}>
+                          <span>Generando archivos...</span><span>{alertaTempranaProgress}%</span>
+                        </div>
+                        <div style={{ height: "12px", background: "#dbeafe", borderRadius: "999px", overflow: "hidden", border: "1px solid #93c5fd" }}>
+                          <div style={{ width: `${alertaTempranaProgress}%`, height: "100%", background: "linear-gradient(90deg, #14b8a6, #2563eb)", transition: "width 180ms ease" }} />
+                        </div>
+                      </div>
+                    ) : null}
+                    <div ref={alertaTempranaGeneratedRef} style={{ overflowX: "auto", background: "#ffffff", borderRadius: "10px", border: "1px solid #bfdbfe" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a" }}>
+                        <thead><tr style={{ background: "#dbeafe" }}>{["Cédula", "Nombre", "Edad", "Sección", "Nombre del archivo", "Acciones"].map((title) => <th key={title} style={{ padding: "8px", textAlign: "left", borderBottom: "1px solid #93c5fd" }}>{title}</th>)}</tr></thead>
+                        <tbody>{[...alertaTempranaGenerated].sort((a: any, b: any) => {
+                          const nombreA = String(a.Nombre || "").trim();
+                          const nombreB = String(b.Nombre || "").trim();
+                          const nombreCompare = nombreA.localeCompare(nombreB, "es", { sensitivity: "base" });
+                          if (nombreCompare !== 0) return nombreCompare;
+                          const estudianteCompare = Number(a.EstudianteId || 0) - Number(b.EstudianteId || 0);
+                          return estudianteCompare || Number(a.AlertaTempranaDocumentoId || 0) - Number(b.AlertaTempranaDocumentoId || 0);
+                        }).map((item: any) => <tr key={item.AlertaTempranaDocumentoId}><td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.Cedula}</td><td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.Nombre}</td><td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.Edad}</td><td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.Seccion}</td><td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{item.NombreArchivo}</td><td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0", display: "flex", gap: "6px", flexWrap: "wrap" }}><button type="button" style={secondaryButtonStyle} onClick={() => abrirDocumentoAlertaTemprana(Number(item.AlertaTempranaDocumentoId), item.NombreArchivo)}>Abrir en Excel</button><button type="button" style={{ ...secondaryButtonStyle, color: "#991b1b", borderColor: "#fca5a5" }} onClick={() => eliminarDocumentoAlertaTemprana(Number(item.AlertaTempranaDocumentoId))}>Eliminar</button></td></tr>)}</tbody>
+                      </table>
+                      {!alertaTempranaGenerated.length ? <p style={{ padding: "10px", color: "#475569" }}>Todavía no hay documentos generados para este grupo y período.</p> : null}
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
 
             {activePanel === "bitacora" && (
               <div style={{ display: "grid", gap: "14px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "16px", background: "#ffffff", color: "#0f172a" }}>

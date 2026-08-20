@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql, timedQuery } from "../../config/database";
-import { badRequest, forbidden, ok } from "../../utils/http";
+import { badRequest, created, forbidden, ok } from "../../utils/http";
 import {
   CIERRE_CURSO_ESTADO_CERRADO,
   CIERRE_CURSO_ESTADO_REABIERTO,
@@ -15,9 +15,10 @@ import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
 import multer from "multer";
 import JSZip from "jszip";
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Document, Header, ImageRun, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
 import { sendEmail, sendEmailsBatch } from "../../services/email.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
@@ -54,6 +55,8 @@ let estudianteApoyoColumnsCache: { at: number; columns: {
   hasObservaciones: boolean;
 } } | null = null;
 const MIS_GRUPOS_PERF_LOG_PATH = join(tmpdir(), "profe360-mis-grupos-perf.jsonl");
+const ALERTA_TEMPRANA_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const ALERTA_TEMPRANA_TEMPLATE_FILE = "BOLETA_AT.xlsx";
 
 function writeLocalMisGruposPerfTrace(trace: Record<string, unknown>) {
   if (process.env.NODE_ENV === "production" || process.env.RENDER) return;
@@ -348,6 +351,177 @@ function joinNameParts(parts: any[]) {
   return parts.map((item) => normalizeText(item)).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
 
+function getAlertaTempranaTemplatePath() {
+  const candidates = [
+    resolve(process.cwd(), "backend", "assets", ALERTA_TEMPRANA_TEMPLATE_FILE),
+    resolve(process.cwd(), "assets", ALERTA_TEMPRANA_TEMPLATE_FILE),
+    resolve(__dirname, "../../assets", ALERTA_TEMPRANA_TEMPLATE_FILE)
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) || candidates[0];
+}
+
+function safeAlertaFilePart(value: any, fallback = "sin-dato") {
+  const normalized = String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return normalized.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || fallback;
+}
+
+function calcularEdad(fechaNacimiento: any, fechaReferencia = new Date()) {
+  if (!fechaNacimiento) return "";
+  const nacimiento = new Date(fechaNacimiento);
+  if (Number.isNaN(nacimiento.getTime())) return "";
+  const fecha = new Date(fechaReferencia);
+  let edad = fecha.getUTCFullYear() - nacimiento.getUTCFullYear();
+  const mes = fecha.getUTCMonth() - nacimiento.getUTCMonth();
+  if (mes < 0 || (mes === 0 && fecha.getUTCDate() < nacimiento.getUTCDate())) edad -= 1;
+  return edad >= 0 ? String(edad) : "";
+}
+
+function alertaDocxCell(text: any, options: any = {}) {
+  return new TableCell({
+    width: options.width ? { size: options.width, type: WidthType.DXA } : undefined,
+    shading: options.fill ? { fill: options.fill } : undefined,
+    children: [docP(text, { bold: Boolean(options.bold), size: options.size || 18, color: options.color, align: options.align })]
+  });
+}
+
+function alertaDocxTable(headers: string[], rows: any[][], widths?: number[]) {
+  const header = new TableRow({
+    children: headers.map((value, index) => alertaDocxCell(value, { bold: true, color: "FFFFFF", fill: "0B2E6B", width: widths?.[index] }))
+  });
+  const body = rows.map((row) => new TableRow({
+    children: row.map((value, index) => alertaDocxCell(value, { width: widths?.[index] }))
+  }));
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.FIXED, rows: [header, ...body] });
+}
+
+function alertaDocxInfoTable(rows: Array<[string, any]>) {
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.FIXED,
+    rows: rows.map(([label, value]) => new TableRow({
+      children: [
+        alertaDocxCell(label, { bold: true, fill: "E8EEF8", width: 2800 }),
+        alertaDocxCell(value, { width: 6500 })
+      ]
+    }))
+  });
+}
+
+async function construirAlertaTempranaDocx(data: any) {
+  // Read the controlled template at generation time so a missing deployment asset
+  // fails clearly instead of silently generating a document with the wrong base.
+  await readFile(getAlertaTempranaTemplatePath());
+  const alerts = data.notificaciones || [];
+  const actionsRows = alerts.length
+    ? alerts.map((item: any) => [item.accion, item.fecha, "", data.docenteNombre, item.mensaje])
+    : [["", data.fechaEmision, "", data.docenteNombre, ""]];
+  const contactRows = alerts.length
+    ? alerts.flatMap((item: any) => (item.canales || []).map((canal: string) => [item.fecha, canal, item.personaContactada, item.mensaje]))
+    : [["", "", data.personaContactada || "", ""]];
+  const doc = new Document({ sections: [{ children: [
+    new Paragraph({ text: "Estrategia de Alerta Temprana (AT)", alignment: AlignmentType.CENTER, spacing: { after: 100 } }),
+    new Paragraph({ text: data.colegioNombre || "", alignment: AlignmentType.CENTER, spacing: { after: 160 } }),
+    new Paragraph({ text: "1. GUÍA", heading: HeadingLevel.HEADING_1 }),
+    new Paragraph({ text: "La estrategia de AT permite de forma preventiva la identificación, atención, seguimiento y monitoreo de la persona estudiante en riesgo de exclusión educativa, con el fin de que permanezca y culmine con éxito su proceso educativo." }),
+    new Paragraph({ text: `Centro Educativo: ${data.colegioNombre || ""}` }),
+    new Paragraph({ text: "Guía para la implementación de la Estrategia de Alerta Temprana en Centros Educativos 2024" }),
+    new Paragraph({ text: "2. BOLETA DE ALERTA TEMPRANA", heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
+    alertaDocxInfoTable([
+      ["Nombre de la persona estudiante", data.estudianteNombre], ["Cédula", data.cedula], ["Teléfono / Móvil", data.telefonoEstudiante],
+      ["Edad", data.edad], ["Sección", data.seccion], ["Fecha", data.fechaEmision], ["Nombre del encargado/a del estudiante", data.personaContactada],
+      ["Teléfono / Móvil del encargado/a", data.telefonoEncargado], ["Nombre del Centro Educativo", data.colegioNombre], ["Nombre de la persona docente", data.docenteNombre]
+    ]),
+    new Paragraph({ text: "Notificaciones del período", heading: HeadingLevel.HEADING_2, spacing: { before: 160, after: 80 } }),
+    alertaDocxTable(["Tipo", "Fecha", "Vía", "Mensaje"], alerts.map((item: any) => [item.accion, item.fecha, (item.canales || []).join(" / "), item.mensaje]), [2200, 1500, 1600, 4000]),
+    new Paragraph({ text: "3. BOLETA DE SEGUIMIENTO", heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
+    alertaDocxInfoTable([["Fecha de activación de la AT", data.fechaEmision], ["Fecha de cierre de la AT", data.fechaEmision], ["Docente encargado de la AT", data.docenteNombre], ["Funcionario que registra en plataforma ministerial SABER", data.directorNombre]]),
+    new Paragraph({ text: "Observaciones", heading: HeadingLevel.HEADING_2, spacing: { before: 160, after: 80 } }),
+    new Paragraph({ text: alerts.map((item: any) => item.mensaje).filter(Boolean).join("\n") || "" }),
+    new Paragraph({ text: "4. PLAN DE ATENCIÓN", heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
+    alertaDocxInfoTable([["Nombre del estudiante", data.estudianteNombre], ["Cédula", data.cedula], ["Sección", data.seccion]]),
+    new Paragraph({ text: "Acciones de atención de la AT", heading: HeadingLevel.HEADING_2, spacing: { before: 160, after: 80 } }),
+    alertaDocxTable(["Acciones de atención de la AT", "Fecha Inicio", "Fecha Final", "Responsable", "Observaciones"], actionsRows, [2200, 1300, 1300, 2000, 2500]),
+    new Paragraph({ text: "Registro de contacto", heading: HeadingLevel.HEADING_2, spacing: { before: 160, after: 80 } }),
+    alertaDocxTable(["Fecha", "Vía de contacto", "Persona contactada", "Comentarios"], contactRows, [1300, 1500, 2500, 4000])
+  ] }] });
+  return Packer.toBuffer(doc);
+}
+
+function formatFechaAlertaTemprana(value: any) {
+  const iso = String(value || "").slice(0, 10);
+  const parts = iso.split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
+}
+
+function setAlertaCell(sheet: any, address: string, value: any) {
+  sheet.getCell(address).value = value ?? "";
+}
+
+async function construirAlertaTempranaExcel(data: any) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(getAlertaTempranaTemplatePath());
+  const fecha = formatFechaAlertaTemprana(data.fechaEmision);
+  const alerts = Array.isArray(data.notificaciones) ? data.notificaciones : [];
+  const messages = alerts.map((item: any) => String(item.mensaje || "").trim()).filter(Boolean);
+  const actions = alerts.map((item: any) => String(item.accion || "").trim()).filter(Boolean);
+  const dates = alerts.map((item: any) => formatFechaAlertaTemprana(item.fecha || data.fechaEmision)).join("\n");
+  const channels = alerts.flatMap((item: any) => Array.isArray(item.canales) ? item.canales : []).filter(Boolean);
+  const contacts = alerts.map((item: any) => String(item.personaContactada || data.personaContactada || "").trim()).filter(Boolean);
+
+  const guia = workbook.worksheets[0];
+  const boleta = workbook.worksheets.find((sheet) => sheet.name.startsWith("2.")) || workbook.worksheets[1];
+  const seguimiento = workbook.worksheets.find((sheet) => sheet.name.startsWith("3.")) || workbook.worksheets[2];
+  const plan = workbook.worksheets.find((sheet) => sheet.name.startsWith("4.")) || workbook.worksheets[3];
+
+  await agregarEncabezadoExcel(workbook, guia, data, 0);
+  await agregarEncabezadoExcel(workbook, boleta, data, 0);
+  await agregarEncabezadoExcel(workbook, seguimiento, data, 1);
+  await agregarEncabezadoExcel(workbook, plan, data, 1);
+
+  setAlertaCell(guia, "A1", `Estrategia de Alerta Temprana (AT)\n${data.colegioNombre || ""}`);
+
+  setAlertaCell(boleta, "A1", `BOLETA DE ALERTA TEMPRANA\n${data.colegioNombre || ""}`);
+  setAlertaCell(boleta, "E3", data.estudianteNombre);
+  setAlertaCell(boleta, "J3", data.cedula);
+  setAlertaCell(boleta, "L3", data.telefonoEstudiante);
+  setAlertaCell(boleta, "E4", data.edad);
+  setAlertaCell(boleta, "J4", data.seccion);
+  setAlertaCell(boleta, "L4", fecha);
+  setAlertaCell(boleta, "E5", data.personaContactada);
+  setAlertaCell(boleta, "K5", data.telefonoEncargado);
+  setAlertaCell(boleta, "E6", data.colegioNombre);
+  setAlertaCell(boleta, "K6", data.docenteNombre);
+
+  setAlertaCell(seguimiento, "A2", `SEGUIMIENTO DE LA ALERTA TEMPRANA\n${data.colegioNombre || ""}`);
+  setAlertaCell(seguimiento, "F28", fecha);
+  setAlertaCell(seguimiento, "F29", fecha);
+  setAlertaCell(seguimiento, "F30", data.docenteNombre);
+  setAlertaCell(seguimiento, "F31", data.directorNombre);
+
+  setAlertaCell(plan, "B2", `PLAN DE ATENCIÓN AL ESTUDIANTE EN RIESGO DE EXCLUSIÓN\n${data.colegioNombre || ""}`);
+  setAlertaCell(plan, "D4", data.estudianteNombre);
+  setAlertaCell(plan, "C5", data.cedula);
+  setAlertaCell(plan, "C6", data.seccion);
+  setAlertaCell(plan, "C7", `${data.personaContactada || ""}${data.telefonoEncargado ? ` - ${data.telefonoEncargado}` : ""}`);
+  setAlertaCell(plan, "C8", actions.join("\n"));
+  setAlertaCell(plan, "B13", actions.join("\n"));
+  setAlertaCell(plan, "D13", dates);
+  setAlertaCell(plan, "E13", "");
+  setAlertaCell(plan, "F13", data.docenteNombre);
+  setAlertaCell(plan, "G13", messages.join("\n"));
+  setAlertaCell(plan, "B22", dates);
+  setAlertaCell(plan, "C22", channels.join("\n"));
+  setAlertaCell(plan, "D22", contacts.join("\n"));
+  setAlertaCell(plan, "E22", messages.join("\n"));
+
+  [boleta, seguimiento, plan].forEach((sheet: any) => {
+    sheet.eachRow((row: any) => row.eachCell((cell: any) => {
+      if (typeof cell.value === "string" && cell.value.includes("\n")) cell.alignment = { ...cell.alignment, wrapText: true, vertical: "top" };
+    }));
+  });
+  return workbook.xlsx.writeBuffer();
+}
+
 function formatDateApoyoCR(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
   return new Intl.DateTimeFormat("es-CR", { timeZone: "America/Costa_Rica", day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
@@ -603,6 +777,45 @@ async function fetchDocxImage(url: any, width: number, height: number, altText: 
     });
   } catch {
     return null;
+  }
+}
+
+async function fetchExcelImage(url: any) {
+  const rawUrl = String(url || "").trim();
+  if (!rawUrl) return null;
+  try {
+    let buffer: any;
+    let contentType = "";
+    if (/^data:image\//i.test(rawUrl)) {
+      const match = rawUrl.match(/^data:(image\/[^;]+);base64,(.+)$/i);
+      if (!match || /image\/(webp|svg\+xml)/i.test(match[1])) return null;
+      contentType = match[1];
+      buffer = Buffer.from(match[2], "base64");
+    } else {
+      if (!/^https?:\/\//i.test(rawUrl)) return null;
+      const response = await fetch(rawUrl);
+      if (!response.ok) return null;
+      contentType = response.headers.get("content-type") || "";
+      if (/image\/(webp|svg\+xml)/i.test(contentType) || /\.(webp|svg)(\?|#|$)/i.test(rawUrl)) return null;
+      buffer = Buffer.from(await response.arrayBuffer());
+    }
+    const type = getImageTypeFromUrl(rawUrl, contentType);
+    return { buffer, extension: type === "jpg" ? "jpeg" : type };
+  } catch {
+    return null;
+  }
+}
+
+async function agregarEncabezadoExcel(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet, data: any, row = 0) {
+  const membrete = await fetchExcelImage(data.membreteUrl);
+  const logo = await fetchExcelImage(data.logoUrl);
+  if (membrete) {
+    const imageId = workbook.addImage({ buffer: membrete.buffer, extension: membrete.extension as any });
+    sheet.addImage(imageId, { tl: { col: 0, row }, ext: { width: 300, height: 42 } });
+  }
+  if (logo) {
+    const imageId = workbook.addImage({ buffer: logo.buffer, extension: logo.extension as any });
+    sheet.addImage(imageId, { tl: { col: 9, row }, ext: { width: 78, height: 42 } });
   }
 }
 
@@ -5298,6 +5511,275 @@ async function buildResumenAsistencia(
 
   return Array.from(resumenMap.values());
 }
+
+async function ensureAlertaTempranaTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.AlertaTempranaDocumento', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.AlertaTempranaDocumento (
+        AlertaTempranaDocumentoId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        InstitucionId INT NOT NULL,
+        UsuarioId INT NOT NULL,
+        GrupoId INT NOT NULL,
+        MateriaId INT NOT NULL,
+        AnioLectivoId INT NOT NULL,
+        PeriodoId INT NOT NULL,
+        GrupoClaseId INT NULL,
+        EstudianteId INT NOT NULL,
+        Cedula NVARCHAR(50) NULL,
+        Nombre NVARCHAR(300) NULL,
+        Edad NVARCHAR(20) NULL,
+        Seccion NVARCHAR(120) NULL,
+        FechaEmision DATE NOT NULL,
+        NombreArchivo NVARCHAR(255) NOT NULL,
+        MimeType NVARCHAR(150) NOT NULL,
+        DocumentoDocx VARBINARY(MAX) NOT NULL,
+        DatosJson NVARCHAR(MAX) NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_AlertaTempranaDocumento_CreatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE INDEX IX_AlertaTempranaDocumento_Filtros
+        ON dbo.AlertaTempranaDocumento(InstitucionId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, EstudianteId, CreatedAt DESC);
+    END
+  `);
+}
+
+async function getAlertaTempranaAsignacion(req: any, res: any, grupoId: number, materiaId: number, anioLectivoId: number, periodoId: number, grupoClaseId: number | null) {
+  const asignacion = await getAsignacionPermitida(req, res, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId);
+  if (!asignacion) return null;
+  if (isInstitutionAdmin(req) || isSuperAdmin(req)) return asignacion;
+  const pool = await getPool();
+  const userId = getUserId(req);
+  const guia = await pool.request()
+    .input("institucionId", sql.Int, Number(asignacion.InstitucionId))
+    .input("grupoId", sql.Int, grupoId)
+    .input("materiaId", sql.Int, materiaId)
+    .input("anioLectivoId", sql.Int, anioLectivoId)
+    .input("periodoId", sql.Int, periodoId)
+    .input("usuarioId", sql.Int, userId)
+    .query(`
+      SELECT TOP 1 ad.TipoAsignacion
+      FROM dbo.AsignacionDocente ad
+      WHERE ad.InstitucionId = @institucionId
+        AND ad.GrupoId = @grupoId
+        AND ad.MateriaId = @materiaId
+        AND ad.AnioLectivoId = @anioLectivoId
+        AND ad.PeriodoId = @periodoId
+        AND ad.UsuarioId = @usuarioId
+        AND ad.Activo = 1
+        AND ad.TipoAsignacion = N'PROFESOR_GUIA'
+    `);
+  if (!guia.recordset[0]) {
+    forbidden(res, "Alerta Temprana está disponible únicamente para grupos de Guía");
+    return null;
+  }
+  return asignacion;
+}
+
+async function cargarAlertaTempranaContexto(req: any, res: any, params: { grupoId: number; materiaId: number; anioLectivoId: number; periodoId: number; grupoClaseId: number | null }) {
+  const asignacion = await getAlertaTempranaAsignacion(req, res, params.grupoId, params.materiaId, params.anioLectivoId, params.periodoId, params.grupoClaseId);
+  if (!asignacion) return null;
+  const pool = await getPool();
+  await ensureAlertaTempranaTable(pool);
+  await ensureReporteEnvioBitacoraTable(pool);
+  const institutionId = Number(asignacion.InstitucionId);
+  const groupStudentFilter = params.grupoClaseId
+    ? `AND EXISTS (SELECT 1 FROM dbo.GrupoClaseEstudiante gce WHERE gce.GrupoClaseId = @grupoClaseId AND gce.MatriculaId = ma.MatriculaId AND gce.Activo = 1)`
+    : `AND ma.GrupoId = @grupoId`;
+  const result = await pool.request()
+    .input("institucionId", sql.Int, institutionId)
+    .input("grupoId", sql.Int, params.grupoId)
+    .input("materiaId", sql.Int, params.materiaId)
+    .input("anioLectivoId", sql.Int, params.anioLectivoId)
+    .input("periodoId", sql.Int, params.periodoId)
+    .input("grupoClaseId", sql.Int, params.grupoClaseId)
+    .query(`
+      SELECT e.EstudianteId, e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido, e.FechaNacimiento, e.Telefono,
+        enc.NombreCompleto AS EncargadoNombre, enc.Telefono AS EncargadoTelefono
+      FROM dbo.Matricula ma
+      INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+      OUTER APPLY (
+        SELECT TOP 1 LTRIM(RTRIM(CONCAT(ISNULL(en.Nombre,''), ' ', ISNULL(en.PrimerApellido,''), ' ', ISNULL(en.SegundoApellido,'')))) AS NombreCompleto, en.Telefono
+        FROM dbo.EstudianteEncargado ee INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
+        WHERE ee.EstudianteId = e.EstudianteId AND ISNULL(ee.Activo,1)=1 AND ISNULL(en.Activo,1)=1
+        ORDER BY ISNULL(ee.EsPrincipal,0) DESC, ISNULL(ee.RecibeNotificaciones,0) DESC, ee.EstudianteEncargadoId DESC
+      ) enc
+      WHERE ma.AnioLectivoId = @anioLectivoId AND ma.Estado <> N'Inactiva' AND e.Activo = 1 ${groupStudentFilter}
+      ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
+    `);
+  const periodResult = await pool.request()
+    .input("institucionId", sql.Int, institutionId)
+    .input("periodoId", sql.Int, params.periodoId)
+    .query(`
+      SELECT TOP 1 p.Nombre AS PeriodoNombre, p.FechaInicio, p.FechaFin, al.Nombre AS AnioNombre, i.NombreOficialBoleta, i.NombreComercial, i.Nombre AS InstitucionNombre, i.LogoUrl, i.MembreteUrl
+      FROM dbo.Periodo p INNER JOIN dbo.AnioLectivo al ON al.AnioLectivoId = p.AnioLectivoId
+      LEFT JOIN dbo.Institucion i ON i.InstitucionId = @institucionId
+      WHERE p.PeriodoId = @periodoId AND al.InstitucionId = @institucionId
+    `);
+  const teacherResult = await pool.request().input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req))).query(`SELECT TOP 1 Titulo, Nombre, PrimerApellido, SegundoApellido FROM dbo.Usuario WHERE UsuarioId = @usuarioId`);
+  const directorResult = await pool.request().input("institucionId", sql.Int, institutionId).query(`
+    SELECT TOP 1 u.Titulo, u.Nombre, u.PrimerApellido, u.SegundoApellido
+    FROM dbo.Usuario u LEFT JOIN dbo.UsuarioRol ur ON ur.UsuarioId=u.UsuarioId AND ur.Activo=1
+    LEFT JOIN dbo.Rol r ON r.RolId=ur.RolId
+    WHERE u.InstitucionId=@institucionId AND u.Activo=1 AND (UPPER(ISNULL(u.Cargo,'')) LIKE '%DIRECTOR%' OR UPPER(ISNULL(r.Nombre,'')) LIKE '%DIRECTOR%')
+    ORDER BY CASE WHEN UPPER(ISNULL(u.Cargo,'')) LIKE '%DIRECTOR%' THEN 0 ELSE 1 END, u.UsuarioId
+  `);
+  const generatedResult = await pool.request()
+    .input("institucionId", sql.Int, institutionId).input("grupoId", sql.Int, params.grupoId).input("materiaId", sql.Int, params.materiaId)
+    .input("anioLectivoId", sql.Int, params.anioLectivoId).input("periodoId", sql.Int, params.periodoId).input("grupoClaseId", sql.Int, params.grupoClaseId)
+    .query(`
+      SELECT AlertaTempranaDocumentoId, EstudianteId, Cedula, Nombre, Edad, Seccion, FechaEmision, NombreArchivo, CreatedAt
+      FROM dbo.AlertaTempranaDocumento
+      WHERE InstitucionId=@institucionId AND GrupoId=@grupoId AND MateriaId=@materiaId AND AnioLectivoId=@anioLectivoId AND PeriodoId=@periodoId
+        AND ISNULL(GrupoClaseId,0)=ISNULL(@grupoClaseId,0)
+      ORDER BY CreatedAt DESC, AlertaTempranaDocumentoId DESC
+    `);
+  const period = periodResult.recordset[0] || {};
+  const teacher = teacherResult.recordset[0] || {};
+  const director = directorResult.recordset[0] || {};
+  return {
+    asignacion, estudiantes: result.recordset || [], generated: generatedResult.recordset || [],
+    periodo: period, docenteNombre: joinNameParts([teacher.Titulo, teacher.Nombre, teacher.PrimerApellido, teacher.SegundoApellido]),
+    directorNombre: joinNameParts([director.Titulo, director.Nombre, director.PrimerApellido, director.SegundoApellido]),
+    colegioNombre: period.NombreOficialBoleta || period.NombreComercial || period.InstitucionNombre || "",
+    logoUrl: period.LogoUrl || "",
+    membreteUrl: period.MembreteUrl || ""
+  };
+}
+
+router.get("/mis-grupos/:grupoId/materias/:materiaId/alerta-temprana/bootstrap", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const params = { grupoId: Number(req.params.grupoId), materiaId: Number(req.params.materiaId), anioLectivoId: Number(req.query.anioLectivoId), periodoId: Number(req.query.periodoId), grupoClaseId: toOptionalGrupoClaseId(req.query.grupoClaseId) };
+    if (!params.grupoId || !params.materiaId || !params.anioLectivoId || !params.periodoId) return badRequest(res, "Faltan parámetros del grupo de Guía");
+    const context = await cargarAlertaTempranaContexto(req, res, params);
+    if (!context) return;
+    return ok(res, context);
+  } catch (error) {
+    console.error("Error cargando contexto de Alerta Temprana:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar Alerta Temprana" });
+  }
+});
+
+router.post("/alerta-temprana/generar", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const params = { grupoId: Number(req.body.grupoId), materiaId: Number(req.body.materiaId), anioLectivoId: Number(req.body.anioLectivoId), periodoId: Number(req.body.periodoId), grupoClaseId: toOptionalGrupoClaseId(req.body.grupoClaseId) };
+    const ids = Array.isArray(req.body.estudianteIds) ? req.body.estudianteIds.map(Number).filter((id: number) => Number.isFinite(id) && id > 0) : [];
+    if (!params.grupoId || !params.materiaId || !params.anioLectivoId || !params.periodoId || !ids.length) return badRequest(res, "Seleccioná al menos un estudiante");
+    const context = await cargarAlertaTempranaContexto(req, res, params);
+    if (!context) return;
+    const pool = await getPool();
+    const period = context.periodo || {};
+    const fechaInicio = period.FechaInicio ? String(period.FechaInicio).slice(0, 10) : `${String(period.AnioNombre || new Date().getFullYear()).slice(0, 4)}-01-01`;
+    const fechaFin = period.FechaFin ? String(period.FechaFin).slice(0, 10) : `${String(period.AnioNombre || new Date().getFullYear()).slice(0, 4)}-12-31`;
+    const config = await getCorreoNotificacionConfig(pool, Number(context.asignacion.InstitucionId), "ASISTENCIA");
+    const directorNombre = context.directorNombre;
+    const generated: any[] = [];
+    for (const studentId of ids) {
+      const student = context.estudiantes.find((item: any) => Number(item.EstudianteId) === studentId);
+      if (!student) continue;
+      const studentName = joinNameParts([student.Nombre, student.PrimerApellido, student.SegundoApellido]);
+      const attendance = await pool.request().input("estudianteId", sql.Int, studentId).input("grupoId", sql.Int, params.grupoId).input("materiaId", sql.Int, params.materiaId).input("anioLectivoId", sql.Int, params.anioLectivoId).input("periodoId", sql.Int, params.periodoId).input("fechaInicio", sql.Date, fechaInicio).input("fechaFin", sql.Date, fechaFin).query(`
+        SELECT ar.Fecha, ar.Estado, ar.MinutosTardia, ar.Observacion, reb.CorreoEnviado, reb.WaEnviado
+        FROM dbo.AsistenciaRegistro ar INNER JOIN dbo.ReporteEnvioBitacora reb ON reb.Modulo=N'ASISTENCIA' AND reb.EstudianteId=ar.EstudianteId AND reb.GrupoId=ar.GrupoId AND reb.MateriaId=ar.MateriaId AND reb.AnioLectivoId=ar.AnioLectivoId AND reb.PeriodoId=ar.PeriodoId AND reb.Fecha=ar.Fecha
+        WHERE ar.EstudianteId=@estudianteId AND ar.GrupoId=@grupoId AND ar.MateriaId=@materiaId AND ar.AnioLectivoId=@anioLectivoId AND ar.PeriodoId=@periodoId AND ar.Fecha BETWEEN @fechaInicio AND @fechaFin AND (reb.CorreoEnviado=1 OR reb.WaEnviado=1)
+        ORDER BY ar.Fecha, ar.AsistenciaRegistroId
+      `);
+      const notifications: any[] = [];
+      for (const item of attendance.recordset || []) {
+        const estado = normalizeKey(item.Estado);
+        const accion = estado.includes("TARDIA") ? "Tardía" : estado.includes("AUSENTE") ? "Ausencia" : "Otro";
+        const detalle = `${accion}${item.MinutosTardia ? ` (${item.MinutosTardia} minutos)` : ""}${item.Observacion ? `: ${item.Observacion}` : ""}`;
+        const vars: any = { fecha: String(item.Fecha).slice(0, 10), alumno: studentName, materia: context.asignacion.MateriaNombre || "", seccion: context.asignacion.GrupoNombre || "", profesor: context.docenteNombre, colegio: context.colegioNombre, reporte: accion, detalle };
+        const mensaje = config?.CuerpoTemplate ? renderTemplate(String(config.CuerpoTemplate), vars) : `Se registra ${detalle} para ${studentName}. Fecha: ${vars.fecha}.`;
+        notifications.push({ accion, fecha: String(item.Fecha).slice(0, 10), mensaje, canales: [item.CorreoEnviado ? "Correo" : "", item.WaEnviado ? "WhatsApp" : ""].filter(Boolean), personaContactada: student.EncargadoNombre || "" });
+      }
+      const boletaTable = await pool.request().query(`SELECT CASE WHEN OBJECT_ID('dbo.BoletaConducta','U') IS NULL THEN 0 ELSE 1 END AS ExisteBoleta, CASE WHEN OBJECT_ID('dbo.BoletaConductaEnvio','U') IS NULL THEN 0 ELSE 1 END AS ExisteEnvio`);
+      if (boletaTable.recordset[0]?.ExisteBoleta && boletaTable.recordset[0]?.ExisteEnvio) {
+        const boletas = await pool.request().input("institucionId", sql.Int, Number(context.asignacion.InstitucionId)).input("estudianteId", sql.Int, studentId).input("grupoId", sql.Int, params.grupoId).input("fechaInicio", sql.Date, fechaInicio).input("fechaFin", sql.Date, fechaFin).query(`
+          SELECT b.Fecha, b.DetalleHechos, be.CorreoEnviado, be.WhatsAppEnviado
+          FROM dbo.BoletaConducta b INNER JOIN dbo.BoletaConductaEnvio be ON be.BoletaConductaId=b.BoletaConductaId
+          WHERE b.InstitucionId=@institucionId AND b.EstudianteId=@estudianteId AND b.GrupoId=@grupoId AND b.Fecha BETWEEN @fechaInicio AND @fechaFin AND (be.CorreoEnviado=1 OR be.WhatsAppEnviado=1)
+          ORDER BY b.Fecha, b.BoletaConductaId
+        `);
+        for (const item of boletas.recordset || []) notifications.push({ accion: "Boleta", fecha: String(item.Fecha).slice(0, 10), mensaje: String(item.DetalleHechos || "Boleta de conducta enviada"), canales: [item.CorreoEnviado ? "Correo" : "", item.WhatsAppEnviado ? "WhatsApp" : ""].filter(Boolean), personaContactada: student.EncargadoNombre || "" });
+      }
+      const fechaEmision = getCostaRicaIsoDate();
+      const seccion = String(context.asignacion.GrupoNombre || "");
+      const edad = calcularEdad(student.FechaNacimiento);
+      const data = { estudianteNombre: studentName, cedula: student.Identificacion, telefonoEstudiante: student.Telefono, edad, seccion, fechaEmision, personaContactada: student.EncargadoNombre, telefonoEncargado: student.EncargadoTelefono, colegioNombre: context.colegioNombre, logoUrl: context.logoUrl, membreteUrl: context.membreteUrl, docenteNombre: context.docenteNombre, directorNombre, notificaciones: notifications };
+      const excel = await construirAlertaTempranaExcel(data);
+      const fileBase = `${safeAlertaFilePart(student.Identificacion, `estudiante-${studentId}`)}-${safeAlertaFilePart(studentName)}-${safeAlertaFilePart(seccion)}-${fechaEmision}`;
+      const provisionalFileName = `${fileBase}.xlsx`;
+      const inserted = await pool.request()
+        .input("institucionId", sql.Int, Number(context.asignacion.InstitucionId)).input("usuarioId", sql.Int, getUserId(req)).input("grupoId", sql.Int, params.grupoId).input("materiaId", sql.Int, params.materiaId).input("anioLectivoId", sql.Int, params.anioLectivoId).input("periodoId", sql.Int, params.periodoId).input("grupoClaseId", sql.Int, params.grupoClaseId).input("estudianteId", sql.Int, studentId).input("cedula", sql.NVarChar(50), student.Identificacion).input("nombre", sql.NVarChar(300), studentName).input("edad", sql.NVarChar(20), edad).input("seccion", sql.NVarChar(120), seccion).input("fechaEmision", sql.Date, fechaEmision).input("nombreArchivo", sql.NVarChar(255), provisionalFileName).input("mimeType", sql.NVarChar(150), ALERTA_TEMPRANA_MIME).input("docx", sql.VarBinary(sql.MAX), excel).input("datosJson", sql.NVarChar(sql.MAX), JSON.stringify(data)).query(`
+          INSERT INTO dbo.AlertaTempranaDocumento (InstitucionId, UsuarioId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, GrupoClaseId, EstudianteId, Cedula, Nombre, Edad, Seccion, FechaEmision, NombreArchivo, MimeType, DocumentoDocx, DatosJson)
+          OUTPUT INSERTED.AlertaTempranaDocumentoId
+          VALUES (@institucionId,@usuarioId,@grupoId,@materiaId,@anioLectivoId,@periodoId,@grupoClaseId,@estudianteId,@cedula,@nombre,@edad,@seccion,@fechaEmision,@nombreArchivo,@mimeType,@docx,@datosJson)
+        `);
+      const documentoId = Number(inserted.recordset[0]?.AlertaTempranaDocumentoId);
+      const fileName = `${fileBase}_${documentoId}.xlsx`;
+      await pool.request().input("id", sql.BigInt, documentoId).input("nombreArchivo", sql.NVarChar(255), fileName).query("UPDATE dbo.AlertaTempranaDocumento SET NombreArchivo=@nombreArchivo WHERE AlertaTempranaDocumentoId=@id");
+      generated.push({ AlertaTempranaDocumentoId: documentoId, EstudianteId: studentId, Cedula: student.Identificacion, Nombre: studentName, Edad: edad, Seccion: seccion, FechaEmision: fechaEmision, NombreArchivo: fileName });
+    }
+    return created(res, { generated }, "Alerta Temprana generada correctamente");
+  } catch (error) {
+    console.error("Error generando Alerta Temprana:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo generar Alerta Temprana" });
+  }
+});
+
+router.get("/alerta-temprana/documentos/:id/excel", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const pool = await getPool(); await ensureAlertaTempranaTable(pool);
+    const request = pool.request().input("id", sql.BigInt, Number(req.params.id));
+    let scope = "";
+    if (isSuperAdmin(req)) {
+      scope = "";
+    } else if (isInstitutionAdmin(req)) {
+      request.input("institucionId", sql.Int, Number(getAuth(req).institucionId || 0)); scope = "AND InstitucionId=@institucionId";
+    } else {
+      request.input("usuarioId", sql.Int, getUserId(req)); scope = "AND UsuarioId=@usuarioId";
+    }
+    const result = await request.query(`SELECT TOP 1 InstitucionId, NombreArchivo, MimeType, DocumentoDocx, DatosJson FROM dbo.AlertaTempranaDocumento WHERE AlertaTempranaDocumentoId=@id ${scope}`);
+    const row = result.recordset[0]; if (!row?.DocumentoDocx) return res.status(404).json({ ok: false, message: "No se encontró el documento" });
+    const storedFileName = String(row.NombreArchivo || "");
+    const isStoredExcel = String(row.MimeType || "").includes("spreadsheetml") && storedFileName.toLowerCase().endsWith(".xlsx");
+    let output = Buffer.from(row.DocumentoDocx);
+    let fileName = storedFileName || "alerta-temprana.xlsx";
+    if (!isStoredExcel && row.DatosJson) {
+      const data = typeof row.DatosJson === "string" ? JSON.parse(row.DatosJson) : row.DatosJson;
+      if (!data.logoUrl && !data.membreteUrl) {
+        const institutionResult = await pool.request().input("institucionId", sql.Int, Number(row.InstitucionId)).query("SELECT TOP 1 LogoUrl, MembreteUrl FROM dbo.Institucion WHERE InstitucionId=@institucionId");
+        data.logoUrl = institutionResult.recordset[0]?.LogoUrl || "";
+        data.membreteUrl = institutionResult.recordset[0]?.MembreteUrl || "";
+      }
+      output = Buffer.from(await construirAlertaTempranaExcel(data));
+      fileName = `${safeAlertaFilePart(data.cedula, "estudiante")}-${safeAlertaFilePart(data.estudianteNombre)}-${safeAlertaFilePart(data.seccion)}-${safeAlertaFilePart(data.fechaEmision)}.xlsx`;
+    }
+    res.setHeader("Content-Type", ALERTA_TEMPRANA_MIME); res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/[\"\r\n]/g, "")}"`); return res.send(output);
+  } catch (error) { console.error("Error descargando Alerta Temprana:", error); return res.status(500).json({ ok: false, message: "No se pudo abrir el documento" }); }
+});
+
+router.delete("/alerta-temprana/documentos/:id", async (req, res) => {
+  try {
+    if (!assertCanAccessProfessorModule(req, res)) return;
+    const pool = await getPool(); await ensureAlertaTempranaTable(pool);
+    const request = pool.request().input("id", sql.BigInt, Number(req.params.id));
+    let scope = "";
+    if (isSuperAdmin(req)) {
+      scope = "";
+    } else if (isInstitutionAdmin(req)) {
+      request.input("institucionId", sql.Int, Number(getAuth(req).institucionId || 0)); scope = "AND InstitucionId=@institucionId";
+    } else {
+      request.input("usuarioId", sql.Int, getUserId(req)); scope = "AND UsuarioId=@usuarioId";
+    }
+    const result = await request.query(`DELETE FROM dbo.AlertaTempranaDocumento OUTPUT DELETED.AlertaTempranaDocumentoId WHERE AlertaTempranaDocumentoId=@id ${scope}`);
+    if (!result.recordset[0]) return res.status(404).json({ ok: false, message: "No se encontró el documento" });
+    return ok(res, { eliminado: true }, "Documento eliminado correctamente");
+  } catch (error) { console.error("Error eliminando Alerta Temprana:", error); return res.status(500).json({ ok: false, message: "No se pudo eliminar el documento" }); }
+});
 
 router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, res) => {
   try {
