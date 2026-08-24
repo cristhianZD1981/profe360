@@ -1,4 +1,5 @@
 ﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+import * as React from "react";
 import api from "../lib/http";
 
 type Institution = {
@@ -22,6 +23,25 @@ type Institution = {
   Activo: boolean;
 };
 
+type WhatsAppConfig = {
+  numeroOrigen: string;
+  apiKey: string;
+  nombreVisible: string;
+  activo: boolean;
+  estado: string;
+  tieneApiKey: boolean;
+};
+
+type WhatsAppTemplate = {
+  tipoMensaje: string;
+  nombre: string;
+  templateUuid: string;
+  codigoIdioma: string;
+  cantidadParametrosBody: number;
+  estado: string;
+  activo: boolean;
+};
+
 const initialForm = {
   tipoClienteId: 1,
   nombre: "",
@@ -40,6 +60,72 @@ const initialForm = {
   regionalEducativa: "",
   circuitoEducativo: ""
 };
+
+const initialWhatsAppConfig: WhatsAppConfig = {
+  numeroOrigen: "",
+  apiKey: "",
+  nombreVisible: "",
+  activo: true,
+  estado: "PENDIENTE",
+  tieneApiKey: false
+};
+
+const whatsappTemplateTypes = [
+  { value: "ASISTENCIA", label: "Asistencia" },
+  { value: "TAREA", label: "Tareas" },
+  { value: "BOLETA", label: "Boletas" },
+  { value: "EVALUACION", label: "Evaluaciones" },
+  { value: "GENERAL", label: "General" }
+];
+
+function createEmptyTemplates(): WhatsAppTemplate[] {
+  return whatsappTemplateTypes.map((item) => ({
+    tipoMensaje: item.value,
+    nombre: "",
+    templateUuid: "",
+    codigoIdioma: "es",
+    cantidadParametrosBody: 0,
+    estado: "PENDIENTE",
+    activo: true
+  }));
+}
+
+function normalizeWabaNumberInput(value: string, addDefaultCountryCode = false) {
+  const cleaned = value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "");
+  if (addDefaultCountryCode && /^\d{8,12}$/.test(cleaned)) return `+506${cleaned}`;
+  return cleaned;
+}
+
+function WhatsAppTemplateEditor(props: {
+  templates: WhatsAppTemplate[];
+  setTemplates: React.Dispatch<React.SetStateAction<WhatsAppTemplate[]>>;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  return (
+    <div style={{ display: "grid", gap: "10px", paddingTop: "8px" }}>
+      <strong>Plantillas WABA</strong>
+      <small style={{ color: "#c9d6e2" }}>
+        Registrá el UUID exacto de la plantilla aprobada en Meta/2Chat y la cantidad de variables del cuerpo.
+      </small>
+      {props.templates.map((template) => {
+        const label = whatsappTemplateTypes.find((item) => item.value === template.tipoMensaje)?.label || template.tipoMensaje;
+        return (
+          <div key={template.tipoMensaje} style={{ display: "grid", gridTemplateColumns: "150px 1fr 1fr 90px 110px", gap: "8px", alignItems: "center" }}>
+            <strong style={{ fontSize: "13px" }}>{label}</strong>
+            <input placeholder="Nombre de plantilla" value={template.nombre} onChange={(e) => props.setTemplates((current) => current.map((item) => item.tipoMensaje === template.tipoMensaje ? { ...item, nombre: e.target.value } : item))} />
+            <input placeholder="Template UUID" value={template.templateUuid} onChange={(e) => props.setTemplates((current) => current.map((item) => item.tipoMensaje === template.tipoMensaje ? { ...item, templateUuid: e.target.value } : item))} />
+            <input type="number" min={0} placeholder="Variables" value={template.cantidadParametrosBody} onChange={(e) => props.setTemplates((current) => current.map((item) => item.tipoMensaje === template.tipoMensaje ? { ...item, cantidadParametrosBody: Number(e.target.value || 0) } : item))} />
+            <span style={{ fontSize: "12px", color: template.estado === "APPROVED" ? "#166534" : "#92400e" }}>{template.estado}</span>
+          </div>
+        );
+      })}
+      <button type="button" className="primary-btn" onClick={props.onSave} disabled={props.saving} style={{ width: "fit-content" }}>
+        {props.saving ? "Guardando plantillas..." : "Guardar plantillas"}
+      </button>
+    </div>
+  );
+}
 
 function parseJwt(token: string) {
   try {
@@ -63,6 +149,16 @@ export default function InstitucionesPage() {
   const [isFormExpanded, setIsFormExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const [incluirInactivas, setIncluirInactivas] = useState(false);
+  const [whatsappConfig, setWhatsappConfig] = useState(initialWhatsAppConfig);
+  const [fallbackConfig, setFallbackConfig] = useState(initialWhatsAppConfig);
+  const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppTemplate[]>(createEmptyTemplates);
+  const [fallbackTemplates, setFallbackTemplates] = useState<WhatsAppTemplate[]>(createEmptyTemplates);
+  const [modoWhatsApp, setModoWhatsApp] = useState<"GENERICA" | "PROPIO_API" | "PROPIO_QR">("GENERICA");
+  const [qrCodeImageUrl, setQrCodeImageUrl] = useState("");
+  const [qrChannelConfigured, setQrChannelConfigured] = useState(false);
+  const [qrConnected, setQrConnected] = useState(false);
+  const [loadingWhatsApp, setLoadingWhatsApp] = useState(false);
+  const [savingWhatsApp, setSavingWhatsApp] = useState(false);
 
   const authInfo = useMemo(() => {
     const token =
@@ -97,13 +193,314 @@ export default function InstitucionesPage() {
     load("", incluirInactivas);
   }, []);
 
+  useEffect(() => {
+    if (!editingId || modoWhatsApp !== "PROPIO_QR" || !qrCodeImageUrl || qrConnected) return;
+    let cancelled = false;
+    let checking = false;
+
+    const verifyConnection = async () => {
+      if (checking || cancelled) return;
+      checking = true;
+      try {
+        const response = await api.get("/instituciones/" + editingId + "/whatsapp/qr/estado");
+        if (!cancelled && response.data?.data?.connected) {
+          setQrConnected(true);
+          setQrCodeImageUrl("");
+          setWhatsappConfig((prev) => ({ ...prev, estado: "CONECTADO" }));
+          setMessage("WhatsApp conectado y verificado correctamente.");
+        }
+      } catch (error) {
+        console.error("No se pudo verificar todavía la conexión QR:", error);
+      } finally {
+        checking = false;
+      }
+    };
+
+    void verifyConnection();
+    const timer = window.setInterval(() => void verifyConnection(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [editingId, modoWhatsApp, qrCodeImageUrl, qrConnected]);
+
   function openCreateForm() {
     setEditingId(null);
     setForm(initialForm);
     setMessage("");
     setErrorMessage("");
+    setWhatsappConfig(initialWhatsAppConfig);
+    setModoWhatsApp("GENERICA");
+    setQrCodeImageUrl("");
+    setQrChannelConfigured(false);
+    setQrConnected(false);
+    setWhatsappTemplates(createEmptyTemplates());
     setIsFormExpanded(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function loadWhatsAppConfig(institucionId: number) {
+    setLoadingWhatsApp(true);
+    try {
+      const response = await api.get(`/instituciones/${institucionId}/whatsapp`);
+      const canal = response.data?.data?.canal;
+      const savedTemplates = Array.isArray(response.data?.data?.plantillas) ? response.data.data.plantillas : [];
+      setWhatsappConfig({
+        numeroOrigen: canal?.NumeroOrigen || "",
+        apiKey: "",
+        nombreVisible: canal?.NombreVisible || "",
+        activo: canal?.Activo !== false,
+        estado: canal?.Estado || "PENDIENTE",
+        tieneApiKey: Boolean(canal?.TieneApiKey)
+      });
+      setModoWhatsApp(canal?.TipoCanal === "WHATSAPP_WEB" ? "PROPIO_QR" : canal ? "PROPIO_API" : "GENERICA");
+      setQrCodeImageUrl("");
+      setQrChannelConfigured(Boolean(canal?.TipoCanal === "WHATSAPP_WEB" && canal?.CanalExternoId));
+      setQrConnected(canal?.TipoCanal === "WHATSAPP_WEB" && canal?.Estado === "CONECTADO");
+      setWhatsappTemplates((current) => current.map((item) => {
+        const saved = savedTemplates.find((template: any) => template.TipoMensaje === item.tipoMensaje);
+        return saved ? {
+          ...item,
+          nombre: saved.Nombre || "",
+          templateUuid: saved.TemplateUuid || "",
+          codigoIdioma: saved.CodigoIdioma || "es",
+          cantidadParametrosBody: Number(saved.CantidadParametrosBody || 0),
+          estado: saved.Estado || "PENDIENTE",
+          activo: saved.Activo !== false
+        } : item;
+      }));
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo cargar la configuración de WhatsApp");
+    } finally {
+      setLoadingWhatsApp(false);
+    }
+  }
+
+  async function loadWhatsAppFallback() {
+    if (!isSuperAdmin) return;
+    try {
+      const response = await api.get("/instituciones/whatsapp/fallback");
+      const canal = response.data?.data?.canal;
+      const savedTemplates = Array.isArray(response.data?.data?.plantillas) ? response.data.data.plantillas : [];
+      setFallbackConfig({
+        numeroOrigen: canal?.NumeroOrigen || "",
+        apiKey: "",
+        nombreVisible: canal?.NombreVisible || "",
+        activo: canal?.Activo !== false,
+        estado: canal?.Estado || "PENDIENTE",
+        tieneApiKey: Boolean(canal?.TieneApiKey)
+      });
+      setFallbackTemplates((current) => current.map((item) => {
+        const saved = savedTemplates.find((template: any) => template.TipoMensaje === item.tipoMensaje);
+        return saved ? {
+          ...item,
+          nombre: saved.Nombre || "",
+          templateUuid: saved.TemplateUuid || "",
+          codigoIdioma: saved.CodigoIdioma || "es",
+          cantidadParametrosBody: Number(saved.CantidadParametrosBody || 0),
+          estado: saved.Estado || "PENDIENTE",
+          activo: saved.Activo !== false
+        } : item;
+      }));
+    } catch (error) {
+      console.error("Error cargando fallback WhatsApp:", error);
+    }
+  }
+
+  async function saveWhatsAppConfig() {
+    if (!editingId) {
+      setErrorMessage("Primero guardá la institución y luego configurá WhatsApp");
+      return;
+    }
+    if (!whatsappConfig.numeroOrigen.trim()) {
+      setErrorMessage("Ingresá el número WABA de origen");
+      return;
+    }
+    if (!/^\+\d{8,15}$/.test(whatsappConfig.numeroOrigen.trim())) {
+      setErrorMessage("El número WABA debe estar en formato internacional, por ejemplo +50686103791");
+      return;
+    }
+    if (!whatsappConfig.tieneApiKey && !whatsappConfig.apiKey.trim()) {
+      setErrorMessage("Ingresá la API Key de 2Chat");
+      return;
+    }
+
+    setSavingWhatsApp(true);
+    setMessage("");
+    setErrorMessage("");
+    try {
+      const response = await api.put(`/instituciones/${editingId}/whatsapp`, {
+        numeroOrigen: whatsappConfig.numeroOrigen,
+        apiKey: whatsappConfig.apiKey || undefined,
+        nombreVisible: whatsappConfig.nombreVisible || null,
+        activo: whatsappConfig.activo
+      });
+      const canal = response.data?.data;
+      setWhatsappConfig((prev) => ({
+        ...prev,
+        apiKey: "",
+        estado: canal?.Estado || "PENDIENTE",
+        tieneApiKey: true
+      }));
+      setMessage("Configuración de WhatsApp guardada correctamente");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la configuración de WhatsApp");
+    } finally {
+      setSavingWhatsApp(false);
+    }
+  }
+
+  async function saveWhatsAppMode(institucionId: number, modo: "GENERICA" | "PROPIO") {
+    await api.put(`/instituciones/${institucionId}/whatsapp/mode`, { modo });
+  }
+
+  async function connectWhatsAppQr() {
+    if (!editingId) {
+      setErrorMessage("Primero guardá la institución y luego conectá WhatsApp por QR");
+      return;
+    }
+    setSavingWhatsApp(true);
+    setErrorMessage("");
+    try {
+      let response: any;
+      if (!qrChannelConfigured) {
+        if (!whatsappConfig.numeroOrigen.trim() || !/^\+\d{8,15}$/.test(whatsappConfig.numeroOrigen.trim())) {
+          throw new Error("Ingresá el número QR en formato internacional, por ejemplo +50686103791");
+        }
+        if (!whatsappConfig.apiKey.trim() && !whatsappConfig.tieneApiKey) {
+          throw new Error("Ingresá la API Key de 2Chat para crear el canal QR");
+        }
+        response = await api.post(`/instituciones/${editingId}/whatsapp/qr/crear`, {
+          numeroOrigen: whatsappConfig.numeroOrigen,
+          apiKey: whatsappConfig.apiKey || undefined,
+          nombreVisible: whatsappConfig.nombreVisible || `WhatsApp ${editingId}`
+        });
+        setQrChannelConfigured(true);
+        setWhatsappConfig((prev) => ({
+          ...prev,
+          apiKey: "",
+          tieneApiKey: true,
+          estado: response.data?.data?.connected ? "CONECTADO" : response.data?.data?.channel?.Estado || "PENDIENTE"
+        }));
+        setQrConnected(Boolean(response.data?.data?.connected));
+      } else {
+        response = await api.post(`/instituciones/${editingId}/whatsapp/qr/conectar`, {
+          apiKey: whatsappConfig.apiKey || undefined
+        });
+      }
+      setQrCodeImageUrl(response.data?.data?.qrCodeImageUrl || "");
+      if (response.data?.data?.connected) {
+        setQrConnected(true);
+        setWhatsappConfig((prev) => ({ ...prev, estado: "CONECTADO" }));
+        setMessage(response.data?.message || "WhatsApp ya está conectado; no es necesario escanear otro QR.");
+      } else if (response.data?.data?.qrCodeImageUrl || response.data?.data?.qrCode) {
+        setMessage("QR generado. Escanealo desde WhatsApp - Dispositivos vinculados.");
+      } else {
+        setMessage(response.data?.data?.warning || response.data?.message || "2Chat todavia esta preparando el codigo QR.");
+      }
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo generar el QR");
+    } finally {
+      setSavingWhatsApp(false);
+    }
+  }
+
+  async function disconnectWhatsAppQr() {
+    if (!editingId) return;
+    setSavingWhatsApp(true);
+    setErrorMessage("");
+    try {
+      const response = await api.post(`/instituciones/${editingId}/whatsapp/qr/desconectar`, {
+        apiKey: whatsappConfig.apiKey || undefined
+      });
+      setQrConnected(false);
+      setQrCodeImageUrl("");
+      setWhatsappConfig((prev) => ({ ...prev, estado: "PENDIENTE", apiKey: "" }));
+      setMessage(response.data?.message || "WhatsApp desconectado correctamente");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo desconectar WhatsApp");
+    } finally {
+      setSavingWhatsApp(false);
+    }
+  }
+
+  function beginNewWhatsAppQrChannel() {
+    setQrChannelConfigured(false);
+    setQrConnected(false);
+    setQrCodeImageUrl("");
+    setWhatsappConfig({
+      ...initialWhatsAppConfig,
+      activo: true,
+      estado: "PENDIENTE"
+    });
+    setMessage("Ingresá el nuevo número y la API Key de 2Chat; luego presioná Agregar número a 2Chat.");
+    setErrorMessage("");
+  }
+
+  async function saveWhatsAppFallback() {
+    if (!fallbackConfig.numeroOrigen.trim()) {
+      setErrorMessage("Ingresá el número fallback de PROFE360");
+      return;
+    }
+    if (!fallbackConfig.tieneApiKey && !fallbackConfig.apiKey.trim()) {
+      setErrorMessage("Ingresá la API Key de 2Chat del fallback");
+      return;
+    }
+
+    setSavingWhatsApp(true);
+    setMessage("");
+    setErrorMessage("");
+    try {
+      const response = await api.put("/instituciones/whatsapp/fallback", {
+        numeroOrigen: fallbackConfig.numeroOrigen,
+        apiKey: fallbackConfig.apiKey || undefined,
+        nombreVisible: fallbackConfig.nombreVisible || null,
+        activo: fallbackConfig.activo
+      });
+      const canal = response.data?.data;
+      setFallbackConfig((prev) => ({
+        ...prev,
+        apiKey: "",
+        estado: canal?.Estado || "PENDIENTE",
+        tieneApiKey: true
+      }));
+      setMessage("Fallback WhatsApp guardado correctamente");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar el fallback de WhatsApp");
+    } finally {
+      setSavingWhatsApp(false);
+    }
+  }
+
+  function updateTemplate(setter: React.Dispatch<React.SetStateAction<WhatsAppTemplate[]>>, tipoMensaje: string, field: keyof WhatsAppTemplate, value: string | number | boolean) {
+    setter((current) => current.map((item) => item.tipoMensaje === tipoMensaje ? { ...item, [field]: value } : item));
+  }
+
+  async function saveTemplates(target: "institution" | "fallback") {
+    const templates = target === "institution" ? whatsappTemplates : fallbackTemplates;
+    const configured = templates.filter((item) => item.templateUuid.trim() && item.nombre.trim());
+    if (!configured.length) {
+      setErrorMessage("Ingresá al menos una plantilla con nombre y UUID");
+      return;
+    }
+    setSavingWhatsApp(true);
+    setMessage("");
+    setErrorMessage("");
+    try {
+      const url = target === "institution" ? `/instituciones/${editingId}/whatsapp/plantillas` : "/instituciones/whatsapp/fallback/plantillas";
+      const response = await api.put(url, { plantillas: configured });
+      const saved = response.data?.data?.plantillas || [];
+      const setter = target === "institution" ? setWhatsappTemplates : setFallbackTemplates;
+      setter((current) => current.map((item) => {
+        const match = saved.find((template: any) => template.TipoMensaje === item.tipoMensaje);
+        return match ? { ...item, estado: match.Estado || item.estado, activo: match.Activo !== false } : item;
+      }));
+      setMessage("Plantillas guardadas correctamente");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudieron guardar las plantillas");
+    } finally {
+      setSavingWhatsApp(false);
+    }
   }
 
   async function subirArchivo(file: File, tipo: "logo" | "membrete") {
@@ -179,12 +576,39 @@ export default function InstitucionesPage() {
         circuitoEducativo: form.circuitoEducativo || null
       };
 
+      let savedInstitutionId = editingId;
       if (editingId) {
         await api.put(`/instituciones/${editingId}`, payload);
         setMessage("Institución actualizada correctamente");
       } else {
-        await api.post("/instituciones", payload);
+        const response = await api.post("/instituciones", payload);
+        savedInstitutionId = Number(response.data?.data?.InstitucionId || response.data?.data?.institucionId || 0) || null;
         setMessage("Institución creada correctamente");
+      }
+
+      if (false && isSuperAdmin && savedInstitutionId && modoWhatsApp === "GENERICA") {
+        await saveWhatsAppMode(savedInstitutionId!, "GENERICA");
+      }
+      if (false && isSuperAdmin && modoWhatsApp === "PROPIO_API") {
+        if (!whatsappConfig.numeroOrigen.trim()) throw new Error("Ingresá el número WABA propio del colegio");
+        if (!/^\+\d{8,15}$/.test(whatsappConfig.numeroOrigen.trim())) throw new Error("El número WABA debe estar en formato internacional, por ejemplo +50686103791");
+        if (!whatsappConfig.tieneApiKey && !whatsappConfig.apiKey.trim()) throw new Error("Ingresá la API Key de 2Chat del colegio");
+        if (savedInstitutionId) {
+          const response = await api.put(`/instituciones/${savedInstitutionId}/whatsapp`, {
+            numeroOrigen: whatsappConfig.numeroOrigen,
+            apiKey: whatsappConfig.apiKey || undefined,
+            nombreVisible: whatsappConfig.nombreVisible || null,
+            activo: true
+          });
+          setWhatsappConfig((prev) => ({ ...prev, apiKey: "", estado: response.data?.data?.Estado || "PENDIENTE", tieneApiKey: true }));
+        }
+      }
+      if (false && isSuperAdmin && modoWhatsApp === "PROPIO_QR" && savedInstitutionId && !qrChannelConfigured && whatsappConfig.numeroOrigen.trim() && whatsappConfig.apiKey.trim()) {
+        await api.post(`/instituciones/${savedInstitutionId}/whatsapp/qr/crear`, {
+          numeroOrigen: whatsappConfig.numeroOrigen,
+          apiKey: whatsappConfig.apiKey,
+          nombreVisible: whatsappConfig.nombreVisible || `WhatsApp ${form.nombre}`
+        });
       }
 
       setForm(initialForm);
@@ -208,6 +632,11 @@ export default function InstitucionesPage() {
   function handleEdit(item: Institution) {
     setMessage("");
     setErrorMessage("");
+    setWhatsappConfig(initialWhatsAppConfig);
+    setModoWhatsApp("GENERICA");
+    setQrCodeImageUrl("");
+    setQrChannelConfigured(false);
+    setQrConnected(false);
     setEditingId(item.InstitucionId);
     setForm({
       tipoClienteId: item.TipoClienteId,
@@ -228,6 +657,7 @@ export default function InstitucionesPage() {
       circuitoEducativo: item.CircuitoEducativo || ""
     });
     setIsFormExpanded(true);
+    if (isSuperAdmin) void loadWhatsAppConfig(item.InstitucionId);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -236,6 +666,11 @@ export default function InstitucionesPage() {
     setForm(initialForm);
     setMessage("");
     setErrorMessage("");
+    setWhatsappConfig(initialWhatsAppConfig);
+    setModoWhatsApp("GENERICA");
+    setQrCodeImageUrl("");
+    setQrChannelConfigured(false);
+    setQrConnected(false);
     setIsFormExpanded(false);
   }
 
@@ -295,8 +730,11 @@ export default function InstitucionesPage() {
   }
 
   return (
-    <div className="two-col">
-      <section className="card">
+    <div
+      className="two-col"
+      style={isFormExpanded ? { display: "flex", flexDirection: "column", gap: "16px" } : undefined}
+    >
+      <section className="card" style={isFormExpanded ? { order: 2 } : undefined}>
         <div
           style={{
             display: "flex",
@@ -615,6 +1053,161 @@ export default function InstitucionesPage() {
             )}
           </div>
 
+          {false && isSuperAdmin && (
+            <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "12px", border: "1px solid rgba(96,165,250,0.35)", background: "rgba(255,255,255,0.05)" }}>
+              <div>
+                <strong>Canal de WhatsApp para esta institución</strong>
+                <div style={{ color: "#c9d6e2", fontSize: "13px", marginTop: "4px" }}>
+                  Elegí si el colegio enviará desde el número genérico de Profe360 o desde un número WABA propio.
+                </div>
+              </div>
+              {form.nombre.trim().toUpperCase() === "PROFE360" ? (
+                <div style={{ color: "#93c5fd", fontSize: "13px" }}>
+                  Esta institución es la fuente del número genérico de Profe360. Los datos WABA configurados abajo serán utilizados por los colegios que elijan la opción genérica.
+                </div>
+              ) : (
+                <label>
+                  Tipo de número
+                  <select value={modoWhatsApp} onChange={(e) => setModoWhatsApp(e.target.value as "GENERICA" | "PROPIO_API" | "PROPIO_QR")}>
+                    <option value="GENERICA">Número genérico de Profe360</option>
+                    <option value="PROPIO_API">Número propio del colegio - API</option>
+                    <option value="PROPIO_QR">Número propio del colegio - QR</option>
+                  </select>
+                </label>
+              )}
+              {modoWhatsApp === "GENERICA" && (
+                <div style={{ color: "#93c5fd", fontSize: "13px" }}>
+                  Se utilizará el número fallback configurado por SUPER_ADMIN. No se requiere API Key en esta institución.
+                </div>
+              )}
+            </div>
+          )}
+
+          {false && isSuperAdmin && (modoWhatsApp === "PROPIO_API" || modoWhatsApp === "PROPIO_QR" || form.nombre.trim().toUpperCase() === "PROFE360") && (
+            <div
+              style={{
+                display: "grid",
+                gap: "12px",
+                padding: "16px",
+                borderRadius: "12px",
+                border: "1px solid rgba(16,183,164,0.35)",
+                background: "rgba(255,255,255,0.05)"
+              }}
+            >
+              <div>
+                <strong>WhatsApp WABA del colegio</strong>
+                <div style={{ color: "#c9d6e2", fontSize: "13px", marginTop: "4px" }}>
+                  La API Key se guarda cifrada y nunca se muestra nuevamente.
+                </div>
+              </div>
+
+              {loadingWhatsApp ? (
+                <div style={{ color: "#c9d6e2" }}>Cargando configuración de WhatsApp...</div>
+              ) : (
+                <>
+                  <label>
+                    Número de origen WABA
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={whatsappConfig.numeroOrigen}
+                      onChange={(e) => setWhatsappConfig({ ...whatsappConfig, numeroOrigen: normalizeWabaNumberInput(e.target.value) })}
+                      onBlur={(e) => setWhatsappConfig({ ...whatsappConfig, numeroOrigen: normalizeWabaNumberInput(e.target.value, true) })}
+                      placeholder="+50686103791 (también puede ser +507...)"
+                    />
+                    <small style={{ color: "#c9d6e2" }}>Si escribís solo el número local, se antepone +506. También podés ingresar manualmente otro código, como +507.</small>
+                    {whatsappConfig.numeroOrigen && !/^\+\d{8,15}$/.test(whatsappConfig.numeroOrigen.trim()) && (
+                      <small style={{ color: "#fca5a5" }}>Debe ser un número telefónico internacional, no un correo.</small>
+                    )}
+                  </label>
+
+                  <label>
+                    API Key de 2Chat {whatsappConfig.tieneApiKey ? "(dejar vacío para conservarla)" : ""}
+                    <input
+                      type="password"
+                      value={whatsappConfig.apiKey}
+                      onChange={(e) => setWhatsappConfig({ ...whatsappConfig, apiKey: e.target.value })}
+                      placeholder={whatsappConfig.tieneApiKey ? "API Key configurada" : "Ingresá la API Key"}
+                    />
+                  </label>
+
+                  <label>
+                    Nombre visible
+                    <input
+                      value={whatsappConfig.nombreVisible}
+                      onChange={(e) => setWhatsappConfig({ ...whatsappConfig, nombreVisible: e.target.value })}
+                      placeholder="WhatsApp Colegio"
+                    />
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <input
+                      type="checkbox"
+                      checked={whatsappConfig.activo}
+                      onChange={(e) => setWhatsappConfig({ ...whatsappConfig, activo: e.target.checked })}
+                    />
+                    Canal activo
+                  </label>
+
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                    {modoWhatsApp === "PROPIO_QR" && (
+                      <>
+                        <button type="button" className="primary-btn" onClick={connectWhatsAppQr} disabled={savingWhatsApp}>
+                          {savingWhatsApp ? "Procesando..." : !qrChannelConfigured ? "Agregar número a 2Chat" : qrConnected ? "Conectado" : "Conectar WA"}
+                        </button>
+                        {qrChannelConfigured && qrConnected && (
+                          <button type="button" className="secondary-btn" onClick={disconnectWhatsAppQr} disabled={savingWhatsApp}>
+                            {savingWhatsApp ? "Procesando..." : "Desconectar WA"}
+                          </button>
+                        )}
+                        {qrChannelConfigured && !qrConnected && (
+                          <button type="button" className="secondary-btn" onClick={beginNewWhatsAppQrChannel} disabled={savingWhatsApp}>
+                            Agregar/cambiar número
+                          </button>
+                        )}
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={saveWhatsAppConfig}
+                      disabled={savingWhatsApp || modoWhatsApp === "PROPIO_QR"}
+                    >
+                      {savingWhatsApp ? "Guardando WhatsApp..." : modoWhatsApp === "PROPIO_QR" ? "Guardar datos QR" : "Guardar WhatsApp"}
+                    </button>
+                    <span style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      padding: "8px 14px",
+                      borderRadius: "999px",
+                      fontSize: "14px",
+                      fontWeight: 800,
+                      color: qrConnected ? "#065f46" : "#92400e",
+                      background: qrConnected ? "#a7f3d0" : "#fef3c7",
+                      border: `2px solid ${qrConnected ? "#10b981" : "#f59e0b"}`
+                    }}>
+                      <span style={{ width: "10px", height: "10px", borderRadius: "50%", background: qrConnected ? "#059669" : "#d97706" }} />
+                      {qrConnected ? "CONECTADO" : qrChannelConfigured ? "DESCONECTADO" : "NO CONFIGURADO"}
+                    </span>
+                  </div>
+                  {modoWhatsApp === "PROPIO_QR" && qrCodeImageUrl && (
+                    <div style={{ display: "grid", gap: "8px", justifyItems: "start" }}>
+                      <strong>Escaneá este código desde WhatsApp → Dispositivos vinculados</strong>
+                      <img src={qrCodeImageUrl} alt="Código QR de conexión WhatsApp" style={{ width: "260px", height: "260px", background: "#fff", padding: "10px", borderRadius: "12px" }} />
+                    </div>
+                  )}
+                  {editingId && modoWhatsApp === "PROPIO_API" && <WhatsAppTemplateEditor
+                    templates={whatsappTemplates}
+                    setTemplates={setWhatsappTemplates}
+                    onSave={() => void saveTemplates("institution")}
+                    saving={savingWhatsApp}
+                  />}
+                </>
+              )}
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
             <button className="primary-btn" disabled={loading || uploadingLogo || uploadingMembrete}>
               {loading
@@ -644,8 +1237,13 @@ export default function InstitucionesPage() {
         ) : null}
       </section>
 
-      <section className="card">
-        <h3>Instituciones</h3>
+      <section
+        className="card"
+        style={isFormExpanded ? { order: 1, padding: "14px", marginTop: "8px" } : undefined}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: isFormExpanded ? "8px" : undefined }}>
+          Instituciones {isFormExpanded ? `(${items.length})` : ""}
+        </h3>
 
         {isSuperAdmin && (
           <>
@@ -699,7 +1297,10 @@ export default function InstitucionesPage() {
           </>
         )}
 
-        <div className="table-wrap">
+        <div
+          className="table-wrap"
+          style={isFormExpanded ? { maxHeight: "260px", overflow: "auto" } : undefined}
+        >
           <table>
             <thead>
               <tr>

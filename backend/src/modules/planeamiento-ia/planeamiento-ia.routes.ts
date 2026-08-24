@@ -702,7 +702,7 @@ async function findMateriaId(pool: any, institucionId: number, materiaNombre: st
     .query(`
       SELECT TOP 1 MateriaId
       FROM dbo.Materia
-      WHERE InstitucionId = @institucionId
+      WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
         AND (
           UPPER(LTRIM(RTRIM(Nombre))) COLLATE Latin1_General_100_CI_AI = UPPER(LTRIM(RTRIM(@materia))) COLLATE Latin1_General_100_CI_AI
           OR UPPER(LTRIM(RTRIM(Nombre))) COLLATE Latin1_General_100_CI_AI LIKE UPPER(LTRIM(RTRIM(@materia))) COLLATE Latin1_General_100_CI_AI + N'%'
@@ -2873,7 +2873,7 @@ router.get("/catalogos", async (req, res) => {
             MIN(Descripcion) AS Descripcion,
             CAST(1 AS bit) AS Activo
           FROM dbo.Materia
-          WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId)
+          WHERE (@esSuperAdmin = 1 OR InstitucionId = @institucionId OR EsGlobal = 1)
             AND Activa = 1
           GROUP BY Nombre
           ORDER BY Nombre
@@ -3504,14 +3504,36 @@ router.get("/habilidades/plantilla", async (_req, res) => {
   try {
     const rows = [
       {
-        Materia: "Matematica",
+        Materia: "Español",
         Colegio: "Académico",
         Ciclo: "Tercer Ciclo",
         Grado: "7",
         Mes: "Febrero",
-        Area: "Numeros",
+        Area: "Ejemplo de área",
         "Numero de Habilidad": "1",
-        "Descripcion de la Habilidad": "Reconoce y representa numeros racionales en diferentes contextos.",
+        "Descripcion de la Habilidad": "Ejemplo: redactar una habilidad clara y observable.",
+        "Documento de referencia": "Programa de estudio MEP"
+      },
+      {
+        Materia: "Español",
+        Colegio: "Técnico",
+        Ciclo: "Cuarto Ciclo",
+        Grado: "10",
+        Mes: "Marzo",
+        Area: "Ejemplo de área",
+        "Numero de Habilidad": "1",
+        "Descripcion de la Habilidad": "Ejemplo para décimo: usar Cuarto Ciclo, no Educación Diversificada.",
+        "Documento de referencia": "Programa de estudio MEP"
+      },
+      {
+        Materia: "Español",
+        Colegio: "Técnico",
+        Ciclo: "Cuarto Ciclo",
+        Grado: "11",
+        Mes: "Marzo",
+        Area: "Ejemplo de área",
+        "Numero de Habilidad": "1",
+        "Descripcion de la Habilidad": "Ejemplo para undécimo: usar Cuarto Ciclo, no Educación Diversificada.",
         "Documento de referencia": "Programa de estudio MEP"
       }
     ];
@@ -3521,7 +3543,7 @@ router.get("/habilidades/plantilla", async (_req, res) => {
       {
         Columna: "Materia",
         Requerido: "SI",
-        Descripcion: "Nombre de la materia. Debe existir en el catalogo de materias de la institucion."
+        Descripcion: "Nombre exacto de una materia existente en Catálogo de materias para la institución. El sistema busca este texto para llenar MateriaId; no se debe agregar una columna MateriaId al Excel. Ejemplo: Español."
       },
       {
         Columna: "Colegio",
@@ -3531,12 +3553,12 @@ router.get("/habilidades/plantilla", async (_req, res) => {
       {
         Columna: "Ciclo",
         Requerido: "NO",
-        Descripcion: "Se asigna automáticamente según el grado. Si se indica, debe coincidir exactamente: 1-3 Primer Ciclo; 4-6 Segundo Ciclo; 7-9 Tercer Ciclo; 10-12 Cuarto Ciclo."
+        Descripcion: "Se asigna automáticamente según el grado. Si se indica, debe coincidir: grados 1-3 = Primer Ciclo; 4-6 = Segundo Ciclo; 7-9 = Tercer Ciclo; 10-12 = Cuarto Ciclo. Educación Diversificada no es un valor válido para la importación."
       },
       {
         Columna: "Grado",
         Requerido: "SI",
-        Descripcion: "Usá los valores normalizados 1 a 12. Para modalidad PN, usá por ejemplo: 7 PN, 10 PN o 12 PN. El sistema valida el ciclo correspondiente."
+        Descripcion: "Usá los valores normalizados 1 a 12. Para modalidad PN, usá por ejemplo: 7 PN, 10 PN o 12 PN. El sistema valida el ciclo correspondiente; 10 y 11 deben usar Cuarto Ciclo."
       },
       {
         Columna: "Mes",
@@ -3569,9 +3591,42 @@ router.get("/habilidades/plantilla", async (_req, res) => {
         Descripcion: "La disponibilidad para todos los colegios o colegios específicos se selecciona en la pantalla antes de importar el archivo."
       }
     ]);
+    const catalogos = XLSX.utils.json_to_sheet([
+      {
+        Tipo: "Ciclo",
+        Valor: "Primer Ciclo",
+        Grados: "1, 2 y 3",
+        Nota: "Usar exactamente este nombre si se informa la columna Ciclo."
+      },
+      {
+        Tipo: "Ciclo",
+        Valor: "Segundo Ciclo",
+        Grados: "4, 5 y 6",
+        Nota: "Usar exactamente este nombre si se informa la columna Ciclo."
+      },
+      {
+        Tipo: "Ciclo",
+        Valor: "Tercer Ciclo",
+        Grados: "7, 8 y 9",
+        Nota: "Usar exactamente este nombre si se informa la columna Ciclo."
+      },
+      {
+        Tipo: "Ciclo",
+        Valor: "Cuarto Ciclo",
+        Grados: "10, 11 y 12",
+        Nota: "Para 10 y 11 no usar Educación Diversificada."
+      },
+      {
+        Tipo: "Materia",
+        Valor: "Catálogo institucional",
+        Grados: "N/A",
+        Nota: "Materia debe coincidir con el nombre existente en Catálogo de materias; el sistema asigna MateriaId automáticamente."
+      }
+    ]);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Habilidades");
     XLSX.utils.book_append_sheet(workbook, instrucciones, "Instrucciones");
+    XLSX.utils.book_append_sheet(workbook, catalogos, "Catalogos");
     const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

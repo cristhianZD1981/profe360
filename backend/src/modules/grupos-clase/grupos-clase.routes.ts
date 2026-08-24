@@ -152,7 +152,7 @@ async function validatePayload(params: {
           SELECT 1
           FROM dbo.Materia m
           WHERE m.MateriaId = @materiaId
-            AND m.InstitucionId = @institucionId
+            AND (m.InstitucionId = @institucionId OR m.EsGlobal = 1)
             AND m.Activa = 1
         ) THEN 1 ELSE 0 END AS MateriaValida,
         (
@@ -325,7 +325,7 @@ router.get("/catalogos", async (req, res) => {
         .query(`
         SELECT AnioLectivoId, Nombre, FechaInicio, FechaFin, Activo
         FROM dbo.AnioLectivo
-        WHERE InstitucionId = @institucionId
+        WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
         ORDER BY Activo DESC, FechaInicio DESC, AnioLectivoId DESC;
 
         SELECT p.PeriodoId, p.AnioLectivoId, p.Nombre, p.NumeroOrden, p.FechaInicio, p.FechaFin, p.Activo

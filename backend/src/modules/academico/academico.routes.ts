@@ -1104,7 +1104,7 @@ router.get("/catalogos", async (req, res) => {
             CreatedAt,
             UpdatedAt
           FROM dbo.Materia
-          WHERE InstitucionId = @institucionId
+          WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
             AND Activa = 1
           ORDER BY Nombre
         `),
@@ -4155,7 +4155,7 @@ router.get("/materias", async (req, res) => {
           CreatedAt,
           UpdatedAt
         FROM dbo.Materia
-        WHERE InstitucionId = @institucionId
+        WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
           AND (@incluirInactivas = 1 OR Activa = 1)
           AND (
             @q = '%%'
@@ -4197,7 +4197,7 @@ router.post("/materias", async (req, res) => {
       .query(`
         SELECT TOP 1 MateriaId
         FROM dbo.Materia
-        WHERE InstitucionId = @institucionId
+        WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
           AND (Nombre = @nombre OR (@codigo IS NOT NULL AND Codigo = @codigo))
       `);
 
@@ -10074,7 +10074,7 @@ async function resolveMateriaImport(pool: any, institucionId: number, row: any) 
     .query(`
       SELECT TOP 1 MateriaId, Nombre, Codigo
       FROM dbo.Materia
-      WHERE InstitucionId = @institucionId
+      WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
         AND Activa = 1
         AND (
           (@id IS NOT NULL AND MateriaId = @id)

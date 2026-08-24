@@ -21,12 +21,13 @@ import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, created, forbidden, ok } from "../../utils/http";
 
 import { sendEmail } from "../../services/email.service";
+import { sendWhatsAppNotification } from "../../services/whatsapp.service";
 
 import { env } from "../../config/env";
 
 import { parseDateInputAsLocalDate } from "../../utils/date.utils";
 
-import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
+import { buildWhatsAppWabaPayload, normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 import { assertCierreCursoAbierto } from "../academico/cierre-curso.utils";
 
@@ -10646,6 +10647,10 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
           ig.IndicadorBase,
 
+          p.ResultadoIAJson AS PlaneamientoResultadoIAJson,
+
+          ROW_NUMBER() OVER (PARTITION BY ig.PlaneamientoId ORDER BY ig.IndicadorGrupoId) AS IndicadorOrden,
+
           ai.NumeroLecciones,
 
           ai.Puntos,
@@ -10655,6 +10660,8 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
         FROM dbo.Eval360_ActividadIndicador ai
 
         INNER JOIN dbo.Eval360_IndicadorGrupo ig ON ig.IndicadorGrupoId = ai.IndicadorGrupoId
+
+        LEFT JOIN dbo.Planeamiento p ON p.PlaneamientoId = ig.PlaneamientoId
 
         WHERE ai.ActividadId = @actividadId
 
@@ -10666,15 +10673,46 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
 
+    const limpiarDescripcionHabilidad = (value: any) => String(value || "")
+      .trim()
+      .replace(/^\s*\d+(?:\.\d+)?\s*[:.)-]\s*/, "")
+      .trim();
+
+    const aprendizajesPorPlaneamiento = new Map<number, { aprendizajes: string[]; cobertura: any[] }>();
+    for (const row of result.recordset || []) {
+      const planeamientoId = Number(row.PlaneamientoId || 0);
+      if (aprendizajesPorPlaneamiento.has(planeamientoId)) continue;
+      const resultadoPlaneamiento = parseJsonSafe(row.PlaneamientoResultadoIAJson) || {};
+      const aprendizajes = (Array.isArray(resultadoPlaneamiento.aprendizajesEsperados)
+        ? resultadoPlaneamiento.aprendizajesEsperados
+        : Array.isArray(resultadoPlaneamiento.controlCalidad?.contextoGeneracion?.habilidades)
+          ? resultadoPlaneamiento.controlCalidad.contextoGeneracion.habilidades.map((item: any) => item?.DescripcionHabilidad || item)
+          : [])
+        .map(limpiarDescripcionHabilidad)
+        .filter(Boolean);
+      aprendizajesPorPlaneamiento.set(planeamientoId, {
+        aprendizajes,
+        cobertura: Array.isArray(resultadoPlaneamiento.coberturaHabilidades) ? resultadoPlaneamiento.coberturaHabilidades : []
+      });
+    }
+
     const rows = (result.recordset || []).map((r: any) => {
 
       const d = parseJsonSafe(r.DetalleItemsJson);
+      const datosPlaneamiento = aprendizajesPorPlaneamiento.get(Number(r.PlaneamientoId || 0)) || { aprendizajes: [], cobertura: [] };
+      const indicadorOrden = Number(r.IndicadorOrden || 1);
+      const cobertura = datosPlaneamiento.cobertura.find((item: any) => Array.isArray(item?.indicadoresIndices) && item.indicadoresIndices.some((indice: any) => Number(indice) === indicadorOrden));
+      const numeroHabilidadPorIndicador = String(r.IndicadorBase || "").match(/^\s*(\d+)\.\d+\b/)?.[1];
+      const indiceHabilidad = Number(cobertura?.habilidadIndice || numeroHabilidadPorIndicador || 0);
+      const habilidad = datosPlaneamiento.aprendizajes[indiceHabilidad - 1] || datosPlaneamiento.aprendizajes[indicadorOrden - 1] || datosPlaneamiento.aprendizajes[0] || "";
 
       return {
 
         IndicadorGrupoId: Number(r.IndicadorGrupoId || 0),
 
         PlaneamientoId: Number(r.PlaneamientoId || 0),
+
+        Habilidad: habilidad,
 
         Indicador: String(r.IndicadorBase || ""),
 
@@ -10764,11 +10802,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
 
-    const worksheet = workbook.addWorksheet("TablaEspecificaciones", {
-
-      views: [{ state: "frozen", xSplit: 0, ySplit: 12 }]
-
-    });
+    const worksheet = workbook.addWorksheet("TablaEspecificaciones");
 
 
 
@@ -10793,6 +10827,8 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
     worksheet.columns = [
+
+      { width: 42 },
 
       { width: 42 },
 
@@ -10868,13 +10904,13 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
 
-    worksheet.mergeCells("C1:U2");
+    worksheet.mergeCells("D1:V2");
 
-    worksheet.getCell("C1").value = "TABLA DE ESPECIFICACIONES";
+    worksheet.getCell("D1").value = "TABLA DE ESPECIFICACIONES";
 
-    worksheet.getCell("C1").font = { bold: true, size: 18, color: { argb: "FF0F172A" } };
+    worksheet.getCell("D1").font = { bold: true, size: 18, color: { argb: "FF0F172A" } };
 
-    worksheet.getCell("C1").alignment = { horizontal: "center", vertical: "middle" };
+    worksheet.getCell("D1").alignment = { horizontal: "center", vertical: "middle" };
 
 
 
@@ -10971,16 +11007,18 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
     worksheet.mergeCells(`B${headerRow1}:B${headerRow2}`);
 
     worksheet.mergeCells(`C${headerRow1}:C${headerRow2}`);
+    worksheet.mergeCells(`D${headerRow1}:D${headerRow2}`);
 
-    worksheet.getCell(`A${headerRow1}`).value = "Indicador";
+    worksheet.getCell(`A${headerRow1}`).value = "Habilidad";
 
-    worksheet.getCell(`B${headerRow1}`).value = "Numero de lecciones";
+    worksheet.getCell(`B${headerRow1}`).value = "Indicador";
 
-    worksheet.getCell(`C${headerRow1}`).value = "Puntos";
+    worksheet.getCell(`C${headerRow1}`).value = "Numero de lecciones";
+    worksheet.getCell(`D${headerRow1}`).value = "Puntos";
 
 
 
-    [worksheet.getCell(`A${headerRow1}`), worksheet.getCell(`B${headerRow1}`), worksheet.getCell(`C${headerRow1}`)].forEach((cell) => {
+    [worksheet.getCell(`A${headerRow1}`), worksheet.getCell(`B${headerRow1}`), worksheet.getCell(`C${headerRow1}`), worksheet.getCell(`D${headerRow1}`)].forEach((cell) => {
 
       cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
 
@@ -11004,7 +11042,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
 
-    let colIndex = 4;
+    let colIndex = 5;
 
     for (const def of itemDefs) {
 
@@ -11062,6 +11100,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
       const values = [
 
+        row.Habilidad,
         row.Indicador,
 
         row.NumeroLecciones,
@@ -11108,23 +11147,23 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
         };
 
-        cell.alignment = columnIndex === 0
+        cell.alignment = columnIndex <= 1
 
           ? { wrapText: true, vertical: "middle" }
 
           : { horizontal: "center", vertical: "middle" };
 
-        if (columnIndex === 1) cell.numFmt = "0.00";
-
         if (columnIndex === 2) cell.numFmt = "0.00";
 
-        if (columnIndex >= 3 && columnIndex % 2 === 1) {
+        if (columnIndex === 3) cell.numFmt = "0.00";
+
+        if (columnIndex >= 4 && columnIndex % 2 === 0) {
 
           cell.numFmt = "0.00";
 
         }
 
-        if (columnIndex >= 3 && columnIndex % 2 === 0) {
+        if (columnIndex >= 4 && columnIndex % 2 === 1) {
 
           cell.numFmt = "0";
 
@@ -11158,7 +11197,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
 
-    const sumColumns = [2, 3, ...Array.from({ length: itemDefs.length * 2 }, (_, idx) => idx + 4)];
+    const sumColumns = [3, 4, ...Array.from({ length: itemDefs.length * 2 }, (_, idx) => idx + 5)];
 
     sumColumns.forEach((columnNumber) => {
 
@@ -11204,9 +11243,9 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
       cell.alignment = { horizontal: "center", vertical: "middle" };
 
-      if (columnNumber === 2 || columnNumber === 3 || columnNumber % 2 === 1) cell.numFmt = "0.00";
+      if (columnNumber === 3 || columnNumber === 4 || (columnNumber >= 5 && columnNumber % 2 === 0)) cell.numFmt = "0.00";
 
-      if (columnNumber >= 4 && columnNumber % 2 === 0) cell.numFmt = "0";
+      if (columnNumber >= 5 && columnNumber % 2 === 1) cell.numFmt = "0";
 
     });
 
@@ -11216,7 +11255,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
       from: { row: headerRow1, column: 1 },
 
-      to: { row: totalRow, column: 21 }
+      to: { row: totalRow, column: 22 }
 
     };
 
@@ -14906,7 +14945,9 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
 
   const provider = String(process.env.WHATSAPP_PROVIDER || "generic").trim().toLowerCase();
 
-  const webhookUrl = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim();
+  const webhookUrl = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim() ||
+    (provider === "2chat-waba" ? "https://api.p.2chat.io/open/waba/send-message" :
+      provider === "2chat" ? "https://api.p.2chat.io/open/whatsapp/send-message" : "");
 
   const webhookToken = String(process.env.WHATSAPP_WEBHOOK_TOKEN || "").trim();
 
@@ -14966,6 +15007,13 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
 
       };
 
+    } else if (provider === "2chat-waba") {
+      if (!webhookToken) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_WEBHOOK_TOKEN no configurado para 2Chat WABA" };
+      if (!fromNumber) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_FROM_NUMBER no configurado para 2Chat WABA" };
+      const wabaPayload = buildWhatsAppWabaPayload({ fromNumber, toNumber: telefono, message: String(params.mensaje || "") });
+      if (!wabaPayload) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_WABA_TEMPLATE_UUID no configurado para mensajes WABA" };
+      headers["X-User-API-Key"] = webhookToken;
+      payload = wabaPayload;
     } else if (webhookToken) {
 
       headers[webhookAuthHeader] = webhookToken.toLowerCase().startsWith("bearer ")
@@ -18514,7 +18562,16 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
         for (const telefono of telefonos) {
 
-          const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: bodyFinal });
+          const whatsapp = await sendWhatsAppNotification({
+            institucionId: Number(contextoCorreo.InstitucionId || 0),
+            grupoId: Number(contextoCorreo.GrupoId || 0) || undefined,
+            estudianteId: aviso.estudianteId,
+            solicitadoPorUsuarioId: getUserId(req),
+            tipoMensaje: normalizeKey(tipoUso).includes("TAREA") ? "TAREA" : "EVALUACION",
+            telefono,
+            mensaje: bodyFinal,
+            templateParams: [bodyFinal]
+          });
 
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
 
@@ -19385,7 +19442,16 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
         for (const telefono of telefonos) {
 
-          const whatsapp = await sendWhatsAppSeguimiento({ telefono, mensaje: whatsappFinal });
+          const whatsapp = await sendWhatsAppNotification({
+            institucionId: Number(actividad.InstitucionId || contextoCorreo?.InstitucionId || 0),
+            grupoId: Number(actividad.GrupoId || contextoCorreo?.GrupoId || 0) || undefined,
+            estudianteId: aviso.estudianteId,
+            solicitadoPorUsuarioId: getUserId(req),
+            tipoMensaje: normalizeKey(actividad?.Fuente || actividad?.Nombre || "").includes("TAREA") ? "TAREA" : "EVALUACION",
+            telefono,
+            mensaje: whatsappFinal,
+            templateParams: [whatsappFinal]
+          });
 
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
 

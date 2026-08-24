@@ -24,6 +24,7 @@ import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage
 import AssistantAdminPage from "./pages/AssistantAdminPage";
 import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
 import SuperAdminConsecutivosPage from "./pages/SuperAdminConsecutivosPage";
+import SuperAdminWhatsAppPage from "./pages/SuperAdminWhatsAppPage";
 import HabilidadesPlaneamientoAcademicoPage from "./pages/HabilidadesPlaneamientoAcademicoPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
 import GruposClasePage from "./pages/GruposClasePage";
@@ -275,6 +276,14 @@ export default function App() {
                 allowedRoles={SUPER_ADMIN_ROLES}
               >
                 <SuperAdminConsecutivosPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="super-admin/whatsapp"
+            element={
+              <ProtectedRoute allowedRoles={SUPER_ADMIN_ROLES}>
+                <SuperAdminWhatsAppPage />
               </ProtectedRoute>
             }
           />

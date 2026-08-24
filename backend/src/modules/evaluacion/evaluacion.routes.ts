@@ -163,7 +163,7 @@ async function resolveMateriaEvaluacionId(pool: any, institucionId: number, mate
     .query(`
       SELECT TOP 1 MateriaId
       FROM dbo.Materia
-      WHERE InstitucionId = @institucionId
+      WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
         AND UPPER(LTRIM(RTRIM(Nombre))) = UPPER(LTRIM(RTRIM(@nombre)))
     `);
 

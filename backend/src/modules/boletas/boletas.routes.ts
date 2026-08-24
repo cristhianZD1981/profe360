@@ -4,8 +4,9 @@ import { getPool, sql } from "../../config/database";
 import { env } from "../../config/env";
 import { ok, badRequest } from "../../utils/http";
 import { sendEmail } from "../../services/email.service";
+import { sendWhatsAppNotification } from "../../services/whatsapp.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
-import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
+import { buildWhatsAppWabaPayload, normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
 const router = Router();
 const MAIL_FROM_NOTIFICACIONES = "info@profe360cr.com";
@@ -103,7 +104,9 @@ async function sendBoletaConductaWhatsApp(params: { telefono?: string | null; me
 
   const mode = String(process.env.WHATSAPP_MODE || "simulado").trim().toLowerCase();
   const provider = String(process.env.WHATSAPP_PROVIDER || "generic").trim().toLowerCase();
-  const webhookUrl = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim();
+  const webhookUrl = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim() ||
+    (provider === "2chat-waba" ? "https://api.p.2chat.io/open/waba/send-message" :
+      provider === "2chat" ? "https://api.p.2chat.io/open/whatsapp/send-message" : "");
   const webhookToken = String(process.env.WHATSAPP_WEBHOOK_TOKEN || "").trim();
   const webhookAuthHeader = String(process.env.WHATSAPP_WEBHOOK_AUTH_HEADER || "Authorization").trim() || "Authorization";
   const fromNumber = normalizeWhatsAppPhone(process.env.WHATSAPP_FROM_NUMBER || "");
@@ -131,6 +134,13 @@ async function sendBoletaConductaWhatsApp(params: { telefono?: string | null; me
         to_number: telefono,
         text: String(params.mensaje || "")
       };
+    } else if (provider === "2chat-waba") {
+      if (!webhookToken) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_WEBHOOK_TOKEN no configurado para 2Chat WABA" };
+      if (!fromNumber) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_FROM_NUMBER no configurado para 2Chat WABA" };
+      const wabaPayload = buildWhatsAppWabaPayload({ fromNumber, toNumber: telefono, message: String(params.mensaje || "") });
+      if (!wabaPayload) return { enviado: false, modo: "webhook", telefono, motivo: "WHATSAPP_WABA_TEMPLATE_UUID no configurado para mensajes WABA" };
+      headers["X-User-API-Key"] = webhookToken;
+      payload = wabaPayload;
     } else if (webhookToken) {
       headers[webhookAuthHeader] = webhookToken.toLowerCase().startsWith("bearer ")
         ? webhookToken
@@ -1602,9 +1612,15 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
     });
     const erroresWhatsApp: string[] = [];
     for (const telefono of telefonosWhatsApp) {
-      const respuesta = await sendBoletaConductaWhatsApp({
+      const respuesta = await sendWhatsAppNotification({
+        institucionId,
+        grupoId: Number(row.GrupoId || 0) || undefined,
+        estudianteId: Number(row.EstudianteId || 0) || undefined,
+        solicitadoPorUsuarioId: getAuthUserId(req),
+        tipoMensaje: "BOLETA",
         telefono,
-        mensaje: mensajeWhatsApp
+        mensaje: mensajeWhatsApp,
+        templateParams: [mensajeWhatsApp]
       });
       if (respuesta?.enviado === true) {
         whatsappEnviado = true;

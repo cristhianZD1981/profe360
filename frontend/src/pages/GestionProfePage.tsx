@@ -929,6 +929,33 @@ export default function GestionProfePage() {
     return Array.from(map.entries()).map(([tipo, detalleItem]) => ({ tipo, detalle: detalleItem }));
   }, [seguimientoContexto?.detalles, eval360DetallesDraft]);
 
+  const opcionesReporteGestion = useMemo(() => {
+    const opcionesPlantilla = seguimientoComponentes.map((item) => {
+      const key = normalizarSeguimientoKey(item.tipo);
+      const value = key.includes("ASIST")
+        ? "ASISTENCIA"
+        : key.includes("COTIDIAN")
+          ? "COTIDIANO"
+          : key.includes("TAREA")
+            ? "TAREAS"
+            : key.includes("EXAM") || key.includes("PRUEBA") || key.includes("SUMATIVA") || key.includes("INSTRUMENTO")
+              ? "EXAMENES"
+              : `RUBRO:${item.tipo}`;
+      return { value, label: `Reporte de ${item.tipo}`, orden: 1 };
+    });
+    const especiales = [
+      { value: "MENSAJES", label: "Reporte de mensajes enviados", orden: 2 },
+      { value: "BITACORA", label: "Reporte de Bitácora", orden: 2 },
+      { value: "BOLETAS", label: "Reporte de Boletas", orden: 2 },
+      { value: "NOTAS", label: "Reporte de Notas de Asistencia", orden: 2 }
+    ];
+    const unicas = new Map<string, { value: TipoReporteGestion; label: string; orden: number }>();
+    [...opcionesPlantilla, ...especiales].forEach((opcion) => {
+      if (!unicas.has(opcion.value)) unicas.set(opcion.value, opcion as { value: TipoReporteGestion; label: string; orden: number });
+    });
+    return Array.from(unicas.values()).sort((a, b) => a.orden - b.orden || a.label.localeCompare(b.label, "es"));
+  }, [seguimientoComponentes]);
+
   const seguimientoDetallesSeleccionados = useMemo(() => {
     const detalles = seguimientoContexto?.detalles || eval360DetallesDraft || [];
     if (!seguimientoTipo) return [];
@@ -1881,6 +1908,13 @@ export default function GestionProfePage() {
   }, [seguimientoComponentes, seguimientoTipo]);
 
   useEffect(() => {
+    if (!opcionesReporteGestion.length) return;
+    if (!opcionesReporteGestion.some((opcion) => opcion.value === tipoReporteGestion)) {
+      setTipoReporteGestion(opcionesReporteGestion[0].value);
+    }
+  }, [opcionesReporteGestion, tipoReporteGestion]);
+
+  useEffect(() => {
     if (activePanel !== "seguimiento") return;
     if (!selected) return;
     if (!asistenciaFecha) return;
@@ -2427,10 +2461,78 @@ export default function GestionProfePage() {
       return { columns, rows };
     };
 
+    const construirRubroPersonalizado = (tipoNombre: string) => {
+      const tipoKey = normalizarSeguimientoKey(tipoNombre);
+      const detalleIdsTipo = detalles
+        .filter((d) => normalizarSeguimientoKey(getTipoSeguimientoFromDetalle(d)) === tipoKey)
+        .map((d) => Number(d.EstructuraGrupoDetalleId || 0))
+        .filter((v) => v > 0);
+      const acts = dedupeActividadesLogicas(
+        actividades.filter((a) => detalleIdsTipo.includes(Number(a.EstructuraGrupoDetalleId || 0)))
+      );
+      const rubroValorTotal = Array.from(new Set(detalleIdsTipo)).reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
+      const sumaPesosConfig = acts.reduce((acc, item) => {
+        const peso = Number(item.PorcentajeDentroRubro || 0);
+        return acc + (Number.isFinite(peso) && peso > 0 ? peso : 0);
+      }, 0);
+      const columns = acts.map((a) => ({ actividadId: Number(a.ActividadId), nombre: String(a.Nombre || `${tipoNombre} ${a.ActividadId}`) }));
+      const rows = estudiantes.map((estudiante) => {
+        const notas = notasActividades.filter((n) => Number(n.EstudianteId) === Number(estudiante.EstudianteId));
+        const porActividad = new Map<number, any>();
+        for (const nota of notas) porActividad.set(Number(nota.ActividadId), nota);
+        const valoresCols = columns.map((col) => {
+          const nota = porActividad.get(col.actividadId);
+          if (!nota) return "-";
+          if (nota.PuntosObtenidos === null || nota.PuntosObtenidos === undefined) return "Registrada";
+          const puntosObtenidos = Number(nota.PuntosObtenidos || 0);
+          const puntosMaximos = Number(nota.PuntosMaximos || acts.find((a) => Number(a.ActividadId) === col.actividadId)?.PuntosMaximos || 0);
+          const notaPorcentaje = puntosMaximos > 0 ? (puntosObtenidos / puntosMaximos) * 100 : Number(nota.PorcentajeObtenido || nota.NotaObtenida || 0);
+          return `${Number(notaPorcentaje || 0).toFixed(2)}% (${puntosObtenidos.toFixed(2)}/${puntosMaximos.toFixed(2)})`;
+        });
+        const calificadas = columns.filter((col) => {
+          const nota = porActividad.get(col.actividadId);
+          return nota && nota.PuntosObtenidos !== null && nota.PuntosObtenidos !== undefined;
+        });
+        let porcentajeEvaluado = 0;
+        let porcentajeGanado = 0;
+        for (const col of calificadas) {
+          const nota = porActividad.get(col.actividadId);
+          const actividad = acts.find((a) => Number(a.ActividadId) === col.actividadId);
+          const pesoActividad = sumaPesosConfig > 0 ? Math.max(0, Number(actividad?.PorcentajeDentroRubro || 0)) : (acts.length ? rubroValorTotal / acts.length : 0);
+          const puntosObtenidos = Number(nota.PuntosObtenidos || 0);
+          const puntosMaximos = Number(nota.PuntosMaximos || actividad?.PuntosMaximos || 0);
+          const notaPct = puntosMaximos > 0 ? (puntosObtenidos / puntosMaximos) * 100 : Number(nota.PorcentajeObtenido || nota.NotaObtenida || 0);
+          porcentajeEvaluado += pesoActividad;
+          porcentajeGanado += (Number(notaPct || 0) / 100) * pesoActividad;
+        }
+        return {
+          EstudianteId: Number(estudiante.EstudianteId),
+          NombreCompleto: getFullName(estudiante),
+          Identificacion: String(estudiante.Identificacion || ""),
+          TipoAdecuacion: estudiante.TipoAdecuacion || estudiante.Adecuacion || null,
+          RegistradasCalificadas: `${calificadas.length}/${columns.length}`,
+          porcentajeEvaluado: Number(porcentajeEvaluado.toFixed(2)),
+          porcentajeGanado: Number(porcentajeGanado.toFixed(2)),
+          cols: valoresCols
+        };
+      });
+      return { columns, rows };
+    };
+
+    const personalizados: Record<string, any> = {};
+    for (const componente of detalles) {
+      if (componente.Activo === false || componente.Activo === 0) continue;
+      const tipo = getTipoSeguimientoFromDetalle(componente);
+      const key = normalizarSeguimientoKey(tipo);
+      if (key.includes("ASIST") || key.includes("COTIDIAN") || key.includes("TAREA") || key.includes("EXAM") || key.includes("PRUEBA") || key.includes("SUMATIVA") || key.includes("INSTRUMENTO")) continue;
+      personalizados[`RUBRO:${tipo}`] = construirRubroPersonalizado(tipo);
+    }
+
     return {
       cotidiano: construir("COTIDIANO"),
       tareas: construir("TAREAS"),
-      examenes: construir("EXAMENES")
+      examenes: construir("EXAMENES"),
+      personalizados
     };
   }, [detalle?.estudiantes, seguimientoContexto?.actividades, seguimientoContexto?.detalles, seguimientoContexto?.notasActividades, seguimientoContexto?.seguimientos, seguimientoContexto?.actividadIndicadores, seguimientoContexto?.indicadores]);
 
@@ -2843,6 +2945,13 @@ export default function GestionProfePage() {
       const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
       return exportarTablaGenericaExcel(`reporte-${tipoReporteGestion.toLowerCase()}-${base}`, `Reporte de ${tipoReporteGestion}`, headers, rows, fuente.rows.map((f) => f.TipoAdecuacion));
     }
+    const fuentePersonalizada = detalleReportesPorTipo.personalizados?.[tipoReporteGestion];
+    if (fuentePersonalizada) {
+      const nombreRubro = tipoReporteGestion.slice("RUBRO:".length);
+      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuentePersonalizada.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
+      const rows = fuentePersonalizada.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
+      return exportarTablaGenericaExcel(`reporte-${nombreRubro}-${base}`, `Reporte de ${nombreRubro}`, headers, rows, fuentePersonalizada.rows.map((f) => f.TipoAdecuacion));
+    }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
       const rows = boletasConductaFiltradas.map((b) => [String(b.CodigoBoleta || "").trim() || String(Number(b.Consecutivo || 0)).padStart(3, "0"), String(b.Fecha || "").slice(0, 10), [b.PrimerApellido || "", b.SegundoApellido || "", b.Nombre || ""].join(" ").replace(/\s+/g, " ").trim(), b.Seccion || "", b.NombreFuncionario || "", `${Number(b.TotalEnviosExitosos || 0)} / ${Number(b.TotalEnviosCorreo || 0)}`]);
@@ -2875,6 +2984,13 @@ export default function GestionProfePage() {
       const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuente.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
       const rows = fuente.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
       return exportarTablaGenericaPdf(`Reporte de ${tipoReporteGestion}`, headers, rows, fuente.rows.map((f) => f.TipoAdecuacion));
+    }
+    const fuentePersonalizada = detalleReportesPorTipo.personalizados?.[tipoReporteGestion];
+    if (fuentePersonalizada) {
+      const nombreRubro = tipoReporteGestion.slice("RUBRO:".length);
+      const headers = ["Estudiante", "Identificación", "Actividades registradas/calificadas", ...fuentePersonalizada.columns.map((c) => c.nombre), "% evaluado", "% ganado", "Promedio final"];
+      const rows = fuentePersonalizada.rows.map((f) => [f.NombreCompleto, f.Identificacion, f.RegistradasCalificadas, ...f.cols, `${Number(f.porcentajeEvaluado || 0).toFixed(2)}%`, `${Number(f.porcentajeGanado || 0).toFixed(2)}%`, `${Number(promedioFinalPorEstudiante.get(Number(f.EstudianteId)) || 0).toFixed(2)}%`]);
+      return exportarTablaGenericaPdf(`Reporte de ${nombreRubro}`, headers, rows, fuentePersonalizada.rows.map((f) => f.TipoAdecuacion));
     }
     if (tipoReporteGestion === "BOLETAS") {
       const headers = ["N°", "Fecha", "Estudiante", "Sección", "Funcionario", "Envíos correo"];
@@ -14838,14 +14954,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     <div className="gestion-report-type-selector">
                       <span className="gestion-report-type-selector__label">Tipo de reporte</span>
                       <select className="gestion-report-type-selector__select" value={tipoReporteGestion} onChange={(e) => setTipoReporteGestion(e.target.value as TipoReporteGestion)}>
-                        <option value="ASISTENCIA">Reporte de Asistencia</option>
-                        <option value="COTIDIANO">Reporte de Cotidiano</option>
-                        <option value="TAREAS">Reporte de Tareas</option>
-                        <option value="EXAMENES">Reporte de Exámenes</option>
-                        <option value="MENSAJES">Reporte de mensajes enviados</option>
-                        <option value="BITACORA">Reporte de Bitácora</option>
-                        <option value="BOLETAS">Reporte de Boletas</option>
-                        <option value="NOTAS">Reporte de Notas de Asistencia</option>
+                        {opcionesReporteGestion.map((opcion) => <option key={opcion.value} value={opcion.value}>{opcion.label}</option>)}
                       </select>
                     </div>
                   </div>
@@ -15233,6 +15342,44 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     </table>
                   </div>
                 )}
+
+                {tipoReporteGestion.startsWith("RUBRO:") && detalleReportesPorTipo.personalizados?.[tipoReporteGestion] && (() => {
+                  const nombreRubro = tipoReporteGestion.slice("RUBRO:".length);
+                  const fuente = detalleReportesPorTipo.personalizados[tipoReporteGestion];
+                  return (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="adecuacion-zebra-list" style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", color: "#0f172a", background: "#ffffff" }}>
+                        <thead>
+                          <tr>
+                            <th className="gestion-report-active-title" colSpan={5 + fuente.columns.length} style={{ textAlign: "left", background: "#ecfeff", color: "#0f172a", border: "1px solid #99f6e4", padding: "8px 10px", fontWeight: 800 }}>
+                              Reporte de {nombreRubro}: {fuente.columns.length} actividades
+                            </th>
+                          </tr>
+                          <tr>
+                            <th>Estudiante</th>
+                            <th>Identificación</th>
+                            <th>Actividades registradas/calificadas</th>
+                            {fuente.columns.map((col) => <th key={`custom-col-${col.actividadId}`}>{col.nombre}</th>)}
+                            <th>% evaluado</th>
+                            <th>% ganado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fuente.rows.map((fila) => (
+                            <tr key={fila.EstudianteId} className="adecuacion-student-row" data-adecuacion={getAdecuacionStyleKind(fila.TipoAdecuacion) || undefined} style={{ background: getTransferRowBg(Number(fila.EstudianteId), "#ffffff") }}>
+                              <td>{fila.NombreCompleto}</td>
+                              <td>{fila.Identificacion}</td>
+                              <td style={{ textAlign: "center" }}>{fila.RegistradasCalificadas}</td>
+                              {fila.cols.map((valor, idx) => <td key={`custom-v-${fila.EstudianteId}-${idx}`} style={{ textAlign: "center" }}>{valor}</td>)}
+                              <td style={{ textAlign: "center" }}>{Number(fila.porcentajeEvaluado || 0).toFixed(2)}%</td>
+                              <td style={{ textAlign: "center" }}>{Number(fila.porcentajeGanado || 0).toFixed(2)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
 
                 {tipoReporteGestion === "BOLETAS" && (
                   <div style={{ display: "grid", gap: "10px" }}>

@@ -7,6 +7,45 @@ export function normalizeWhatsAppPhone(raw?: string | null) {
   return `+${normalized}`;
 }
 
+export function buildWhatsAppWabaPayload(params: {
+  fromNumber: string;
+  toNumber: string;
+  message: string;
+}) {
+  const mode = String(process.env.WHATSAPP_WABA_MESSAGE_MODE || "template")
+    .trim()
+    .toLowerCase();
+
+  if (mode === "session") {
+    return {
+      from_number: params.fromNumber,
+      to_number: params.toNumber,
+      text: params.message
+    };
+  }
+
+  const templateUuid = String(process.env.WHATSAPP_WABA_TEMPLATE_UUID || "").trim();
+  if (!templateUuid) return null;
+
+  let bodyParams = [params.message];
+  const configuredParams = String(process.env.WHATSAPP_WABA_TEMPLATE_BODY_PARAMS_JSON || "").trim();
+  if (configuredParams) {
+    try {
+      const parsed = JSON.parse(configuredParams);
+      if (Array.isArray(parsed)) bodyParams = parsed.map((item) => String(item ?? ""));
+    } catch {
+      // Se conserva el mensaje completo como {{1}} cuando la configuración no es JSON válido.
+    }
+  }
+
+  return {
+    from_number: params.fromNumber,
+    to_number: params.toNumber,
+    template_uuid: templateUuid,
+    params: { body: bodyParams }
+  };
+}
+
 export function isAdultByBirthDate(fechaNacimiento?: string | Date | null) {
   if (!fechaNacimiento) return false;
   const dob = new Date(fechaNacimiento);

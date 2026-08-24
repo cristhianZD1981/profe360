@@ -21,8 +21,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Document, Header, ImageRun, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType, AlignmentType, BorderStyle, HeadingLevel, TableLayoutType } from "docx";
 import { sendEmail, sendEmailsBatch } from "../../services/email.service";
+import { sendWhatsAppNotification } from "../../services/whatsapp.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
-import { normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
+import { buildWhatsAppWabaPayload, normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 import {
   getGrupoClaseEstudiantesPermitidos,
   getGrupoClasePermitido,
@@ -3548,7 +3549,9 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
   }
 
   const provider = String(process.env.WHATSAPP_PROVIDER || "").trim().toLowerCase();
-  const url = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim();
+  const url = String(process.env.WHATSAPP_WEBHOOK_URL || "").trim() ||
+    (provider === "2chat-waba" ? "https://api.p.2chat.io/open/waba/send-message" :
+      provider === "2chat" ? "https://api.p.2chat.io/open/whatsapp/send-message" : "");
   const token = String(process.env.WHATSAPP_WEBHOOK_TOKEN || "").trim();
   const fromNumber = String(process.env.WHATSAPP_FROM_NUMBER || "").trim();
   const authHeader = String(process.env.WHATSAPP_WEBHOOK_AUTH_HEADER || "Authorization").trim() || "Authorization";
@@ -3567,6 +3570,12 @@ async function sendWhatsAppSeguimiento(params: { telefono?: string | null; mensa
       to_number: telefono,
       text: params.mensaje
     };
+  } else if (provider === "2chat-waba") {
+    if (!fromNumber) return { enviado: false, modo: "webhook", motivo: "Falta WHATSAPP_FROM_NUMBER para provider 2chat-waba" };
+    const wabaPayload = buildWhatsAppWabaPayload({ fromNumber, toNumber: telefono, message: params.mensaje });
+    if (!wabaPayload) return { enviado: false, modo: "webhook", motivo: "Falta WHATSAPP_WABA_TEMPLATE_UUID para mensajes WABA" };
+    headers["X-User-API-Key"] = token;
+    payload = wabaPayload;
   } else {
     headers[authHeader] = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
     payload = {
@@ -6407,9 +6416,16 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
             autorizaWhatsAppEncargado: !!estudiante.AutorizaWhatsAppEncargado
           });
           for (const telefono of telefonos) {
-            const whatsapp = await sendWhatsAppSeguimiento({
+            const whatsapp = await sendWhatsAppNotification({
+              institucionId: Number(asignacion.InstitucionId),
+              grupoId: Number(grupoId),
+              grupoClaseId: Number(grupoClaseId || 0) || undefined,
+              estudianteId,
+              solicitadoPorUsuarioId: getUserId(req),
+              tipoMensaje: "ASISTENCIA",
               telefono,
-              mensaje: texto
+              mensaje: texto,
+              templateParams: [texto]
             });
             notificaciones.push({ estudianteId, canal: "whatsapp", telefono, ...whatsapp });
             if (whatsapp?.enviado === true) waEnviado = true;

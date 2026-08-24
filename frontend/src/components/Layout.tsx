@@ -72,6 +72,11 @@ const items: MenuItem[] = [
     allowedRoles: PARAMETRIZACIONES_ROLES
   },
   {
+    label: "WhatsApp",
+    path: "/super-admin/whatsapp",
+    allowedRoles: SUPER_ADMIN_ROLES
+  },
+  {
     label: "Reporte y Certificaciones",
     path: "/reportes",
     allowedRoles: REPORTE_CERTIFICACIONES_ROLES

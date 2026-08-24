@@ -4436,6 +4436,88 @@ router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (r
   return res.send(buffer);
 });
 
+router.get("/admin/whatsapp/filtros", async (req, res) => {
+  if (!isSuperAdmin(req)) return res.status(403).json({ ok: false, message: "Solo SUPER_ADMIN puede consultar este reporte" });
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT InstitucionId, COALESCE(NULLIF(NombreComercial, N''), Nombre) AS Nombre
+      FROM dbo.Institucion
+      WHERE Activo = 1
+      ORDER BY Nombre
+    `);
+    return ok(res, {
+      instituciones: result.recordset,
+      tipos: ["ASISTENCIA", "TAREA", "BOLETA", "EVALUACION", "GENERAL"]
+    });
+  } catch (error) {
+    console.error("Error cargando filtros del reporte WhatsApp:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar los filtros" });
+  }
+});
+
+router.get("/admin/whatsapp", async (req, res) => {
+  if (!isSuperAdmin(req)) return res.status(403).json({ ok: false, message: "Solo SUPER_ADMIN puede consultar este reporte" });
+  try {
+    const pool = await getPool();
+    const fechaHasta = String(req.query.fechaHasta || new Date().toISOString().slice(0, 10));
+    const fechaDesde = String(req.query.fechaDesde || new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10));
+    const institucionId = Number(req.query.institucionId || 0) || null;
+    const tipo = String(req.query.tipo || "").trim().toUpperCase() || null;
+    const addFilters = (request: any) => request
+      .input("fechaDesde", sql.Date, fechaDesde)
+      .input("fechaHasta", sql.Date, fechaHasta)
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipo", sql.NVarChar(40), tipo);
+    const filters = `
+      w.CreatedAt >= @fechaDesde
+      AND w.CreatedAt < DATEADD(day, 1, @fechaHasta)
+      AND (@institucionId IS NULL OR w.InstitucionId = @institucionId)
+      AND (@tipo IS NULL OR w.TipoMensaje = @tipo)
+    `;
+    const summaryResult = await addFilters(pool.request()).query(`
+        SELECT
+          COUNT_BIG(*) AS Total,
+          SUM(CASE WHEN w.Estado IN (N'ACEPTADO', N'ENVIADO') THEN 1 ELSE 0 END) AS Enviados,
+          SUM(CASE WHEN w.Estado = N'FALLIDO' THEN 1 ELSE 0 END) AS Fallidos,
+          SUM(CASE WHEN w.Estado = N'PENDIENTE' THEN 1 ELSE 0 END) AS Pendientes,
+          SUM(CASE WHEN w.Estado = N'OMITIDO' THEN 1 ELSE 0 END) AS Omitidos,
+          SUM(CASE WHEN w.EsFallback = 1 THEN 1 ELSE 0 END) AS Fallback
+        FROM dbo.WhatsAppEnvio w
+        WHERE ${filters}
+      `);
+    const rowsResult = await addFilters(pool.request()).query(`
+        SELECT TOP 1000
+          w.WhatsAppEnvioId,
+          w.CreatedAt,
+          w.InstitucionId,
+          COALESCE(NULLIF(i.NombreComercial, N''), i.Nombre) AS InstitucionNombre,
+          w.TipoMensaje,
+          w.Estado,
+          w.TelefonoDestino,
+          w.NumeroOrigenSnapshot,
+          w.EsFallback,
+          w.MotivoError,
+          g.Nombre AS Seccion,
+          LTRIM(RTRIM(CONCAT(ISNULL(p.Nombre, N''), N' ', ISNULL(p.PrimerApellido, N''), N' ', ISNULL(p.SegundoApellido, N'')))) AS Profesor
+        FROM dbo.WhatsAppEnvio w
+        LEFT JOIN dbo.Institucion i ON i.InstitucionId = w.InstitucionId
+        LEFT JOIN dbo.Grupo g ON g.GrupoId = w.GrupoId
+        LEFT JOIN dbo.Usuario p ON p.UsuarioId = w.ProfesorUsuarioId
+        WHERE ${filters}
+        ORDER BY w.CreatedAt DESC, w.WhatsAppEnvioId DESC
+      `);
+    return ok(res, {
+      filtros: { fechaDesde, fechaHasta, institucionId, tipo },
+      resumen: summaryResult.recordset[0] || {},
+      rows: rowsResult.recordset
+    });
+  } catch (error) {
+    console.error("Error consultando reporte WhatsApp:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar el reporte de WhatsApp" });
+  }
+});
+
 router.get("/admin/consecutivos/filtros", async (req, res) => {
   if (!isSuperAdmin(req)) {
     return res.status(403).json({ ok: false, message: "Solo el super admin puede consultar estos filtros" });

@@ -744,7 +744,7 @@ export type AsistenciaNotificacionEstado = Record<string, { correoEnviado?: bool
 
 export type NoteDrafts = Record<string, string>;
 export type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "bitacora" | "reportes";
-export type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS" | "BITACORA";
+export type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS" | "BITACORA" | `RUBRO:${string}`;
 
 
 export type HorarioBloque = {

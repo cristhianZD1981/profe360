@@ -837,6 +837,9 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [profesGuia12Docentes, setProfesGuia12Docentes] = useState<DocenteCatalogo[]>([]);
   const [profesGuia12Grupos, setProfesGuia12Grupos] = useState<Grupo[]>([]);
   const [profesGuia12Anios, setProfesGuia12Anios] = useState<AnioLectivo[]>([]);
+  const [whatsappQrImageUrl, setWhatsappQrImageUrl] = useState("");
+  const [whatsappQrLoading, setWhatsappQrLoading] = useState(false);
+  const [whatsappQrConnected, setWhatsappQrConnected] = useState(false);
   const [bloquesCatalogo, setBloquesCatalogo] = useState<BloqueHorario[]>([]);
   const [bloques, setBloques] = useState<BloqueHorario[]>([]);
   const [gruposMateria, setGruposMateria] = useState<GrupoMateria[]>([]);
@@ -3853,6 +3856,57 @@ function resetMatriculaForm() {
     };
   }
 
+  useEffect(() => {
+    const institucionId = Number(user?.institucionId || 0);
+    if (!institucionId || !whatsappQrImageUrl || whatsappQrConnected) return;
+    let cancelled = false;
+    let checking = false;
+
+    const verifyConnection = async () => {
+      if (checking || cancelled) return;
+      checking = true;
+      try {
+        const response = await api.get("/instituciones/" + institucionId + "/whatsapp/qr/estado");
+        if (!cancelled && response.data?.data?.connected) {
+          setWhatsappQrConnected(true);
+          setWhatsappQrImageUrl("");
+          setMessage("WhatsApp conectado y verificado correctamente.");
+        }
+      } catch (error) {
+        console.error("No se pudo verificar todavía la conexión QR:", error);
+      } finally {
+        checking = false;
+      }
+    };
+
+    void verifyConnection();
+    const timer = window.setInterval(() => void verifyConnection(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user?.institucionId, whatsappQrImageUrl, whatsappQrConnected]);
+
+  async function conectarWhatsAppQr() {
+    const institucionId = Number(user?.institucionId || 0);
+    if (!institucionId) {
+      setErrorMessage("No se encontró la institución del usuario");
+      return;
+    }
+    setWhatsappQrLoading(true);
+    setErrorMessage("");
+    try {
+      const response = await api.post(`/instituciones/${institucionId}/whatsapp/qr/conectar`);
+      setWhatsappQrImageUrl(response.data?.data?.qrCodeImageUrl || "");
+      setWhatsappQrConnected(Boolean(response.data?.data?.connected));
+      setMessage(response.data?.data?.connected ? "WhatsApp ya está conectado." : "QR generado. Escanealo desde WhatsApp - Dispositivos vinculados.");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo generar el QR de WhatsApp");
+    } finally {
+      setWhatsappQrLoading(false);
+    }
+  }
+
   async function handleConsecutivosSubmit(e: FormEvent) {
     e.preventDefault();
     setLoadingConsecutivos(true);
@@ -4188,6 +4242,21 @@ function resetMatriculaForm() {
 
         {tab === "mensajes" && (
           <div className="stack">
+            {user?.roles?.includes("ADMINISTRATIVO") && (
+              <div className="card" style={{ display: "grid", gap: "10px" }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>Conexión de WhatsApp</h3>
+                  <p style={{ margin: "6px 0 0" }}>Si la institución utiliza WhatsApp Web mediante QR, conectá aquí el teléfono autorizado.</p>
+                </div>
+                <button type="button" className="primary-btn" onClick={conectarWhatsAppQr} disabled={whatsappQrLoading} style={{ width: "fit-content" }}>
+                  {whatsappQrLoading ? "Generando QR..." : "Conectar WA"}
+                </button>
+                <span style={{ width: "fit-content", padding: "8px 14px", borderRadius: "999px", fontWeight: 800, color: whatsappQrConnected ? "#065f46" : "#92400e", background: whatsappQrConnected ? "#a7f3d0" : "#fef3c7", border: `2px solid ${whatsappQrConnected ? "#10b981" : "#f59e0b"}` }}>
+                  {whatsappQrConnected ? "CONECTADO" : whatsappQrImageUrl ? "ESPERANDO ESCANEO" : "SIN VERIFICAR"}
+                </span>
+                {whatsappQrImageUrl && <img src={whatsappQrImageUrl} alt="Código QR de WhatsApp" style={{ width: "260px", height: "260px", background: "#fff", padding: "10px", borderRadius: "12px" }} />}
+              </div>
+            )}
             <div className="card">
               <h3>Mensajes para informar al encargado</h3>
               <p style={{ marginTop: 0 }}>Definí plantillas para cotidiano, tarea, asistencia y exámenes. Se pueden configurar por nivel 1/2/3 o generales.</p>
