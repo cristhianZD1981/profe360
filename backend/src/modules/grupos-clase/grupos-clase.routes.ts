@@ -325,7 +325,7 @@ router.get("/catalogos", async (req, res) => {
         .query(`
         SELECT AnioLectivoId, Nombre, FechaInicio, FechaFin, Activo
         FROM dbo.AnioLectivo
-        WHERE (InstitucionId = @institucionId OR EsGlobal = 1)
+        WHERE InstitucionId = @institucionId
         ORDER BY Activo DESC, FechaInicio DESC, AnioLectivoId DESC;
 
         SELECT p.PeriodoId, p.AnioLectivoId, p.Nombre, p.NumeroOrden, p.FechaInicio, p.FechaFin, p.Activo

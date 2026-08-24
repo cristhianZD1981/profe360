@@ -1546,7 +1546,7 @@ router.get("/", async (req, res) => {
     const result = await pool
       .request()
       .input("institucionId", sql.Int, req.auth.institucionId)
-      .input("q", sql.NVarChar, `%${q}%`)
+      .input("q", sql.NVarChar, q)
       .input("incluirInactivos", sql.Bit, incluirInactivos)
       .input("offset", sql.Int, offset)
       .input("pageSize", sql.Int, pageSize)
@@ -1584,6 +1584,9 @@ router.get("/", async (req, res) => {
             e.Observaciones,
             e.ObservacionMedica,
             e.Activo,
+            matriculaActual.Seccion,
+            matriculaActual.GrupoNombre,
+            matriculaActual.GrupoNivel,
             ${suspensionVigenteSelectSql}
           FROM dbo.Estudiante e
           LEFT JOIN dbo.TipoEstudiante te
@@ -1591,19 +1594,50 @@ router.get("/", async (req, res) => {
           LEFT JOIN dbo.RutaTransporte rt
             ON rt.RutaTransporteId = e.RutaTransporteId
           ${getSuspensionVigenteApplySql("e")}
+          OUTER APPLY (
+            SELECT TOP 1
+              COALESCE(
+                NULLIF(LTRIM(RTRIM(md.SeccionTexto)), N''),
+                NULLIF(LTRIM(RTRIM(g.Nombre)), N''),
+                NULLIF(LTRIM(RTRIM(g.Nivel)), N''),
+                N''
+              ) AS Seccion,
+              g.Nombre AS GrupoNombre,
+              g.Nivel AS GrupoNivel
+            FROM dbo.Matricula m
+            INNER JOIN dbo.AnioLectivo al
+              ON al.AnioLectivoId = m.AnioLectivoId
+             AND al.InstitucionId = @institucionId
+             AND al.Activo = 1
+            LEFT JOIN dbo.Grupo g
+              ON g.GrupoId = m.GrupoId
+            LEFT JOIN dbo.MatriculaDetalle md
+              ON md.MatriculaId = m.MatriculaId
+            WHERE m.EstudianteId = e.EstudianteId
+              AND m.Estado = N'Activa'
+            ORDER BY al.FechaInicio DESC, m.MatriculaId DESC
+          ) matriculaActual
           WHERE e.InstitucionId = @institucionId
             AND (@incluirInactivos = 1 OR e.Activo = 1)
             AND (
-              @q = '%%'
-              OR e.Identificacion LIKE @q
-              OR e.Nombre LIKE @q
-              OR e.PrimerApellido LIKE @q
-              OR e.SegundoApellido LIKE @q
-              OR e.Correo LIKE @q
-              OR e.Telefono LIKE @q
-              OR e.Nacionalidad LIKE @q
-              OR te.Descripcion LIKE @q
-              OR rt.Descripcion LIKE @q
+              @q = N''
+              OR NOT EXISTS (
+                SELECT 1
+                FROM STRING_SPLIT(LTRIM(RTRIM(@q)), N' ') termino
+                WHERE LTRIM(RTRIM(termino.value)) <> N''
+                  AND CONCAT(
+                    ISNULL(e.Identificacion, N''), N' ',
+                    ISNULL(e.Nombre, N''), N' ',
+                    ISNULL(e.PrimerApellido, N''), N' ',
+                    ISNULL(e.SegundoApellido, N''), N' ',
+                    ISNULL(e.Correo, N''), N' ',
+                    ISNULL(e.Telefono, N''), N' ',
+                    ISNULL(e.Nacionalidad, N''), N' ',
+                    ISNULL(te.Descripcion, N''), N' ',
+                    ISNULL(rt.Descripcion, N''), N' ',
+                    ISNULL(matriculaActual.Seccion, N'')
+                  ) COLLATE Latin1_General_100_CI_AI NOT LIKE N'%' + LTRIM(RTRIM(termino.value)) + N'%'
+              )
             )
           )
         SELECT
@@ -2679,6 +2713,9 @@ router.get("/:id/detalle", async (req, res) => {
           e.Observaciones,
           e.ObservacionMedica,
           e.Activo,
+          matriculaActual.Seccion,
+          matriculaActual.GrupoNombre,
+          matriculaActual.GrupoNivel,
           ${suspensionVigenteSelectSql}
         FROM dbo.Estudiante e
         LEFT JOIN dbo.TipoEstudiante te
@@ -2686,6 +2723,29 @@ router.get("/:id/detalle", async (req, res) => {
         LEFT JOIN dbo.RutaTransporte rt
           ON rt.RutaTransporteId = e.RutaTransporteId
         ${getSuspensionVigenteApplySql("e")}
+        OUTER APPLY (
+          SELECT TOP 1
+            COALESCE(
+              NULLIF(LTRIM(RTRIM(md.SeccionTexto)), N''),
+              NULLIF(LTRIM(RTRIM(g.Nombre)), N''),
+              NULLIF(LTRIM(RTRIM(g.Nivel)), N''),
+              N''
+            ) AS Seccion,
+            g.Nombre AS GrupoNombre,
+            g.Nivel AS GrupoNivel
+          FROM dbo.Matricula m
+          INNER JOIN dbo.AnioLectivo al
+            ON al.AnioLectivoId = m.AnioLectivoId
+           AND al.InstitucionId = @institucionId
+           AND al.Activo = 1
+          LEFT JOIN dbo.Grupo g
+            ON g.GrupoId = m.GrupoId
+          LEFT JOIN dbo.MatriculaDetalle md
+            ON md.MatriculaId = m.MatriculaId
+          WHERE m.EstudianteId = e.EstudianteId
+            AND m.Estado = N'Activa'
+          ORDER BY al.FechaInicio DESC, m.MatriculaId DESC
+        ) matriculaActual
         WHERE e.EstudianteId = @id
           AND e.InstitucionId = @institucionId
       `);

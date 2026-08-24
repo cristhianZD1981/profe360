@@ -32,6 +32,9 @@ type Student = {
   TipoDiscapacidad?: string | null;
   Enfermedad: string | null;
   Observaciones: string | null;
+  Seccion?: string | null;
+  GrupoNombre?: string | null;
+  GrupoNivel?: string | null;
   RutaTransporteId?: number | null;
   RutaTransporteDescripcion?: string | null;
   RutaTransporteHabitual: string | null;
@@ -100,6 +103,18 @@ type StudentType = {
   Descripcion: string;
   Activo: boolean;
 };
+
+function getSectionNumber(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.replace(/\s*[-/]?\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+$/, "").trim() || text;
+}
+
+function getSubsection(value: unknown) {
+  const text = String(value || "").trim();
+  const match = text.match(/(?:^|[\s/-])([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)$/);
+  return match?.[1] || "";
+}
 
 type TipoAdecuacion = {
   TipoAdecuacionId: number;
@@ -2282,7 +2297,7 @@ export default function EstudiantesPage() {
                 <th>Teléfono</th>
                 <th>Tipo</th>
                 <th>Nivel de funcionamiento</th>
-                <th>Observaciones</th>
+                <th>Sección</th>
                 <th>Ruta</th>
                 <th>VB WhatsApp</th>
                 <th>Estado</th>
@@ -2327,7 +2342,10 @@ export default function EstudiantesPage() {
                     <td>{item.Telefono ?? ""}</td>
                     <td>{item.TipoEstudianteDescripcion ?? ""}</td>
                     <td>{item.NivelFuncionamiento ?? ""}</td>
-                    <td>{item.Observaciones ?? ""}</td>
+                    <td>
+                      <div>{getSectionNumber(item.Seccion || item.GrupoNombre || item.GrupoNivel)}</div>
+                      {getSubsection(item.Seccion) && <small>Subsección: {getSubsection(item.Seccion)}</small>}
+                    </td>
                     <td>{item.RutaTransporteDescripcion ?? item.RutaTransporteHabitual ?? ""}</td>
                     <td>{item.AutorizaWhatsAppEncargado ? "Sí" : "No"}</td>
                     <td>
@@ -2544,6 +2562,8 @@ export default function EstudiantesPage() {
                               <div><strong>Discapacidad:</strong> {detalleEstudiante.Discapacidad || ""}</div>
                               <div><strong>Tipo de discapacidad:</strong> {detalleEstudiante.TipoDiscapacidad || ""}</div>
                               <div><strong>Enfermedad:</strong> {detalleEstudiante.Enfermedad || ""}</div>
+                              <div><strong>Sección:</strong> {getSectionNumber(detalleEstudiante.Seccion || detalleEstudiante.GrupoNombre || detalleEstudiante.GrupoNivel)}</div>
+                              <div><strong>Subsección:</strong> {getSubsection(detalleEstudiante.Seccion) || ""}</div>
                               <div><strong>Ruta transporte:</strong> {detalleEstudiante.RutaTransporteDescripcion || detalleEstudiante.RutaTransporteHabitual || ""}</div>
                               <div><strong>VB WhatsApp encargado:</strong> {detalleEstudiante.AutorizaWhatsAppEncargado ? "Sí" : "No"}</div>
                               <div><strong>Observaciones:</strong> {detalleEstudiante.Observaciones || ""}</div>
