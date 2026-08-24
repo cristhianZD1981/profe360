@@ -4439,12 +4439,43 @@ router.get("/certificaciones/constancia-estudio/:certificacionId/word", async (r
 router.get("/admin/whatsapp/filtros", async (req, res) => {
   if (!isSuperAdmin(req)) return res.status(403).json({ ok: false, message: "Solo SUPER_ADMIN puede consultar este reporte" });
   try {
+    res.setHeader("Cache-Control", "no-store");
     const pool = await getPool();
     const result = await pool.request().query(`
-      SELECT InstitucionId, COALESCE(NULLIF(NombreComercial, N''), Nombre) AS Nombre
-      FROM dbo.Institucion
-      WHERE Activo = 1
-      ORDER BY Nombre
+      SELECT
+        i.InstitucionId,
+        COALESCE(NULLIF(i.NombreComercial, N''), i.Nombre) AS Nombre,
+        i.NombreComercial,
+        UPPER(ISNULL(i.WhatsAppModo, N'NO_CONFIGURADO')) AS WhatsAppModo,
+        CASE
+          WHEN UPPER(ISNULL(i.WhatsAppModo, N'NO_CONFIGURADO')) = N'GENERICA' THEN ISNULL(genericChannel.Estado, N'DESCONECTADO')
+          ELSE ISNULL(ownChannel.Estado, N'DESCONECTADO')
+        END AS WhatsAppEstado,
+        CASE
+          WHEN UPPER(ISNULL(i.WhatsAppModo, N'NO_CONFIGURADO')) = N'GENERICA' THEN genericChannel.NumeroOrigen
+          ELSE ownChannel.NumeroOrigen
+        END AS WhatsAppNumero,
+        CASE
+          WHEN UPPER(ISNULL(i.WhatsAppModo, N'NO_CONFIGURADO')) = N'GENERICA' THEN genericChannel.TipoCanal
+          ELSE ownChannel.TipoCanal
+        END AS WhatsAppTipoCanal
+      FROM dbo.Institucion i
+      OUTER APPLY (
+        SELECT TOP 1 c.Estado, c.NumeroOrigen, c.TipoCanal
+        FROM dbo.WhatsAppCanal c
+        WHERE c.InstitucionId = i.InstitucionId AND c.EsFallback = 0
+        ORDER BY c.Activo DESC, c.WhatsAppCanalId DESC
+      ) ownChannel
+      OUTER APPLY (
+        SELECT TOP 1 c.Estado, c.NumeroOrigen, c.TipoCanal
+        FROM dbo.WhatsAppCanal c
+        INNER JOIN dbo.Institucion pi ON pi.InstitucionId = c.InstitucionId
+        WHERE (UPPER(LTRIM(RTRIM(pi.Nombre))) = N'PROFE360'
+            OR UPPER(LTRIM(RTRIM(ISNULL(pi.NombreComercial, N'')))) = N'PROFE360')
+        ORDER BY c.Activo DESC, c.WhatsAppCanalId DESC
+      ) genericChannel
+      WHERE i.Activo = 1
+      ORDER BY COALESCE(NULLIF(i.NombreComercial, N''), i.Nombre)
     `);
     return ok(res, {
       instituciones: result.recordset,

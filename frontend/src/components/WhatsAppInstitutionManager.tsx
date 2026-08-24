@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../lib/http";
 
-type Institution = { InstitucionId: number; Nombre: string; NombreComercial?: string | null; Activo?: boolean };
+type Institution = {
+  InstitucionId: number;
+  Nombre: string;
+  NombreComercial?: string | null;
+  Activo?: boolean;
+  WhatsAppModo?: Mode;
+  WhatsAppEstado?: string | null;
+  WhatsAppNumero?: string | null;
+  WhatsAppTipoCanal?: string | null;
+};
 type Mode = "NO_CONFIGURADO" | "GENERICA" | "PROPIO_API" | "PROPIO_QR";
 type Template = { tipoMensaje: string; nombre: string; templateUuid: string; cantidadParametrosBody: number; estado: string };
 type WabaChannel = {
@@ -22,6 +31,12 @@ const emptyTemplates = (): Template[] => templateTypes.map((tipoMensaje) => ({ t
 
 function dataOf(response: any) { return response?.data?.data ?? response?.data ?? {}; }
 function normalizePhone(value: string) { return value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, ""); }
+function channelTypeLabel(item: Institution) {
+  const type = String(item.WhatsAppTipoCanal || "").toUpperCase();
+  const typeLabel = type === "WHATSAPP_WEB" ? "QR" : type === "WABA" ? "API" : type || "-";
+  return item.WhatsAppModo === "GENERICA" ? `Genérico${typeLabel !== "-" ? ` · ${typeLabel}` : ""}` : typeLabel;
+}
+function isConnected(item: Institution) { return String(item.WhatsAppEstado || "").toUpperCase() === "CONECTADO"; }
 
 export default function WhatsAppInstitutionManager() {
   const [institutions, setInstitutions] = useState<Institution[]>([]);
@@ -68,6 +83,10 @@ export default function WhatsAppInstitutionManager() {
       : progress > 0 ? "Validando configuración"
       : "";
 
+  function updateInstitutionSummary(id: number, values: Partial<Institution>) {
+    setInstitutions((items) => items.map((item) => item.InstitucionId === id ? { ...item, ...values } : item));
+  }
+
   function stopProgress() {
     if (progressTimer.current !== null) window.clearInterval(progressTimer.current);
     progressTimer.current = null;
@@ -82,9 +101,9 @@ export default function WhatsAppInstitutionManager() {
   }
 
   async function loadInstitutions() {
-    const response = await api.get("/instituciones", { params: { q: "", incluirInactivas: false } });
+    const response = await api.get("/reportes/admin/whatsapp/filtros");
     const values = dataOf(response);
-    const list = Array.isArray(values) ? values : Array.isArray(values.items) ? values.items : [];
+    const list = Array.isArray(values.instituciones) ? values.instituciones : [];
     setInstitutions(list);
   }
 
@@ -108,11 +127,18 @@ export default function WhatsAppInstitutionManager() {
       setDisplayName(channel?.NombreVisible || "");
       setSelectedWabaUuid(channel?.TipoCanal === "WABA" ? channel?.CanalExternoId || "" : "");
       setActive(channel?.Activo !== false);
+      updateInstitutionSummary(id, {
+        WhatsAppModo: effectiveMode,
+        WhatsAppEstado: effectiveChannel?.Estado || "DESCONECTADO",
+        WhatsAppNumero: effectiveChannel?.NumeroOrigen || null,
+        WhatsAppTipoCanal: effectiveChannel?.TipoCanal || null
+      });
       if (effectiveChannel?.TipoCanal === "WHATSAPP_WEB" && effectiveChannel?.CanalExternoId) {
         const statusResponse = await api.get("/instituciones/" + effectiveChannel.InstitucionId + "/whatsapp/qr/estado");
         const isConnected = Boolean(dataOf(statusResponse).connected);
         setConnected(isConnected);
         setEffectiveStatus(isConnected ? "CONECTADO" : "DESCONECTADO");
+        updateInstitutionSummary(id, { WhatsAppEstado: isConnected ? "CONECTADO" : "DESCONECTADO" });
       }
       if (effectiveMode === "PROPIO_API" && channel?.TipoCanal === "WABA" && channel?.CanalExternoId) {
         try {
@@ -121,6 +147,10 @@ export default function WhatsAppInstitutionManager() {
           setConnected(Boolean(statusData.connected && statusData.enabled));
           setEffectiveStatus(statusData.estado || (statusData.connected ? "CONECTADO" : "PENDIENTE"));
           setEffectiveNumber(statusData.phoneNumber || channel.NumeroOrigen || "");
+          updateInstitutionSummary(id, {
+            WhatsAppEstado: statusData.connected && statusData.enabled ? "CONECTADO" : "DESCONECTADO",
+            WhatsAppNumero: statusData.phoneNumber || channel.NumeroOrigen || null
+          });
         } catch (statusError) {
           console.error("No se pudo actualizar el estado WABA:", statusError);
         }
@@ -150,6 +180,7 @@ export default function WhatsAppInstitutionManager() {
           setConnected(true);
           setEffectiveStatus("CONECTADO");
           setQrUrl("");
+          updateInstitutionSummary(selectedId, { WhatsAppEstado: "CONECTADO" });
           setMessage("WhatsApp conectado y verificado correctamente.");
         }
       } catch (err) {
@@ -213,6 +244,12 @@ export default function WhatsAppInstitutionManager() {
         stopProgress(); setProgress(100); setConnected(true); setQrUrl("");
         setMessage("WhatsApp conectado y verificado correctamente.");
         setEffectiveStatus("CONECTADO");
+        updateInstitutionSummary(selectedId, { WhatsAppModo: "PROPIO_QR", WhatsAppEstado: "CONECTADO", WhatsAppNumero: number || null, WhatsAppTipoCanal: "WHATSAPP_WEB" });
+      } else if (data.sourceNumberNotFound) {
+        stopProgress(); setProgress(0); setConnected(false); setQrUrl("");
+        setEffectiveStatus("DESCONECTADO");
+        setMessage(data.warning || "El número ya no existe en 2Chat. Usá Agregar/cambiar número para registrar otro.");
+        updateInstitutionSummary(selectedId, { WhatsAppEstado: "DESCONECTADO" });
       } else if (data.qrCodeImageUrl) {
         stopProgress(); setProgress(90); setQrUrl(data.qrCodeImageUrl);
         setEffectiveStatus("ESPERANDO ESCANEO");
@@ -281,6 +318,7 @@ export default function WhatsAppInstitutionManager() {
       const response = await api.post("/instituciones/" + selectedId + "/whatsapp/qr/desconectar");
       stopProgress(); setProgress(0); setConnected(false); setQrUrl("");
       setEffectiveStatus("DESCONECTADO");
+      updateInstitutionSummary(selectedId, { WhatsAppEstado: "DESCONECTADO" });
       setMessage(response.data?.message || "WhatsApp desconectado correctamente.");
     } catch (err: any) {
       stopProgress(); setProgress(0);
@@ -309,8 +347,16 @@ export default function WhatsAppInstitutionManager() {
       <div style={{ background: "#fff", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: 14, padding: 14, display: "grid", gap: 10 }}>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar institución" style={{ padding: 10, borderRadius: 8, border: "1px solid #94a3b8" }} />
         <div style={{ maxHeight: 430, overflowY: "auto", display: "grid", gap: 7 }}>
-          {filtered.map((item) => <button key={item.InstitucionId} type="button" onClick={() => setSelectedId(item.InstitucionId)} style={{ textAlign: "left", padding: 11, borderRadius: 9, cursor: "pointer", border: selectedId === item.InstitucionId ? "2px solid #14b8a6" : "1px solid #cbd5e1", background: selectedId === item.InstitucionId ? "#ccfbf1" : "#fff", color: "#0f172a" }}>
+          {filtered.map((item) => <button key={item.InstitucionId} type="button" onClick={() => setSelectedId(item.InstitucionId)} style={{
+            textAlign: "left", padding: 11, borderRadius: 9, cursor: "pointer",
+            border: selectedId === item.InstitucionId ? "2px solid #14b8a6" : isConnected(item) ? "1px solid #22c55e" : "1px solid #cbd5e1",
+            background: selectedId === item.InstitucionId ? (isConnected(item) ? "#bbf7d0" : "#ccfbf1") : isConnected(item) ? "#f0fdf4" : "#fff",
+            color: "#0f172a"
+          }}>
             <strong>{item.Nombre}</strong>{item.NombreComercial && <small style={{ display: "block", color: "#64748b" }}>{item.NombreComercial}</small>}
+            <small style={{ display: "block", marginTop: 6, color: isConnected(item) ? "#047857" : "#b45309", fontWeight: 800 }}>
+              {isConnected(item) ? `CONECTADO · ${item.WhatsAppNumero || "Sin número"} · ${channelTypeLabel(item)}` : "DESCONECTADO"}
+            </small>
           </button>)}
         </div>
       </div>

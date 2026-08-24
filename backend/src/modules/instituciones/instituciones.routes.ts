@@ -16,6 +16,12 @@ function friendlyQrWarning(value: unknown) {
   return warning || null;
 }
 
+function isMissingWhatsAppSourceNumberError(error: unknown) {
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  return message.includes("source number not found")
+    || (message.includes("source number") && (message.includes("deleted") || message.includes("not found")));
+}
+
 function canAccessInstitution(req: any, id: number) {
   const isSuperAdmin = req.auth?.roles?.includes("SUPER_ADMIN") ?? false;
   return isSuperAdmin || Number(req.auth?.institucionId || 0) === id;
@@ -573,6 +579,26 @@ router.post("/:id/whatsapp/qr/conectar", requireRoles("SUPER_ADMIN", "ADMIN_INST
     }
     return ok(res, { connected: false, connectionStatus: latestStatus?.connection_status || "D", qrCode: null, qrCodeImageUrl: null, warning: friendlyQrWarning(latestQr?.warning) || "2Chat todavía está preparando el código QR. Presioná Conectar WA nuevamente en unos segundos." }, "2Chat está preparando el código QR");
   } catch (error: any) {
+    if (isMissingWhatsAppSourceNumberError(error)) {
+      console.warn("No se puede conectar un QR que ya no existe en 2Chat:", error?.message || error);
+      try {
+        const pool = await getPool();
+        const channel = await getWhatsAppChannel(pool, institucionId);
+        await pool.request()
+          .input("whatsappCanalId", sql.Int, channel?.WhatsAppCanalId)
+          .query("UPDATE dbo.WhatsAppCanal SET Estado = N'PENDIENTE', FechaUltimaValidacion = SYSDATETIME(), UpdatedAt = SYSDATETIME() WHERE WhatsAppCanalId = @whatsappCanalId");
+      } catch (persistError) {
+        console.warn("No se pudo actualizar el estado local del canal QR:", persistError);
+      }
+      return ok(res, {
+        connected: false,
+        connectionStatus: "D",
+        sourceNumberNotFound: true,
+        qrCode: null,
+        qrCodeImageUrl: null,
+        warning: "El número ya no existe en 2Chat. Usá Agregar/cambiar número para registrar otro."
+      }, "El número QR ya no existe en 2Chat");
+    }
     console.error("Error generando QR:", error);
     return res.status(500).json({ ok: false, message: error?.message || "No se pudo generar el QR" });
   }
@@ -593,6 +619,21 @@ router.get("/:id/whatsapp/qr/estado", requireRoles("SUPER_ADMIN", "ADMIN_INSTITU
       .query("UPDATE dbo.WhatsAppCanal SET Estado = @estado, FechaUltimaValidacion = SYSDATETIME(), UpdatedAt = SYSDATETIME() WHERE WhatsAppCanalId = @whatsappCanalId");
     return ok(res, { connected, connectionStatus: status?.connection_status || null }, connected ? "WhatsApp conectado correctamente" : "Esperando que se escanee el código QR");
   } catch (error: any) {
+    if (isMissingWhatsAppSourceNumberError(error)) {
+      console.warn("Estado QR no disponible en 2Chat; se trata como desconectado:", error?.message || error);
+      try {
+        const pool = await getPool();
+        const channel = await getWhatsAppChannel(pool, institucionId);
+        if (channel?.WhatsAppCanalId) {
+          await pool.request()
+            .input("whatsappCanalId", sql.Int, channel.WhatsAppCanalId)
+            .query("UPDATE dbo.WhatsAppCanal SET Estado = N'PENDIENTE', FechaUltimaValidacion = SYSDATETIME(), UpdatedAt = SYSDATETIME() WHERE WhatsAppCanalId = @whatsappCanalId");
+        }
+      } catch (persistError) {
+        console.warn("No se pudo actualizar el estado local del canal QR:", persistError);
+      }
+      return ok(res, { connected: false, connectionStatus: "D", sourceNumberNotFound: true }, "El número QR está desconectado o ya no existe en 2Chat");
+    }
     console.error("Error consultando estado QR:", error);
     return res.status(500).json({ ok: false, message: error?.message || "No se pudo consultar el estado de WhatsApp" });
   }
@@ -792,6 +833,7 @@ router.get("/:id/whatsapp", requireRoles("SUPER_ADMIN"), async (req, res) => {
   if (!institucionId || !canAccessInstitution(req, institucionId)) return res.status(403).json({ ok: false, message: "No tenés permisos para esta institución" });
 
   try {
+    res.setHeader("Cache-Control", "no-store");
     const pool = await getPool();
     const canal = await getWhatsAppChannel(pool, institucionId);
     const seleccion = await getInstitutionWhatsAppSelection(pool, institucionId);
