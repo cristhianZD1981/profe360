@@ -2173,7 +2173,11 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
       .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
     const adecuacionIds = parseMaybeJsonArray(req.body?.adecuacionIds)
       .map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0);
-    const plantillaNombre = String((req as any).file?.originalname || req.body?.plantillaNombre || "plantilla-apoyos-educativos.docx").slice(0, 255);
+    const plantillaFile = (req as any).file;
+    if (!plantillaFile?.buffer || !String(plantillaFile.originalname || "").trim()) {
+      return badRequest(res, "Cargá la plantilla Word para generar los informes educativos");
+    }
+    const plantillaNombre = String(plantillaFile.originalname).slice(0, 255);
 
     if (!grupoIds.length) {
       return badRequest(res, "Seleccioná al menos una sección");

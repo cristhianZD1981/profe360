@@ -30,6 +30,7 @@ import {
   getSuspensionVigenteApplySql,
   suspensionVigenteSelectSql
 } from "../estudiantes/estudiante-suspension.utils";
+import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
 
 const router = Router();
 router.use(requireAuth);
@@ -3384,6 +3385,8 @@ router.get("/gestion-profe", async (req, res) => {
     .input("desde", sql.Date, desde)
     .input("hasta", sql.Date, hasta);
 
+  request.input("anioLectivoId", sql.Int, anioLectivoId);
+
   if (tipo === "CONSTANCIA_ESTUDIO") {
     const result = await request.query(`
       SELECT
@@ -3404,6 +3407,44 @@ router.get("/gestion-profe", async (req, res) => {
       ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, g.Nombre, e.EstudianteId
     `);
     return ok(res, result.recordset);
+  }
+
+  if (tipo === "TRASLADOS_SECCIONES") {
+    await ensureMatriculaTrasladoHistorialTable(pool);
+    const result = await request.query(`
+      SELECT
+        e.EstudianteId,
+        LTRIM(RTRIM(CONCAT(ISNULL(e.PrimerApellido, N''),
+          CASE WHEN NULLIF(LTRIM(RTRIM(e.SegundoApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(e.SegundoApellido)) ELSE N'' END,
+          CASE WHEN NULLIF(LTRIM(RTRIM(e.Nombre)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(e.Nombre)) ELSE N'' END))) AS [Nombre],
+        e.Identificacion AS [Cédula],
+        go.Nombre AS [Sección anterior],
+        gd.Nombre AS [Nueva sección],
+        LTRIM(RTRIM(CONCAT(ISNULL(u.Nombre, N''),
+          CASE WHEN NULLIF(LTRIM(RTRIM(u.PrimerApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(u.PrimerApellido)) ELSE N'' END,
+          CASE WHEN NULLIF(LTRIM(RTRIM(u.SegundoApellido)), N'') IS NOT NULL THEN N' ' + LTRIM(RTRIM(u.SegundoApellido)) ELSE N'' END))) AS [Funcionario],
+        CONVERT(varchar(10), h.CreatedAt, 103) AS [Fecha],
+        NULLIF(LTRIM(RTRIM(h.Observacion)), N'') AS [Observación / justificación]
+      FROM dbo.MatriculaTrasladoHistorial h
+      INNER JOIN dbo.Estudiante e ON e.EstudianteId = h.EstudianteId
+      LEFT JOIN dbo.Grupo go ON go.GrupoId = h.GrupoIdOrigen
+      LEFT JOIN dbo.Grupo gd ON gd.GrupoId = h.GrupoIdDestino
+      LEFT JOIN dbo.Usuario u ON u.UsuarioId = h.UsuarioTrasladoId
+      WHERE h.InstitucionId = @institucionId
+        AND (@anioLectivoId IS NULL OR h.AnioLectivoId = @anioLectivoId)
+        AND (@desde IS NULL OR CONVERT(date, h.CreatedAt) >= @desde)
+        AND (@hasta IS NULL OR CONVERT(date, h.CreatedAt) <= @hasta)
+        AND (@grado IS NULL OR TRY_CONVERT(int, LEFT(LTRIM(gd.Nombre), PATINDEX('%[^0-9]%', LTRIM(gd.Nombre) + 'X') - 1)) = @grado)
+      ORDER BY h.CreatedAt DESC, h.MatriculaTrasladoHistorialId DESC
+    `);
+    const rows = result.recordset || [];
+    const hasObservations = rows.some((row: any) => String(row?.["Observación / justificación"] || "").trim() !== "");
+    return ok(res, hasObservations
+      ? rows
+      : rows.map((row: any) => {
+          const { ["Observación / justificación"]: _observacion, ...withoutObservation } = row;
+          return withoutObservation;
+        }));
   }
 
   if (tipo === "PROMEDIOS_ACADEMICOS") {

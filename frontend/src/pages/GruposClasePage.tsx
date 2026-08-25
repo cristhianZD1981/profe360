@@ -74,6 +74,9 @@ export default function GruposClasePage() {
   const [materiaSearch, setMateriaSearch] = useState("");
   const [profesorSearch, setProfesorSearch] = useState("");
   const [estudianteSearch, setEstudianteSearch] = useState("");
+  const [alumnoBusqueda, setAlumnoBusqueda] = useState("");
+  const [subgruposAlumno, setSubgruposAlumno] = useState<any[]>([]);
+  const [loadingBusquedaAlumno, setLoadingBusquedaAlumno] = useState(false);
   const horarioRequestKeyRef = useRef("");
   const horarioContextKeyRef = useRef("");
 
@@ -104,6 +107,52 @@ export default function GruposClasePage() {
   useEffect(() => {
     void loadBase();
   }, []);
+
+  async function buscarSubgruposPorAlumno() {
+    const q = alumnoBusqueda.trim();
+    if (!q) {
+      setSubgruposAlumno([]);
+      return;
+    }
+    setLoadingBusquedaAlumno(true);
+    setError("");
+    try {
+      const activeYear = (catalogos?.anios || []).find((item: any) => item.Activo);
+      const response = await api.get("/grupos-clase/buscar-estudiante", {
+        params: { q, anioLectivoId: activeYear?.AnioLectivoId || undefined }
+      });
+      setSubgruposAlumno(dataOf(response) || []);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.message || "No se pudieron consultar los subgrupos del alumno");
+      setSubgruposAlumno([]);
+    } finally {
+      setLoadingBusquedaAlumno(false);
+    }
+  }
+
+  function limpiarBusquedaSubgrupos() {
+    setAlumnoBusqueda("");
+    setSubgruposAlumno([]);
+    setLoadingBusquedaAlumno(false);
+  }
+
+  async function eliminarAlumnoDelSubgrupo(item: any) {
+    const nombreAlumno = [item.PrimerApellido, item.SegundoApellido, item.Nombre].filter(Boolean).join(" ");
+    if (!window.confirm(`¿Eliminar a ${nombreAlumno || "este alumno"} del subgrupo "${item.GrupoClaseNombre || "seleccionado"}"?`)) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      await api.delete(`/grupos-clase/estudiantes/${Number(item.GrupoClaseId)}/${Number(item.MatriculaId)}`);
+      setMessage("Alumno eliminado del subgrupo correctamente");
+      await buscarSubgruposPorAlumno();
+      await loadBase();
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.message || "No se pudo eliminar al alumno del subgrupo");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const periodos = useMemo(
     () => (catalogos?.periodos || []).filter(
@@ -844,7 +893,50 @@ export default function GruposClasePage() {
       </section>
 
       <section style={panel}>
-        <h3 style={{ marginTop: 0 }}>Grupos configurados</h3>
+        <h3 style={{ marginTop: 0 }}>Grupos configurados por Alumno</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap", marginBottom: 12 }}>
+          <label style={{ display: "grid", gap: 4, minWidth: 280 }}>
+            Buscar alumno
+            <input
+              style={{ ...input, marginTop: 0 }}
+              type="search"
+              value={alumnoBusqueda}
+              onChange={(e) => setAlumnoBusqueda(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void buscarSubgruposPorAlumno(); }}
+              placeholder="Nombre, apellidos o identificación"
+            />
+          </label>
+          <button type="button" onClick={() => void buscarSubgruposPorAlumno()} disabled={loadingBusquedaAlumno}>
+            {loadingBusquedaAlumno ? "Buscando..." : "Buscar subgrupos"}
+          </button>
+          <button type="button" onClick={limpiarBusquedaSubgrupos} disabled={loadingBusquedaAlumno || loading}>
+            Limpiar
+          </button>
+          {subgruposAlumno.length === 0 && alumnoBusqueda.trim() && !loadingBusquedaAlumno && (
+            <small style={{ color: "#64748b" }}>No se encontraron subgrupos para ese alumno.</small>
+          )}
+        </div>
+        {subgruposAlumno.length > 0 && <div style={{ overflowX: "auto", marginBottom: 14 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={tableHeader}>Alumno</th><th style={tableHeader}>Subgrupo</th><th style={tableHeader}>Materia</th><th style={tableHeader}>Secciones</th><th style={tableHeader}>Profesor(es)</th><th style={tableHeader}>Periodo</th><th style={tableHeader}>Acciones</th></tr></thead>
+            <tbody>{subgruposAlumno.map((item: any, index: number) => <tr key={`${item.GrupoClaseId}-${item.EstudianteId}`} style={{ background: index % 2 === 0 ? "#ffffff" : "#eaf1f8", color: "#0f172a" }}>
+              <td style={{ padding: 8 }}><strong>{item.PrimerApellido} {item.SegundoApellido} {item.Nombre}</strong><br /><small>{item.Identificacion}</small></td>
+              <td style={{ padding: 8 }}>{item.GrupoClaseNombre}</td>
+              <td style={{ padding: 8 }}>{item.MateriaNombre}</td>
+              <td style={{ padding: 8 }}>{item.Secciones || "-"}</td>
+              <td style={{ padding: 8 }}>{item.Profesores || "-"}</td>
+              <td style={{ padding: 8 }}>{item.AnioNombre} · {item.PeriodoNombre}</td>
+              <td style={{ padding: 8, whiteSpace: "nowrap" }}>
+                <button type="button" disabled={loading} onClick={() => void editGroup(Number(item.GrupoClaseId))}>Editar</button>{" "}
+                <button type="button" disabled={loading} onClick={() => void eliminarAlumnoDelSubgrupo(item)}>Eliminar</button>
+              </td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
+      </section>
+
+      <section style={panel}>
+        <h3 style={{ marginTop: 0 }}>Grupos de clase configurados</h3>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={tableHeader}>Grupo</th><th style={tableHeader}>Materia</th><th style={tableHeader}>Secciones</th><th style={tableHeader}>Profesor(es)</th><th style={tableHeader}>Estudiantes</th><th style={tableHeader}></th></tr></thead>

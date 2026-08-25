@@ -884,6 +884,133 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.get("/buscar-estudiante", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const q = text(req.query.q, 200);
+    const anioLectivoId = positiveId(req.query.anioLectivoId);
+    if (!q) return ok(res, []);
+
+    const pool = await getPool();
+    if (!await requireSchema(pool, res)) return;
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("anioLectivoId", sql.Int, anioLectivoId)
+      .input("q", sql.NVarChar(200), q)
+      .query(`
+        SELECT DISTINCT
+          gc.GrupoClaseId,
+          gc.Nombre AS GrupoClaseNombre,
+          gc.Descripcion AS GrupoClaseDescripcion,
+          gc.AnioLectivoId,
+          al.Nombre AS AnioNombre,
+          CASE WHEN gc.AplicaTodosPeriodos = 1
+            THEN N'Todos los periodos activos'
+            ELSE p.Nombre
+          END AS PeriodoNombre,
+          m.Nombre AS MateriaNombre,
+          e.EstudianteId,
+          gce.MatriculaId,
+          e.Identificacion,
+          e.Nombre,
+          e.PrimerApellido,
+          e.SegundoApellido,
+          STUFF((
+            SELECT N', ' + LTRIM(RTRIM(CONCAT(u.Nombre, N' ', ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N''))))
+            FROM dbo.GrupoClaseDocente gcd
+            INNER JOIN dbo.Usuario u ON u.UsuarioId = gcd.UsuarioId
+            WHERE gcd.GrupoClaseId = gc.GrupoClaseId AND gcd.Activo = 1
+            ORDER BY gcd.EsPrincipal DESC, u.PrimerApellido, u.SegundoApellido, u.Nombre
+            FOR XML PATH(N''), TYPE
+          ).value(N'.', N'nvarchar(max)'), 1, 2, N'') AS Profesores,
+          STUFF((
+            SELECT N', ' + g.Nombre
+            FROM dbo.GrupoClaseSeccion gcs
+            INNER JOIN dbo.Grupo g ON g.GrupoId = gcs.GrupoId
+            WHERE gcs.GrupoClaseId = gc.GrupoClaseId AND gcs.Activo = 1
+            ORDER BY g.Nombre
+            FOR XML PATH(N''), TYPE
+          ).value(N'.', N'nvarchar(max)'), 1, 2, N'') AS Secciones
+        FROM dbo.GrupoClaseEstudiante gce
+        INNER JOIN dbo.GrupoClase gc
+          ON gc.GrupoClaseId = gce.GrupoClaseId
+         AND gc.InstitucionId = @institucionId
+         AND gc.GrupoClaseCanonicoId IS NULL
+         AND gc.Activo = 1
+        INNER JOIN dbo.Matricula ma
+          ON ma.MatriculaId = gce.MatriculaId
+         AND ma.Estado <> N'Inactiva'
+        INNER JOIN dbo.Estudiante e
+          ON e.EstudianteId = ma.EstudianteId
+         AND e.InstitucionId = @institucionId
+        INNER JOIN dbo.AnioLectivo al
+          ON al.AnioLectivoId = gc.AnioLectivoId
+        LEFT JOIN dbo.Periodo p
+          ON p.PeriodoId = gc.PeriodoId
+        INNER JOIN dbo.Materia m
+          ON m.MateriaId = gc.MateriaId
+        WHERE gce.Activo = 1
+          AND (@anioLectivoId IS NULL OR gc.AnioLectivoId = @anioLectivoId)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM STRING_SPLIT(LTRIM(RTRIM(@q)), N' ') termino
+            WHERE LTRIM(RTRIM(termino.value)) <> N''
+              AND CONCAT(
+                ISNULL(e.Identificacion, N''), N' ',
+                ISNULL(e.Nombre, N''), N' ',
+                ISNULL(e.PrimerApellido, N''), N' ',
+                ISNULL(e.SegundoApellido, N'')
+              ) COLLATE Latin1_General_100_CI_AI NOT LIKE N'%' + LTRIM(RTRIM(termino.value)) + N'%'
+          )
+        ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre, gc.Nombre;
+      `);
+    return ok(res, result.recordset || []);
+  } catch (error) {
+    console.error("Error buscando subgrupos por estudiante:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron consultar los subgrupos del estudiante" });
+  }
+});
+
+router.delete("/estudiantes/:grupoClaseId/:matriculaId", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const grupoClaseId = positiveId(req.params.grupoClaseId);
+    const matriculaId = positiveId(req.params.matriculaId);
+    if (!grupoClaseId || !matriculaId) return badRequest(res, "Grupo o matrícula inválidos");
+    const pool = await getPool();
+    if (!await requireSchema(pool, res)) return;
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("grupoClaseId", sql.Int, grupoClaseId)
+      .input("matriculaId", sql.Int, matriculaId)
+      .query(`
+        UPDATE gce
+        SET Activo = 0,
+            FechaHasta = COALESCE(FechaHasta, CONVERT(date, SYSDATETIME())),
+            UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.GrupoClaseEstudianteId
+        FROM dbo.GrupoClaseEstudiante gce
+        INNER JOIN dbo.GrupoClase gc ON gc.GrupoClaseId = gce.GrupoClaseId
+        INNER JOIN dbo.Matricula ma ON ma.MatriculaId = gce.MatriculaId
+        INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+        WHERE gce.GrupoClaseId = @grupoClaseId
+          AND gce.MatriculaId = @matriculaId
+          AND gce.Activo = 1
+          AND gc.InstitucionId = @institucionId
+          AND e.InstitucionId = @institucionId;
+      `);
+    if (!result.recordset[0]) {
+      return res.status(404).json({ ok: false, message: "El alumno no pertenece activamente a ese subgrupo" });
+    }
+    return ok(res, { grupoClaseId, matriculaId }, "Alumno eliminado del subgrupo correctamente");
+  } catch (error) {
+    console.error("Error eliminando alumno del grupo de clase:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar al alumno del subgrupo" });
+  }
+});
+
 router.get("/:grupoClaseId", async (req, res) => {
   try {
     const institucionId = getInstitutionId(req, res);

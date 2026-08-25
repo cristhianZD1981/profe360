@@ -9908,9 +9908,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     </table>
                   </div>
                   <label style={{ display: "grid", gap: "6px", color: "#e5eefb", fontWeight: 700 }}>
-                    Cargar plantilla Word
+                    Cargar plantilla Word <span style={{ color: "#fca5a5" }}>* Obligatoria</span>
                     <input
                       type="file"
+                      required
                       accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                       onChange={(event) => setApoyoEducativoPlantilla(event.target.files?.[0] || null)}
                       style={{ color: "#f8fafc" }}

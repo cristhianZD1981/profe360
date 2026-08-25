@@ -12480,6 +12480,23 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       ? `AND h.Mes IN (${meses.map((_, index) => `@mes${index}`).join(", ")})`
       : "";
 
+    // Debe coincidir con la disponibilidad usada por GET /planeamiento-ia/habilidades:
+    // una habilidad puede ser propia, global, disponible para todas o estar
+    // autorizada explícitamente para la institución actual.
+    const disponibilidadHabilidadSql = `
+      (
+        h.InstitucionId = @institucionId
+        OR h.InstitucionId IS NULL
+        OR ISNULL(h.DisponibleTodos, 1) = 1
+        OR EXISTS (
+          SELECT 1
+          FROM dbo.PlaneamientoHabilidadInstitucion hi
+          WHERE hi.PlaneamientoHabilidadId = h.PlaneamientoHabilidadId
+            AND hi.InstitucionId = @institucionId
+        )
+      )
+    `;
+
     const materiaCompatibleSql = `
       (
         h.MateriaId = @materiaId
@@ -12515,7 +12532,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       LEFT JOIN dbo.Materia m ON m.MateriaId = h.MateriaId
       CROSS JOIN (SELECT TOP 1 Nombre FROM dbo.Materia WHERE MateriaId = @materiaId) mref
       WHERE h.PlaneamientoHabilidadId IN (${placeholdersHabilidades})
-        AND (h.InstitucionId = @institucionId OR h.InstitucionId IS NULL)
+        AND ${disponibilidadHabilidadSql}
         AND ${materiaCompatibleSql}
         AND ISNULL(h.Activo, 1) = 1
         ${filtroMeses}
@@ -12544,7 +12561,7 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
           h.Mes,
           h.NumeroHabilidad,
           h.DescripcionHabilidad,
-          CASE WHEN h.InstitucionId = @institucionId OR h.InstitucionId IS NULL THEN 1 ELSE 0 END AS InstitucionOk,
+          CASE WHEN ${disponibilidadHabilidadSql} THEN 1 ELSE 0 END AS InstitucionOk,
           CASE WHEN ${materiaCompatibleSql} THEN 1 ELSE 0 END AS MateriaOk,
           CASE WHEN ISNULL(h.Activo, 1) = 1 THEN 1 ELSE 0 END AS ActivoOk,
           CASE WHEN h.Mes IN (${meses.map((_, index) => `@dmes${index}`).join(", ")}) THEN 1 ELSE 0 END AS MesOk

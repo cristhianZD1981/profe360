@@ -21,7 +21,8 @@ type TipoReporte =
   | "PROMEDIOS_ACADEMICOS"
   | "CIERRE_CURSOS"
   | "HORARIO_PROFESOR"
-  | "HORARIO_SECCION";
+  | "HORARIO_SECCION"
+  | "TRASLADOS_SECCIONES";
 
 type VistaAsistencia = "ALUMNO" | "SECCION" | "PROFESOR";
 
@@ -745,7 +746,9 @@ export default function ReportesPage() {
           grupoId: grupoId || undefined,
           estudianteId: estudianteId || undefined,
           desde: desde || undefined,
-          hasta: hasta || undefined
+          hasta: hasta || undefined,
+          anioLectivoId: anioLectivoIdReporte || undefined,
+          grado: gradoReporte || undefined
         }
       });
       setFilas(Array.isArray(response.data?.data) ? response.data.data : []);
@@ -1054,8 +1057,8 @@ export default function ReportesPage() {
       const row = headers.map((h) => f[h]);
       return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;background:${getReporteZebraBackground(idx)};${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
     }).join("");
-    const titulo = tipo === "ESTUDIANTES" ? "Reporte de estudiantes" : `Reporte ${tipo}`;
-    const archivo = tipo === "ESTUDIANTES" ? "reporte-estudiantes.xls" : `reporte-${tipo}.xls`;
+    const titulo = tipo === "TRASLADOS_SECCIONES" ? "Traslado entre secciones" : `Reporte ${tipo}`;
+    const archivo = tipo === "TRASLADOS_SECCIONES" ? "reporte-traslado-entre-secciones.xls" : `reporte-${tipo}.xls`;
     const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>${escapeHtml(titulo)}</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
     const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
     descargarBlob(blob, archivo);
@@ -1450,6 +1453,7 @@ export default function ReportesPage() {
                 <option value="PROMEDIOS_ACADEMICOS">Promedios Académicos</option>
                 <option value="HORARIO_PROFESOR">Horario profesor</option>
                 <option value="HORARIO_SECCION">Horario sección</option>
+                <option value="TRASLADOS_SECCIONES">Traslado entre secciones</option>
                 {puedeAdministrarCierres ? <option value="CIERRE_CURSOS">Cursos Cerrados</option> : null}
               </select>
             </label>
@@ -1606,6 +1610,21 @@ export default function ReportesPage() {
                   </select>
                 </label>
               </>
+            ) : tipo === "TRASLADOS_SECCIONES" ? (
+              <>
+                <label>Año lectivo
+                  <select value={anioLectivoIdReporte} onChange={(e) => { setAnioLectivoIdReporte(e.target.value); setFilas([]); }}>
+                    <option value="">Todos</option>
+                    {aniosLectivos.map((item) => <option key={item.AnioLectivoId} value={item.AnioLectivoId}>{item.Nombre}</option>)}
+                  </select>
+                </label>
+                <label>Grado
+                  <select value={gradoReporte} onChange={(e) => { setGradoReporte(e.target.value); setFilas([]); }}>
+                    <option value="">Todos</option>
+                    {gradosDisponibles.map((grado) => <option key={grado} value={grado}>{grado}</option>)}
+                  </select>
+                </label>
+              </>
             ) : tipo === "ESTUDIANTES" ? (
               <>
                 <label>Buscar estudiante
@@ -1674,7 +1693,7 @@ export default function ReportesPage() {
                 </label>
               </>
             )}
-            {tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
+            {tipo === "ASISTENCIA" || tipo === "BOLETAS" || tipo === "TRASLADOS_SECCIONES" ? (
               <>
                 <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
                 <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
