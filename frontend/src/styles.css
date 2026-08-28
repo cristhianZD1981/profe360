@@ -1904,6 +1904,22 @@ td {
   transition: width 0.25s ease;
 }
 
+.processing-progress {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(22,181,217,0.38);
+  border-radius: 12px;
+  background: rgba(22,181,217,0.12);
+  color: #e0f7ff;
+}
+
+.processing-progress-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 700;
+}
+
 .processing-progress-meta {
   display: flex;
   gap: 12px;

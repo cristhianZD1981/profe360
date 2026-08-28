@@ -36,13 +36,18 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
           (c.InstitucionId = @institucionId AND target.WhatsAppModo IN (N'PROPIO_API', N'PROPIO_QR'))
           OR (
             (@institucionId IS NULL OR target.WhatsAppModo = N'GENERICA')
-            AND UPPER(LTRIM(RTRIM(COALESCE(i.NombreComercial, i.Nombre, N'')))) = N'PROFE360'
+            AND c.EsFallback = 1
+            AND (
+              c.InstitucionId IS NULL
+              OR UPPER(LTRIM(RTRIM(COALESCE(i.NombreComercial, i.Nombre, N'')))) = N'PROFE360'
+            )
           )
         )
       ORDER BY CASE
         WHEN c.InstitucionId = @institucionId THEN 0
-        WHEN UPPER(LTRIM(RTRIM(COALESCE(i.NombreComercial, i.Nombre, N'')))) = N'PROFE360' THEN 1
-        ELSE 2 END,
+        WHEN c.EsFallback = 1 AND c.InstitucionId IS NULL THEN 1
+        WHEN c.EsFallback = 1 AND UPPER(LTRIM(RTRIM(COALESCE(i.NombreComercial, i.Nombre, N'')))) = N'PROFE360' THEN 2
+        ELSE 3 END,
                c.WhatsAppCanalId DESC
     `);
   const channel = channelResult.recordset[0];
@@ -164,7 +169,7 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
   }
 
   const bodyParams = (input.templateParams?.length ? input.templateParams : [String(input.mensaje || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim()])
-    .map((item) => String(item || "").slice(0, 1024));
+    .map((item) => String(item || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim().slice(0, 1024));
   const response = await fetch("https://api.p.2chat.io/open/waba/send-message", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-User-API-Key": token },

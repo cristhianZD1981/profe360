@@ -2341,8 +2341,59 @@ function buildWordParagraphsXml(text: string, style?: { font?: string; sizePt?: 
 
   const lines = String(text || "").split(/\r?\n/);
 
-  return lines.map((line) => `<w:p>${buildWordRunsXml(line || " ", style)}</w:p>`).join("");
+  const parts: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (String(lines[index] || "").trim() === "[[RUBRICA_INICIO]]") {
+      const rubricLines: string[] = [];
+      index += 1;
+      while (index < lines.length && String(lines[index] || "").trim() !== "[[RUBRICA_FIN]]") {
+        rubricLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      parts.push(buildWordRubricTableXml(rubricLines, style));
+      continue;
+    }
+    parts.push(`<w:p>${buildWordRunsXml(lines[index] || " ", style)}</w:p>`);
+    index += 1;
+  }
+  return parts.join("");
 
+}
+
+
+
+function buildWordRubricTableXml(lines: string[], style?: { font?: string; sizePt?: number }) {
+  const content = lines.map((line) => String(line || "").trim()).filter(Boolean);
+  if (!content.length) return "";
+  const title = content.find((line) => line.startsWith("TITULO:"))?.slice(7).trim() || "RÚBRICA DE VALORACIÓN";
+  const columns = (content.find((line) => line.startsWith("COLUMNAS:"))?.slice(9).split("|") || ["4 puntos", "3 puntos", "2 puntos", "1 punto"]).map((value) => value.trim());
+  const criteria = content
+    .filter((line) => line.startsWith("CRITERIO:"))
+    .map((line) => line.slice(9).split("|")[0].trim())
+    .filter(Boolean);
+  if (!criteria.length) return "";
+  const cell = (text: string, bold = false, fill = "FFFFFF") => `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${fill}"/><w:tcMar><w:top w:w="90" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tcMar></w:tcPr><w:p>${buildWordRunsXml(text, { ...style, bold })}</w:p></w:tc>`;
+  const border = `<w:tblBorders><w:top w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:left w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:bottom w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:right w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="7F8C8D"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="7F8C8D"/></w:tblBorders>`;
+  const header = ["Criterio", ...columns].map((value) => cell(value, true, "B8CCE4")).join("");
+  const rows = criteria.map((criterion, criterionIndex) => {
+    const maximum = Number(content.find((line) => line.startsWith(`CRITERIO:${criterion}|`))?.split("|")[1] || 0);
+    const levels = columns.map((_column, levelIndex) => {
+      const ratio = [1, 0.75, 0.5, 0.25][levelIndex] ?? 0.25;
+      const points = Number((maximum * ratio).toFixed(2));
+      const description = levelIndex === 0
+        ? `Cumple completamente con el indicador: ${criterion}. (${points} pts)`
+        : levelIndex === 1
+          ? `Cumple parcialmente con el indicador: ${criterion}. (${points} pts)`
+          : levelIndex === 2
+            ? `Evidencia un avance limitado en: ${criterion}. (${points} pts)`
+            : `Presenta un intento insuficiente en: ${criterion}. (${points} pts)`;
+      return cell(description);
+    }).join("");
+    return `<w:tr>${cell(criterion, true, criterionIndex % 2 ? "F8FAFC" : "FFFFFF")}${levels}</w:tr>`;
+  }).join("");
+  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/>${border}</w:tblPr><w:tr>${cell(title, true, "FFFFFF")}</w:tr><w:tr>${header}</w:tr>${rows}</w:tbl>`;
 }
 
 
@@ -3269,7 +3320,31 @@ function buildQuestionsBlockByType(items: any[], tipo: string) {
 
   const lines: string[] = [];
 
-  filtered.forEach((it, idx) => lines.push(formatQuestionFromItem(it, idx)));
+  const rubricTypes = new Set(["RE", "RP", "RCAS", "RR", "PE"]);
+  filtered.forEach((it, idx) => {
+    lines.push(formatQuestionFromItem(it, idx));
+    if (rubricTypes.has(tipo)) {
+      const indicatorText = String(
+        it?.indicadorEvaluacion
+        || it?.indicador
+        || it?.indicadorBase
+        || it?.aprendizajeEsperado
+        || ""
+      ).trim();
+      const rubricLines = splitTextLines(indicatorText);
+      const puntaje = Number(it?.puntaje || 0);
+      const criterios = rubricLines.length
+        ? rubricLines.flatMap((line) => String(line).split(/(?:\.\s+|;\s+)/).map((part) => part.trim()).filter(Boolean))
+        : ["Cumplimiento del indicador asociado a la pregunta"];
+      const puntosPorCriterio = criterios.length > 0 ? puntaje / criterios.length : puntaje;
+      const formatoPuntos = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+      lines.push("[[RUBRICA_INICIO]]");
+      lines.push(`TITULO:RÚBRICA DE VALORACIÓN - ${getItemTypeLabel(tipo).toUpperCase()} (${formatoPuntos(puntaje)} PUNTOS)`);
+      lines.push(`COLUMNAS:${[1, 0.75, 0.5, 0.25].map((ratio) => `${formatoPuntos(puntosPorCriterio * ratio)} ${puntosPorCriterio * ratio === 1 ? "punto" : "puntos"}`).join("|")}`);
+      criterios.forEach((criterio) => lines.push(`CRITERIO:${criterio}|${puntosPorCriterio}`));
+      lines.push("[[RUBRICA_FIN]]");
+    }
+  });
 
   return lines.join("\n\n");
 
@@ -10705,6 +10780,21 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
       const numeroHabilidadPorIndicador = String(r.IndicadorBase || "").match(/^\s*(\d+)\.\d+\b/)?.[1];
       const indiceHabilidad = Number(cobertura?.habilidadIndice || numeroHabilidadPorIndicador || 0);
       const habilidad = datosPlaneamiento.aprendizajes[indiceHabilidad - 1] || datosPlaneamiento.aprendizajes[indicadorOrden - 1] || datosPlaneamiento.aprendizajes[0] || "";
+      const puntosPorItem = [
+        [d?.seleccionRespuestaCantidad, d?.seleccionRespuestaPuntos],
+        [d?.respuestaCortaCantidad, d?.respuestaCortaPuntos],
+        [d?.correspondenciaCantidad, d?.correspondenciaPuntos],
+        [d?.identificacionCantidad, d?.identificacionPuntos],
+        [d?.resolucionEjerciciosCantidad, d?.resolucionEjerciciosPuntos],
+        [d?.resolucionProblemasCantidad, d?.resolucionProblemasPuntos],
+        [d?.respuestaRestringidaCantidad, d?.respuestaRestringidaPuntos],
+        [d?.resolucionCasosCantidad, d?.resolucionCasosPuntos],
+        [d?.produccionEscritaCantidad, d?.produccionEscritaPuntos]
+      ];
+      const puntosCalculados = puntosPorItem.reduce(
+        (total: number, [cantidad, valor]: any[]) => total + (Number(cantidad) || 0) * (Number(valor) || 0),
+        0
+      );
 
       return {
 
@@ -10718,7 +10808,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
         NumeroLecciones: Number(r.NumeroLecciones || 0),
 
-        Puntos: Number(r.Puntos || 0),
+        Puntos: puntosCalculados,
 
         SR_Cantidad: Number(d?.seleccionRespuestaCantidad || 0),
 
@@ -10896,7 +10986,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
         tl: { col: 0, row: 0 },
 
-        ext: { width: 120, height: 120 }
+        ext: { width: 144, height: 144 }
 
       });
 
@@ -11197,7 +11287,7 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
 
 
-    const sumColumns = [3, 4, ...Array.from({ length: itemDefs.length * 2 }, (_, idx) => idx + 5)];
+    const sumColumns = [3, 4];
 
     sumColumns.forEach((columnNumber) => {
 
@@ -11243,10 +11333,40 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
 
       cell.alignment = { horizontal: "center", vertical: "middle" };
 
-      if (columnNumber === 3 || columnNumber === 4 || (columnNumber >= 5 && columnNumber % 2 === 0)) cell.numFmt = "0.00";
+      if (columnNumber === 3 || columnNumber === 4) cell.numFmt = "0.00";
 
-      if (columnNumber >= 5 && columnNumber % 2 === 1) cell.numFmt = "0";
+    });
 
+    itemDefs.forEach((def: any, itemIndex: number) => {
+      const startColumn = 5 + itemIndex * 2;
+      const endColumn = startColumn + 1;
+      const startLetter = worksheet.getColumn(startColumn).letter;
+      const endLetter = worksheet.getColumn(endColumn).letter;
+      const formulaRange = rows.length > 0 ? `${startLetter}${dataStartRow}:${startLetter}${totalRow - 1}` : null;
+      const valueRange = rows.length > 0 ? `${endLetter}${dataStartRow}:${endLetter}${totalRow - 1}` : null;
+      const subtotal = rows.reduce((acc: number, row: any) => {
+        return acc + (Number(row[def.cantidad]) || 0) * (Number(row[def.valor]) || 0);
+      }, 0);
+      const leftCell = worksheet.getCell(totalRow, startColumn);
+      const rightCell = worksheet.getCell(totalRow, endColumn);
+      const totalStyle = {
+        font: { bold: true, color: { argb: "FF0F172A" } },
+        fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFD9EAF7" } },
+        border: {
+          top: { style: "medium" as const, color: { argb: "FF0F4C81" } },
+          left: { style: "medium" as const, color: { argb: "FF0F4C81" } },
+          bottom: { style: "medium" as const, color: { argb: "FF0F4C81" } },
+          right: { style: "medium" as const, color: { argb: "FF0F4C81" } }
+        },
+        alignment: { horizontal: "center" as const, vertical: "middle" as const }
+      };
+      Object.assign(leftCell, totalStyle);
+      Object.assign(rightCell, totalStyle);
+      worksheet.mergeCells(totalRow, startColumn, totalRow, endColumn);
+      leftCell.value = formulaRange && valueRange
+        ? { formula: `SUMPRODUCT(${formulaRange},${valueRange})`, result: subtotal }
+        : subtotal;
+      leftCell.numFmt = "0.00";
     });
 
 
@@ -14844,6 +14964,25 @@ function buildSeguimientoMensaje(params: {
 
 }
 
+function normalizeTipoMensajeWhatsApp(value: any) {
+  const raw = normalizeKey(value);
+  if (raw.includes("TAREA")) return "TAREA";
+  if (raw.includes("PROYECT")) return "PROYECTO";
+  if (raw.includes("COTIDIAN")) return "COTIDIANO";
+  if (raw.includes("EXAM") || raw.includes("PRUEBA") || raw.includes("EVALU")) return "EXAMENES";
+  // GENERAL aún no tiene plantilla configurada; los avisos académicos
+  // desconocidos deben seguir la plantilla general académica.
+  return "COTIDIANO";
+}
+
+function getTipoMensajeAcademicoLabel(value: any) {
+  const raw = normalizeKey(value);
+  if (raw.includes("TAREA")) return "Tarea";
+  if (raw.includes("PROYECT")) return "Proyecto";
+  if (raw.includes("EXAM") || raw.includes("PRUEBA") || raw.includes("EVALU")) return "Examen";
+  return "Trabajo Cotidiano";
+}
+
 
 
 function formatSeguimientoExamenNota(puntosObtenidos: any, puntosMaximos: any) {
@@ -17918,6 +18057,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
           eg.InstitucionId,
 
+          eg.GrupoId,
+
           i.Nombre AS InstitucionNombre,
 
           g.Nombre AS SeccionNombre,
@@ -18583,11 +18724,21 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
             institucionId: Number(contextoCorreo.InstitucionId || 0),
             grupoId: Number(contextoCorreo.GrupoId || 0) || undefined,
             estudianteId: aviso.estudianteId,
+            profesorUsuarioId: getUserId(req) || undefined,
             solicitadoPorUsuarioId: getUserId(req),
-            tipoMensaje: normalizeKey(tipoUso).includes("TAREA") ? "TAREA" : "EVALUACION",
+            tipoMensaje: normalizeTipoMensajeWhatsApp(tipoUso),
             telefono,
             mensaje: bodyFinal,
-            templateParams: [bodyFinal]
+            templateParams: [
+              getTipoMensajeAcademicoLabel(tipoUso),
+              aviso.estudianteNombre,
+              contextoCorreo.SeccionNombre || "",
+              contextoCorreo.MateriaNombre || "",
+              new Date().toISOString().slice(0, 10),
+              aviso.observacion || getEstadoLabelSeguimiento(aviso.estado),
+              contextoCorreo.ProfesorNombreCompleto || contextoCorreo.ProfesorCorreo || "",
+              contextoCorreo.InstitucionNombre || ""
+            ]
           });
 
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });
@@ -19301,7 +19452,11 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
           eg.InstitucionId,
 
+          eg.GrupoId,
+
           i.Nombre AS InstitucionNombre,
+
+          g.Nombre AS SeccionNombre,
 
           m.Nombre AS MateriaNombre,
 
@@ -19316,6 +19471,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
         FROM dbo.Eval360_EstructuraGrupo eg
 
         INNER JOIN dbo.Institucion i ON i.InstitucionId = eg.InstitucionId
+
+        INNER JOIN dbo.Grupo g ON g.GrupoId = eg.GrupoId
 
         INNER JOIN dbo.Materia m ON m.MateriaId = eg.MateriaId
 
@@ -19463,11 +19620,21 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
             institucionId: Number(actividad.InstitucionId || contextoCorreo?.InstitucionId || 0),
             grupoId: Number(actividad.GrupoId || contextoCorreo?.GrupoId || 0) || undefined,
             estudianteId: aviso.estudianteId,
+            profesorUsuarioId: getUserId(req) || undefined,
             solicitadoPorUsuarioId: getUserId(req),
-            tipoMensaje: normalizeKey(actividad?.Fuente || actividad?.Nombre || "").includes("TAREA") ? "TAREA" : "EVALUACION",
+            tipoMensaje: "EXAMENES",
             telefono,
             mensaje: whatsappFinal,
-            templateParams: [whatsappFinal]
+            templateParams: [
+              "Examen",
+              aviso.estudianteNombre,
+              String(contextoCorreo.SeccionNombre || ""),
+              String(contextoCorreo.MateriaNombre || ""),
+              new Date().toISOString().slice(0, 10),
+              String(aviso.observacion || whatsappFinal),
+              String(profesorLogueadoNombre || contextoCorreo.ProfesorNombreCompleto || contextoCorreo.ProfesorCorreo || ""),
+              String(contextoCorreo.InstitucionNombre || "")
+            ]
           });
 
           resultadosNotificacion.push({ estudianteId: aviso.estudianteId, canal: "whatsapp", telefono, ...whatsapp });

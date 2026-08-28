@@ -11,6 +11,7 @@ import {
   ensureMatriculaTrasladoHistorialTable
 } from "./matricula-traslado.utils";
 import { bumpProfesorPeriodoEstadosVersion } from "../periodos-profesor/periodos-profesor.utils";
+import { ensureSustitucionProfesorTables, procesarSustitucionesProfesor } from "./sustitucion-profesor.utils";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -6917,6 +6918,172 @@ router.patch("/matriculas/:id/reactivar", async (req, res) => {
       ok: false,
       message: "Error interno al reactivar matrícula"
     });
+  }
+});
+
+/* =========================================================
+   SUSTITUCION DE PROFESORES
+   ========================================================= */
+const causasSustitucion = ["INCAPACIDAD", "VACACIONES", "LICENCIA", "CAPACITACION", "OTROS"];
+
+router.get("/sustituciones-profesor", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const pool = await getPool();
+    await procesarSustitucionesProfesor(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT s.SustitucionProfesorId, s.ProfesorTitularUsuarioId, s.ProfesorSustitutoUsuarioId,
+               s.Causa, s.Justificacion, s.FechaInicio, s.FechaFin, s.Estado, s.CreatedAt,
+               LTRIM(RTRIM(CONCAT(ISNULL(t.Nombre, N''), N' ', ISNULL(t.PrimerApellido, N''), N' ', ISNULL(t.SegundoApellido, N'')))) AS ProfesorTitular,
+               LTRIM(RTRIM(CONCAT(ISNULL(n.Nombre, N''), N' ', ISNULL(n.PrimerApellido, N''), N' ', ISNULL(n.SegundoApellido, N'')))) AS ProfesorSustituto,
+               COUNT(spa.SustitucionProfesorAsignacionId) AS CantidadAsignaciones
+        FROM dbo.SustitucionProfesor s
+        INNER JOIN dbo.Usuario t ON t.UsuarioId = s.ProfesorTitularUsuarioId
+        INNER JOIN dbo.Usuario n ON n.UsuarioId = s.ProfesorSustitutoUsuarioId
+        LEFT JOIN dbo.SustitucionProfesorAsignacion spa ON spa.SustitucionProfesorId = s.SustitucionProfesorId
+        WHERE s.InstitucionId = @institucionId
+        GROUP BY s.SustitucionProfesorId, s.ProfesorTitularUsuarioId, s.ProfesorSustitutoUsuarioId,
+                 s.Causa, s.Justificacion, s.FechaInicio, s.FechaFin, s.Estado, s.CreatedAt,
+                 t.Nombre, t.PrimerApellido, t.SegundoApellido, n.Nombre, n.PrimerApellido, n.SegundoApellido
+        ORDER BY s.CreatedAt DESC, s.SustitucionProfesorId DESC
+      `);
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error listando sustituciones de profesores:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron listar las sustituciones" });
+  }
+});
+
+router.post("/sustituciones-profesor", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const titularId = Number(req.body?.profesorTitularUsuarioId);
+    const sustitutoId = Number(req.body?.profesorSustitutoUsuarioId);
+    const causa = String(req.body?.causa || "").trim().toUpperCase();
+    const justificacion = String(req.body?.justificacion || "").trim();
+    const fechaInicio = String(req.body?.fechaInicio || "").trim();
+    const fechaFin = String(req.body?.fechaFin || "").trim() || null;
+    if (!isValidPositiveId(titularId) || !isValidPositiveId(sustitutoId) || titularId === sustitutoId) return badRequest(res, "El profesor titular y el sustituto deben ser válidos y diferentes");
+    if (!causasSustitucion.includes(causa)) return badRequest(res, "La causa de sustitución no es válida");
+    if (!justificacion) return badRequest(res, "La justificación es obligatoria");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaInicio) || (fechaFin && !/^\d{4}-\d{2}-\d{2}$/.test(fechaFin))) return badRequest(res, "Las fechas deben tener formato AAAA-MM-DD");
+    if (fechaFin && new Date(fechaInicio) > new Date(fechaFin)) return badRequest(res, "La fecha fin no puede ser anterior a la fecha inicio");
+    const pool = await getPool();
+    await procesarSustitucionesProfesor(pool);
+    const profesores = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("titularId", sql.Int, titularId)
+      .input("sustitutoId", sql.Int, sustitutoId)
+      .query(`
+        SELECT u.UsuarioId
+        FROM dbo.Usuario u
+        INNER JOIN dbo.UsuarioRol ur ON ur.UsuarioId = u.UsuarioId AND ur.Activo = 1
+        INNER JOIN dbo.Rol r ON r.RolId = ur.RolId
+        WHERE u.InstitucionId = @institucionId
+          AND u.Activo = 1
+          AND u.UsuarioId IN (@titularId, @sustitutoId)
+          AND r.Nombre IN (N'PROFESOR', N'PROFESOR_GUIA')
+        GROUP BY u.UsuarioId
+      `);
+    if (profesores.recordset.length !== 2) return badRequest(res, "Ambos usuarios deben ser profesores activos de la institución");
+    const existing = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("titularId", sql.Int, titularId)
+      .query("SELECT TOP 1 SustitucionProfesorId FROM dbo.SustitucionProfesor WHERE InstitucionId = @institucionId AND ProfesorTitularUsuarioId = @titularId AND Estado IN (N'PROGRAMADA', N'ACTIVA')");
+    if (existing.recordset.length) return res.status(409).json({ ok: false, message: "El profesor titular ya tiene una sustitución activa o programada" });
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      const header = await new sql.Request(transaction)
+        .input("institucionId", sql.Int, institucionId)
+        .input("titularId", sql.Int, titularId)
+        .input("sustitutoId", sql.Int, sustitutoId)
+        .input("causa", sql.NVarChar(40), causa)
+        .input("justificacion", sql.NVarChar(2000), justificacion)
+        .input("fechaInicio", sql.Date, fechaInicio)
+        .input("fechaFin", sql.Date, fechaFin)
+        .input("createdBy", sql.Int, Number(req.auth?.usuarioId || req.auth?.userId || 0) || null)
+        .query(`
+          INSERT INTO dbo.SustitucionProfesor
+            (InstitucionId, ProfesorTitularUsuarioId, ProfesorSustitutoUsuarioId, Causa, Justificacion, FechaInicio, FechaFin, Estado, CreatedByUsuarioId)
+          OUTPUT INSERTED.SustitucionProfesorId
+          VALUES (@institucionId, @titularId, @sustitutoId, @causa, @justificacion, @fechaInicio, @fechaFin,
+                  CASE WHEN @fechaInicio <= CAST(SYSDATETIME() AS date) THEN N'ACTIVA' ELSE N'PROGRAMADA' END, @createdBy)
+        `);
+      const sustitucionId = Number(header.recordset[0]?.SustitucionProfesorId || 0);
+      const assignments = await new sql.Request(transaction)
+        .input("institucionId", sql.Int, institucionId)
+        .input("titularId", sql.Int, titularId)
+        .query(`SELECT AsignacionDocenteId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, TipoAsignacion FROM dbo.AsignacionDocente WHERE InstitucionId = @institucionId AND UsuarioId = @titularId AND Activo = 1`);
+      if (!assignments.recordset.length) throw new Error("El profesor titular no tiene asignaciones activas");
+      for (const assignment of assignments.recordset) {
+        const existingReplacement = await new sql.Request(transaction)
+          .input("institucionId", sql.Int, institucionId)
+          .input("sustitutoId", sql.Int, sustitutoId)
+          .input("grupoId", sql.Int, Number(assignment.GrupoId))
+          .input("materiaId", sql.Int, assignment.MateriaId ?? null)
+          .input("anioLectivoId", sql.Int, Number(assignment.AnioLectivoId))
+          .input("periodoId", sql.Int, assignment.PeriodoId ?? null)
+          .input("tipoAsignacion", sql.NVarChar, assignment.TipoAsignacion)
+          .query(`SELECT TOP 1 AsignacionDocenteId, Activo FROM dbo.AsignacionDocente WHERE InstitucionId = @institucionId AND UsuarioId = @sustitutoId AND GrupoId = @grupoId AND AnioLectivoId = @anioLectivoId AND ISNULL(MateriaId, 0) = ISNULL(@materiaId, 0) AND ISNULL(PeriodoId, 0) = ISNULL(@periodoId, 0) AND TipoAsignacion = @tipoAsignacion ORDER BY Activo DESC, AsignacionDocenteId DESC`);
+        let replacementId = Number(existingReplacement.recordset[0]?.AsignacionDocenteId || 0);
+        const replacementWasActive = Boolean(existingReplacement.recordset[0]?.Activo);
+        if (!replacementId) {
+          const inserted = await new sql.Request(transaction)
+            .input("institucionId", sql.Int, institucionId).input("sustitutoId", sql.Int, sustitutoId).input("grupoId", sql.Int, Number(assignment.GrupoId)).input("materiaId", sql.Int, assignment.MateriaId ?? null).input("anioLectivoId", sql.Int, Number(assignment.AnioLectivoId)).input("periodoId", sql.Int, assignment.PeriodoId ?? null).input("tipoAsignacion", sql.NVarChar, assignment.TipoAsignacion).input("fechaInicio", sql.Date, fechaInicio)
+            .query(`INSERT INTO dbo.AsignacionDocente (InstitucionId, UsuarioId, GrupoId, MateriaId, AnioLectivoId, PeriodoId, TipoAsignacion, Activo, CreatedAt) OUTPUT INSERTED.AsignacionDocenteId VALUES (@institucionId, @sustitutoId, @grupoId, @materiaId, @anioLectivoId, @periodoId, @tipoAsignacion, CASE WHEN @fechaInicio <= CAST(SYSDATETIME() AS date) THEN 1 ELSE 0 END, SYSDATETIME())`);
+          replacementId = Number(inserted.recordset[0]?.AsignacionDocenteId || 0);
+        } else if (fechaInicio <= new Date().toISOString().slice(0, 10)) {
+          await new sql.Request(transaction).input("id", sql.Int, replacementId).query("UPDATE dbo.AsignacionDocente SET Activo = 1, UpdatedAt = SYSDATETIME() WHERE AsignacionDocenteId = @id");
+        }
+        await new sql.Request(transaction).input("id", sql.Int, Number(assignment.AsignacionDocenteId)).input("fechaInicio", sql.Date, fechaInicio).query("UPDATE dbo.AsignacionDocente SET Activo = CASE WHEN @fechaInicio <= CAST(SYSDATETIME() AS date) THEN 0 ELSE Activo END, UpdatedAt = SYSDATETIME() WHERE AsignacionDocenteId = @id");
+        await new sql.Request(transaction).input("sustitucionId", sql.Int, sustitucionId).input("originalId", sql.Int, Number(assignment.AsignacionDocenteId)).input("replacementId", sql.Int, replacementId).input("activeBefore", sql.Bit, replacementWasActive).query("INSERT INTO dbo.SustitucionProfesorAsignacion (SustitucionProfesorId, AsignacionOriginalId, AsignacionSustitutaId, SustitutaActivaAntes) VALUES (@sustitucionId, @originalId, @replacementId, @activeBefore)");
+      }
+      await transaction.commit();
+      return created(res, { SustitucionProfesorId: sustitucionId, cantidadAsignaciones: assignments.recordset.length }, "Sustitución de profesor registrada correctamente");
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined);
+      throw error;
+    }
+  } catch (error: any) {
+    console.error("Error registrando sustitución de profesor:", error);
+    return res.status(500).json({ ok: false, message: error?.message || "No se pudo registrar la sustitución" });
+  }
+});
+
+router.post("/sustituciones-profesor/:id/restablecer", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const id = Number(req.params.id);
+    if (!isValidPositiveId(id)) return badRequest(res, "Id inválido");
+    const pool = await getPool();
+    await ensureSustitucionProfesorTables(pool);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      const request = new sql.Request(transaction).input("id", sql.Int, id).input("institucionId", sql.Int, institucionId);
+      await request.query(`
+        UPDATE original SET Activo = 1, UpdatedAt = SYSDATETIME()
+        FROM dbo.AsignacionDocente original INNER JOIN dbo.SustitucionProfesorAsignacion spa ON spa.AsignacionOriginalId = original.AsignacionDocenteId
+        INNER JOIN dbo.SustitucionProfesor s ON s.SustitucionProfesorId = spa.SustitucionProfesorId
+        WHERE spa.SustitucionProfesorId = @id AND s.InstitucionId = @institucionId;
+        UPDATE sustituta SET Activo = spa.SustitutaActivaAntes, UpdatedAt = SYSDATETIME()
+        FROM dbo.AsignacionDocente sustituta INNER JOIN dbo.SustitucionProfesorAsignacion spa ON spa.AsignacionSustitutaId = sustituta.AsignacionDocenteId
+        INNER JOIN dbo.SustitucionProfesor s ON s.SustitucionProfesorId = spa.SustitucionProfesorId
+        WHERE spa.SustitucionProfesorId = @id AND s.InstitucionId = @institucionId;
+        UPDATE dbo.SustitucionProfesor SET Estado = N'FINALIZADA', FinalizadaAt = SYSDATETIME(), UpdatedAt = SYSDATETIME() WHERE SustitucionProfesorId = @id AND InstitucionId = @institucionId;
+      `);
+      await transaction.commit();
+      return ok(res, { SustitucionProfesorId: id }, "Profesor titular restablecido correctamente");
+    } catch (error) { await transaction.rollback().catch(() => undefined); throw error; }
+  } catch (error) {
+    console.error("Error restableciendo profesor titular:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo restablecer el profesor titular" });
   }
 });
 

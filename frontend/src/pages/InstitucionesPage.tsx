@@ -73,8 +73,10 @@ const initialWhatsAppConfig: WhatsAppConfig = {
 const whatsappTemplateTypes = [
   { value: "ASISTENCIA", label: "Asistencia" },
   { value: "TAREA", label: "Tareas" },
+  { value: "PROYECTO", label: "Proyectos" },
+  { value: "COTIDIANO", label: "Cotidiano" },
+  { value: "EXAMENES", label: "Exámenes" },
   { value: "BOLETA", label: "Boletas" },
-  { value: "EVALUACION", label: "Evaluaciones" },
   { value: "GENERAL", label: "General" }
 ];
 
@@ -258,7 +260,7 @@ export default function InstitucionesPage() {
       setQrChannelConfigured(Boolean(canal?.TipoCanal === "WHATSAPP_WEB" && canal?.CanalExternoId));
       setQrConnected(canal?.TipoCanal === "WHATSAPP_WEB" && canal?.Estado === "CONECTADO");
       setWhatsappTemplates((current) => current.map((item) => {
-        const saved = savedTemplates.find((template: any) => template.TipoMensaje === item.tipoMensaje);
+        const saved = savedTemplates.find((template: any) => template.TipoMensaje === item.tipoMensaje || (item.tipoMensaje === "COTIDIANO" && template.TipoMensaje === "EVALUACION"));
         return saved ? {
           ...item,
           nombre: saved.Nombre || "",
@@ -291,7 +293,7 @@ export default function InstitucionesPage() {
         tieneApiKey: Boolean(canal?.TieneApiKey)
       });
       setFallbackTemplates((current) => current.map((item) => {
-        const saved = savedTemplates.find((template: any) => template.TipoMensaje === item.tipoMensaje);
+        const saved = savedTemplates.find((template: any) => template.TipoMensaje === item.tipoMensaje || (item.tipoMensaje === "COTIDIANO" && template.TipoMensaje === "EVALUACION"));
         return saved ? {
           ...item,
           nombre: saved.Nombre || "",

@@ -157,7 +157,13 @@ export async function sendEmailsBatch(inputs: SendBatchEmailInput[]) {
       ...(input.bcc ? { bcc: input.bcc } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {})
     }));
-    const keyMaterial = chunk.map((input) => input.idempotencyKey || randomUUID()).join("|");
+    // Resend rechaza reutilizar una clave durante 24 horas si cambia el cuerpo.
+    // Incluimos el payload exacto para conservar la deduplicación del mismo lote
+    // y permitir un nuevo envío cuando el contenido realmente cambió.
+    const keyMaterial = [
+      chunk.map((input) => input.idempotencyKey || randomUUID()).join("|"),
+      JSON.stringify(payload)
+    ].join("|");
     const idempotencyKey = createHash("sha256").update(keyMaterial).digest("hex");
     const response = await withResendRetries(async () => {
       const result = await resend.batch.send(payload, { idempotencyKey, batchValidation: "permissive" });

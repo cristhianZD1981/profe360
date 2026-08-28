@@ -13,6 +13,7 @@ type Institution = {
 };
 type Mode = "NO_CONFIGURADO" | "GENERICA" | "PROPIO_API" | "PROPIO_QR";
 type Template = { tipoMensaje: string; nombre: string; templateUuid: string; cantidadParametrosBody: number; estado: string };
+type AvailableTemplate = { uuid: string; name: string; status: string; category: string; language: string; templateContent: string };
 type WabaChannel = {
   uuid: string;
   phoneNumber: string;
@@ -26,7 +27,7 @@ type WabaChannel = {
   assignedInstitutionName?: string | null;
 };
 
-const templateTypes = ["ASISTENCIA", "TAREA", "BOLETA", "EVALUACION", "GENERAL"];
+const templateTypes = ["ASISTENCIA", "TAREA", "PROYECTO", "COTIDIANO", "EXAMENES", "BOLETA", "GENERAL"];
 const emptyTemplates = (): Template[] => templateTypes.map((tipoMensaje) => ({ tipoMensaje, nombre: "", templateUuid: "", cantidadParametrosBody: 0, estado: "PENDIENTE" }));
 
 function dataOf(response: any) { return response?.data?.data ?? response?.data ?? {}; }
@@ -54,6 +55,7 @@ export default function WhatsAppInstitutionManager() {
   const [displayName, setDisplayName] = useState("");
   const [active, setActive] = useState(true);
   const [templates, setTemplates] = useState<Template[]>(emptyTemplates);
+  const [availableTemplates, setAvailableTemplates] = useState<AvailableTemplate[]>([]);
   const [qrUrl, setQrUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -157,7 +159,7 @@ export default function WhatsAppInstitutionManager() {
       }
       const saved = Array.isArray(data.plantillas) ? data.plantillas : [];
       setTemplates(emptyTemplates().map((item) => {
-        const match = saved.find((value: any) => value.TipoMensaje === item.tipoMensaje);
+        const match = saved.find((value: any) => value.TipoMensaje === item.tipoMensaje || (item.tipoMensaje === "COTIDIANO" && value.TipoMensaje === "EVALUACION"));
         return match ? { ...item, nombre: match.Nombre || "", templateUuid: match.TemplateUuid || "", cantidadParametrosBody: Number(match.CantidadParametrosBody || 0), estado: match.Estado || "PENDIENTE" } : item;
       }));
     } catch (err: any) {
@@ -332,10 +334,37 @@ export default function WhatsAppInstitutionManager() {
     if (!configured.length) { setError("Ingresá al menos una plantilla con nombre y UUID."); return; }
     setLoading(true); setError("");
     try {
-      await api.put("/instituciones/" + selectedId + "/whatsapp/plantillas", { plantillas: configured });
+      const endpoint = isProfe360
+        ? "/instituciones/whatsapp/fallback/plantillas"
+        : "/instituciones/" + selectedId + "/whatsapp/plantillas";
+      await api.put(endpoint, { plantillas: configured });
       setMessage("Plantillas guardadas correctamente.");
     } catch (err: any) { setError(err?.response?.data?.message || "No se pudieron guardar las plantillas."); }
     finally { setLoading(false); }
+  }
+
+  async function loadAvailableTemplates() {
+    if (!selectedId) return;
+    setLoading(true); setError(""); setMessage("");
+    try {
+      const endpoint = isProfe360
+        ? "/instituciones/whatsapp/fallback/plantillas-disponibles"
+        : `/instituciones/${selectedId}/whatsapp/plantillas-disponibles`;
+      const response = await api.get(endpoint);
+      setAvailableTemplates(response.data?.data?.plantillas || []);
+      setMessage("Plantillas cargadas desde 2Chat.");
+    } catch (err: any) { setError(err?.response?.data?.message || "No se pudieron consultar las plantillas en 2Chat."); }
+    finally { setLoading(false); }
+  }
+
+  function assignAvailableTemplate(tipoMensaje: string, uuid: string) {
+    const selectedTemplate = availableTemplates.find((item) => item.uuid === uuid);
+    if (!selectedTemplate) return;
+    const indexes = [...selectedTemplate.templateContent.matchAll(/\{\{(\d+)\}\}/g)].map((match) => Number(match[1]));
+    const cantidad = indexes.length ? new Set(indexes).size : 0;
+    setTemplates((values) => values.map((item) => item.tipoMensaje === tipoMensaje
+      ? { ...item, nombre: selectedTemplate.name, templateUuid: selectedTemplate.uuid, cantidadParametrosBody: cantidad, estado: selectedTemplate.status }
+      : item));
   }
 
   return <section style={{ display: "grid", gap: 16 }}>
@@ -431,8 +460,10 @@ export default function WhatsAppInstitutionManager() {
           </div>}
           {mode === "PROPIO_API" && <div style={{ display: "grid", gap: 8, borderTop: "1px solid #334155", paddingTop: 12 }}>
             <strong>Plantillas WABA</strong>
-            {templates.map((item) => <div key={item.tipoMensaje} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 75px", gap: 7, alignItems: "center" }}>
+            <button type="button" onClick={loadAvailableTemplates} disabled={loading} style={{ width: "fit-content" }}>Buscar plantillas en 2Chat</button>
+            {templates.map((item) => <div key={item.tipoMensaje} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 1fr 75px", gap: 7, alignItems: "center" }}>
               <span>{item.tipoMensaje}</span>
+              <select value={item.templateUuid} onChange={(e) => assignAvailableTemplate(item.tipoMensaje, e.target.value)}><option value="">Seleccionar plantilla</option>{availableTemplates.map((available) => <option key={available.uuid} value={available.uuid}>{available.name} · {available.status}</option>)}</select>
               <input value={item.nombre} onChange={(e) => setTemplates((values) => values.map((value) => value.tipoMensaje === item.tipoMensaje ? { ...value, nombre: e.target.value } : value))} placeholder="Nombre" />
               <input value={item.templateUuid} onChange={(e) => setTemplates((values) => values.map((value) => value.tipoMensaje === item.tipoMensaje ? { ...value, templateUuid: e.target.value } : value))} placeholder="UUID" />
               <input type="number" min={0} value={item.cantidadParametrosBody} onChange={(e) => setTemplates((values) => values.map((value) => value.tipoMensaje === item.tipoMensaje ? { ...value, cantidadParametrosBody: Number(e.target.value || 0) } : value))} />

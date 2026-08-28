@@ -242,6 +242,20 @@ type AsignacionDocente = {
   PeriodoNombre: string | null;
 };
 
+type SustitucionProfesor = {
+  SustitucionProfesorId: number;
+  ProfesorTitularUsuarioId: number;
+  ProfesorSustitutoUsuarioId: number;
+  ProfesorTitular: string;
+  ProfesorSustituto: string;
+  Causa: string;
+  Justificacion: string;
+  FechaInicio: string;
+  FechaFin: string | null;
+  Estado: string;
+  CantidadAsignaciones: number;
+};
+
 type BloqueHorario = {
   BloqueHorarioId: number;
   InstitucionId: number;
@@ -562,6 +576,15 @@ const initialAsignacionForm = {
   tipoAsignacion: "PROFESOR_MATERIA"
 };
 
+const initialSustitucionForm = {
+  profesorTitularUsuarioId: "",
+  profesorSustitutoUsuarioId: "",
+  causa: "INCAPACIDAD",
+  justificacion: "",
+  fechaInicio: new Date().toISOString().slice(0, 10),
+  fechaFin: ""
+};
+
 const initialProfeGuia12Form = {
   usuarioId: "",
   grupoId: "",
@@ -753,6 +776,7 @@ type TabKey =
   | "evaluacion"
   | "materias"
   | "asignaciones"
+  | "cambioProfe"
   | "profesGuia12"
   | "bloques"
   | "gruposMateria"
@@ -833,6 +857,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [materias, setMaterias] = useState<Materia[]>([]);
   const [docentesCatalogo, setDocentesCatalogo] = useState<DocenteCatalogo[]>([]);
   const [asignaciones, setAsignaciones] = useState<AsignacionDocente[]>([]);
+  const [sustitucionesProfesor, setSustitucionesProfesor] = useState<SustitucionProfesor[]>([]);
   const [profesGuia12, setProfesGuia12] = useState<AsignacionDocente[]>([]);
   const [profesGuia12Docentes, setProfesGuia12Docentes] = useState<DocenteCatalogo[]>([]);
   const [profesGuia12Grupos, setProfesGuia12Grupos] = useState<Grupo[]>([]);
@@ -861,6 +886,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [rutaTransporteForm, setRutaTransporteForm] = useState(initialRutaTransporteForm);
   const [materiaForm, setMateriaForm] = useState(initialMateriaForm);
   const [asignacionForm, setAsignacionForm] = useState(initialAsignacionForm);
+  const [sustitucionForm, setSustitucionForm] = useState(initialSustitucionForm);
   const [profeGuia12Form, setProfeGuia12Form] = useState(initialProfeGuia12Form);
   const [bloqueForm, setBloqueForm] = useState(initialBloqueForm);
   const [grupoMateriaForm, setGrupoMateriaForm] = useState(initialGrupoMateriaForm);
@@ -967,6 +993,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [loadingRutaTransporte, setLoadingRutaTransporte] = useState(false);
   const [loadingMateria, setLoadingMateria] = useState(false);
   const [loadingAsignacion, setLoadingAsignacion] = useState(false);
+  const [sustitucionProgress, setSustitucionProgress] = useState(0);
   const [loadingProfeGuia12, setLoadingProfeGuia12] = useState(false);
   const [loadingBloque, setLoadingBloque] = useState(false);
   const [loadingGrupoMateria, setLoadingGrupoMateria] = useState(false);
@@ -1198,6 +1225,47 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     setAsignaciones(response.data?.data || []);
   }
 
+  async function loadSustitucionesProfesor() {
+    const response = await api.get("/academico/sustituciones-profesor");
+    setSustitucionesProfesor(response.data?.data || []);
+  }
+
+  async function handleSustitucionSubmit(e: FormEvent) {
+    e.preventDefault();
+    clearMessages();
+    let progressTimer: number | null = null;
+    try {
+      setSustitucionProgress(10);
+      progressTimer = window.setInterval(() => {
+        setSustitucionProgress((current) => Math.min(current + 8, 90));
+      }, 350);
+      await api.post("/academico/sustituciones-profesor", sustitucionForm);
+      if (progressTimer !== null) window.clearInterval(progressTimer);
+      progressTimer = null;
+      setSustitucionProgress(100);
+      setMessage("Sustitución de profesor registrada correctamente");
+      setSustitucionForm({ ...initialSustitucionForm });
+      await Promise.all([loadSustitucionesProfesor(), loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)]);
+      window.setTimeout(() => setSustitucionProgress(0), 700);
+    } catch (error: any) {
+      if (progressTimer !== null) window.clearInterval(progressTimer);
+      setSustitucionProgress(0);
+      setErrorMessage(error?.response?.data?.message || "No se pudo registrar la sustitución");
+    }
+  }
+
+  async function restablecerProfesorTitular(id: number) {
+    if (!window.confirm("¿Deseás restablecer el profesor titular para todos sus grupos y materias?")) return;
+    clearMessages();
+    try {
+      await api.post(`/academico/sustituciones-profesor/${id}/restablecer`);
+      setMessage("Profesor titular restablecido correctamente");
+      await Promise.all([loadSustitucionesProfesor(), loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)]);
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo restablecer el profesor titular");
+    }
+  }
+
   async function loadProfesGuia12(anioLectivoId = profeGuia12AnioFiltro, incluirInactivos = incluirProfesGuia12Inactivos, force = false) {
     const requestedAnioId = String(anioLectivoId || "").trim();
     const key = `${requestedAnioId || "activo"}|${incluirInactivos ? "1" : "0"}`;
@@ -1416,6 +1484,9 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           break;
         case "asignaciones":
           await Promise.all([loadCatalogos(), loadAsignaciones(asignacionSearch, incluirAsignacionesInactivas)]);
+          break;
+        case "cambioProfe":
+          await Promise.all([loadCatalogos(), loadSustitucionesProfesor()]);
           break;
         case "profesGuia12":
           await loadProfesGuia12(profeGuia12AnioFiltro, incluirProfesGuia12Inactivos);
@@ -3828,6 +3899,7 @@ function resetMatriculaForm() {
     { key: "matriculas", label: "Matrícula", tone: "#7c3aed", help: "Ingreso del estudiante al grupo" },
     { key: "gruposMateria", label: "Materias por grupo", tone: "#16a34a", help: "Qué recibe cada grupo" },
     { key: "asignaciones", label: "Asignación Docentes", tone: "#16a34a", help: "Qué docente atiende cada grupo" },
+    { key: "cambioProfe", label: "Cambio de profe", tone: "#16a34a", help: "Sustitución temporal de un profesor" },
     { key: "profesGuia12", label: "Profe Guía 12°", tone: "#16a34a", help: "Docente guía de duodécimo" },
     { key: "bloques", label: "Bloque Horario", tone: "#f59e0b", help: "Franja horaria disponible" },
     { key: "horarios", label: "Horario de clases", tone: "#f59e0b", help: "Cruce de grupo, materia y bloque" },
@@ -6072,6 +6144,57 @@ function resetMatriculaForm() {
                   </tbody>
                 </table>
               </div>
+            </section>
+          </div>
+        )}
+
+        {tab === "cambioProfe" && (
+          <div className="stack">
+            <section className="card">
+              <h3>Cambio de profe</h3>
+              <p>La sustitución mantiene los grupos y la información existente; solo cambia el profesor responsable desde la fecha de inicio.</p>
+              <form className="form" onSubmit={handleSustitucionSubmit}>
+                <label>Profesor titular actual
+                  <select required value={sustitucionForm.profesorTitularUsuarioId} onChange={(e) => setSustitucionForm((prev) => ({ ...prev, profesorTitularUsuarioId: e.target.value }))}>
+                    <option value="">Seleccione</option>
+                    {docentesCatalogo.map((item) => <option key={item.UsuarioId} value={item.UsuarioId}>{getTeacherFullName(item)} - {item.Correo}</option>)}
+                  </select>
+                </label>
+                <label>Profesor sustituto
+                  <select required value={sustitucionForm.profesorSustitutoUsuarioId} onChange={(e) => setSustitucionForm((prev) => ({ ...prev, profesorSustitutoUsuarioId: e.target.value }))}>
+                    <option value="">Seleccione</option>
+                    {docentesCatalogo.map((item) => <option key={item.UsuarioId} value={item.UsuarioId}>{getTeacherFullName(item)} - {item.Correo}</option>)}
+                  </select>
+                </label>
+                <label>Causa de sustitución
+                  <select value={sustitucionForm.causa} onChange={(e) => setSustitucionForm((prev) => ({ ...prev, causa: e.target.value }))}>
+                    <option value="INCAPACIDAD">Incapacidad</option><option value="VACACIONES">Vacaciones</option><option value="LICENCIA">Licencia</option><option value="CAPACITACION">Capacitación</option><option value="OTROS">Otros</option>
+                  </select>
+                </label>
+                <label>Fecha de inicio
+                  <input type="date" required value={sustitucionForm.fechaInicio} onChange={(e) => setSustitucionForm((prev) => ({ ...prev, fechaInicio: e.target.value }))} />
+                </label>
+                <label>Fecha fin (opcional)
+                  <input type="date" value={sustitucionForm.fechaFin} onChange={(e) => setSustitucionForm((prev) => ({ ...prev, fechaFin: e.target.value }))} />
+                </label>
+                <label>Justificación
+                  <textarea required minLength={5} value={sustitucionForm.justificacion} onChange={(e) => setSustitucionForm((prev) => ({ ...prev, justificacion: e.target.value }))} rows={4} placeholder="Indicá el motivo de la sustitución" />
+                </label>
+                <button type="submit" className="primary-btn" disabled={sustitucionProgress > 0 && sustitucionProgress < 100}>
+                  {sustitucionProgress > 0 && sustitucionProgress < 100 ? "Registrando sustitución..." : "Registrar sustitución"}
+                </button>
+                {sustitucionProgress > 0 && <div className="processing-progress" aria-label={`Progreso de sustitución: ${sustitucionProgress}%`}>
+                  <div className="processing-progress-title"><span>Procesando sustitución</span><strong>{sustitucionProgress}%</strong></div>
+                  <div className="processing-progress-track"><div className="processing-progress-bar" style={{ width: `${sustitucionProgress}%` }} /></div>
+                </div>}
+              </form>
+            </section>
+            <section className="card">
+              <h3>Historial de sustituciones</h3>
+              <div className="table-wrap"><table><thead><tr><th>Titular</th><th>Sustituto</th><th>Causa</th><th>Inicio</th><th>Fin</th><th>Asignaciones</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+                {sustitucionesProfesor.map((item) => <tr key={item.SustitucionProfesorId}><td>{item.ProfesorTitular}</td><td>{item.ProfesorSustituto}</td><td>{item.Causa}</td><td>{formatDate(item.FechaInicio)}</td><td>{item.FechaFin ? formatDate(item.FechaFin) : "Indefinida"}</td><td>{item.CantidadAsignaciones}</td><td>{item.Estado}</td><td>{["ACTIVA", "PROGRAMADA"].includes(item.Estado) && <button type="button" className="primary-btn" style={{ color: "#ffffff", background: "#0f766e", padding: "8px 12px", whiteSpace: "nowrap" }} onClick={() => void restablecerProfesorTitular(item.SustitucionProfesorId)}>Restablecer titular</button>}</td></tr>)}
+                {!sustitucionesProfesor.length && <tr><td colSpan={8}>No hay sustituciones registradas</td></tr>}
+              </tbody></table></div>
             </section>
           </div>
         )}

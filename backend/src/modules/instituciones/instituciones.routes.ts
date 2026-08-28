@@ -32,24 +32,38 @@ async function getWhatsAppChannel(pool: Awaited<ReturnType<typeof getPool>>, ins
     .input("institucionId", sql.Int, institucionId)
     .query(`
       SELECT TOP 1
-        WhatsAppCanalId,
-        InstitucionId,
-        Proveedor,
-        TipoCanal,
-        CanalExternoId,
-        NumeroOrigen,
-        NombreVisible,
-        Estado,
-        EsFallback,
-        Activo,
-        CASE WHEN ApiKeyCifrada IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS TieneApiKey,
-        FechaUltimaValidacion,
-        UltimoError,
-        CreatedAt,
-        UpdatedAt
-      FROM dbo.WhatsAppCanal
-      WHERE InstitucionId = @institucionId
-      ORDER BY Activo DESC, WhatsAppCanalId DESC
+        c.WhatsAppCanalId,
+        c.InstitucionId,
+        c.Proveedor,
+        c.TipoCanal,
+        c.CanalExternoId,
+        c.NumeroOrigen,
+        c.NombreVisible,
+        c.Estado,
+        c.EsFallback,
+        c.Activo,
+        CASE WHEN c.ApiKeyCifrada IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS TieneApiKey,
+        c.FechaUltimaValidacion,
+        c.UltimoError,
+        c.CreatedAt,
+        c.UpdatedAt
+      FROM dbo.WhatsAppCanal c
+      LEFT JOIN dbo.Institucion target ON target.InstitucionId = @institucionId
+      WHERE c.InstitucionId = @institucionId
+         OR (
+           c.EsFallback = 1
+           AND (
+             UPPER(LTRIM(RTRIM(target.Nombre))) = N'PROFE360'
+             OR UPPER(LTRIM(RTRIM(ISNULL(target.NombreComercial, N'')))) = N'PROFE360'
+           )
+         )
+      ORDER BY
+        CASE WHEN c.EsFallback = 1 AND (
+          UPPER(LTRIM(RTRIM(target.Nombre))) = N'PROFE360'
+          OR UPPER(LTRIM(RTRIM(ISNULL(target.NombreComercial, N'')))) = N'PROFE360'
+        ) THEN 0 ELSE 1 END,
+        c.Activo DESC,
+        c.WhatsAppCanalId DESC
     `);
   return result.recordset[0] || null;
 }
@@ -60,9 +74,9 @@ async function getProfe360WhatsAppChannel(pool: Awaited<ReturnType<typeof getPoo
     "c.NumeroOrigen, c.NombreVisible, c.Estado, c.EsFallback, c.Activo,",
     "CASE WHEN c.ApiKeyCifrada IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS TieneApiKey,",
     "c.FechaUltimaValidacion, c.UltimoError, c.CreatedAt, c.UpdatedAt",
-    "FROM dbo.WhatsAppCanal c INNER JOIN dbo.Institucion i ON i.InstitucionId = c.InstitucionId",
-    "WHERE UPPER(LTRIM(RTRIM(i.Nombre))) = N'PROFE360'",
-    "OR UPPER(LTRIM(RTRIM(ISNULL(i.NombreComercial, N'')))) = N'PROFE360'",
+    "FROM dbo.WhatsAppCanal c LEFT JOIN dbo.Institucion i ON i.InstitucionId = c.InstitucionId",
+    "WHERE c.EsFallback = 1",
+    "AND (c.InstitucionId IS NULL OR UPPER(LTRIM(RTRIM(i.Nombre))) = N'PROFE360' OR UPPER(LTRIM(RTRIM(ISNULL(i.NombreComercial, N'')))) = N'PROFE360')",
     "ORDER BY c.Activo DESC, c.WhatsAppCanalId DESC"
   ].join(" "));
   return result.recordset[0] || null;
@@ -322,6 +336,52 @@ router.put("/:id/whatsapp/plantillas", requireRoles("SUPER_ADMIN"), async (req, 
   } catch (error: any) {
     console.error("Error guardando plantillas WhatsApp:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron guardar las plantillas del colegio" });
+  }
+});
+
+async function getWabaTemplatesFrom2Chat(pool: Awaited<ReturnType<typeof getPool>>, channel: any) {
+  const apiKey = await getStoredWhatsAppApiKey(pool, channel);
+  if (!apiKey) throw new Error("El canal no tiene API Key de 2Chat configurada");
+  if (!channel?.NumeroOrigen) throw new Error("El canal no tiene número de origen configurado");
+  const url = new URL("https://api.p.2chat.io/open/waba/templates");
+  url.searchParams.set("phone_number", channel.NumeroOrigen);
+  url.searchParams.set("limit", "200");
+  const response = await fetch(url, { headers: { "Content-Type": "application/json", "X-User-API-Key": apiKey } });
+  const body: any = await response.json().catch(() => null);
+  if (!response.ok || body?.success === false) throw new Error(body?.error_message || `2Chat respondió HTTP ${response.status}`);
+  return (Array.isArray(body?.templates) ? body.templates : []).map((item: any) => ({
+    uuid: String(item?.uuid || ""),
+    name: String(item?.name || ""),
+    status: String(item?.status || ""),
+    category: String(item?.category || ""),
+    language: String(item?.language || item?.language_code || ""),
+    templateContent: String(item?.template_content || item?.content || "")
+  })).filter((item: any) => item.uuid && item.name);
+}
+
+router.get("/whatsapp/fallback/plantillas-disponibles", requireRoles("SUPER_ADMIN"), async (_req, res) => {
+  try {
+    const pool = await getPool();
+    const channel = await getProfe360WhatsAppChannel(pool);
+    if (!channel) return res.status(404).json({ ok: false, message: "Primero configurá el canal WABA de Profe360" });
+    return ok(res, { plantillas: await getWabaTemplatesFrom2Chat(pool, channel) });
+  } catch (error: any) {
+    console.error("Error consultando plantillas WABA en 2Chat:", error);
+    return res.status(502).json({ ok: false, message: error?.message || "No se pudieron consultar las plantillas en 2Chat" });
+  }
+});
+
+router.get("/:id/whatsapp/plantillas-disponibles", requireRoles("SUPER_ADMIN"), async (req, res) => {
+  try {
+    const institucionId = Number(req.params.id);
+    if (!institucionId) return badRequest(res, "Id de institución inválido");
+    const pool = await getPool();
+    const channel = await getWhatsAppChannel(pool, institucionId);
+    if (!channel) return res.status(404).json({ ok: false, message: "Primero configurá el canal WABA del colegio" });
+    return ok(res, { plantillas: await getWabaTemplatesFrom2Chat(pool, channel) });
+  } catch (error: any) {
+    console.error("Error consultando plantillas WABA en 2Chat:", error);
+    return res.status(502).json({ ok: false, message: error?.message || "No se pudieron consultar las plantillas en 2Chat" });
   }
 });
 
@@ -781,10 +841,21 @@ router.post("/:id/whatsapp/waba/vincular", requireRoles("SUPER_ADMIN"), async (r
 
       const current = await transaction.request()
         .input("institucionId", sql.Int, institucionId)
-        .query("SELECT TOP 1 WhatsAppCanalId FROM dbo.WhatsAppCanal WITH (UPDLOCK, HOLDLOCK) WHERE InstitucionId = @institucionId ORDER BY Activo DESC, WhatsAppCanalId DESC");
+        .input("esProfe360", sql.Bit, Boolean(seleccion.EsProfe360))
+        .query(`
+          SELECT TOP 1 WhatsAppCanalId
+          FROM dbo.WhatsAppCanal WITH (UPDLOCK, HOLDLOCK)
+          WHERE InstitucionId = @institucionId
+             OR (@esProfe360 = 1 AND EsFallback = 1)
+          ORDER BY
+            CASE WHEN @esProfe360 = 1 AND EsFallback = 1 THEN 0 ELSE 1 END,
+            Activo DESC,
+            WhatsAppCanalId DESC
+        `);
       const whatsappCanalId = Number(current.recordset[0]?.WhatsAppCanalId || 0);
       const request = transaction.request()
         .input("institucionId", sql.Int, institucionId)
+        .input("esProfe360", sql.Bit, Boolean(seleccion.EsProfe360))
         .input("canalExternoId", sql.NVarChar(150), waba.uuid)
         .input("numeroOrigen", sql.NVarChar(30), waba.phoneNumber)
         .input("nombreVisible", sql.NVarChar(200), waba.verifiedName || waba.friendlyName || null)
@@ -800,7 +871,8 @@ router.post("/:id/whatsapp/waba/vincular", requireRoles("SUPER_ADMIN"), async (r
               UltimoError = NULL, UpdatedAt = SYSDATETIME()
           OUTPUT INSERTED.WhatsAppCanalId, INSERTED.InstitucionId, INSERTED.CanalExternoId,
                  INSERTED.NumeroOrigen, INSERTED.NombreVisible, INSERTED.Estado, INSERTED.Activo
-          WHERE WhatsAppCanalId = @whatsappCanalId AND InstitucionId = @institucionId
+          WHERE WhatsAppCanalId = @whatsappCanalId
+            AND (InstitucionId = @institucionId OR (@esProfe360 = 1 AND EsFallback = 1))
         `);
       } else {
         saved = await request.query(`

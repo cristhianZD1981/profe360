@@ -6425,11 +6425,21 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
               grupoId: Number(grupoId),
               grupoClaseId: Number(grupoClaseId || 0) || undefined,
               estudianteId,
+              profesorUsuarioId: Number(asignacion?.UsuarioId || getUserId(req)) || undefined,
               solicitadoPorUsuarioId: getUserId(req),
               tipoMensaje: "ASISTENCIA",
               telefono,
               mensaje: texto,
-              templateParams: [texto]
+              templateParams: [
+                vars.alumno,
+                vars.seccion,
+                vars.materia,
+                vars.fecha,
+                vars.detalle,
+                vars.lecciones,
+                vars.profesor,
+                vars.colegio
+              ]
             });
             notificaciones.push({ estudianteId, canal: "whatsapp", telefono, ...whatsapp });
             if (whatsapp?.enviado === true) waEnviado = true;

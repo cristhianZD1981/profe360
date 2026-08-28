@@ -1617,10 +1617,20 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
         grupoId: Number(row.GrupoId || 0) || undefined,
         estudianteId: Number(row.EstudianteId || 0) || undefined,
         solicitadoPorUsuarioId: getAuthUserId(req),
+        profesorUsuarioId: Number(row.UsuarioReportaId || getAuthUserId(req)) || undefined,
         tipoMensaje: "BOLETA",
         telefono,
         mensaje: mensajeWhatsApp,
-        templateParams: [mensajeWhatsApp]
+        templateParams: [
+          consecutivo,
+          fechaCR,
+          nombreColegio,
+          estudianteNombre,
+          String(row.Seccion || ""),
+          String(row.LugarAcontecimiento || ""),
+          String(row.NombreFuncionario || ""),
+          String(row.DetalleHechos || "")
+        ]
       });
       if (respuesta?.enviado === true) {
         whatsappEnviado = true;

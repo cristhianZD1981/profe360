@@ -4504,15 +4504,26 @@ router.get("/admin/whatsapp/filtros", async (req, res) => {
       OUTER APPLY (
         SELECT TOP 1 c.Estado, c.NumeroOrigen, c.TipoCanal
         FROM dbo.WhatsAppCanal c
-        WHERE c.InstitucionId = i.InstitucionId AND c.EsFallback = 0
-        ORDER BY c.Activo DESC, c.WhatsAppCanalId DESC
+        WHERE c.InstitucionId = i.InstitucionId
+           OR (
+             c.EsFallback = 1
+             AND (
+               UPPER(LTRIM(RTRIM(i.Nombre))) = N'PROFE360'
+               OR UPPER(LTRIM(RTRIM(ISNULL(i.NombreComercial, N'')))) = N'PROFE360'
+             )
+           )
+        ORDER BY
+          CASE WHEN c.EsFallback = 1 AND (
+            UPPER(LTRIM(RTRIM(i.Nombre))) = N'PROFE360'
+            OR UPPER(LTRIM(RTRIM(ISNULL(i.NombreComercial, N'')))) = N'PROFE360'
+          ) THEN 0 ELSE 1 END,
+          c.Activo DESC,
+          c.WhatsAppCanalId DESC
       ) ownChannel
       OUTER APPLY (
         SELECT TOP 1 c.Estado, c.NumeroOrigen, c.TipoCanal
         FROM dbo.WhatsAppCanal c
-        INNER JOIN dbo.Institucion pi ON pi.InstitucionId = c.InstitucionId
-        WHERE (UPPER(LTRIM(RTRIM(pi.Nombre))) = N'PROFE360'
-            OR UPPER(LTRIM(RTRIM(ISNULL(pi.NombreComercial, N'')))) = N'PROFE360')
+        WHERE c.EsFallback = 1
         ORDER BY c.Activo DESC, c.WhatsAppCanalId DESC
       ) genericChannel
       WHERE i.Activo = 1
