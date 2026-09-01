@@ -628,7 +628,10 @@ const initialFechaClaseForm = {
 
 const initialFechaClaseSyncForm = {
   periodoId: "",
-  fechaCorte: ""
+  fechaCorte: "",
+  grupoId: "",
+  materiaId: "",
+  docenteUsuarioId: ""
 };
 
 const academicoBulkImportLabels: Record<AcademicoBulkImportKey, { title: string; filename: string }> = {
@@ -829,6 +832,14 @@ const initialOpenSections: Record<FormSectionKey, boolean> = {
   configuracionCorreo: false
 };
 
+function filtrarPorColumnas<T>(rows: T[], filters: Record<string, string>, values: (row: T) => Record<string, unknown>) {
+  return rows.filter((row) => Object.entries(filters).every(([key, filter]) => {
+    const needle = String(filter || "").trim().toLocaleLowerCase();
+    if (!needle) return true;
+    return String(values(row)[key] ?? "").toLocaleLowerCase().includes(needle);
+  }));
+}
+
 export default function AcademicoPage({ initialTab = "anios", visibleTabs }: AcademicoPageProps) {
   const location = useLocation();
   const { user } = useAuth();
@@ -960,6 +971,11 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [horarioSearch, setHorarioSearch] = useState("");
   const [fechaClaseSearch, setFechaClaseSearch] = useState("");
   const [feriadoSearch, setFeriadoSearch] = useState("");
+  const [grupoColumnFilters, setGrupoColumnFilters] = useState<Record<string, string>>({});
+  const [asignacionColumnFilters, setAsignacionColumnFilters] = useState<Record<string, string>>({});
+  const [grupoMateriaColumnFilters, setGrupoMateriaColumnFilters] = useState<Record<string, string>>({});
+  const [horarioColumnFilters, setHorarioColumnFilters] = useState<Record<string, string>>({});
+  const [fechaClaseColumnFilters, setFechaClaseColumnFilters] = useState<Record<string, string>>({});
 
   const [incluirAniosInactivos, setIncluirAniosInactivos] = useState(false);
   const [incluirPeriodosInactivos, setIncluirPeriodosInactivos] = useState(false);
@@ -1501,7 +1517,12 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           await Promise.all([loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas), loadBloques(bloqueSearch), loadHorarios(horarioSearch, incluirHorariosInactivos)]);
           break;
         case "fechasClase":
-          await Promise.all([loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas), loadBloques(bloqueSearch), loadFechasClase(fechaClaseSearch)]);
+          await Promise.all([
+            loadCatalogos(),
+            loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas),
+            loadBloques(bloqueSearch),
+            loadFechasClase(fechaClaseSearch)
+          ]);
           break;
         case "feriados":
           await loadFeriados(feriadoSearch, incluirFeriadosInactivos);
@@ -2868,7 +2889,10 @@ function resetMatriculaForm() {
     try {
       const payload = {
         periodoId: Number(fechaClaseSyncForm.periodoId),
-        fechaCorte: fechaClaseSyncForm.fechaCorte || null
+        fechaCorte: fechaClaseSyncForm.fechaCorte || null,
+        grupoId: fechaClaseSyncForm.grupoId ? Number(fechaClaseSyncForm.grupoId) : null,
+        materiaId: fechaClaseSyncForm.materiaId ? Number(fechaClaseSyncForm.materiaId) : null,
+        docenteUsuarioId: fechaClaseSyncForm.docenteUsuarioId ? Number(fechaClaseSyncForm.docenteUsuarioId) : null
       };
 
       const response = await api.post("/academico/fechas-clase/sync-periodo/preview", payload);
@@ -2907,7 +2931,10 @@ function resetMatriculaForm() {
     try {
       const payload = {
         periodoId: Number(fechaClaseSyncForm.periodoId),
-        fechaCorte: fechaClaseSyncForm.fechaCorte || null
+        fechaCorte: fechaClaseSyncForm.fechaCorte || null,
+        grupoId: fechaClaseSyncForm.grupoId ? Number(fechaClaseSyncForm.grupoId) : null,
+        materiaId: fechaClaseSyncForm.materiaId ? Number(fechaClaseSyncForm.materiaId) : null,
+        docenteUsuarioId: fechaClaseSyncForm.docenteUsuarioId ? Number(fechaClaseSyncForm.docenteUsuarioId) : null
       };
 
       const response = await api.post("/academico/fechas-clase/sync-periodo/apply", payload);
@@ -4001,6 +4028,36 @@ function resetMatriculaForm() {
     }
   }
 
+  const gruposFiltrados = filtrarPorColumnas(grupos, grupoColumnFilters, (item) => ({
+    id: item.GrupoId, anio: item.AnioNombre, grupo: item.Nombre, nivel: item.Nivel,
+    ciclo: getCicloPorNivel(item.Nivel), jornada: item.Jornada, estado: item.Activo ? "Activo" : "Inactivo"
+  }));
+  const asignacionesFiltradas = filtrarPorColumnas(asignaciones, asignacionColumnFilters, (item) => ({
+    id: item.AsignacionDocenteId, docente: getTeacherFullName(item), grupo: `${item.GrupoNombre || ""} ${item.GrupoNivel || ""}`,
+    materia: item.MateriaNombre, anio: item.AnioNombre, periodo: item.PeriodoNombre, tipo: item.TipoAsignacion,
+    estado: item.Activo ? "Activo" : "Inactivo"
+  }));
+  const gruposMateriaFiltrados = filtrarPorColumnas(gruposMateria, grupoMateriaColumnFilters, (item) => ({
+    id: item.GrupoMateriaId, grupo: `${item.GrupoNombre || ""} ${item.GrupoNivel || ""}`,
+    materia: `${item.MateriaNombre || ""} ${item.MateriaCodigo || ""}`, periodo: item.PeriodoNombre,
+    estado: item.Activo ? "Activo" : "Inactivo"
+  }));
+  const horariosFiltrados = filtrarPorColumnas(horarios, horarioColumnFilters, (item) => ({
+    id: item.HorarioGrupoId, grupo: `${item.GrupoNombre || ""} ${item.GrupoNivel || ""}`, materia: item.MateriaNombre,
+    periodo: item.PeriodoNombre, dia: diaSemanaLabel(item.DiaSemana), bloque: item.BloqueNombre,
+    hora: `${formatTime(item.HoraInicio)} ${formatTime(item.HoraFin)}`, estado: item.Activo ? "Activo" : "Inactivo"
+  }));
+  const fechasClaseFiltradas = filtrarPorColumnas(fechasClase, fechaClaseColumnFilters, (item) => ({
+    id: item.FechaClaseId, fecha: formatDate(item.Fecha), grupo: `${item.GrupoNombre || ""} ${item.GrupoNivel || ""}`,
+    materia: item.MateriaNombre, periodo: item.PeriodoNombre, bloque: item.BloqueNombre,
+    dia: diaSemanaLabel(item.DiaSemana), extraordinaria: item.EsExtraordinaria ? "Sí" : "No"
+  }));
+
+  const columnFilterInput = (value: string, onChange: (value: string) => void, placeholder = "Filtrar") => (
+    <input value={value || ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder}
+      aria-label={placeholder} style={{ width: "100%", minWidth: "70px", boxSizing: "border-box", padding: "5px 7px", border: "1px solid #cbd5e1", borderRadius: "6px" }} />
+  );
+
   return (
     <div className="stack">
       <section className="card">
@@ -4720,9 +4777,10 @@ function resetMatriculaForm() {
                 <table>
                   <thead>
                     <tr><th>ID</th><th>Año lectivo</th><th>Grupo</th><th>Nivel</th><th>Ciclo</th><th>Jornada</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>{columnFilterInput(grupoColumnFilters.id, (v) => setGrupoColumnFilters((p) => ({ ...p, id: v })))}</th><th>{columnFilterInput(grupoColumnFilters.anio, (v) => setGrupoColumnFilters((p) => ({ ...p, anio: v })))}</th><th>{columnFilterInput(grupoColumnFilters.grupo, (v) => setGrupoColumnFilters((p) => ({ ...p, grupo: v })))}</th><th>{columnFilterInput(grupoColumnFilters.nivel, (v) => setGrupoColumnFilters((p) => ({ ...p, nivel: v })))}</th><th>{columnFilterInput(grupoColumnFilters.ciclo, (v) => setGrupoColumnFilters((p) => ({ ...p, ciclo: v })))}</th><th>{columnFilterInput(grupoColumnFilters.jornada, (v) => setGrupoColumnFilters((p) => ({ ...p, jornada: v })))}</th><th>{columnFilterInput(grupoColumnFilters.estado, (v) => setGrupoColumnFilters((p) => ({ ...p, estado: v })))}</th><th /></tr>
                   </thead>
                   <tbody>
-                    {grupos.map((item) => (
+                    {gruposFiltrados.map((item) => (
                       <tr key={item.GrupoId}>
                         <td>{item.GrupoId}</td>
                         <td>{item.AnioNombre || ""}</td>
@@ -6116,9 +6174,10 @@ function resetMatriculaForm() {
                 <table>
                   <thead>
                     <tr><th>ID</th><th>Docente</th><th>Grupo</th><th>Materia</th><th>Año</th><th>Período</th><th>Tipo</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>{columnFilterInput(asignacionColumnFilters.id, (v) => setAsignacionColumnFilters((p) => ({ ...p, id: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.docente, (v) => setAsignacionColumnFilters((p) => ({ ...p, docente: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.grupo, (v) => setAsignacionColumnFilters((p) => ({ ...p, grupo: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.materia, (v) => setAsignacionColumnFilters((p) => ({ ...p, materia: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.anio, (v) => setAsignacionColumnFilters((p) => ({ ...p, anio: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.periodo, (v) => setAsignacionColumnFilters((p) => ({ ...p, periodo: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.tipo, (v) => setAsignacionColumnFilters((p) => ({ ...p, tipo: v })))}</th><th>{columnFilterInput(asignacionColumnFilters.estado, (v) => setAsignacionColumnFilters((p) => ({ ...p, estado: v })))}</th><th /></tr>
                   </thead>
                   <tbody>
-                    {asignaciones.map((item) => (
+                    {asignacionesFiltradas.map((item) => (
                       <tr key={item.AsignacionDocenteId}>
                         <td>{item.AsignacionDocenteId}</td>
                         <td>{getTeacherFullName(item)}</td>
@@ -6502,9 +6561,10 @@ function resetMatriculaForm() {
                 <table>
                   <thead>
                     <tr><th>ID</th><th>Grupo</th><th>Materia</th><th>Período</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>{columnFilterInput(grupoMateriaColumnFilters.id, (v) => setGrupoMateriaColumnFilters((p) => ({ ...p, id: v })))}</th><th>{columnFilterInput(grupoMateriaColumnFilters.grupo, (v) => setGrupoMateriaColumnFilters((p) => ({ ...p, grupo: v })))}</th><th>{columnFilterInput(grupoMateriaColumnFilters.materia, (v) => setGrupoMateriaColumnFilters((p) => ({ ...p, materia: v })))}</th><th>{columnFilterInput(grupoMateriaColumnFilters.periodo, (v) => setGrupoMateriaColumnFilters((p) => ({ ...p, periodo: v })))}</th><th>{columnFilterInput(grupoMateriaColumnFilters.estado, (v) => setGrupoMateriaColumnFilters((p) => ({ ...p, estado: v })))}</th><th /></tr>
                   </thead>
                   <tbody>
-                    {gruposMateria.map((item) => (
+                    {gruposMateriaFiltrados.map((item) => (
                       <tr key={item.GrupoMateriaId}>
                         <td>{item.GrupoMateriaId}</td>
                         <td>{item.GrupoNombre || ""} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>
@@ -6613,9 +6673,10 @@ function resetMatriculaForm() {
                 <table>
                   <thead>
                     <tr><th>ID</th><th>Grupo</th><th>Materia</th><th>Período</th><th>Día</th><th>Bloque</th><th>Hora</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>{columnFilterInput(horarioColumnFilters.id, (v) => setHorarioColumnFilters((p) => ({ ...p, id: v })))}</th><th>{columnFilterInput(horarioColumnFilters.grupo, (v) => setHorarioColumnFilters((p) => ({ ...p, grupo: v })))}</th><th>{columnFilterInput(horarioColumnFilters.materia, (v) => setHorarioColumnFilters((p) => ({ ...p, materia: v })))}</th><th>{columnFilterInput(horarioColumnFilters.periodo, (v) => setHorarioColumnFilters((p) => ({ ...p, periodo: v })))}</th><th>{columnFilterInput(horarioColumnFilters.dia, (v) => setHorarioColumnFilters((p) => ({ ...p, dia: v })))}</th><th>{columnFilterInput(horarioColumnFilters.bloque, (v) => setHorarioColumnFilters((p) => ({ ...p, bloque: v })))}</th><th>{columnFilterInput(horarioColumnFilters.hora, (v) => setHorarioColumnFilters((p) => ({ ...p, hora: v })))}</th><th>{columnFilterInput(horarioColumnFilters.estado, (v) => setHorarioColumnFilters((p) => ({ ...p, estado: v })))}</th><th /></tr>
                   </thead>
                   <tbody>
-                    {horarios.map((item) => (
+                    {horariosFiltrados.map((item) => (
                       <tr key={item.HorarioGrupoId}>
                         <td>{item.HorarioGrupoId}</td>
                         <td>{item.GrupoNombre || ""} {item.GrupoNivel ? `- ${item.GrupoNivel}` : ""}</td>
@@ -6816,8 +6877,8 @@ function resetMatriculaForm() {
             <section className="card" style={{ marginBottom: 0 }}>
               <h3>Sincronización por período</h3>
               <p style={{ marginTop: 0, color: "#475569", lineHeight: 1.5 }}>
-                Este proceso recalcula las fechas de clase del período completo y solo aplica cambios a fechas futuras.
-                El histórico anterior y las fechas con asistencia registrada se conservan.
+                Este proceso recalcula las fechas de clase del período o del filtro seleccionado y solo aplica cambios a fechas futuras.
+                El histórico anterior y las fechas con asistencia registrada se conservan. Si dejás los filtros en “Todos”, se mantiene la sincronización completa del período.
               </p>
 
               <form className="form" onSubmit={handleFechaClaseSyncPreview}>
@@ -6825,7 +6886,10 @@ function resetMatriculaForm() {
                   Período
                   <select
                     value={fechaClaseSyncForm.periodoId}
-                    onChange={(e) => setFechaClaseSyncForm({ ...fechaClaseSyncForm, periodoId: e.target.value })}
+                    onChange={(e) => {
+                      setFechaClaseSyncForm({ ...fechaClaseSyncForm, periodoId: e.target.value });
+                      setFechaClaseSyncPreview(null);
+                    }}
                   >
                     <option value="">Seleccione</option>
                     {periodos.filter((p) => p.Activo).map((item) => (
@@ -6841,8 +6905,65 @@ function resetMatriculaForm() {
                   <input
                     type="date"
                     value={fechaClaseSyncForm.fechaCorte}
-                    onChange={(e) => setFechaClaseSyncForm({ ...fechaClaseSyncForm, fechaCorte: e.target.value })}
+                    onChange={(e) => {
+                      setFechaClaseSyncForm({ ...fechaClaseSyncForm, fechaCorte: e.target.value });
+                      setFechaClaseSyncPreview(null);
+                    }}
                   />
+                </label>
+
+                <label>
+                  Sección / grupo (opcional)
+                  <select
+                    value={fechaClaseSyncForm.grupoId}
+                    onChange={(e) => {
+                      setFechaClaseSyncForm({ ...fechaClaseSyncForm, grupoId: e.target.value });
+                      setFechaClaseSyncPreview(null);
+                    }}
+                  >
+                    <option value="">Todos los grupos</option>
+                    {gruposActivos.map((item) => (
+                      <option key={item.GrupoId} value={item.GrupoId}>
+                        {getGrupoSeccionLabel(item)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Materia (opcional)
+                  <select
+                    value={fechaClaseSyncForm.materiaId}
+                    onChange={(e) => {
+                      setFechaClaseSyncForm({ ...fechaClaseSyncForm, materiaId: e.target.value });
+                      setFechaClaseSyncPreview(null);
+                    }}
+                  >
+                    <option value="">Todas las materias</option>
+                    {materiasActivas.map((item) => (
+                      <option key={item.MateriaId} value={item.MateriaId}>
+                        {item.Nombre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Profesor (opcional)
+                  <select
+                    value={fechaClaseSyncForm.docenteUsuarioId}
+                    onChange={(e) => {
+                      setFechaClaseSyncForm({ ...fechaClaseSyncForm, docenteUsuarioId: e.target.value });
+                      setFechaClaseSyncPreview(null);
+                    }}
+                  >
+                    <option value="">Todos los profesores</option>
+                    {docentesCatalogo.map((item) => (
+                      <option key={item.UsuarioId} value={item.UsuarioId}>
+                        {getTeacherFullName(item)}
+                      </option>
+                    ))}
+                  </select>
                 </label>
 
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
@@ -7048,9 +7169,20 @@ function resetMatriculaForm() {
               <th>Extraordinaria</th>
               <th>Acciones</th>
             </tr>
+            <tr>
+              <th>{columnFilterInput(fechaClaseColumnFilters.id, (v) => setFechaClaseColumnFilters((p) => ({ ...p, id: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.fecha, (v) => setFechaClaseColumnFilters((p) => ({ ...p, fecha: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.grupo, (v) => setFechaClaseColumnFilters((p) => ({ ...p, grupo: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.materia, (v) => setFechaClaseColumnFilters((p) => ({ ...p, materia: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.periodo, (v) => setFechaClaseColumnFilters((p) => ({ ...p, periodo: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.bloque, (v) => setFechaClaseColumnFilters((p) => ({ ...p, bloque: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.dia, (v) => setFechaClaseColumnFilters((p) => ({ ...p, dia: v })))}</th>
+              <th>{columnFilterInput(fechaClaseColumnFilters.extraordinaria, (v) => setFechaClaseColumnFilters((p) => ({ ...p, extraordinaria: v })))}</th>
+              <th />
+            </tr>
           </thead>
           <tbody>
-            {fechasClase.map((item) => (
+            {fechasClaseFiltradas.map((item) => (
               <tr key={item.FechaClaseId}>
                 <td>{item.FechaClaseId}</td>
                 <td>{formatDate(item.Fecha)}</td>

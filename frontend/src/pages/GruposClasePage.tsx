@@ -77,6 +77,12 @@ export default function GruposClasePage() {
   const [alumnoBusqueda, setAlumnoBusqueda] = useState("");
   const [subgruposAlumno, setSubgruposAlumno] = useState<any[]>([]);
   const [loadingBusquedaAlumno, setLoadingBusquedaAlumno] = useState(false);
+  const [gruposClaseColumnFilters, setGruposClaseColumnFilters] = useState({
+    grupo: "",
+    materia: "",
+    secciones: "",
+    profesores: ""
+  });
   const horarioRequestKeyRef = useRef("");
   const horarioContextKeyRef = useRef("");
 
@@ -89,7 +95,7 @@ export default function GruposClasePage() {
       if (!ready) return;
       const [catalogResponse, listResponse] = await Promise.all([
         api.get("/grupos-clase/catalogos"),
-        api.get("/grupos-clase")
+        api.get("/grupos-clase", { params: { _ts: Date.now() } })
       ]);
       const catalogs = dataOf(catalogResponse);
       setCatalogos(catalogs);
@@ -194,6 +200,19 @@ export default function GruposClasePage() {
       `${item.Identificacion || ""} ${item.PrimerApellido || ""} ${item.SegundoApellido || ""} ${item.Nombre || ""} ${item.GrupoNombre || ""} ${item.Especialidad || ""}`
     ).includes(q));
   }, [candidatos, estudianteSearch]);
+
+  const gruposClaseFiltrados = useMemo(() => gruposClase.filter((item: any) => {
+    const valores = {
+      grupo: `${item.Nombre || ""} ${item.AnioNombre || ""} ${item.PeriodoNombre || ""}`,
+      materia: item.MateriaNombre || "",
+      secciones: item.Secciones || "",
+      profesores: item.Profesores || ""
+    };
+    return Object.entries(gruposClaseColumnFilters).every(([key, value]) => {
+      const filtro = normalizeSearch(value);
+      return !filtro || normalizeSearch(valores[key]).includes(filtro);
+    });
+  }), [gruposClase, gruposClaseColumnFilters]);
 
   const horariosPorPatron = useMemo(() => {
     const map = new Map<string, any>();
@@ -329,7 +348,7 @@ export default function GruposClasePage() {
   async function loadCandidates(selectSuggested = true, sourceForm = form) {
     if (!sourceForm.anioLectivoId || !sourceForm.grupoIds.length) {
       setError("Seleccioná el año y al menos una sección");
-      return;
+      return null;
     }
     setLoadingCandidates(true);
     setError("");
@@ -350,6 +369,7 @@ export default function GruposClasePage() {
           : [];
         setForm((current) => ({ ...current, matriculaIds: selected }));
       }
+      return rows;
     } catch (requestError: any) {
       const status = requestError?.response?.status;
       const serverMessage = requestError?.response?.data?.message;
@@ -358,6 +378,7 @@ export default function GruposClasePage() {
           ? "No se pudieron cargar los estudiantes. La consulta tardó demasiado; probá con menos secciones o intentá de nuevo."
           : (serverMessage || "No se pudieron cargar los estudiantes")
       );
+      return null;
     } finally {
       setLoadingCandidates(false);
     }
@@ -366,8 +387,9 @@ export default function GruposClasePage() {
   async function editGroup(id: number) {
     setLoading(true);
     setError("");
+    setMessage("");
     try {
-      const detail = dataOf(await api.get(`/grupos-clase/${id}`));
+      const detail = dataOf(await api.get(`/grupos-clase/${id}`, { params: { _ts: Date.now() } }));
       const next = {
         nombre: detail.Nombre || "",
         descripcion: detail.Descripcion || "",
@@ -386,8 +408,36 @@ export default function GruposClasePage() {
       };
       setEditingId(id);
       setForm(next);
-      await loadCandidates(false, next);
-      setForm(next);
+      const candidateRows = await loadCandidates(false, next);
+      if (candidateRows !== null) {
+        const availableCandidateIds = new Set(
+          candidateRows.map((row: any) => Number(row.MatriculaId))
+        );
+        const removedStudentIds = next.matriculaIds.filter(
+          (matriculaId: number) => !availableCandidateIds.has(matriculaId)
+        );
+        const reconciledForm = {
+          ...next,
+          matriculaIds: next.matriculaIds.filter(
+            (matriculaId: number) => availableCandidateIds.has(matriculaId)
+          )
+        };
+        setForm(reconciledForm);
+        if (removedStudentIds.length) {
+          const storedStudents = detail.estudiantesGuardados || [];
+          const removedNames = storedStudents
+            .filter((student: any) => removedStudentIds.includes(Number(student.MatriculaId)))
+            .map((student: any) => [
+              student.PrimerApellido,
+              student.SegundoApellido,
+              student.Nombre
+            ].filter(Boolean).join(" ").trim())
+            .filter(Boolean);
+          setMessage(
+            `${removedStudentIds.length} estudiante(s) inactivo(s) o no elegible(s) se retirarán del grupo al guardar${removedNames.length ? `: ${removedNames.join(", ")}` : ""}.`
+          );
+        }
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (requestError: any) {
       setError(requestError?.response?.data?.message || "No se pudo abrir el grupo");
@@ -420,6 +470,23 @@ export default function GruposClasePage() {
       };
       if (editingId) {
         await api.put(`/grupos-clase/${editingId}`, payload);
+        const verifiedDetail = dataOf(await api.get(`/grupos-clase/${editingId}`, {
+          params: { _ts: Date.now() }
+        }));
+        const requestedPatterns = payload.leccionPatrones
+          .map(lessonPatternKey)
+          .sort();
+        const persistedPatterns = (verifiedDetail?.leccionPatrones || [])
+          .map(lessonPatternKey)
+          .sort();
+        if (requestedPatterns.join(",") !== persistedPatterns.join(",")) {
+          const missingPatterns = requestedPatterns.filter(
+            (key: string) => !persistedPatterns.includes(key)
+          );
+          throw new Error(
+            `El servidor respondió que actualizó el grupo, pero no conservó ${missingPatterns.length} lección(es): ${missingPatterns.join(", ")}`
+          );
+        }
       } else {
         await api.post("/grupos-clase", payload);
       }
@@ -430,9 +497,22 @@ export default function GruposClasePage() {
       const responseData = requestError?.response?.data || {};
       const details = responseData.issues ?? responseData.errors;
       const detailMessage = Array.isArray(details)
-        ? details.filter(Boolean).join(". ")
+        ? `${details.some((item: any) => item && typeof item === "object" && item.SeccionActual) ? "Los siguientes estudiantes están fuera de las secciones seleccionadas:\n\n" : ""}${details.filter(Boolean).map((item: any) => {
+            if (typeof item === "string") return item;
+            const nombre = [item.PrimerApellido, item.SegundoApellido, item.Nombre]
+              .filter(Boolean)
+              .join(" ")
+              .trim();
+            const identificacion = item.Identificacion ? `Cédula: ${item.Identificacion}` : "Cédula no disponible";
+            const seccion = item.SeccionActual
+              ? `Sección actual: ${item.SeccionActual}${item.NivelActual ? ` - ${item.NivelActual}` : ""}`
+              : "Sección actual no disponible";
+            return nombre
+              ? `- ${nombre} — ${identificacion} — ${seccion} — Motivo: ${item.Motivo || "Registro fuera de las secciones seleccionadas"}`
+              : String(item.Motivo || item);
+          }).join("\n")}`
         : (typeof details === "string" ? details : "");
-      setError(detailMessage || responseData.message || "No se pudo guardar");
+      setError(detailMessage || responseData.message || requestError?.message || "No se pudo guardar");
     } finally {
       setLoading(false);
     }
@@ -600,7 +680,7 @@ export default function GruposClasePage() {
         </p>
       </header>
 
-      {error ? <div style={{ ...panel, borderColor: "#ef4444", background: "#fef2f2", color: "#991b1b" }}>{error}</div> : null}
+      {error ? <div style={{ ...panel, borderColor: "#ef4444", background: "#fef2f2", color: "#991b1b", whiteSpace: "pre-line" }}>{error}</div> : null}
       {message ? <div style={{ ...panel, borderColor: "#22c55e", background: "#f0fdf4", color: "#166534" }}>{message}</div> : null}
 
       <section style={panel}>
@@ -939,9 +1019,27 @@ export default function GruposClasePage() {
         <h3 style={{ marginTop: 0 }}>Grupos de clase configurados</h3>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={tableHeader}>Grupo</th><th style={tableHeader}>Materia</th><th style={tableHeader}>Secciones</th><th style={tableHeader}>Profesor(es)</th><th style={tableHeader}>Estudiantes</th><th style={tableHeader}></th></tr></thead>
+            <thead>
+              <tr><th style={tableHeader}>Grupo</th><th style={tableHeader}>Materia</th><th style={tableHeader}>Secciones</th><th style={tableHeader}>Profesor(es)</th><th style={tableHeader}>Estudiantes</th><th style={tableHeader}></th></tr>
+              <tr>
+                <th style={tableHeader}>
+                  <input style={{ ...input, marginTop: 0 }} value={gruposClaseColumnFilters.grupo} onChange={(e) => setGruposClaseColumnFilters((current) => ({ ...current, grupo: e.target.value }))} placeholder="Filtrar grupo" aria-label="Filtrar grupo" />
+                </th>
+                <th style={tableHeader}>
+                  <input style={{ ...input, marginTop: 0 }} value={gruposClaseColumnFilters.materia} onChange={(e) => setGruposClaseColumnFilters((current) => ({ ...current, materia: e.target.value }))} placeholder="Filtrar materia" aria-label="Filtrar materia" />
+                </th>
+                <th style={tableHeader}>
+                  <input style={{ ...input, marginTop: 0 }} value={gruposClaseColumnFilters.secciones} onChange={(e) => setGruposClaseColumnFilters((current) => ({ ...current, secciones: e.target.value }))} placeholder="Filtrar secciones" aria-label="Filtrar secciones" />
+                </th>
+                <th style={tableHeader}>
+                  <input style={{ ...input, marginTop: 0 }} value={gruposClaseColumnFilters.profesores} onChange={(e) => setGruposClaseColumnFilters((current) => ({ ...current, profesores: e.target.value }))} placeholder="Filtrar profesor" aria-label="Filtrar profesor" />
+                </th>
+                <th style={tableHeader}></th>
+                <th style={tableHeader}></th>
+              </tr>
+            </thead>
             <tbody>
-              {gruposClase.map((item: any, index: number) => (
+              {gruposClaseFiltrados.map((item: any, index: number) => (
                 <tr key={item.GrupoClaseId} style={{ background: index % 2 === 0 ? "#ffffff" : "#eaf1f8", color: "#0f172a" }}>
                   <td style={{ padding: 8 }}><strong>{item.Nombre}</strong><br /><small>{item.AnioNombre} · {item.PeriodoNombre}</small></td>
                   <td style={{ padding: 8 }}>{item.MateriaNombre}</td>
@@ -955,7 +1053,7 @@ export default function GruposClasePage() {
                   </td>
                 </tr>
               ))}
-              {!gruposClase.length ? <tr><td colSpan={6}>No hay grupos de clase configurados.</td></tr> : null}
+              {!gruposClaseFiltrados.length ? <tr><td colSpan={6}>{gruposClase.length ? "No hay grupos que coincidan con los filtros." : "No hay grupos de clase configurados."}</td></tr> : null}
             </tbody>
           </table>
         </div>

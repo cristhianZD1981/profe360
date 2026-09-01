@@ -390,7 +390,10 @@ async function buildFechaClaseSyncPreview(
   pool: any,
   institucionId: number,
   periodoId: number,
-  fechaCorteSolicitada?: string | null
+  fechaCorteSolicitada?: string | null,
+  grupoId?: number | null,
+  materiaId?: number | null,
+  docenteUsuarioId?: number | null
 ) {
   const periodoResult = await pool.request()
     .input("periodoId", sql.Int, periodoId)
@@ -475,6 +478,9 @@ async function buildFechaClaseSyncPreview(
     pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("periodoId", sql.Int, periodoId)
+      .input("grupoId", sql.Int, grupoId ?? null)
+      .input("materiaId", sql.Int, materiaId ?? null)
+      .input("docenteUsuarioId", sql.Int, docenteUsuarioId ?? null)
       .query(`
         SELECT
           hg.HorarioGrupoId,
@@ -504,12 +510,31 @@ async function buildFechaClaseSyncPreview(
           AND gm.PeriodoId = @periodoId
           AND gm.Activo = 1
           AND hg.Activo = 1
+          AND (@grupoId IS NULL OR gm.GrupoId = @grupoId)
+          AND (@materiaId IS NULL OR gm.MateriaId = @materiaId)
+          AND (
+            @docenteUsuarioId IS NULL OR EXISTS (
+              SELECT 1
+              FROM dbo.AsignacionDocente ad
+              WHERE ad.InstitucionId = @institucionId
+                AND ad.UsuarioId = @docenteUsuarioId
+                AND ad.GrupoId = gm.GrupoId
+                AND ad.MateriaId = gm.MateriaId
+                AND ad.AnioLectivoId = p.AnioLectivoId
+                AND ISNULL(ad.PeriodoId, 0) = ISNULL(gm.PeriodoId, 0)
+                AND ad.TipoAsignacion = N'PROFESOR_MATERIA'
+                AND ad.Activo = 1
+            )
+          )
         ORDER BY g.Nombre, m.Nombre, bh.OrdenVisual
       `),
     pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("periodoId", sql.Int, periodoId)
       .input("fechaCorteAplicada", sql.Date, formatDateOnly(fechaAplicadaDate))
+      .input("grupoId", sql.Int, grupoId ?? null)
+      .input("materiaId", sql.Int, materiaId ?? null)
+      .input("docenteUsuarioId", sql.Int, docenteUsuarioId ?? null)
       .query(`
         SELECT
           fc.FechaClaseId,
@@ -545,6 +570,22 @@ async function buildFechaClaseSyncPreview(
         WHERE g.InstitucionId = @institucionId
           AND fc.PeriodoId = @periodoId
           AND fc.Fecha >= @fechaCorteAplicada
+          AND (@grupoId IS NULL OR gm.GrupoId = @grupoId)
+          AND (@materiaId IS NULL OR gm.MateriaId = @materiaId)
+          AND (
+            @docenteUsuarioId IS NULL OR EXISTS (
+              SELECT 1
+              FROM dbo.AsignacionDocente ad
+              WHERE ad.InstitucionId = @institucionId
+                AND ad.UsuarioId = @docenteUsuarioId
+                AND ad.GrupoId = gm.GrupoId
+                AND ad.MateriaId = gm.MateriaId
+                AND ad.AnioLectivoId = p.AnioLectivoId
+                AND ISNULL(ad.PeriodoId, 0) = ISNULL(gm.PeriodoId, 0)
+                AND ad.TipoAsignacion = N'PROFESOR_MATERIA'
+                AND ad.Activo = 1
+            )
+          )
         ORDER BY fc.Fecha, g.Nombre, m.Nombre, bh.OrdenVisual
       `),
     pool.request()
@@ -9369,10 +9410,15 @@ router.post("/fechas-clase/sync-periodo/preview", async (req, res) => {
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
 
-    const { periodoId, fechaCorte } = req.body;
+    const { periodoId, fechaCorte, grupoId, materiaId, docenteUsuarioId } = req.body;
 
     if (!isValidNonNegativeId(periodoId)) {
       return badRequest(res, "periodoId es obligatorio");
+    }
+
+    const filtros = [grupoId, materiaId, docenteUsuarioId];
+    if (filtros.some((value) => value !== null && value !== undefined && value !== "" && !isValidNonNegativeId(value))) {
+      return badRequest(res, "Los filtros de grupo, materia y docente deben ser válidos");
     }
 
     const pool = await getPool();
@@ -9380,7 +9426,10 @@ router.post("/fechas-clase/sync-periodo/preview", async (req, res) => {
       pool,
       institucionId,
       Number(periodoId),
-      fechaCorte || null
+      fechaCorte || null,
+      grupoId === "" || grupoId == null ? null : Number(grupoId),
+      materiaId === "" || materiaId == null ? null : Number(materiaId),
+      docenteUsuarioId === "" || docenteUsuarioId == null ? null : Number(docenteUsuarioId)
     );
 
     return ok(res, preview, "Vista previa de sincronización generada correctamente");
@@ -9397,10 +9446,15 @@ router.post("/fechas-clase/sync-periodo/apply", async (req, res) => {
   const institucionId = getInstitutionId(req, res);
   if (institucionId === null) return;
 
-  const { periodoId, fechaCorte } = req.body;
+  const { periodoId, fechaCorte, grupoId, materiaId, docenteUsuarioId } = req.body;
 
   if (!isValidNonNegativeId(periodoId)) {
     return badRequest(res, "periodoId es obligatorio");
+  }
+
+  const filtros = [grupoId, materiaId, docenteUsuarioId];
+  if (filtros.some((value) => value !== null && value !== undefined && value !== "" && !isValidNonNegativeId(value))) {
+    return badRequest(res, "Los filtros de grupo, materia y docente deben ser válidos");
   }
 
   const pool = await getPool();
@@ -9411,7 +9465,10 @@ router.post("/fechas-clase/sync-periodo/apply", async (req, res) => {
       pool,
       institucionId,
       Number(periodoId),
-      fechaCorte || null
+      fechaCorte || null,
+      grupoId === "" || grupoId == null ? null : Number(grupoId),
+      materiaId === "" || materiaId == null ? null : Number(materiaId),
+      docenteUsuarioId === "" || docenteUsuarioId == null ? null : Number(docenteUsuarioId)
     );
 
     await transaction.begin();

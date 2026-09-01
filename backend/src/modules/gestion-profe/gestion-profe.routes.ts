@@ -6731,6 +6731,27 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/cierre", async (req, res) =
       Advertencias: []
     };
 
+    const auditoriaCierre = cierreActual?.CierreAcademicoCursoId
+      ? await pool.request()
+        .input("cierreId", sql.Int, Number(cierreActual.CierreAcademicoCursoId))
+        .query(`
+          SELECT
+            a.CierreAcademicoCursoAuditoriaId,
+            a.Accion,
+            a.EstadoAnterior,
+            a.EstadoNuevo,
+            a.Motivo,
+            a.CreatedAt,
+            LTRIM(RTRIM(CONCAT(ISNULL(u.Nombre, N''), N' ', ISNULL(u.PrimerApellido, N''), N' ', ISNULL(u.SegundoApellido, N'')))) AS UsuarioNombre
+          FROM dbo.CierreAcademicoCursoAuditoria a
+          LEFT JOIN dbo.Usuario u ON u.UsuarioId = a.UsuarioId
+          WHERE a.CierreAcademicoCursoId = @cierreId
+          ORDER BY a.CreatedAt ASC, a.CierreAcademicoCursoAuditoriaId ASC
+        `)
+        .then((result: any) => result.recordset || [])
+      : [];
+    (cierreResponse as any).Auditoria = auditoriaCierre;
+
     if (String(req.query.soloEstado || "").toLowerCase() === "true") {
       return ok(res, { cierre: cierreResponse, preview: null });
     }

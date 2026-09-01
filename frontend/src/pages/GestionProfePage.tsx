@@ -484,6 +484,7 @@ export default function GestionProfePage() {
   });
   const [cierreCurso, setCierreCurso] = useState<any | null>(null);
   const [cierreCursoPreview, setCierreCursoPreview] = useState<any | null>(null);
+  const [cierreAuditoriaExpandida, setCierreAuditoriaExpandida] = useState(false);
   const [loadingCierreCurso, setLoadingCierreCurso] = useState(false);
   const [savingCierreCurso, setSavingCierreCurso] = useState(false);
   const asistenciaInFlightKeyRef = useRef<string>("");
@@ -945,7 +946,6 @@ export default function GestionProfePage() {
     });
     const especiales = [
       { value: "MENSAJES", label: "Reporte de mensajes enviados", orden: 2 },
-      { value: "BITACORA", label: "Reporte de Bitácora", orden: 2 },
       { value: "BOLETAS", label: "Reporte de Boletas", orden: 2 },
       { value: "NOTAS", label: "Reporte de Notas de Asistencia", orden: 2 }
     ];
@@ -1221,9 +1221,17 @@ export default function GestionProfePage() {
       if (!planeamientoId) continue;
       try {
         const json = planeamiento.ResultadoIAJson ? JSON.parse(String(planeamiento.ResultadoIAJson)) : null;
-        const aprendizajes = Array.isArray(json?.aprendizajesEsperados)
-          ? json.aprendizajesEsperados.map((item: any) => String(item || "").trim()).filter(Boolean)
-          : [];
+        const extraerAprendizaje = (item: any) => {
+          if (typeof item === "string") return item.trim();
+          return String(item?.DescripcionHabilidad || item?.descripcion || item?.habilidad || item?.Habilidad || item?.texto || "").trim();
+        };
+        const aprendizajes = (Array.isArray(json?.aprendizajesEsperados)
+          ? json.aprendizajesEsperados
+          : Array.isArray(json?.controlCalidad?.contextoGeneracion?.habilidades)
+            ? json.controlCalidad.contextoGeneracion.habilidades
+            : [])
+          .map(extraerAprendizaje)
+          .filter(Boolean);
         map.set(planeamientoId, aprendizajes);
       } catch {
         map.set(planeamientoId, []);
@@ -2724,6 +2732,61 @@ export default function GestionProfePage() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  }
+
+  function descargarBlobConNombreExacto(blob: Blob, fileName: string) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportarArchivoSea() {
+    if (!selected || !cursoGestionCerrado || !seguimientoContexto?.estructura) return;
+
+    const detalles = (seguimientoContexto.detalles || []).filter((detalle: any) => detalle.Activo !== false && detalle.Activo !== 0);
+    const nombresUsados = new Map<string, number>();
+    const columnas = detalles.map((detalle: SeguimientoEvaluacionDetalle) => {
+      const tipoKey = normalizarSeguimientoKey(getTipoSeguimientoFromDetalle(detalle));
+      const nombreBase = tipoKey.includes("ASIST")
+        ? "Asistencia"
+        : tipoKey.includes("COTIDIAN")
+          ? "Trabajo cotidiano"
+          : tipoKey.includes("TAREA")
+            ? "Tareas"
+            : tipoKey.includes("EXAM") || tipoKey.includes("PRUEBA")
+              ? "Prueba"
+              : String(detalle.Nombre || detalle.ComponenteCatalogoNombre || getTipoSeguimientoFromDetalle(detalle) || "Componente").trim();
+      const numero = (nombresUsados.get(nombreBase) || 0) + 1;
+      nombresUsados.set(nombreBase, numero);
+      return { detalleId: Number(detalle.EstructuraGrupoDetalleId), nombre: numero === 1 ? nombreBase : `${nombreBase} ${numero}` };
+    });
+
+    const columnasOrdenadas = ["Trabajo cotidiano", "Tareas", "Prueba", "Asistencia"]
+      .map((nombre) => columnas.find((columna) => columna.nombre === nombre))
+      .filter((columna): columna is typeof columnas[number] => Boolean(columna));
+    const columnasExtra = columnas.filter((columna) => !columnasOrdenadas.includes(columna));
+    const columnasFinales = [...columnasOrdenadas, ...columnasExtra];
+    const encabezados = ["Id", "Nombre", ...columnasFinales.map((columna) => columna.nombre)];
+    const filas = consolidadoAlumnos.map((alumno) => [
+      String(alumno.identificacion || ""),
+      String(alumno.nombre || "").toUpperCase(),
+      ...columnasFinales.map((columna) => {
+        const componente = alumno.componentes.find((item) => Number(item.key.split("-").pop()) === columna.detalleId);
+        return Number(componente?.porcentajeGanado || 0).toFixed(2);
+      })
+    ]);
+    const csv = [encabezados, ...filas]
+      .map((fila) => fila.map((valor) => String(valor).replace(/;/g, ",").replace(/\r?\n/g, " ")).join(";"))
+      .join("\r\n");
+    const fecha = new Date();
+    const fechaArchivo = `${String(fecha.getDate()).padStart(2, "0")}-${String(fecha.getMonth() + 1).padStart(2, "0")}-${String(fecha.getFullYear()).slice(-2)}`;
+    const nombreArchivo = `SEA-${String(selected.MateriaNombre || "Materia")}-${String(selected.GrupoNombre || "Grupo")}_${fechaArchivo}.csv`;
+    descargarBlobConNombreExacto(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8;" }), nombreArchivo);
   }
 
   async function exportarReporteExcel() {
@@ -4862,6 +4925,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     setBitacoraForm({ temasDesarrollados: "", observaciones: "", hechosRelevantes: "" });
     setCierreCurso(null);
     setCierreCursoPreview(null);
+    setCierreAuditoriaExpandida(false);
     resetPlaneamientoForm();
     setPlaneamientoIaForm({
       ...initialPlaneamientoIaForm,
@@ -8223,12 +8287,13 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
   }
 
   async function cerrarCursoSeleccionado() {
-    if (!selected) return;
+    if (!selected) return false;
     const incompletos = Number(cierreCursoPreview?.resumen?.totalIncompletos || 0);
-    const mensaje = incompletos > 0
+    const mensajeBase = incompletos > 0
       ? `El curso tiene ${incompletos} estudiante(s) con advertencias. Se cerrara como Incompleto. Deseas continuar?`
       : "Deseas cerrar este curso? Al cerrarlo se bloquean nuevas notas, asistencia y bitacora hasta que Direccion lo reabra.";
-    if (!window.confirm(mensaje)) return;
+    const mensaje = `${mensajeBase}\n\nRecuerda que al cerrar el curso, ya no podrás incluir registros. En caso de necesitar reabrirlo, se debe tramitar ante la Dirección del Colegio.`;
+    if (!window.confirm(mensaje)) return false;
 
     setSavingCierreCurso(true);
     try {
@@ -8243,10 +8308,13 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setCierreCurso(data.cierre || null);
       actualizarCierreCursoEnListado(selected, data.cierre || null);
       setCierreCursoPreview(data.preview || null);
+      await cargarCierreCurso(selected);
       setMessage(response.data?.message || "Curso cerrado correctamente");
+      return true;
     } catch (error: any) {
       console.error("Error cerrando curso:", error);
       setErrorMessage(error?.response?.data?.message || "No se pudo cerrar el curso");
+      return false;
     } finally {
       setSavingCierreCurso(false);
     }
@@ -10127,8 +10195,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                 Evaluaciones
               </button>
               <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitácora</button>
-              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true, incluirEnvios: true }); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); cargarCierreCurso(selected); }}>Reportes</button>
-              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true }); }}>Registro de Notas</button>
+              <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true, incluirEnvios: true }); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); }}>Reportes</button>
+              <button type="button" className={activePanel === "notas" ? "primary-btn" : undefined} style={activePanel === "notas" ? undefined : getGestionPanelButtonStyle("notas")} onClick={() => { setActivePanel("notas"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true }); cargarCierreCurso(selected); }}>Registro de Notas</button>
               <button
                 type="button"
                 className={activePanel === "examenes_tabla" && !panelBloqueadoPorCierre("examenes_tabla") ? "primary-btn" : undefined}
@@ -10334,9 +10402,91 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       Consolidado por componente y actividad según la plantilla de evaluación asignada al grupo.
                     </p>
                   </div>
-                  <button type="button" style={secondaryButtonStyle} onClick={() => loadSeguimientoEvaluacion(selected)} disabled={loadingSeguimiento || !selected}>
-                    {loadingSeguimiento ? "Actualizando..." : "Actualizar consolidado"}
-                  </button>
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={cerrarCursoSeleccionado}
+                      disabled={!selected || loadingCierreCurso || savingCierreCurso || cursoGestionCerrado}
+                      title={cursoGestionCerrado ? "El curso ya está cerrado" : undefined}
+                      style={cursoGestionCerrado ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+                    >
+                      {cursoGestionCerrado ? "Curso cerrado" : (savingCierreCurso ? "Cerrando..." : "Cerrar curso")}
+                    </button>
+                    <span title={!cursoGestionCerrado ? "Para descargar el archivo SEA primero debes cerrar el curso" : undefined}>
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        onClick={exportarArchivoSea}
+                        disabled={!cursoGestionCerrado || loadingSeguimiento || loadingCierreCurso || savingCierreCurso || !selected || !seguimientoContexto?.estructura}
+                        style={!cursoGestionCerrado ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+                      >
+                        Descargar Archivo SEA
+                      </button>
+                    </span>
+                    <button type="button" style={secondaryButtonStyle} onClick={() => loadSeguimientoEvaluacion(selected)} disabled={loadingSeguimiento || !selected}>
+                      {loadingSeguimiento ? "Actualizando..." : "Actualizar consolidado"}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "12px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "12px", background: "#ffffff", color: "#0f172a" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                    <div>
+                      <h4 style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 900 }}>Cierre del curso</h4>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{
+                          padding: "6px 10px",
+                          borderRadius: "999px",
+                          background: cursoGestionCerrado ? "#fee2e2" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "#fef3c7" : "#dcfce7"),
+                          color: cursoGestionCerrado ? "#991b1b" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "#92400e" : "#166534"),
+                          border: cursoGestionCerrado ? "1px solid #fecaca" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "1px solid #fde68a" : "1px solid #bbf7d0"),
+                          fontWeight: 900
+                        }}>
+                          {loadingCierreCurso ? "Cargando..." : (cursoGestionCerrado ? "Cerrado por docente" : (String(cierreCurso?.Estado || "").toUpperCase() === "REABIERTO_DIRECCION" ? "Reabierto por Direccion" : "Abierto"))}
+                        </span>
+                        {cierreCurso?.CerradoAt ? <span style={{ color: "#475569", fontWeight: 700 }}>Cerrado: {new Date(cierreCurso.CerradoAt).toLocaleString("es-CR")}</span> : null}
+                        {cierreCurso?.ReabiertoAt ? <span style={{ color: "#475569", fontWeight: 700 }}>Reabierto: {new Date(cierreCurso.ReabiertoAt).toLocaleString("es-CR")}</span> : null}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button type="button" style={secondaryButtonStyle} onClick={() => cargarCierreCurso(selected)} disabled={!selected || loadingCierreCurso || savingCierreCurso}>Actualizar</button>
+                      {isGestionAdminRole && cursoGestionCerrado ? <button type="button" style={secondaryButtonStyle} onClick={reabrirCursoSeleccionado} disabled={!selected || loadingCierreCurso || savingCierreCurso}>{savingCierreCurso ? "Reabriendo..." : "Reabrir curso"}</button> : null}
+                    </div>
+                  </div>
+
+                  {Array.isArray(cierreCurso?.Auditoria) && cierreCurso.Auditoria.length ? (
+                    <div style={{ display: "grid", gap: "8px", padding: "10px 12px", borderRadius: "10px", border: "1px solid #cbd5e1", background: "#f8fafc" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "center" }}>
+                        <strong>Bitácora de cierre</strong>
+                        <button type="button" style={secondaryButtonStyle} onClick={() => setCierreAuditoriaExpandida((actual) => !actual)}>
+                          {cierreAuditoriaExpandida ? "Minimizar" : "Maximizar"}
+                        </button>
+                      </div>
+                      {cierreAuditoriaExpandida ? <div style={{ display: "grid", gap: "6px" }}>
+                        {cierreCurso.Auditoria.map((evento: any) => {
+                          const accion = String(evento.Accion || "").toUpperCase();
+                          const esReapertura = accion.includes("REAPERTURA");
+                          return (
+                            <div key={evento.CierreAcademicoCursoAuditoriaId} style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "baseline", padding: "6px 8px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
+                              <strong>{esReapertura ? "Reabierto" : "Cerrado"}</strong>
+                              <span>por {evento.UsuarioNombre || "usuario registrado"}</span>
+                              <span>{evento.CreatedAt ? new Date(evento.CreatedAt).toLocaleString("es-CR") : "-"}</span>
+                              {evento.Motivo ? <span style={{ color: "#475569" }}>Motivo: {evento.Motivo}</span> : null}
+                            </div>
+                          );
+                        })}
+                      </div> : null}
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "10px" }}>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}><strong>Estado de datos</strong><span style={{ fontSize: "22px", fontWeight: 900 }}>{cierreCursoPreview?.resumen?.estado || "-"}</span></div>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}><strong>Promedio general</strong><span style={{ fontSize: "22px", fontWeight: 900 }}>{cierreCursoPreview?.resumen?.promedioGeneral ?? "-"}</span></div>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}><strong>Estudiantes</strong><span style={{ fontSize: "22px", fontWeight: 900 }}>{cierreCursoPreview?.resumen?.totalEstudiantes ?? "-"}</span></div>
+                    <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}><strong>Incompletos</strong><span style={{ fontSize: "22px", fontWeight: 900, color: Number(cierreCursoPreview?.resumen?.totalIncompletos || 0) > 0 ? "#b91c1c" : "#166534" }}>{cierreCursoPreview?.resumen?.totalIncompletos ?? "-"}</span></div>
+                  </div>
+                  {Array.isArray(cierreCursoPreview?.advertencias) && cierreCursoPreview.advertencias.length ? <div style={{ padding: "10px 12px", borderRadius: "10px", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", fontWeight: 800 }}>{cierreCursoPreview.advertencias.slice(0, 3).join(" ")}{cierreCursoPreview.advertencias.length > 3 ? ` y ${cierreCursoPreview.advertencias.length - 3} advertencia(s) mas.` : ""}</div> : null}
                 </div>
 
                 {loadingSeguimiento ? (
@@ -10477,7 +10627,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                         const componente = buscarComponenteAlumno(alumno, detalleItem);
                                         const palette = getComponentePalette(detalleItem);
                                         const keyAjuste = `${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`;
-                                        const valorActual = Number(componente?.porcentajeGanado || 0);
+                                        const porcentajeComponente = Number(componente?.porcentajeComponente ?? detalleItem.Porcentaje ?? 0);
+                                        const valorActual = Math.min(
+                                          porcentajeComponente,
+                                          (Number(componente?.nota || 0) / 100) * porcentajeComponente
+                                        );
                                         return (
                                           <React.Fragment key={`valor-${alumno.key}-${detalleItem.EstructuraGrupoDetalleId}`}>
                                             <td style={{ ...tdBase, background: getTransferCellBg(Number(alumno.estudiante?.EstudianteId || 0), palette.cell) }}>
@@ -10504,7 +10658,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                                       setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para editar calificaciones.");
                                                       return;
                                                     }
-                                                    const valor = Number(componente?.porcentajeComponente || detalleItem.Porcentaje || 0);
+                                                    const valor = porcentajeComponente;
                                                     const nuevoTxt = String(window.prompt(`Nuevo % obtenido para ${alumno.nombre} en ${detalleItem.Nombre} (máximo ${valor.toFixed(2)}):`, valorActual.toFixed(2)) || "").trim();
                                                     const nuevo = Number(nuevoTxt);
                                                     if (!Number.isFinite(nuevo)) {
@@ -14960,7 +15114,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                     </div>
                   </div>
                 </div>
-                <div style={{ display: "grid", gap: "12px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "12px", background: "#ffffff", color: "#0f172a" }}>
+                {false && (<div style={{ display: "grid", gap: "12px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "12px", background: "#ffffff", color: "#0f172a" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
                     <div>
                       <h4 style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 900 }}>Cierre del curso</h4>
@@ -14987,8 +15141,15 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       <button type="button" style={secondaryButtonStyle} onClick={() => cargarCierreCurso(selected)} disabled={!selected || loadingCierreCurso || savingCierreCurso}>
                         Actualizar
                       </button>
-                      <button type="button" className="primary-btn" onClick={cerrarCursoSeleccionado} disabled={!selected || loadingCierreCurso || savingCierreCurso || cursoGestionCerrado}>
-                        {savingCierreCurso && !cursoGestionCerrado ? "Cerrando..." : "Cerrar curso"}
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        onClick={cerrarCursoSeleccionado}
+                        disabled={!selected || loadingCierreCurso || savingCierreCurso || cursoGestionCerrado}
+                        title={cursoGestionCerrado ? "El curso ya está cerrado" : undefined}
+                        style={cursoGestionCerrado ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+                      >
+                        {cursoGestionCerrado ? "Curso cerrado" : (savingCierreCurso ? "Cerrando..." : "Cerrar curso")}
                       </button>
                       {isGestionAdminRole && cursoGestionCerrado ? (
                         <button type="button" style={secondaryButtonStyle} onClick={reabrirCursoSeleccionado} disabled={!selected || loadingCierreCurso || savingCierreCurso}>
@@ -14997,6 +15158,31 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       ) : null}
                     </div>
                   </div>
+
+                  {Array.isArray(cierreCurso?.Auditoria) && cierreCurso.Auditoria.length ? (
+                    <div style={{ display: "grid", gap: "8px", padding: "10px 12px", borderRadius: "10px", border: "1px solid #cbd5e1", background: "#f8fafc" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "center" }}>
+                        <strong>Bitácora de cierre</strong>
+                        <button type="button" style={secondaryButtonStyle} onClick={() => setCierreAuditoriaExpandida((actual) => !actual)}>
+                          {cierreAuditoriaExpandida ? "Minimizar" : "Maximizar"}
+                        </button>
+                      </div>
+                      {cierreAuditoriaExpandida ? <div style={{ display: "grid", gap: "6px" }}>
+                        {cierreCurso.Auditoria.map((evento: any) => {
+                          const accion = String(evento.Accion || "").toUpperCase();
+                          const esReapertura = accion.includes("REAPERTURA");
+                          return (
+                            <div key={evento.CierreAcademicoCursoAuditoriaId} style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "baseline", padding: "6px 8px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
+                              <strong>{esReapertura ? "Reabierto" : "Cerrado"}</strong>
+                              <span>por {evento.UsuarioNombre || "usuario registrado"}</span>
+                              <span>{evento.CreatedAt ? new Date(evento.CreatedAt).toLocaleString("es-CR") : "-"}</span>
+                              {evento.Motivo ? <span style={{ color: "#475569" }}>Motivo: {evento.Motivo}</span> : null}
+                            </div>
+                          );
+                        })}
+                      </div> : null}
+                    </div>
+                  ) : null}
 
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "10px" }}>
                     <div style={{ ...cardStyle, background: "#f8fafc", color: "#0f172a" }}>
@@ -15023,7 +15209,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       {cierreCursoPreview.advertencias.length > 3 ? ` y ${cierreCursoPreview.advertencias.length - 3} advertencia(s) mas.` : ""}
                     </div>
                   ) : null}
-                </div>
+                </div>)}
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                   <button type="button" className="primary-btn" onClick={exportarReporteActualExcel} disabled={!selected}>
                     Exportar Excel
@@ -15507,7 +15693,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                 </div>
                 )}
 
-                {tipoReporteGestion === "BITACORA" && (
+                {false && tipoReporteGestion === "BITACORA" && (
                   <div style={{ overflowX: "auto" }}>
                     <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
                       <button type="button" style={secondaryButtonStyle} onClick={() => selected && loadBitacora(selected)} disabled={loadingBitacora}>

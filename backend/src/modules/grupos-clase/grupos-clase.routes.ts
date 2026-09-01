@@ -76,8 +76,14 @@ function uniqueLessonPatterns(value: unknown): LeccionPatron[] {
     const rawDay = typeof item === "string" ? item.split(":")[0] : item?.diaSemana;
     const rawBlock = typeof item === "string" ? item.split(":")[1] : item?.bloqueHorarioId;
     const diaSemana = Number(rawDay);
-    const bloqueHorarioId = positiveId(rawBlock);
-    if (!Number.isInteger(diaSemana) || diaSemana < 1 || diaSemana > 7 || !bloqueHorarioId) continue;
+    const bloqueHorarioId = Number(rawBlock);
+    if (
+      !Number.isInteger(diaSemana)
+      || diaSemana < 1
+      || diaSemana > 7
+      || !Number.isInteger(bloqueHorarioId)
+      || bloqueHorarioId < 0
+    ) continue;
     byKey.set(`${diaSemana}:${bloqueHorarioId}`, { diaSemana, bloqueHorarioId });
   }
   return Array.from(byKey.values());
@@ -244,8 +250,47 @@ async function validatePayload(params: {
             AND p.AnioLectivoId = @anioLectivoId
             AND p.Activo = 1
         ))
-        AND gm.Activo = 1
+      AND gm.Activo = 1
         AND hg.Activo = 1;
+
+      SELECT DISTINCT
+        ma.MatriculaId,
+        e.Identificacion,
+        e.Nombre,
+        e.PrimerApellido,
+        e.SegundoApellido,
+        g.Nombre AS SeccionActual,
+        g.Nivel AS NivelActual,
+        CASE
+          WHEN ma.AnioLectivoId <> @anioLectivoId THEN N'La matrícula pertenece a otro año lectivo'
+          WHEN ma.Estado = N'Inactiva' THEN N'La matrícula está inactiva'
+          WHEN e.EstudianteId IS NULL THEN N'No se encontró el estudiante asociado a la matrícula'
+          WHEN e.Activo <> 1 THEN N'El estudiante está inactivo'
+          WHEN g.GrupoId IS NULL THEN N'No se encontró la sección asociada a la matrícula'
+          WHEN g.InstitucionId <> @institucionId THEN N'La sección pertenece a otra institución'
+          WHEN NOT EXISTS (
+            SELECT 1
+            FROM STRING_SPLIT(@grupoIds, N',') sg
+            WHERE TRY_CONVERT(int, sg.value) = ma.GrupoId
+          ) THEN N'La matrícula pertenece a una sección que no está seleccionada para este grupo de clase'
+          ELSE N'La matrícula no cumple las condiciones de las secciones seleccionadas'
+        END AS Motivo
+      FROM dbo.Matricula ma
+      LEFT JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+      LEFT JOIN dbo.Grupo g ON g.GrupoId = ma.GrupoId
+      INNER JOIN STRING_SPLIT(@matriculaIds, N',') sm
+        ON TRY_CONVERT(int, sm.value) = ma.MatriculaId
+      WHERE ma.AnioLectivoId <> @anioLectivoId
+         OR ma.Estado = N'Inactiva'
+         OR e.EstudianteId IS NULL
+         OR e.Activo <> 1
+         OR g.GrupoId IS NULL
+         OR g.InstitucionId <> @institucionId
+         OR NOT EXISTS (
+           SELECT 1
+           FROM STRING_SPLIT(@grupoIds, N',') sg
+           WHERE TRY_CONVERT(int, sg.value) = ma.GrupoId
+         );
     `);
 
   const header = result.recordsets[0]?.[0] || {};
@@ -258,6 +303,7 @@ async function validatePayload(params: {
   if (Number(result.recordsets[2]?.[0]?.Total || 0) !== matriculaIds.length) {
     errors.push("Hay estudiantes fuera de las secciones seleccionadas");
   }
+  const estudiantesFuera = result.recordsets[7] || [];
   if (Number(result.recordsets[3]?.[0]?.Total || 0) !== usuarioIds.length) {
     errors.push("Hay profesores invalidos o de otra institucion");
   }
@@ -274,6 +320,13 @@ async function validatePayload(params: {
   return {
     valid: errors.length === 0,
     errors,
+    issues: [
+      ...errors.filter((error) => (
+        error !== "Hay estudiantes fuera de las secciones seleccionadas"
+        || !estudiantesFuera.length
+      )),
+      ...estudiantesFuera
+    ],
     data: {
       nombre,
       descripcion: text(payload.descripcion, 500) || null,
@@ -1037,9 +1090,18 @@ router.get("/:grupoClaseId", async (req, res) => {
         FROM dbo.GrupoClaseSubEspecialidad
         WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
 
-        SELECT MatriculaId
-        FROM dbo.GrupoClaseEstudiante
-        WHERE GrupoClaseId = @grupoClaseId AND Activo = 1;
+        SELECT
+          gce.MatriculaId,
+          e.Identificacion,
+          e.Nombre,
+          e.PrimerApellido,
+          e.SegundoApellido,
+          ma.Estado AS EstadoMatricula,
+          e.Activo AS EstudianteActivo
+        FROM dbo.GrupoClaseEstudiante gce
+        LEFT JOIN dbo.Matricula ma ON ma.MatriculaId = gce.MatriculaId
+        LEFT JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
+        WHERE gce.GrupoClaseId = @grupoClaseId AND gce.Activo = 1;
 
         SELECT UsuarioId, EsPrincipal
         FROM dbo.GrupoClaseDocente
@@ -1062,6 +1124,7 @@ router.get("/:grupoClaseId", async (req, res) => {
       grupoIds: (result.recordsets[1] || []).map((row: any) => Number(row.GrupoId)),
       subEspecialidadIds: (result.recordsets[2] || []).map((row: any) => Number(row.SubEspecialidadId)),
       matriculaIds: (result.recordsets[3] || []).map((row: any) => Number(row.MatriculaId)),
+      estudiantesGuardados: result.recordsets[3] || [],
       usuarioIds: (result.recordsets[4] || []).map((row: any) => Number(row.UsuarioId)),
       usuarioPrincipalId: Number((result.recordsets[4] || []).find((row: any) => row.EsPrincipal)?.UsuarioId || 0) || null,
       horarioGrupoIds: (result.recordsets[5] || []).map((row: any) => Number(row.HorarioGrupoId)),
@@ -1169,7 +1232,7 @@ router.post("/", async (req, res) => {
     if (institucionId === null) return;
     if (!await requireSchema(pool, res)) return;
     const validation = await validatePayload({ pool, institucionId, payload: req.body });
-    if (!validation.valid) return badRequest(res, "Revise los datos del grupo", validation.errors);
+    if (!validation.valid) return badRequest(res, "Revise los datos del grupo", validation.issues);
     const data = validation.data!;
 
     await transaction.begin();
@@ -1297,7 +1360,7 @@ router.post("/:grupoClaseId/duplicar", async (req, res) => {
     };
 
     const validation = await validatePayload({ pool, institucionId, payload });
-    if (!validation.valid) return badRequest(res, "No se pudo duplicar el grupo", validation.errors);
+    if (!validation.valid) return badRequest(res, "No se pudo duplicar el grupo", validation.issues);
     const data = validation.data!;
 
     await transaction.begin();
@@ -1350,7 +1413,7 @@ router.put("/:grupoClaseId", async (req, res) => {
     const grupoClaseId = positiveId(req.params.grupoClaseId);
     if (!grupoClaseId) return badRequest(res, "Grupo de clase invalido");
     const validation = await validatePayload({ pool, institucionId, payload: req.body });
-    if (!validation.valid) return badRequest(res, "Revise los datos del grupo", validation.errors);
+    if (!validation.valid) return badRequest(res, "Revise los datos del grupo", validation.issues);
     const data = validation.data!;
 
     await transaction.begin();
@@ -1391,8 +1454,36 @@ router.put("/:grupoClaseId", async (req, res) => {
       return res.status(404).json({ ok: false, message: "Grupo de clase no encontrado" });
     }
     await saveChildren(transaction, grupoClaseId, data, getUserId(req));
+    const persistedLessonsResult = await new sql.Request(transaction)
+      .input("grupoClaseId", sql.Int, grupoClaseId)
+      .query(`
+        SELECT DiaSemana, BloqueHorarioId
+        FROM dbo.GrupoClaseLeccionPatron
+        WHERE GrupoClaseId = @grupoClaseId
+          AND Activo = 1
+        ORDER BY DiaSemana, BloqueHorarioId;
+      `);
+    const persistedLessons = (persistedLessonsResult.recordset || []).map((row: any) => ({
+      diaSemana: Number(row.DiaSemana),
+      bloqueHorarioId: Number(row.BloqueHorarioId)
+    }));
+    const requestedLessonKeys = data.leccionPatrones
+      .map((item: any) => `${item.diaSemana}:${item.bloqueHorarioId}`)
+      .sort();
+    const persistedLessonKeys = persistedLessons
+      .map((item: any) => `${item.diaSemana}:${item.bloqueHorarioId}`)
+      .sort();
+    if (requestedLessonKeys.join(",") !== persistedLessonKeys.join(",")) {
+      throw new Error(
+        `No se conservaron todas las lecciones seleccionadas. Solicitadas: ${requestedLessonKeys.join(",")}; guardadas: ${persistedLessonKeys.join(",")}`
+      );
+    }
     await transaction.commit();
-    return ok(res, { grupoClaseId }, "Grupo de clase actualizado correctamente");
+    return ok(
+      res,
+      { grupoClaseId, leccionPatrones: persistedLessons },
+      "Grupo de clase actualizado correctamente"
+    );
   } catch (error: any) {
     try { await transaction.rollback(); } catch {}
     console.error("Error actualizando grupo de clase:", error);

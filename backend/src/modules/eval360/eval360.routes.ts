@@ -2367,33 +2367,22 @@ function buildWordParagraphsXml(text: string, style?: { font?: string; sizePt?: 
 function buildWordRubricTableXml(lines: string[], style?: { font?: string; sizePt?: number }) {
   const content = lines.map((line) => String(line || "").trim()).filter(Boolean);
   if (!content.length) return "";
-  const title = content.find((line) => line.startsWith("TITULO:"))?.slice(7).trim() || "RÚBRICA DE VALORACIÓN";
-  const columns = (content.find((line) => line.startsWith("COLUMNAS:"))?.slice(9).split("|") || ["4 puntos", "3 puntos", "2 puntos", "1 punto"]).map((value) => value.trim());
+  const title = content.find((line) => line.startsWith("TITULO:"))?.slice(7).trim() || "RÚBRICA DE CALIFICACIÓN";
   const criteria = content
     .filter((line) => line.startsWith("CRITERIO:"))
-    .map((line) => line.slice(9).split("|")[0].trim())
-    .filter(Boolean);
+    .map((line) => {
+      const values = line.slice(9).split("|");
+      return { evidencia: String(values[0] || "").trim(), puntaje: String(values[1] || "").trim() };
+    })
+    .filter((item) => item.evidencia);
   if (!criteria.length) return "";
   const cell = (text: string, bold = false, fill = "FFFFFF") => `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${fill}"/><w:tcMar><w:top w:w="90" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tcMar></w:tcPr><w:p>${buildWordRunsXml(text, { ...style, bold })}</w:p></w:tc>`;
   const border = `<w:tblBorders><w:top w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:left w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:bottom w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:right w:val="single" w:sz="8" w:space="0" w:color="7F8C8D"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="7F8C8D"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="7F8C8D"/></w:tblBorders>`;
-  const header = ["Criterio", ...columns].map((value) => cell(value, true, "B8CCE4")).join("");
+  const header = ["Evidencia esperada", "Puntaje"].map((value) => cell(value, true, "B8CCE4")).join("");
   const rows = criteria.map((criterion, criterionIndex) => {
-    const maximum = Number(content.find((line) => line.startsWith(`CRITERIO:${criterion}|`))?.split("|")[1] || 0);
-    const levels = columns.map((_column, levelIndex) => {
-      const ratio = [1, 0.75, 0.5, 0.25][levelIndex] ?? 0.25;
-      const points = Number((maximum * ratio).toFixed(2));
-      const description = levelIndex === 0
-        ? `Cumple completamente con el indicador: ${criterion}. (${points} pts)`
-        : levelIndex === 1
-          ? `Cumple parcialmente con el indicador: ${criterion}. (${points} pts)`
-          : levelIndex === 2
-            ? `Evidencia un avance limitado en: ${criterion}. (${points} pts)`
-            : `Presenta un intento insuficiente en: ${criterion}. (${points} pts)`;
-      return cell(description);
-    }).join("");
-    return `<w:tr>${cell(criterion, true, criterionIndex % 2 ? "F8FAFC" : "FFFFFF")}${levels}</w:tr>`;
+    return `<w:tr>${cell(criterion.evidencia, false, criterionIndex % 2 ? "F8FAFC" : "FFFFFF")}${cell(criterion.puntaje, false, criterionIndex % 2 ? "F8FAFC" : "FFFFFF")}</w:tr>`;
   }).join("");
-  return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/>${border}</w:tblPr><w:tr>${cell(title, true, "FFFFFF")}</w:tr><w:tr>${header}</w:tr>${rows}</w:tbl>`;
+  return `<w:p>${buildWordRunsXml(title, { ...style, bold: true })}</w:p><w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/>${border}</w:tblPr><w:tr>${header}</w:tr>${rows}</w:tbl>`;
 }
 
 
@@ -3324,24 +3313,55 @@ function buildQuestionsBlockByType(items: any[], tipo: string) {
   filtered.forEach((it, idx) => {
     lines.push(formatQuestionFromItem(it, idx));
     if (rubricTypes.has(tipo)) {
-      const indicatorText = String(
-        it?.indicadorEvaluacion
-        || it?.indicador
-        || it?.indicadorBase
-        || it?.aprendizajeEsperado
-        || ""
-      ).trim();
-      const rubricLines = splitTextLines(indicatorText);
       const puntaje = Number(it?.puntaje || 0);
-      const criterios = rubricLines.length
-        ? rubricLines.flatMap((line) => String(line).split(/(?:\.\s+|;\s+)/).map((part) => part.trim()).filter(Boolean))
-        : ["Cumplimiento del indicador asociado a la pregunta"];
-      const puntosPorCriterio = criterios.length > 0 ? puntaje / criterios.length : puntaje;
+      const rubricaPersonalizada = Array.isArray(it?.rubricaCalificacion)
+        ? it.rubricaCalificacion.map((item: any) => ({
+            evidencia: typeof item === "string" ? item : item?.evidencia || item?.criterio || item?.descripcion,
+            puntaje: typeof item === "string" ? 0 : Number(item?.puntaje || 0)
+          })).filter((item: any) => String(item.evidencia || "").trim())
+        : [];
+      const criteriosPorTipo: Record<string, string[]> = {
+        RE: [
+          "Desarrolla correctamente el procedimiento solicitado.",
+          "Efectúa correctamente las operaciones y transformaciones.",
+          "Obtiene y reduce correctamente el resultado final."
+        ],
+        RP: [
+          "Interpreta correctamente la información del problema.",
+          "Aplica una estrategia y desarrolla el procedimiento.",
+          "Obtiene y justifica la respuesta final."
+        ],
+        RCAS: [
+          "Comprende y analiza la situación planteada.",
+          "Aplica correctamente el procedimiento de resolución.",
+          "Justifica la solución obtenida."
+        ],
+        RR: [
+          "Responde directamente a lo solicitado.",
+          "Utiliza correctamente los conceptos evaluados.",
+          "Presenta una respuesta clara y precisa."
+        ],
+        PE: [
+          "Desarrolla el contenido solicitado.",
+          "Utiliza correctamente los conceptos y procedimientos.",
+          "Presenta una respuesta clara, ordenada y completa."
+        ]
+      };
+      const criterios = rubricaPersonalizada.length
+        ? rubricaPersonalizada.map((item: any) => String(item.evidencia).trim())
+        : (criteriosPorTipo[tipo] || ["Cumplimiento del indicador asociado a la pregunta"]);
+      const puntajesPersonalizados = rubricaPersonalizada.map((item: any) => item.puntaje);
+      const sumaPersonalizada = puntajesPersonalizados.reduce((total: number, value: number) => total + value, 0);
+      const usaPuntajesPersonalizados = rubricaPersonalizada.length > 0
+        && puntajesPersonalizados.every((value: number) => Number.isFinite(value) && value >= 0)
+        && Math.abs(sumaPersonalizada - puntaje) < 0.01;
+      const puntajes = usaPuntajesPersonalizados
+        ? puntajesPersonalizados
+        : criterios.map(() => criterios.length > 0 ? puntaje / criterios.length : puntaje);
       const formatoPuntos = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
       lines.push("[[RUBRICA_INICIO]]");
-      lines.push(`TITULO:RÚBRICA DE VALORACIÓN - ${getItemTypeLabel(tipo).toUpperCase()} (${formatoPuntos(puntaje)} PUNTOS)`);
-      lines.push(`COLUMNAS:${[1, 0.75, 0.5, 0.25].map((ratio) => `${formatoPuntos(puntosPorCriterio * ratio)} ${puntosPorCriterio * ratio === 1 ? "punto" : "puntos"}`).join("|")}`);
-      criterios.forEach((criterio) => lines.push(`CRITERIO:${criterio}|${puntosPorCriterio}`));
+      lines.push(`TITULO:RÚBRICA DE CALIFICACIÓN - ${getItemTypeLabel(tipo).toUpperCase()} (${formatoPuntos(puntaje)} PUNTOS)`);
+      criterios.forEach((criterio, criterioIndex) => lines.push(`CRITERIO:${criterio}|${formatoPuntos(Number(puntajes[criterioIndex] || 0))}`));
       lines.push("[[RUBRICA_FIN]]");
     }
   });
@@ -9112,6 +9132,8 @@ No inventes tipos de item fuera de los definidos por la tabla.
 
 La suma de puntos por pregunta debe coincidir exactamente con la tabla de especificaciones.
 
+Para cada pregunta de desarrollo (RE, RP, RCAS, RR o PE), incluí "rubricaCalificacion" como una lista de 2 a 4 objetos con "evidencia" y "puntaje". Las evidencias deben describir los pasos concretos que debe desarrollar el estudiante y lo que se evaluará según el contenido de esa pregunta y la materia. No uses criterios genéricos ni criterios de otra asignatura. La suma de sus puntajes debe ser igual al puntaje de la pregunta. Para preguntas objetivas (SR, RC, C o I), devolvé "rubricaCalificacion": [].
+
 
 
 Salida obligatoria en JSON válido (sin markdown), con esta estructura:
@@ -9137,6 +9159,8 @@ Salida obligatoria en JSON válido (sin markdown), con esta estructura:
       "respuestaCorrecta": "",
 
       "criterioCorreccion": "",
+
+      "rubricaCalificacion": [],
 
       "puntaje": 0
 
@@ -9240,6 +9264,8 @@ ${documentoApoyoTextoCompacto || "Sin documento de apoyo extraido"}
 
 No cambies la distribucion de tipos ni el puntaje total. Devolve un JSON valido con:
 
+En preguntas de desarrollo (RE, RP, RCAS, RR o PE), agregá "rubricaCalificacion" con 2 a 4 evidencias específicas de esa pregunta y materia. Cada objeto debe tener "evidencia" y "puntaje"; la suma debe coincidir con el puntaje del ítem. En preguntas objetivas (SR, RC, C o I), usá una lista vacía.
+
 {
 
   "items": [
@@ -9261,6 +9287,8 @@ No cambies la distribucion de tipos ni el puntaje total. Devolve un JSON valido 
       "respuestaCorrecta": "",
 
       "criterioCorreccion": "",
+
+      "rubricaCalificacion": [],
 
       "puntaje": 0
 
@@ -9321,6 +9349,8 @@ Obligaciones:
 - No agregues tipos de item con cantidad 0
 
 - Devuelve unicamente JSON valido
+
+- En cada pregunta de desarrollo (RE, RP, RCAS, RR o PE), incluye "rubricaCalificacion" con 2 a 4 evidencias específicas sobre cómo se resuelve esa pregunta y qué se evaluará. Cada evidencia debe tener "evidencia" y "puntaje", y la suma debe coincidir con el puntaje del ítem. Para SR, RC, C e I, usa "rubricaCalificacion": [].
 
 - Si la persona docente escribio indicaciones adicionales, debes aplicarlas de forma mandatoria y literal cuando correspondan al formato o redaccion solicitados
 
@@ -9395,6 +9425,8 @@ Estructura de salida obligatoria:
       "respuestaCorrecta": "",
 
       "criterioCorreccion": "",
+
+      "rubricaCalificacion": [],
 
       "puntaje": 0
 
@@ -10758,10 +10790,14 @@ router.get("/tablas-especificaciones/:actividadId/excel", async (req, res) => {
       const planeamientoId = Number(row.PlaneamientoId || 0);
       if (aprendizajesPorPlaneamiento.has(planeamientoId)) continue;
       const resultadoPlaneamiento = parseJsonSafe(row.PlaneamientoResultadoIAJson) || {};
+      const extraerDescripcionHabilidad = (item: any) => {
+        if (typeof item === "string") return item;
+        return item?.DescripcionHabilidad || item?.descripcion || item?.habilidad || item?.Habilidad || item?.texto || "";
+      };
       const aprendizajes = (Array.isArray(resultadoPlaneamiento.aprendizajesEsperados)
         ? resultadoPlaneamiento.aprendizajesEsperados
         : Array.isArray(resultadoPlaneamiento.controlCalidad?.contextoGeneracion?.habilidades)
-          ? resultadoPlaneamiento.controlCalidad.contextoGeneracion.habilidades.map((item: any) => item?.DescripcionHabilidad || item)
+          ? resultadoPlaneamiento.controlCalidad.contextoGeneracion.habilidades.map(extraerDescripcionHabilidad)
           : [])
         .map(limpiarDescripcionHabilidad)
         .filter(Boolean);
@@ -12735,6 +12771,25 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       return badRequest(res, "No se pudieron crear indicadores desde las habilidades seleccionadas");
     }
 
+    // Los indicadores generados desde habilidades no pasan por el editor de
+    // planeamientos y, por ello, no traen ResultadoIAJson. Guardamos las
+    // habilidades seleccionadas en el mismo formato que usa la tabla de
+    // especificaciones para poder asociarlas a cada indicador por orden.
+    const resultadoIAJsonHabilidades = JSON.stringify({
+      aprendizajesEsperados: habilidades
+        .map((habilidad: any) => normalizeText(habilidad?.DescripcionHabilidad))
+        .filter(Boolean),
+      controlCalidad: {
+        contextoGeneracion: {
+          habilidades: habilidades.map((habilidad: any) => ({
+            habilidadId: Number(habilidad?.PlaneamientoHabilidadId || 0) || null,
+            numero: normalizeText(habilidad?.NumeroHabilidad),
+            descripcion: normalizeText(habilidad?.DescripcionHabilidad)
+          })).filter((habilidad: any) => habilidad.descripcion)
+        }
+      }
+    });
+
     const resultadosPorTipo: Record<string, any[]> = {};
 
     for (const tipoUso of tiposUso) {
@@ -12889,12 +12944,13 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
           .input("usuarioId", sql.Int, Number(asignacion.UsuarioId || getUserId(req) || 0) || null)
           .input("nombre", sql.NVarChar(200), nombrePlaneamientoDestino)
           .input("observaciones", sql.NVarChar(sql.MAX), "Indicadores creados desde habilidades con IA")
+          .input("resultadoIAJson", sql.NVarChar(sql.MAX), resultadoIAJsonHabilidades)
           .query(`
             INSERT INTO dbo.Planeamiento
-              (InstitucionId, AnioLectivoId, PeriodoId, GrupoId, MateriaId, UsuarioId, Nombre, FechaInicio, FechaFin, Observaciones, Activo, CreatedAt)
+              (InstitucionId, AnioLectivoId, PeriodoId, GrupoId, MateriaId, UsuarioId, Nombre, FechaInicio, FechaFin, Observaciones, ResultadoIAJson, Activo, CreatedAt)
             OUTPUT INSERTED.PlaneamientoId
             VALUES
-              (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, NULL, NULL, @observaciones, 1, ${SQL_COSTA_RICA_NOW})
+              (@institucionId, @anioLectivoId, @periodoId, @grupoId, @materiaId, @usuarioId, @nombre, NULL, NULL, @observaciones, @resultadoIAJson, 1, ${SQL_COSTA_RICA_NOW})
           `);
 
         planeamientoDestinoId = Number(creado.recordset[0]?.PlaneamientoId || 0);
@@ -12902,6 +12958,18 @@ router.post("/indicadores/generar-desde-habilidades", async (req, res) => {
       }
 
       if (!planeamientoDestinoId) continue;
+
+      // Si el conjunto ya existía, actualizamos también su contexto de
+      // habilidades para que la tabla lo muestre sin duplicar el planeamiento.
+      await new sql.Request(transaction)
+        .input("planeamientoId", sql.Int, planeamientoDestinoId)
+        .input("resultadoIAJson", sql.NVarChar(sql.MAX), resultadoIAJsonHabilidades)
+        .query(`
+          UPDATE dbo.Planeamiento
+          SET ResultadoIAJson = @resultadoIAJson
+          WHERE PlaneamientoId = @planeamientoId
+            AND ISNULL(Observaciones, N'') = N'Indicadores creados desde habilidades con IA'
+        `);
 
       planeamientosPorGrupo.set(
         claveDestinoIndicadores(grupoDestinoId, grupoClaseDestinoId),
