@@ -1781,6 +1781,9 @@ export default function GestionProfePage() {
         const actividadesDetalle = actividades.filter((actividad) => Number(actividad.EstructuraGrupoDetalleId) === detalleId);
         const notasEstudiante = notas.filter((notaItem) => Number(notaItem.EstudianteId) === Number(estudiante.EstudianteId));
         const notasDetalle = notasEstudiante.filter((notaItem) => actividadesDetalle.some((actividad) => Number(actividad.ActividadId) === Number(notaItem.ActividadId)));
+        const getPesoActividad = (actividad: any) => Number(actividad?.PorcentajeReal || 0) > 0
+          ? Number(actividad.PorcentajeReal)
+          : Number(actividad?.PorcentajeDentroRubro || 0);
         const notasPorActividad = actividadesDetalle.map((actividad) => {
           const notaItem = notasDetalle.find((item) => Number(item.ActividadId) === Number(actividad.ActividadId));
           const puntosObtenidos = notaItem?.PuntosObtenidos;
@@ -1793,13 +1796,13 @@ export default function GestionProfePage() {
           return { actividad, notaItem, notaCalculada, tieneRegistroCalificado };
         });
 
-        const sumaPesosConfig = notasPorActividad.reduce((acc, item) => acc + Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0)), 0);
+        const sumaPesosConfig = notasPorActividad.reduce((acc, item) => acc + Math.max(0, getPesoActividad(item.actividad)), 0);
         const pesoDefault = actividadesDetalle.length ? (porcentajeComponente / actividadesDetalle.length) : 0;
 
         porcentajeGanado = notasPorActividad.reduce((acc, item) => {
           if (!item.tieneRegistroCalificado) return acc;
           const peActividad = sumaPesosConfig > 0
-            ? Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0))
+            ? Math.max(0, getPesoActividad(item.actividad))
             : pesoDefault;
           return acc + ((item.notaCalculada / 100) * peActividad);
         }, 0);
@@ -1808,7 +1811,7 @@ export default function GestionProfePage() {
         porcentajeEvaluado = notasPorActividad.reduce((acc, item) => {
           if (!item.tieneRegistroCalificado) return acc;
           const peActividad = sumaPesosConfig > 0
-            ? Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0))
+            ? Math.max(0, getPesoActividad(item.actividad))
             : pesoDefault;
           return acc + peActividad;
         }, 0);
@@ -1828,7 +1831,7 @@ export default function GestionProfePage() {
           porcentaje: (() => {
             if (!item.tieneRegistroCalificado) return 0;
             const peActividad = sumaPesosConfig > 0
-              ? Math.max(0, Number(item.actividad.PorcentajeDentroRubro || 0))
+              ? Math.max(0, getPesoActividad(item.actividad))
               : pesoDefault;
             return (item.notaCalculada / 100) * peActividad;
           })(),
@@ -2404,8 +2407,11 @@ export default function GestionProfePage() {
       const acts = dedupeActividadesLogicas(filtrarActividades("EXAMENES"));
       const detalleIdsTipo = Array.from(new Set(acts.map((a) => Number(a.EstructuraGrupoDetalleId || 0)).filter((v) => v > 0)));
       const rubroValorTotal = detalleIdsTipo.reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
+      const getPesoActividad = (actividad: any) => Number(actividad?.PorcentajeReal || 0) > 0
+        ? Number(actividad.PorcentajeReal)
+        : Number(actividad?.PorcentajeDentroRubro || 0);
       const sumaPesosConfig = acts.reduce((acc, item) => {
-        const peso = Number(item.PorcentajeDentroRubro || 0);
+        const peso = getPesoActividad(item);
         return acc + (Number.isFinite(peso) && peso > 0 ? peso : 0);
       }, 0);
       const columns = acts.map((a) => ({
@@ -2441,7 +2447,7 @@ export default function GestionProfePage() {
             if (!nota || nota.PuntosObtenidos === null || nota.PuntosObtenidos === undefined) continue;
             const actividad = acts.find((a) => Number(a.ActividadId) === Number(col.actividadId));
             const pesoActividad = sumaPesosConfig > 0
-              ? Math.max(0, Number(actividad?.PorcentajeDentroRubro || 0))
+              ? Math.max(0, getPesoActividad(actividad))
               : (rubroValorTotal / totalActividades);
             const puntosObtenidos = Number(nota.PuntosObtenidos || 0);
             const puntosMaximos = Number(nota.PuntosMaximos || actividad?.PuntosMaximos || 0);
@@ -2479,8 +2485,11 @@ export default function GestionProfePage() {
         actividades.filter((a) => detalleIdsTipo.includes(Number(a.EstructuraGrupoDetalleId || 0)))
       );
       const rubroValorTotal = Array.from(new Set(detalleIdsTipo)).reduce((acc, id) => acc + Number(detallePorId.get(id)?.Porcentaje || 0), 0);
+      const getPesoActividad = (actividad: any) => Number(actividad?.PorcentajeReal || 0) > 0
+        ? Number(actividad.PorcentajeReal)
+        : Number(actividad?.PorcentajeDentroRubro || 0);
       const sumaPesosConfig = acts.reduce((acc, item) => {
-        const peso = Number(item.PorcentajeDentroRubro || 0);
+        const peso = getPesoActividad(item);
         return acc + (Number.isFinite(peso) && peso > 0 ? peso : 0);
       }, 0);
       const columns = acts.map((a) => ({ actividadId: Number(a.ActividadId), nombre: String(a.Nombre || `${tipoNombre} ${a.ActividadId}`) }));
@@ -2506,7 +2515,7 @@ export default function GestionProfePage() {
         for (const col of calificadas) {
           const nota = porActividad.get(col.actividadId);
           const actividad = acts.find((a) => Number(a.ActividadId) === col.actividadId);
-          const pesoActividad = sumaPesosConfig > 0 ? Math.max(0, Number(actividad?.PorcentajeDentroRubro || 0)) : (acts.length ? rubroValorTotal / acts.length : 0);
+          const pesoActividad = sumaPesosConfig > 0 ? Math.max(0, getPesoActividad(actividad)) : (acts.length ? rubroValorTotal / acts.length : 0);
           const puntosObtenidos = Number(nota.PuntosObtenidos || 0);
           const puntosMaximos = Number(nota.PuntosMaximos || actividad?.PuntosMaximos || 0);
           const notaPct = puntosMaximos > 0 ? (puntosObtenidos / puntosMaximos) * 100 : Number(nota.PorcentajeObtenido || nota.NotaObtenida || 0);
@@ -2869,7 +2878,9 @@ export default function GestionProfePage() {
 
   function getActividadPorcentajeReal(actividadId: number) {
     const actividad = detalle?.actividades.find((item) => item.EvaluacionActividadId === actividadId);
-    return Number(actividad?.PorcentajeReal || 0);
+    return Number(actividad?.PorcentajeReal || 0) > 0
+      ? Number(actividad?.PorcentajeReal || 0)
+      : Number(actividad?.Porcentaje || 0);
   }
 
   function calcularPorcentajeGanado(estudianteId: number, actividadId: number) {
@@ -5466,7 +5477,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
 
   function calcularPorcentajeGanadoExamen(nota: number, actividad?: SeguimientoActividad | null, detalleItem?: SeguimientoEvaluacionDetalle | null) {
     void detalleItem;
-    const pe = Number(actividad?.PorcentajeDentroRubro || 0);
+    const pe = Number(actividad?.PorcentajeReal || 0) > 0
+      ? Number(actividad?.PorcentajeReal || 0)
+      : Number(actividad?.PorcentajeDentroRubro || 0);
     return Number(((Number(nota || 0) / 100) * pe).toFixed(2));
   }
 

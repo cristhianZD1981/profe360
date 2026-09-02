@@ -17021,6 +17021,10 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
               a.PorcentajeDentroRubro,
 
+              d.Porcentaje AS ComponentePorcentaje,
+
+              CAST((d.Porcentaje * a.PorcentajeDentroRubro / 100.0) AS DECIMAL(10,4)) AS PorcentajeReal,
+
               ISNULL(a.UsaIndicadoresPlaneamiento, 0) AS UsaIndicadoresPlaneamiento,
 
               a.Fuente,
@@ -17028,6 +17032,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
               a.Activo
 
             FROM dbo.Eval360_Actividad a
+
+            LEFT JOIN dbo.Eval360_EstructuraGrupoDetalle d ON d.EstructuraGrupoDetalleId = a.EstructuraGrupoDetalleId
 
             WHERE a.EstructuraGrupoId = @estructuraGrupoId
 
