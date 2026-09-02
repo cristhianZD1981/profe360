@@ -864,6 +864,7 @@ function buildPrompt(input: {
   perfilEstrategiasReferencia?: PerfilEstrategiasReferencia;
   perfilDocumentoReferencia?: PerfilDocumentoReferencia;
 }) {
+  const reglasIndicacionEspecifica = construirReglasIndicacionEspecifica(input);
   const habilidadesText = input.habilidades.map((h, index) => (
     `${index + 1}. Área: ${h.Area || "No indicada"}. Mes: ${h.Mes || "No indicado"}. Número ${h.NumeroHabilidad || ""}: ${h.DescripcionHabilidad || ""}. Documento referencia: ${h.DocumentoReferencia || "No indicado"}`
   )).join("\n");
@@ -910,6 +911,8 @@ Contexto del planeamiento:
 
 Indicaciones, consideraciones o premisas del docente:
 ${input.indicacionesDocente || "No se indicaron premisas adicionales."}
+
+${reglasIndicacionEspecifica}
 
 IMPORTANTE SOBRE LAS INDICACIONES DEL DOCENTE:
 Las indicaciones del docente tienen prioridad sobre la plantilla general.
@@ -1428,6 +1431,60 @@ function normalizarContratoGeneracionPlaneamiento(resultado: any) {
     camposReferencia,
     contratoGeneracion: "planeamiento-estructurado-v1"
   };
+}
+
+/**
+ * Estas reglas solo se activan cuando la persona docente las solicita de
+ * forma explícita en el campo de indicaciones. No cambian el comportamiento
+ * normal de las generaciones que no contienen esta instrucción.
+ */
+export function solicitaHabilidadesComoObjetivosEspecificos(indicaciones: string) {
+  const texto = normalizarParaBusqueda(indicaciones);
+  const mencionaHabilidades = texto.includes("habilidad");
+  const mencionaObjetivos = texto.includes("objetivo especifico")
+    || texto.includes("objetivos especificos")
+    || texto.includes("objetivo por lograr")
+    || texto.includes("objetivos por lograr");
+  return Boolean(texto && mencionaHabilidades && mencionaObjetivos);
+}
+
+export function solicitaContenidoDesdeDocumento(indicaciones: string, documentoApoyoTexto?: string) {
+  const texto = normalizarParaBusqueda(indicaciones);
+  const mencionaContenido = texto.includes("contenido");
+  const mencionaDocumento = texto.includes("pdf")
+    || texto.includes("documento")
+    || texto.includes("archivo")
+    || texto.includes("referencia");
+  return Boolean(texto && documentoApoyoTexto?.trim() && mencionaContenido && mencionaDocumento);
+}
+
+function construirReglasIndicacionEspecifica(input: {
+  indicacionesDocente?: string;
+  habilidades: any[];
+  documentoApoyoTexto?: string;
+}) {
+  const reglas: string[] = [];
+  if (solicitaHabilidadesComoObjetivosEspecificos(input.indicacionesDocente || "")) {
+    reglas.push([
+      "INSTRUCCIÓN ESPECÍFICA SOLICITADA POR EL DOCENTE — OBJETIVOS ESPECÍFICOS:",
+      "- Copiá literalmente cada descripción de las habilidades seleccionadas en \"aprendizajesEsperados\"; ese campo se mostrará como \"Objetivos específicos\" cuando la plantilla use ese encabezado.",
+      "- No resumás, corrijás, traduzcás, numerés ni reformulés esas descripciones.",
+      "- Generá un objetivo específico por cada habilidad seleccionada, respetando exactamente el orden recibido.",
+      "- No apliqués esta regla a generaciones futuras si la indicación no vuelve a escribirse.",
+      "Habilidades que deben conservarse literalmente:",
+      ...input.habilidades.map((habilidad, index) => `${index + 1}. ${String(habilidad?.DescripcionHabilidad || "").trim()}`)
+    ].join("\n"));
+  }
+  if (solicitaContenidoDesdeDocumento(input.indicacionesDocente || "", input.documentoApoyoTexto)) {
+    reglas.push([
+      "INSTRUCCIÓN ESPECÍFICA SOLICITADA POR EL DOCENTE — CONTENIDO DESDE EL DOCUMENTO:",
+      "- Usá el documento de apoyo adjunto como fuente principal para completar \"saberesEsenciales\"; ese campo se mostrará como \"Contenido\" cuando la plantilla use ese encabezado.",
+      "- Generá un contenido pertinente por cada habilidad seleccionada, en el mismo orden de las habilidades.",
+      "- Relacioná cada contenido con su habilidad correspondiente y no rellenés la columna con una copia general o desconectada del documento.",
+      "- Esta regla es temporal y aplica únicamente porque fue solicitada en las indicaciones actuales."
+    ].join("\n"));
+  }
+  return reglas.join("\n\n");
 }
 
 function serializarParaPrompt(value: any, maxLength = 30000) {
@@ -2682,6 +2739,15 @@ export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, inp
   resultado.materiaNombre = normalizeText(input.materiaNombre);
   resultado.MateriaNombre = resultado.materiaNombre;
 
+  // Solo para la generación que trae esta indicación explícita: el campo de
+  // aprendizajes se exporta como "Objetivos específicos" en esos machotes.
+  // Se conserva la descripción original, sin correcciones ni numeración.
+  if (solicitaHabilidadesComoObjetivosEspecificos(indicacionesDocente)) {
+    resultado.aprendizajesEsperados = input.habilidades
+      .map((habilidad) => String(habilidad?.DescripcionHabilidad || "").trim())
+      .filter(Boolean);
+  }
+
   if (!Array.isArray(resultado.estrategiasMediacion)) {
     resultado.estrategiasMediacion = splitLines(resultado.estrategiasMediacion);
   }
@@ -2718,7 +2784,9 @@ export function aplicarReglasObligatoriasPlaneamiento(resultadoEntrada: any, inp
     indicacionesDocente
   });
 
-  resultado.aprendizajesEsperados = corregirErroresOrtograficosLista(splitLines(resultado.aprendizajesEsperados));
+  resultado.aprendizajesEsperados = solicitaHabilidadesComoObjetivosEspecificos(indicacionesDocente)
+    ? input.habilidades.map((habilidad) => String(habilidad?.DescripcionHabilidad || "").trim()).filter(Boolean)
+    : corregirErroresOrtograficosLista(splitLines(resultado.aprendizajesEsperados));
   resultado.saberesEsenciales = corregirErroresOrtograficosLista(
     splitLines(resultado.saberesEsenciales).length
       ? splitLines(resultado.saberesEsenciales)
@@ -7371,6 +7439,8 @@ export function detectTemplateContentRole(cellXml: string): TemplateContentRole 
     || text.includes("resultados de aprendizaje")
     || text.includes("aprendizaje por lograr")
     || text.includes("aprendizajes por lograr")
+    || text.includes("objetivo especifico")
+    || text.includes("objetivos especificos")
     || text.includes("habilidad especifica")
     || text.includes("habilidades especificas")
     || text.includes("learner can")

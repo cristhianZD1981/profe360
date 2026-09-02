@@ -20,6 +20,8 @@ import {
   normalizarModalidadGrado,
   normalizarAuditoriaSemantica,
   normalizarTextoWordParaComparacion,
+  solicitaContenidoDesdeDocumento,
+  solicitaHabilidadesComoObjetivosEspecificos,
   perfilDocumentoParaRevision,
   renderPlaneamientoEnPlantillaDocx,
   validarWordExportadoContraReferencia,
@@ -29,6 +31,55 @@ import {
   validarOrdenEncabezadosEstrategias,
   validarPlaneamientoGenerado
 } from "./planeamiento-ia.routes.js";
+
+test("aplica objetivos literales solo cuando la indicación los solicita", () => {
+  assert.equal(
+    solicitaHabilidadesComoObjetivosEspecificos("Tomá las habilidades y copiálas literalmente en Objetivos específicos."),
+    true
+  );
+  assert.equal(
+    solicitaHabilidadesComoObjetivosEspecificos("Generá un planeamiento contextualizado para el grupo."),
+    false
+  );
+});
+
+test("activa el uso del documento para Contenido solo con indicación y archivo", () => {
+  assert.equal(
+    solicitaContenidoDesdeDocumento("Usá el archivo PDF para llenar la columna Contenido.", "Contenido extraído del PDF"),
+    true
+  );
+  assert.equal(
+    solicitaContenidoDesdeDocumento("Completá el contenido según las habilidades.", "Contenido extraído del PDF"),
+    false
+  );
+  assert.equal(
+    solicitaContenidoDesdeDocumento("Usá el archivo PDF para llenar la columna Contenido.", ""),
+    false
+  );
+});
+
+test("reconoce Objetivos específicos como columna de aprendizajes del machote", () => {
+  assert.equal(
+    detectTemplateContentRole("Objetivos específicos"),
+    "aprendizajes"
+  );
+});
+
+test("preserva literalmente las habilidades solicitadas como objetivos", () => {
+  const habilidad = "Describe y explica procesos de conservación de alimentos.";
+  const resultado = aplicarReglasObligatoriasPlaneamiento(
+    { aprendizajesEsperados: ["Texto generado por la IA"] },
+    {
+      indicacionesDocente: "Incluí las habilidades literalmente en Objetivos específicos.",
+      materiaNombre: "Taller",
+      grado: "Sétimo",
+      mes: "Agosto",
+      tema: "Conservas",
+      habilidades: [{ DescripcionHabilidad: habilidad }]
+    }
+  );
+  assert.deepEqual(resultado.aprendizajesEsperados, [habilidad]);
+});
 
 test("rechaza una periodicidad que contradice los meses seleccionados", () => {
   assert.match(
