@@ -1,8 +1,9 @@
-﻿import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api from "../lib/http";
 import { useAuth } from "../context/auth";
 import { getCostaRicaIsoDate } from "../utils/date";
+import AsistenciaDetalleDia, { type AsistenciaLeccionDia } from "../components/AsistenciaDetalleDia";
 import {
   getAdecuacionAsistenciaHtmlStyle,
   getAdecuacionAsistenciaRowStyle,
@@ -61,6 +62,7 @@ type AsistenciaResumen = {
   cantidadCorreosEnviados: number;
   cantidadWhatsAppEnviados: number;
   detalle: AsistenciaDetalle[];
+  detalleDia?: AsistenciaLeccionDia[];
 };
 
 type BoletaReporteRow = {
@@ -342,12 +344,14 @@ function getAlertStyle(alertaTemprana: string): React.CSSProperties {
   return { background: "#dcfce7", color: "#166534", fontWeight: 800, borderRadius: 10, padding: "4px 8px", display: "inline-block" };
 }
 
-export default function ReportesPage() {
+export type ContextoReporteGuia = { grupoId: number; anioLectivoId: number; periodoId: number };
+export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { guia?: ContextoReporteGuia; tipoInicial?: "ASISTENCIA" | "BOLETAS" } = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
 
-  const [tipo, setTipo] = useState<TipoReporte>("ASISTENCIA");
+  const [tipo, setTipo] = useState<TipoReporte>(tipoInicial);
+  const guiaParams = guia ? { guiaGrupoId: guia.grupoId, guiaAnioLectivoId: guia.anioLectivoId, guiaPeriodoId: guia.periodoId } : {};
   const [secciones, setSecciones] = useState<any[]>([]);
   const [alumnos, setAlumnos] = useState<any[]>([]);
   const [profesores, setProfesores] = useState<any[]>([]);
@@ -360,7 +364,7 @@ export default function ReportesPage() {
   const [modoPromedios, setModoPromedios] = useState<"PERIODO" | "ANUAL">("PERIODO");
   const [anioLectivoIdReporte, setAnioLectivoIdReporte] = useState<string>("");
   const [periodoIdReporte, setPeriodoIdReporte] = useState<string>("");
-  const [grupoId, setGrupoId] = useState<string>("");
+  const [grupoId, setGrupoId] = useState<string>(guia ? String(guia.grupoId) : "");
   const [estudianteId, setEstudianteId] = useState<string>("");
   const [profesorIdReporte, setProfesorIdReporte] = useState<string>("");
   const [busquedaAlumno, setBusquedaAlumno] = useState<string>("");
@@ -379,6 +383,10 @@ export default function ReportesPage() {
   const [reabriendoCierreId, setReabriendoCierreId] = useState<number | null>(null);
   const [seccionReporteTitulo, setSeccionReporteTitulo] = useState<string>("");
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
+  const [expandedDayRows, setExpandedDayRows] = useState<Record<number, boolean>>({});
+  const [filtrosAsistenciaConsultados, setFiltrosAsistenciaConsultados] = useState<Record<string, string | number | undefined> | null>(null);
+  const [exportandoDetalleDia, setExportandoDetalleDia] = useState(false);
+  useEffect(() => { setExpandedDayRows({}); }, [asistenciaRows, vistaAsistencia, tipo]);
 
   const [grupoIdConstancia, setGrupoIdConstancia] = useState<string>("");
   const [estudianteIdConstancia, setEstudianteIdConstancia] = useState<string>("");
@@ -398,7 +406,7 @@ export default function ReportesPage() {
   const [progressPct, setProgressPct] = useState(0);
   const [generandoConstancia, setGenerandoConstancia] = useState(false);
 
-  const vistaActual = useMemo(() => getVistaActual(location.pathname), [location.pathname]);
+  const vistaActual = useMemo(() => guia ? "consultas" : getVistaActual(location.pathname), [location.pathname, guia]);
   const puedeAdministrarCierres = useMemo(() => {
     const roles = Array.isArray(user?.roles) ? user.roles.map((role) => String(role || "").toUpperCase()) : [];
     return roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role));
@@ -412,8 +420,9 @@ export default function ReportesPage() {
   }, [puedeAdministrarCierres, tipo]);
 
   useEffect(() => {
-    api.get("/reportes/gestion-filtros").then((r) => {
+    api.get("/reportes/gestion-filtros", { params: guiaParams }).then((r) => {
       const data = r.data?.data || {};
+      if (guia) { setDesde(data.desde || ""); setHasta(data.hasta || ""); }
       const anios = Array.isArray(data.aniosLectivos) ? data.aniosLectivos : [];
       const periodosData = Array.isArray(data.periodos) ? data.periodos : [];
       const seccionesData = Array.isArray(data.secciones) ? sortSeccionesMenorMayor(data.secciones) : [];
@@ -430,7 +439,7 @@ export default function ReportesPage() {
         const periodoInicial = periodosData.find((item: any) => String(item.AnioLectivoId) === anioInicial);
         if (periodoInicial?.PeriodoId) setPeriodoIdReporte((prev) => prev || String(periodoInicial.PeriodoId));
       }
-    });
+    }).catch(() => window.alert("No se pudieron cargar los filtros del reporte."));
   }, []);
 
   const alumnosFiltrados = useMemo(() => {
@@ -504,7 +513,7 @@ export default function ReportesPage() {
     setPromediosResumen(null);
     setSeccionReporteTitulo("");
     setExpandedRows({});
-    setGrupoId("");
+    setGrupoId(guia ? String(guia.grupoId) : "");
     setEstudianteId("");
     setProfesorIdReporte("");
     setBusquedaAlumno("");
@@ -617,18 +626,21 @@ export default function ReportesPage() {
       }
 
       if (tipo === "ASISTENCIA") {
-        const response = await api.get("/reportes/gestion-profe", {
-          params: {
+        const params = {
+            ...guiaParams,
             tipo,
             vistaPor: vistaAsistencia,
             grupoId: grupoId || undefined,
             estudianteId: estudianteId || undefined,
             profesorId: profesorIdReporte || undefined,
             desde: desde || undefined,
-            hasta: hasta || undefined
-          }
-        });
+            hasta: vistaAsistencia === "ALUMNO"
+              ? (hasta && hasta < getCostaRicaIsoDate() ? hasta : getCostaRicaIsoDate())
+              : hasta || undefined
+        };
+        const response = await api.get("/reportes/gestion-profe", { params });
         const rows = Array.isArray(response.data?.data?.rows) ? response.data.data.rows : [];
+        setFiltrosAsistenciaConsultados(params);
         setAsistenciaRows(rows);
         setExpandedRows({});
         setFilas([]);
@@ -641,6 +653,7 @@ export default function ReportesPage() {
       if (tipo === "BOLETAS") {
         const response = await api.get("/reportes/gestion-profe", {
           params: {
+            ...guiaParams,
             tipo,
             vistaPor: vistaAsistencia,
             grupoId: grupoId || undefined,
@@ -880,6 +893,34 @@ export default function ReportesPage() {
       window.setTimeout(() => window.URL.revokeObjectURL(url), 2000);
     } catch (error: any) {
       window.alert(error?.response?.data?.message || "No se pudo abrir la certificación en Word.");
+    }
+  }
+
+  async function exportarDetalleDiaExcel(estudianteIdValue: number) {
+    if (!filtrosAsistenciaConsultados || exportandoDetalleDia) return;
+    setExportandoDetalleDia(true);
+    try {
+      const alumno = asistenciaRows.find((fila) => fila.estudianteId === estudianteIdValue);
+      if (!alumno || !Array.isArray(alumno.detalleDia)) {
+        window.alert("Volvé a consultar el reporte para cargar el detalle por día antes de exportarlo.");
+        return;
+      }
+      const { crearExcelAsistenciaDia } = await import("../utils/asistenciaDiaExcel");
+      const workbook = crearExcelAsistenciaDia(
+        { ...alumno, detalleDia: alumno.detalleDia },
+        String(filtrosAsistenciaConsultados.desde || "") || null,
+        String(filtrosAsistenciaConsultados.hasta || getCostaRicaIsoDate())
+      );
+      const buffer = await workbook.xlsx.writeBuffer();
+      const bytes = new Uint8Array(buffer);
+      if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) throw new Error("Archivo Excel inválido");
+      descargarBlob(new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      }), `asistencia-por-dia-${estudianteIdValue}.xlsx`);
+    } catch {
+      window.alert("No se pudo exportar el detalle por día a Excel. Intentá nuevamente.");
+    } finally {
+      setExportandoDetalleDia(false);
     }
   }
 
@@ -1416,12 +1457,12 @@ export default function ReportesPage() {
               <h3 style={{ marginBottom: 6 }}>Consultas y Reportes</h3>
               <p style={{ margin: 0, color: "#475569" }}>Esta pantalla queda dedicada únicamente a consultas y exportación de reportes.</p>
             </div>
-            <button type="button" onClick={() => navigate("/reportes")} style={backButtonStyle}>
+            {!guia ? <button type="button" onClick={() => navigate("/reportes")} style={backButtonStyle}>
                Cambiar opción
-            </button>
+            </button> : null}
           </div>
           <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 12 }}>
-            <label>Tipo de reporte
+            {!guia ? <label>Tipo de reporte
               <select
                 value={tipo}
                 onChange={(e) => {
@@ -1456,7 +1497,7 @@ export default function ReportesPage() {
                 <option value="TRASLADOS_SECCIONES">Traslado entre secciones</option>
                 {puedeAdministrarCierres ? <option value="CIERRE_CURSOS">Cursos Cerrados</option> : null}
               </select>
-            </label>
+            </label> : null}
             {tipo === "HORARIO_PROFESOR" ? (
               <label>Profesor
                 <select value={profesorIdReporte} onChange={(e) => { setProfesorIdReporte(e.target.value); setHorarioReporte(null); }}>
@@ -1485,7 +1526,7 @@ export default function ReportesPage() {
                       setVistaAsistencia(nextVista);
                       setAsistenciaRows([]);
                       setExpandedRows({});
-                      setGrupoId("");
+                      setGrupoId(guia ? String(guia.grupoId) : "");
                       setEstudianteId("");
                       setProfesorIdReporte("");
                     }}
@@ -1497,7 +1538,7 @@ export default function ReportesPage() {
                 </label>
                 {vistaAsistencia !== "PROFESOR" ? (
                   <label>Sección
-                    <select value={grupoId} onChange={(e) => { setGrupoId(e.target.value); setEstudianteId(""); }}>
+                    <select value={grupoId} disabled={!!guia} onChange={(e) => { setGrupoId(e.target.value); setEstudianteId(""); }}>
                       <option value="">{vistaAsistencia === "ALUMNO" ? "Todas" : "Seleccione"}</option>
                       {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
                     </select>
@@ -1640,7 +1681,7 @@ export default function ReportesPage() {
                     value={gradoReporte}
                     onChange={(e) => {
                       setGradoReporte(e.target.value);
-                      setGrupoId("");
+                      setGrupoId(guia ? String(guia.grupoId) : "");
                     }}
                   >
                     <option value="">Todos los grados</option>
@@ -1777,6 +1818,16 @@ export default function ReportesPage() {
                             >
                               {expandedRows[fila.estudianteId] ? "Ocultar" : "Ver detalle"}
                             </button>
+                            {vistaAsistencia === "ALUMNO" ? (
+                              <div style={{ marginTop: 6 }}>
+                                <button type="button"
+                                  aria-expanded={!!expandedDayRows[fila.estudianteId]}
+                                  aria-controls={`asis-dia-${fila.estudianteId}`}
+                                  onClick={() => setExpandedDayRows((prev) => ({ ...prev, [fila.estudianteId]: !prev[fila.estudianteId] }))}
+                                  style={{ borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", padding: "6px 10px", cursor: "pointer", whiteSpace: "nowrap" }}
+                                >{expandedDayRows[fila.estudianteId] ? "Ocultar detalle x día" : "Ver detalle x día"}</button>
+                              </div>
+                            ) : null}
                           </td>
                         ) : null}
                         <td>
@@ -1833,6 +1884,14 @@ export default function ReportesPage() {
                           </td>
                         </tr>
                       ) : null}
+                      {vistaAsistencia === "ALUMNO" && expandedDayRows[fila.estudianteId] ? (
+                        <tr id={`asis-dia-${fila.estudianteId}`}>
+                          <td colSpan={11} style={{ padding: 0 }}>
+                            <AsistenciaDetalleDia lecciones={fila.detalleDia || []} alumno={fila.alumno}
+                              onExportar={() => void exportarDetalleDiaExcel(fila.estudianteId)} exportando={exportandoDetalleDia} />
+                          </td>
+                        </tr>
+                      ) : null}
                     </Fragment>
                     );
                   })}
@@ -1876,7 +1935,7 @@ export default function ReportesPage() {
                           type="button"
                           className="primary-btn"
                           style={{ padding: "6px 10px" }}
-                          onClick={() => window.open(`/boletas/conducta/${fila.boletaConductaId}?modo=reimprimir`, "_blank", "noopener,noreferrer")}
+                          onClick={() => window.open(`/boletas/conducta/${fila.boletaConductaId}?modo=reimprimir${guia ? `&guiaGrupoId=${guia.grupoId}&guiaAnioLectivoId=${guia.anioLectivoId}&guiaPeriodoId=${guia.periodoId}` : ""}`, "_blank", "noopener,noreferrer")}
                         >
                           Reimprimir
                         </button>

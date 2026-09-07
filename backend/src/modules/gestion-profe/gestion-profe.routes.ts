@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { registrarComunicados } from "./comunicados.routes";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql, timedQuery } from "../../config/database";
 import { badRequest, created, forbidden, ok } from "../../utils/http";
@@ -114,6 +115,8 @@ function getUserId(req: any) {
   const auth = getAuth(req);
   return Number(auth.userId || auth.usuarioId || 0);
 }
+
+registrarComunicados(router, getAsignacionPermitida);
 
 function resolveNotificationCc(req: any, ...candidates: any[]) {
   const values = [getAuth(req)?.correo, ...candidates]

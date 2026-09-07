@@ -27,7 +27,7 @@ type WabaChannel = {
   assignedInstitutionName?: string | null;
 };
 
-const templateTypes = ["ASISTENCIA", "TAREA", "PROYECTO", "COTIDIANO", "EXAMENES", "BOLETA", "GENERAL"];
+const templateTypes = ["ASISTENCIA", "TAREA", "PROYECTO", "COTIDIANO", "EXAMENES", "BOLETA", "COMUNICADO"];
 const emptyTemplates = (): Template[] => templateTypes.map((tipoMensaje) => ({ tipoMensaje, nombre: "", templateUuid: "", cantidadParametrosBody: 0, estado: "PENDIENTE" }));
 
 function dataOf(response: any) { return response?.data?.data ?? response?.data ?? {}; }
@@ -158,8 +158,16 @@ export default function WhatsAppInstitutionManager() {
         }
       }
       const saved = Array.isArray(data.plantillas) ? data.plantillas : [];
-      setTemplates(emptyTemplates().map((item) => {
-        const match = saved.find((value: any) => value.TipoMensaje === item.tipoMensaje || (item.tipoMensaje === "COTIDIANO" && value.TipoMensaje === "EVALUACION"));
+      const activeSaved = saved.filter((value: any) => value.Activo !== false && value.Activo !== 0);
+      const concepts = data.esProfe360 && saved.length
+        ? [...new Set<string>(activeSaved.map((value: any) => String(value.TipoMensaje === "GENERAL" ? "COMUNICADO" : value.TipoMensaje)))].map((tipoMensaje) => ({ tipoMensaje, nombre: "", templateUuid: "", cantidadParametrosBody: 0, estado: "PENDIENTE" }))
+        : emptyTemplates();
+      if (data.esProfe360 && !saved.some((value: any) => value.TipoMensaje === "COMUNICADO") && !concepts.some((c) => c.tipoMensaje === "COMUNICADO")) {
+        concepts.push({ tipoMensaje: "COMUNICADO", nombre: "", templateUuid: "", cantidadParametrosBody: 8, estado: "PENDIENTE" });
+      }
+      setTemplates(concepts.map((item) => {
+        const match = activeSaved.find((value: any) => value.TipoMensaje === item.tipoMensaje || (item.tipoMensaje === "COTIDIANO" && value.TipoMensaje === "EVALUACION"))
+          || (item.tipoMensaje === "COMUNICADO" ? activeSaved.find((value: any) => value.Nombre === "notificacion_academica_general") : null);
         return match ? { ...item, nombre: match.Nombre || "", templateUuid: match.TemplateUuid || "", cantidadParametrosBody: Number(match.CantidadParametrosBody || 0), estado: match.Estado || "PENDIENTE" } : item;
       }));
     } catch (err: any) {
@@ -331,11 +339,12 @@ export default function WhatsAppInstitutionManager() {
   async function saveTemplates() {
     if (!selectedId) return;
     const configured = templates.filter((item) => item.nombre.trim() && item.templateUuid.trim());
-    if (!configured.length) { setError("Ingresá al menos una plantilla con nombre y UUID."); return; }
+    if (!isProfe360 && !configured.length) { setError("Ingresá al menos una plantilla con nombre y UUID."); return; }
+    if (isProfe360 && configured.length !== templates.length) { setError("Completá o quitá los conceptos sin nombre de plantilla y UUID antes de guardar."); return; }
     setLoading(true); setError("");
     try {
       const endpoint = isProfe360
-        ? "/instituciones/whatsapp/fallback/plantillas"
+        ? "/instituciones/whatsapp/fallback/conceptos"
         : "/instituciones/" + selectedId + "/whatsapp/plantillas";
       await api.put(endpoint, { plantillas: configured });
       setMessage("Plantillas guardadas correctamente.");
@@ -460,13 +469,15 @@ export default function WhatsAppInstitutionManager() {
           </div>}
           {mode === "PROPIO_API" && <div style={{ display: "grid", gap: 8, borderTop: "1px solid #334155", paddingTop: 12 }}>
             <strong>Plantillas WABA</strong>
+            {isProfe360 ? <><strong>Mantenimiento de conceptos — Profe360</strong><span>Agregá, editá o quitá conceptos y guardá los cambios. COMUNICADO utiliza notificacion_academica_general (8 parámetros).</span><button type="button" disabled={loading} onClick={() => setTemplates((values) => [...values, { tipoMensaje: "", nombre: "", templateUuid: "", cantidadParametrosBody: 8, estado: "PENDIENTE" }])}>Agregar concepto</button></> : null}
             <button type="button" onClick={loadAvailableTemplates} disabled={loading} style={{ width: "fit-content" }}>Buscar plantillas en 2Chat</button>
-            {templates.map((item) => <div key={item.tipoMensaje} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 1fr 75px", gap: 7, alignItems: "center" }}>
-              <span>{item.tipoMensaje}</span>
+            {templates.map((item, index) => <div key={index} style={{ display: "grid", gridTemplateColumns: isProfe360 ? "150px 1fr 1fr 1fr 75px 80px" : "110px 1fr 1fr 1fr 75px", gap: 7, alignItems: "center" }}>
+              {isProfe360 ? <input aria-label="Concepto" maxLength={40} value={item.tipoMensaje} onChange={(e) => setTemplates((values) => values.map((value, i) => i === index ? { ...value, tipoMensaje: e.target.value.toUpperCase().replace(/\s/g, "_") } : value))} /> : <span>{item.tipoMensaje}</span>}
               <select value={item.templateUuid} onChange={(e) => assignAvailableTemplate(item.tipoMensaje, e.target.value)}><option value="">Seleccionar plantilla</option>{availableTemplates.map((available) => <option key={available.uuid} value={available.uuid}>{available.name} · {available.status}</option>)}</select>
               <input value={item.nombre} onChange={(e) => setTemplates((values) => values.map((value) => value.tipoMensaje === item.tipoMensaje ? { ...value, nombre: e.target.value } : value))} placeholder="Nombre" />
               <input value={item.templateUuid} onChange={(e) => setTemplates((values) => values.map((value) => value.tipoMensaje === item.tipoMensaje ? { ...value, templateUuid: e.target.value } : value))} placeholder="UUID" />
               <input type="number" min={0} value={item.cantidadParametrosBody} onChange={(e) => setTemplates((values) => values.map((value) => value.tipoMensaje === item.tipoMensaje ? { ...value, cantidadParametrosBody: Number(e.target.value || 0) } : value))} />
+              {isProfe360 ? <button type="button" disabled={loading} onClick={() => setTemplates((values) => values.filter((_, i) => i !== index))}>Quitar</button> : null}
             </div>)}
             <button type="button" onClick={saveTemplates} disabled={loading}>Guardar plantillas</button>
           </div>}

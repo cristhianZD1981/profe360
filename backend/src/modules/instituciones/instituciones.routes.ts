@@ -304,10 +304,42 @@ async function saveWhatsAppTemplates(pool: Awaited<ReturnType<typeof getPool>>, 
 async function getChannelForTemplates(pool: Awaited<ReturnType<typeof getPool>>, params: { institucionId?: number; fallback?: boolean }) {
   const request = pool.request();
   const result = params.fallback
-    ? await request.query(`SELECT TOP 1 WhatsAppCanalId FROM dbo.WhatsAppCanal WHERE EsFallback = 1 AND Activo = 1 ORDER BY WhatsAppCanalId DESC`)
+    ? await request.query(`SELECT TOP 1 c.WhatsAppCanalId FROM dbo.WhatsAppCanal c
+        LEFT JOIN dbo.Institucion i ON i.InstitucionId = c.InstitucionId
+        WHERE c.EsFallback = 1 AND c.Activo = 1 AND (c.InstitucionId IS NULL
+          OR UPPER(LTRIM(RTRIM(COALESCE(i.NombreComercial, i.Nombre, N'')))) = N'PROFE360'
+          OR UPPER(LTRIM(RTRIM(i.Nombre))) = N'PROFE360') ORDER BY c.WhatsAppCanalId DESC`)
     : await request.input("institucionId", sql.Int, Number(params.institucionId)).query(`SELECT TOP 1 WhatsAppCanalId FROM dbo.WhatsAppCanal WHERE InstitucionId = @institucionId AND EsFallback = 0 AND Activo = 1 ORDER BY WhatsAppCanalId DESC`);
   return result.recordset[0]?.WhatsAppCanalId ? Number(result.recordset[0].WhatsAppCanalId) : null;
 }
+
+router.put("/whatsapp/fallback/conceptos", requireRoles("SUPER_ADMIN"), async (req, res) => {
+  const items = req.body?.plantillas;
+  if (!Array.isArray(items) || items.length > 100) return badRequest(res, "La lista de conceptos no es válida");
+  const templates = items.map((item: any) => ({ ...item, tipoMensaje: String(item.tipoMensaje || "").trim().toUpperCase(), nombre: String(item.nombre || "").trim(), templateUuid: String(item.templateUuid || "").trim() }));
+  if (templates.some((t: any) => !/^[A-Z][A-Z0-9_]{0,39}$/.test(t.tipoMensaje) || !t.nombre || t.nombre.length > 150 || !t.templateUuid || t.templateUuid.length > 150 || !Number.isInteger(t.cantidadParametrosBody) || t.cantidadParametrosBody < 0 || t.cantidadParametrosBody > 30)
+    || new Set(templates.map((t: any) => t.tipoMensaje)).size !== templates.length) return badRequest(res, "Completá conceptos únicos, nombre, UUID y cantidad válida de parámetros");
+  if (templates.some((t: any) => t.tipoMensaje === "COMUNICADO" && (t.nombre !== "notificacion_academica_general" || t.cantidadParametrosBody !== 8))) return badRequest(res, "COMUNICADO debe usar notificacion_academica_general con 8 parámetros");
+  const pool = await getPool();
+  const channelId = await getChannelForTemplates(pool, { fallback: true });
+  if (!channelId) return res.status(404).json({ ok: false, message: "Configurá primero el canal de Profe360" });
+  const trans = new sql.Transaction(pool);
+  try {
+    await trans.begin();
+    const adapter = { request: () => new sql.Request(trans) } as any;
+    await adapter.request().input("channelId", sql.Int, channelId)
+      .input("tipos", sql.NVarChar(sql.MAX), JSON.stringify(templates.map((t: any) => t.tipoMensaje)))
+      .query(`UPDATE dbo.WhatsAppPlantilla SET Activo=0, UpdatedAt=SYSDATETIME()
+        WHERE WhatsAppCanalId=@channelId AND Activo=1 AND TipoMensaje NOT IN (SELECT value FROM OPENJSON(@tipos))`);
+    const saved = await saveWhatsAppTemplates(adapter, channelId, templates);
+    await trans.commit();
+    return ok(res, { plantillas: saved.filter((p: any) => p.Activo) }, "Conceptos y plantillas de Profe360 guardados");
+  } catch (e) {
+    try { await trans.rollback(); } catch {}
+    console.error("Error manteniendo conceptos WABA", e);
+    return res.status(500).json({ ok: false, message: "No se pudieron guardar los conceptos WABA" });
+  }
+});
 
 router.put("/whatsapp/fallback/plantillas", requireRoles("SUPER_ADMIN"), async (req, res) => {
   const templates = Array.isArray(req.body?.plantillas) ? req.body.plantillas : [];

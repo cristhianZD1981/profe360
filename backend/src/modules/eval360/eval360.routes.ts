@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { autorizarReporteGuia, cargarFiltrosGuia } from "../reportes/profe-guia-access";
 
 import multer from "multer";
 
@@ -16042,7 +16043,20 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
-    const asignacion = await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId });
+    let guiaScope: any = null;
+    let guiaFiltros: any = null;
+    if (req.query.guiaGrupoId !== undefined) {
+      guiaScope = await autorizarReporteGuia(req, res);
+      if (!guiaScope) return;
+      if (anioLectivoId !== guiaScope.anioLectivoId || periodoId !== guiaScope.periodoId || sincronizarSolicitado) {
+        return res.status(403).json({ ok: false, message: "El registro del grupo guía es de solo lectura y está limitado al grupo y período asignados" });
+      }
+      guiaFiltros = await cargarFiltrosGuia(guiaScope);
+      if (!guiaFiltros.materias.some((m: any) => Number(m.GrupoConsultaId) === grupoId && Number(m.MateriaId) === materiaId && Number(m.GrupoClaseId || 0) === Number(grupoClaseId || 0))) {
+        return res.status(403).json({ ok: false, message: "La materia no pertenece al grupo guía" });
+      }
+    }
+    const asignacion = guiaScope ? { InstitucionId: guiaScope.institucionId } : await getAsignacionPermitida(req, res, { grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId });
 
     if (!asignacion) return;
 
@@ -16056,7 +16070,7 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
     cacheKey = `${getContextCacheKeyFromParts({ institucionId, grupoId, materiaId, anioLectivoId, periodoId, grupoClaseId })}|asis:${incluirAsistencia ? 1 : 0}|env:${incluirEnvios ? 1 : 0}`;
 
-    canUseCache = !sincronizarSolicitado;
+    canUseCache = !sincronizarSolicitado && !guiaScope;
 
     if (canUseCache) {
 
@@ -16090,8 +16104,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
       const pool = await getPool();
 
-      await ensureComponenteAjusteManualTables(pool);
-      await ensureEval360GrupoClaseColumn(pool);
+      if (!guiaScope) await ensureComponenteAjusteManualTables(pool);
+      if (!guiaScope) await ensureEval360GrupoClaseColumn(pool);
 
 
 
@@ -17303,8 +17317,8 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
-      const estudiantesRows = estudiantes.recordset || [];
-      const estudiantesGrupoClaseIds = grupoClaseId
+      const estudiantesRows = (estudiantes.recordset || []).filter((e: any) => !guiaScope || guiaFiltros.alumnos.some((a: any) => Number(a.EstudianteId) === Number(e.EstudianteId)));
+      const estudiantesGrupoClaseIds = (grupoClaseId || guiaScope)
         ? new Set(estudiantesRows.map((item: any) => Number(item.EstudianteId)))
         : null;
       const filtrarRegistrosGrupoClase = (rows: any[]) => estudiantesGrupoClaseIds

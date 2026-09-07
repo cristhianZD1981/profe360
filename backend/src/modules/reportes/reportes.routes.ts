@@ -31,9 +31,15 @@ import {
   suspensionVigenteSelectSql
 } from "../estudiantes/estudiante-suspension.utils";
 import { ensureMatriculaTrasladoHistorialTable } from "../academico/matricula-traslado.utils";
+import { asistenciaDiaSql } from "./asistencia-dia";
+import { crearExcelAsistenciaDia } from "./asistencia-dia-excel";
+import { autorizarReporteGuia, cargarFiltrosGuia } from "./profe-guia-access";
+import { registrarReporteComunicadosGuia } from "./comunicados-guia.routes";
+import { crearExcelWhatsApp } from "./whatsapp-excel";
 
 const router = Router();
 router.use(requireAuth);
+registrarReporteComunicadosGuia(router);
 
 function getUserId(req: any) {
   return Number(req.auth?.userId || req.auth?.usuarioId || req.auth?.id || 0) || 0;
@@ -1074,10 +1080,11 @@ async function buildReporteAsistenciaGeneral(params: {
   desde: string | null;
   hasta: string | null;
   vistaPor: "ALUMNO" | "SECCION" | "PROFESOR";
+  guiaScope?: { anioLectivoId: number } | null;
 }) {
   const { req, pool, institucionId, grupoId, estudianteId, desde, hasta, vistaPor } = params;
   const userId = getUserId(req);
-  const profesorId = isAdminReportUser(req) ? params.profesorId : (userId || null);
+  const profesorId = params.guiaScope || isAdminReportUser(req) ? params.profesorId : (userId || null);
 
   const commonRequest = () => pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -1085,6 +1092,7 @@ async function buildReporteAsistenciaGeneral(params: {
     .input("estudianteId", sql.Int, estudianteId)
     .input("profesorId", sql.Int, profesorId)
     .input("usuarioId", sql.Int, userId || null)
+    .input("guiaAnioId", sql.Int, params.guiaScope?.anioLectivoId || null)
     .input("desde", sql.Date, desde)
     .input("hasta", sql.Date, hasta);
 
@@ -1105,7 +1113,7 @@ async function buildReporteAsistenciaGeneral(params: {
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
       ${getSuspensionVigenteApplySql("e")}
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
-      WHERE e.InstitucionId = @institucionId
+      WHERE e.InstitucionId = @institucionId AND (@guiaAnioId IS NULL OR m.AnioLectivoId = @guiaAnioId) AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
         AND e.Activo = 1
         AND ISNULL(m.Estado, N'') <> N'Inactiva'
         AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
@@ -1157,7 +1165,7 @@ async function buildReporteAsistenciaGeneral(params: {
         INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
         ${getSuspensionVigenteApplySql("e")}
         INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
-        WHERE e.InstitucionId = @institucionId
+        WHERE e.InstitucionId = @institucionId AND (@guiaAnioId IS NULL OR m.AnioLectivoId = @guiaAnioId) AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
           AND e.Activo = 1
           AND ISNULL(m.Estado, N'') <> N'Inactiva'
           AND (
@@ -1357,7 +1365,7 @@ async function buildReporteAsistenciaGeneral(params: {
       INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
       ${getSuspensionVigenteApplySql("e")}
       INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
-      WHERE e.InstitucionId = @institucionId
+      WHERE e.InstitucionId = @institucionId AND (@guiaAnioId IS NULL OR m.AnioLectivoId = @guiaAnioId) AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
         AND e.Activo = 1
         AND ISNULL(m.Estado, N'') <> N'Inactiva'
         AND (@grupoId IS NULL OR g.GrupoId = @grupoId)
@@ -1584,6 +1592,21 @@ async function buildReporteAsistenciaGeneral(params: {
     detallePorEstudiante.set(key, list);
   }
 
+  const detalleDiaPorEstudiante = new Map<number, any[]>();
+  if (vistaPor === "ALUMNO") {
+    const hoy = getCostaRicaIsoDate();
+    const fechaCorte = hasta && hasta < hoy ? hasta : hoy;
+    const diario = await timedQuery("reportes.asistencia.alumno.dia", () => commonRequest()
+      .input("fechaCorte", sql.Date, fechaCorte)
+      .query(asistenciaDiaSql));
+    for (const item of diario.recordset) {
+      const key = Number(item.estudianteId);
+      const list = detalleDiaPorEstudiante.get(key) || [];
+      list.push(item);
+      detalleDiaPorEstudiante.set(key, list);
+    }
+  }
+
   const resumen = baseStudentsResult.recordset.map((student: any) => {
     const detalle = detallePorEstudiante.get(Number(student.EstudianteId || 0)) || [];
     const totalLecciones = detalle.reduce((acc, item) => acc + Number(item.totalLecciones || 0), 0);
@@ -1614,7 +1637,8 @@ async function buildReporteAsistenciaGeneral(params: {
       presentes,
       cantidadCorreosEnviados,
       cantidadWhatsAppEnviados,
-      detalle
+      detalle,
+      detalleDia: detalleDiaPorEstudiante.get(Number(student.EstudianteId)) || []
     };
   });
 
@@ -2426,6 +2450,11 @@ router.get("/boletas-conducta", async (req, res) => {
 
 router.get("/gestion-filtros", async (req, res) => {
   try {
+    if (req.query.guiaGrupoId !== undefined) {
+      const scope = await autorizarReporteGuia(req, res);
+      if (!scope) return;
+      return ok(res, await cargarFiltrosGuia(scope));
+    }
     const pool = await getPool();
     const usuarioId = getUserId(req);
     const filtroProfesor = isAdminReportUser(req) ? "" : "AND u.UsuarioId = @usuarioId";
@@ -3366,12 +3395,27 @@ router.get("/gestion-profe", async (req, res) => {
   const grado = Number.isFinite(gradoRaw) ? gradoRaw : null;
   const tipoEstudiante = String(req.query.tipoEstudiante || "").trim().toUpperCase() || null;
   const adecuacion = String(req.query.adecuacion || "").trim() || null;
-  const desde = String(req.query.desde || "").trim() || null;
-  const hasta = String(req.query.hasta || "").trim() || null;
+  let desde = String(req.query.desde || "").trim() || null;
+  let hasta = String(req.query.hasta || "").trim() || null;
   const vistaPor = String(req.query.vistaPor || "SECCION").trim().toUpperCase();
   const anioLectivoId = req.query.anioLectivoId ? Number(req.query.anioLectivoId) : null;
   const periodoId = req.query.periodoId ? Number(req.query.periodoId) : null;
   const modoPromedios = String(req.query.modoPromedios || "PERIODO").trim().toUpperCase() === "ANUAL" ? "ANUAL" : "PERIODO";
+
+  let guiaScope = null;
+  if (req.query.guiaGrupoId !== undefined) {
+    guiaScope = await autorizarReporteGuia(req, res);
+    if (!guiaScope) return;
+    if (!["ASISTENCIA", "BOLETAS"].includes(tipo) || grupoId !== guiaScope.grupoId) {
+      return res.status(403).json({ ok: false, message: "El reporte debe pertenecer al grupo guía asignado" });
+    }
+    const filtros = await cargarFiltrosGuia(guiaScope);
+    if (estudianteId && !filtros.alumnos.some((a: any) => Number(a.EstudianteId) === estudianteId)) {
+      return res.status(403).json({ ok: false, message: "El alumno no pertenece al grupo guía" });
+    }
+    desde = desde && desde > guiaScope.Desde ? desde : guiaScope.Desde;
+    hasta = hasta && hasta < guiaScope.Hasta ? hasta : guiaScope.Hasta;
+  }
 
   const request = pool.request()
     .input("institucionId", sql.Int, institucionId)
@@ -3735,8 +3779,20 @@ router.get("/gestion-profe", async (req, res) => {
         profesorId,
         desde,
         hasta,
-        vistaPor: vistaPor as "ALUMNO" | "SECCION" | "PROFESOR"
+        vistaPor: vistaPor as "ALUMNO" | "SECCION" | "PROFESOR",
+        guiaScope
       });
+      if (req.query.formato === "EXCEL_DIA" && vistaPor === "ALUMNO") {
+        const alumno = result.rows[0];
+        if (!alumno || !("detalleDia" in alumno)) return badRequest(res, "No hay datos del alumno para exportar");
+        const hoy = getCostaRicaIsoDate();
+        const fechaCorte = hasta && hasta < hoy ? hasta : hoy;
+        const workbook = crearExcelAsistenciaDia(alumno, desde, fechaCorte);
+        const buffer = await workbook.xlsx.writeBuffer();
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="asistencia-por-dia-${estudianteId}.xlsx"`);
+        return res.send(Buffer.from(buffer));
+      }
       return ok(res, result);
     } catch (error: any) {
       console.error("Error generando reporte general de asistencia:", error);
@@ -3798,7 +3854,7 @@ router.get("/gestion-profe", async (req, res) => {
       return badRequest(res, "Debés seleccionar un profesor para este reporte");
     }
 
-    const profesorFiltroId = isAdminReportUser(req) ? profesorId : (getUserId(req) || null);
+    const profesorFiltroId = guiaScope || isAdminReportUser(req) ? profesorId : (getUserId(req) || null);
     const boletasRequest = pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("grupoId", sql.Int, grupoId)
@@ -4529,10 +4585,9 @@ router.get("/admin/whatsapp/filtros", async (req, res) => {
       WHERE i.Activo = 1
       ORDER BY COALESCE(NULLIF(i.NombreComercial, N''), i.Nombre)
     `);
-    return ok(res, {
-      instituciones: result.recordset,
-      tipos: ["ASISTENCIA", "TAREA", "BOLETA", "EVALUACION", "GENERAL"]
-    });
+    const tipos = await pool.request().query(`SELECT TipoMensaje FROM dbo.WhatsAppPlantilla WHERE Activo=1
+      UNION SELECT TipoMensaje FROM dbo.WhatsAppEnvio UNION SELECT N'COMUNICADO' ORDER BY TipoMensaje`);
+    return ok(res, { instituciones: result.recordset, tipos: tipos.recordset.map((r: any) => r.TipoMensaje) });
   } catch (error) {
     console.error("Error cargando filtros del reporte WhatsApp:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar los filtros" });
@@ -4543,8 +4598,13 @@ router.get("/admin/whatsapp", async (req, res) => {
   if (!isSuperAdmin(req)) return res.status(403).json({ ok: false, message: "Solo SUPER_ADMIN puede consultar este reporte" });
   try {
     const pool = await getPool();
-    const fechaHasta = String(req.query.fechaHasta || new Date().toISOString().slice(0, 10));
-    const fechaDesde = String(req.query.fechaDesde || new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10));
+    const fechaHasta = String(req.query.fechaHasta || getCostaRicaIsoDate());
+    const exportarExcel = req.query.formato === "excel";
+    const fechaDesde = String(req.query.fechaDesde || getCostaRicaIsoDate(new Date(Date.now() - 29 * 86400000)));
+    const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+    if (!validDate(fechaDesde) || !validDate(fechaHasta) || fechaDesde > fechaHasta) {
+      return res.status(400).json({ ok: false, message: "Indicá un rango de fechas válido" });
+    }
     const institucionId = Number(req.query.institucionId || 0) || null;
     const tipo = String(req.query.tipo || "").trim().toUpperCase() || null;
     const addFilters = (request: any) => request
@@ -4553,8 +4613,8 @@ router.get("/admin/whatsapp", async (req, res) => {
       .input("institucionId", sql.Int, institucionId)
       .input("tipo", sql.NVarChar(40), tipo);
     const filters = `
-      w.CreatedAt >= @fechaDesde
-      AND w.CreatedAt < DATEADD(day, 1, @fechaHasta)
+      w.CreatedAt >= DATEADD(hour, 6, CAST(@fechaDesde AS datetime2))
+      AND w.CreatedAt < DATEADD(hour, 6, DATEADD(day, 1, CAST(@fechaHasta AS datetime2)))
       AND (@institucionId IS NULL OR w.InstitucionId = @institucionId)
       AND (@tipo IS NULL OR w.TipoMensaje = @tipo)
     `;
@@ -4564,13 +4624,16 @@ router.get("/admin/whatsapp", async (req, res) => {
           SUM(CASE WHEN w.Estado IN (N'ACEPTADO', N'ENVIADO') THEN 1 ELSE 0 END) AS Enviados,
           SUM(CASE WHEN w.Estado = N'FALLIDO' THEN 1 ELSE 0 END) AS Fallidos,
           SUM(CASE WHEN w.Estado = N'PENDIENTE' THEN 1 ELSE 0 END) AS Pendientes,
+          SUM(CASE WHEN w.Estado = N'INCIERTO' THEN 1 ELSE 0 END) AS Inciertos,
           SUM(CASE WHEN w.Estado = N'OMITIDO' THEN 1 ELSE 0 END) AS Omitidos,
           SUM(CASE WHEN w.EsFallback = 1 THEN 1 ELSE 0 END) AS Fallback
         FROM dbo.WhatsAppEnvio w
         WHERE ${filters}
       `);
+    const schemaComunicados = await pool.request().query(`SELECT OBJECT_ID('dbo.ComunicadoProfeDestino', 'U') AS Id`);
+    const tieneComunicados = Boolean(schemaComunicados.recordset[0]?.Id);
     const rowsResult = await addFilters(pool.request()).query(`
-        SELECT TOP 1000
+        SELECT ${exportarExcel ? "" : "TOP 1000"}
           w.WhatsAppEnvioId,
           w.CreatedAt,
           w.InstitucionId,
@@ -4581,15 +4644,25 @@ router.get("/admin/whatsapp", async (req, res) => {
           w.NumeroOrigenSnapshot,
           w.EsFallback,
           w.MotivoError,
+          w.MensajeResumen,
+          ${tieneComunicados ? "com.Mensaje AS ComunicadoMensaje, com.ContextoJson AS ComunicadoContexto," : ""}
           g.Nombre AS Seccion,
           LTRIM(RTRIM(CONCAT(ISNULL(p.Nombre, N''), N' ', ISNULL(p.PrimerApellido, N''), N' ', ISNULL(p.SegundoApellido, N'')))) AS Profesor
         FROM dbo.WhatsAppEnvio w
         LEFT JOIN dbo.Institucion i ON i.InstitucionId = w.InstitucionId
         LEFT JOIN dbo.Grupo g ON g.GrupoId = w.GrupoId
         LEFT JOIN dbo.Usuario p ON p.UsuarioId = w.ProfesorUsuarioId
+        ${tieneComunicados ? `OUTER APPLY (SELECT TOP 1 c.Mensaje, c.ContextoJson FROM dbo.ComunicadoProfeDestino d
+          INNER JOIN dbo.ComunicadoProfe c ON c.ComunicadoId=d.ComunicadoId WHERE d.WhatsAppEnvioId=w.WhatsAppEnvioId) com` : ""}
         WHERE ${filters}
         ORDER BY w.CreatedAt DESC, w.WhatsAppEnvioId DESC
       `);
+    if (exportarExcel) {
+      const buffer = await crearExcelWhatsApp(rowsResult.recordset, fechaDesde, fechaHasta);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="envios-whatsapp-${fechaDesde}-${fechaHasta}.xlsx"`);
+      return res.send(buffer);
+    }
     return ok(res, {
       filtros: { fechaDesde, fechaHasta, institucionId, tipo },
       resumen: summaryResult.recordset[0] || {},

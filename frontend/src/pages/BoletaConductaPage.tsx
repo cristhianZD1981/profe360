@@ -12,7 +12,7 @@ export default function BoletaConductaPage() {
   const [message, setMessage] = useState("");
   const isReprintMode = useMemo(() => {
     const params = new URLSearchParams(location.search);
-    return params.get("modo") === "reimprimir";
+    return params.get("modo") === "reimprimir" || params.has("guiaGrupoId");
   }, [location.search]);
 
   async function loadBoleta() {
@@ -20,7 +20,11 @@ export default function BoletaConductaPage() {
     setErrorMessage("");
     setMessage("");
     try {
-      const response = await api.get(`/boletas/conducta/${boletaConductaId}`);
+      const query = new URLSearchParams(location.search);
+      const params = query.has("guiaGrupoId") ? {
+        guiaGrupoId: query.get("guiaGrupoId"), guiaAnioLectivoId: query.get("guiaAnioLectivoId"), guiaPeriodoId: query.get("guiaPeriodoId")
+      } : undefined;
+      const response = await api.get(`/boletas/conducta/${boletaConductaId}`, { params });
       const data = response.data?.data;
       setHtml(data?.html || "");
     } catch (error: any) {

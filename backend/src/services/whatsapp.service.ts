@@ -53,7 +53,7 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
   const channel = channelResult.recordset[0];
 
   if (!channel) {
-    await pool.request()
+    const omitted = await pool.request()
       .input("institucionId", sql.Int, input.institucionId || null)
       .input("grupoId", sql.Int, input.grupoId || null)
       .input("grupoClaseId", sql.Int, input.grupoClaseId || null)
@@ -68,12 +68,13 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
           (InstitucionId, WhatsAppCanalId, GrupoId, GrupoClaseId, EstudianteId,
            ProfesorUsuarioId, SolicitadoPorUsuarioId, TipoMensaje, TelefonoDestino,
            NumeroOrigenSnapshot, EsFallback, Estado, MotivoError, MensajeResumen)
+        OUTPUT INSERTED.WhatsAppEnvioId
         VALUES
           (@institucionId, NULL, @grupoId, @grupoClaseId, @estudianteId,
            @profesorUsuarioId, @solicitadoPorUsuarioId, @tipoMensaje, @telefonoDestino,
            NULL, 0, N'OMITIDO', N'No hay canal WhatsApp institucional ni fallback activo', @mensajeResumen)
       `);
-    return result(input, { enviado: false, modo: "omitido", motivo: "No hay canal WhatsApp institucional ni fallback activo" });
+    return result(input, { enviado: false, modo: "omitido", motivo: "No hay canal WhatsApp institucional ni fallback activo", whatsappEnvioId: omitted.recordset[0]?.WhatsAppEnvioId });
   }
 
   const insertRequest = pool.request()
@@ -120,6 +121,11 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
       `);
   };
 
+  try {
+  if (String(input.tipoMensaje).toUpperCase() === "COMUNICADO" && String(channel.TipoCanal).toUpperCase() !== "WABA") {
+    await updateLog({ estado: "FALLIDO", motivo: "COMUNICADO requiere un canal WABA y la plantilla notificacion_academica_general" });
+    return result(input, { enviado: false, motivo: "El canal configurado no es WABA", whatsappEnvioId: envioId });
+  }
   if (String(process.env.WHATSAPP_MODE || "simulado").trim().toLowerCase() !== "webhook") {
     await updateLog({ estado: "OMITIDO", motivo: "WHATSAPP_MODE no está configurado como webhook" });
     return result(input, { enviado: false, modo: "simulado", whatsappEnvioId: envioId });
@@ -167,6 +173,10 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
     await updateLog({ estado: "FALLIDO", motivo: "No hay una plantilla APPROVED para este tipo de mensaje" });
     return result(input, { enviado: false, modo: "webhook", motivo: "No hay una plantilla APPROVED para este tipo de mensaje", whatsappEnvioId: envioId });
   }
+  if (input.tipoMensaje.toUpperCase() === "COMUNICADO" && (template.Nombre !== "notificacion_academica_general" || Number(template.CantidadParametrosBody) !== 8)) {
+    await updateLog({ estado: "FALLIDO", motivo: "COMUNICADO requiere la plantilla notificacion_academica_general con 8 parámetros" });
+    return result(input, { enviado: false, motivo: "Configuración WABA de COMUNICADO inválida", whatsappEnvioId: envioId });
+  }
 
   const bodyParams = (input.templateParams?.length ? input.templateParams : [String(input.mensaje || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim()])
     .map((item) => String(item || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim().slice(0, 1024));
@@ -191,4 +201,9 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
 
   await updateLog({ estado: "ACEPTADO", uuid: body?.message_uuid });
   return result(input, { enviado: true, modo: "webhook", status: response.status, messageUuid: body?.message_uuid, whatsappEnvioId: envioId });
+  } catch (error: any) {
+    const motivo = String(error?.message || "No se confirmó el resultado del proveedor");
+    await updateLog({ estado: "INCIERTO", motivo });
+    return result(input, { enviado: false, estado: "INCIERTO", motivo, whatsappEnvioId: envioId });
+  }
 }

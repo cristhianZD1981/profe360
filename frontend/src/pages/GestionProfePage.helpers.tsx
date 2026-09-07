@@ -743,7 +743,7 @@ export type AsistenciaDraft = Record<string, {
 export type AsistenciaNotificacionEstado = Record<string, { correoEnviado?: boolean; waEnviado?: boolean }>;
 
 export type NoteDrafts = Record<string, string>;
-export type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "bitacora" | "reportes";
+export type ActivePanel = "" | "asistencia" | "notas" | "seguimiento" | "horario" | "planeamientos" | "examenes_tabla" | "bitacora" | "reportes" | "reportes_guia" | "comunicados";
 export type TipoReporteGestion = "ASISTENCIA" | "COTIDIANO" | "TAREAS" | "EXAMENES" | "MENSAJES" | "BOLETAS" | "NOTAS" | "BITACORA" | `RUBRO:${string}`;
 
 
@@ -855,6 +855,7 @@ export function getGestionPanelButtonStyle(panel: ActivePanel): React.CSSPropert
   if (panel === "notas") return { ...base, background: "#f3e8ff", borderColor: "#d8b4fe", color: "#6b21a8" };
   if (panel === "bitacora") return { ...base, background: "#fee2e2", borderColor: "#fca5a5", color: "#991b1b" };
   if (panel === "reportes") return { ...base, background: "#fef9c3", borderColor: "#fde047", color: "#854d0e" };
+  if (panel === "comunicados") return { ...base, background: "#dbeafe", borderColor: "#93c5fd", color: "#1e40af" };
   return base;
 }
 

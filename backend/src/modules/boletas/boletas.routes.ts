@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { autorizarReporteGuia } from "../reportes/profe-guia-access";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { env } from "../../config/env";
@@ -1404,13 +1405,15 @@ router.post("/conducta", async (req, res) => {
 
 router.get("/conducta/:boletaConductaId", async (req, res) => {
   try {
+    const guiaScope = req.query.guiaGrupoId !== undefined ? await autorizarReporteGuia(req, res) : null;
+    if (req.query.guiaGrupoId !== undefined && !guiaScope) return;
     const institucionId = getInstitutionId(req, res);
     if (!institucionId) return;
     const boletaConductaId = Number(req.params.boletaConductaId);
     if (!Number.isFinite(boletaConductaId)) return badRequest(res, "Boleta inválida");
 
     const pool = await getPool();
-    await ensureBoletaConductaTables(pool);
+    if (!guiaScope) await ensureBoletaConductaTables(pool);
 
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
@@ -1435,6 +1438,11 @@ router.get("/conducta/:boletaConductaId", async (req, res) => {
           AND b.InstitucionId = @institucionId
       `);
     const row = result.recordset[0];
+    if (guiaScope && row && (Number(row.GrupoId) !== guiaScope.grupoId ||
+      new Date(row.Fecha).toISOString().slice(0, 10) < guiaScope.Desde ||
+      new Date(row.Fecha).toISOString().slice(0, 10) > guiaScope.Hasta)) {
+      return res.status(403).json({ ok: false, message: "La boleta no pertenece al grupo y período guía asignados" });
+    }
     if (!row) return res.status(404).json({ ok: false, message: "No se encontró la boleta de conducta" });
 
     const institucion = {

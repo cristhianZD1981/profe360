@@ -77,7 +77,7 @@ const whatsappTemplateTypes = [
   { value: "COTIDIANO", label: "Cotidiano" },
   { value: "EXAMENES", label: "Exámenes" },
   { value: "BOLETA", label: "Boletas" },
-  { value: "GENERAL", label: "General" }
+  { value: "COMUNICADO", label: "Comunicado" }
 ];
 
 function createEmptyTemplates(): WhatsAppTemplate[] {
