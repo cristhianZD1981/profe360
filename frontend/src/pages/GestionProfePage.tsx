@@ -8,6 +8,7 @@ import { useAuth } from "../context/auth";
 import { getCostaRicaIsoDate, getCostaRicaIsoDateWithOffset } from "../utils/date";
 import { getAdecuacionListHtmlStyle, getAdecuacionStyleKind } from "../utils/adecuacionStyles";
 import { debePropagarPrimeraSeleccionAsistencia } from "../utils/asistenciaRules";
+import { crearProgresoIndicadores, coincideFiltroProgreso, etiquetasProgresoIndicador } from "../utils/seguimientoProgreso";
 import {
   type ActivePanel,
   type Actividad,
@@ -1262,15 +1263,24 @@ export default function GestionProfePage() {
     return 0;
   }
 
-  function getSeguimientoEstadoAsignacionIndicador(indicadorGrupoId: number) {
-    const actividadId = getSeguimientoActividadAsignadaIndicador(indicadorGrupoId);
-    if (!actividadId) return "Sin Asignar";
-    const calificado = (seguimientoContexto?.seguimientos || []).some((item) =>
-      Number(item.ActividadId) === Number(actividadId)
-      && Number(item.IndicadorGrupoId) === Number(indicadorGrupoId)
-    );
-    return calificado ? "Calificado" : "No Calificado";
-  }
+  const seguimientoEstudiantesEvaluables = useMemo(() =>
+    (seguimientoContexto?.estudiantes || []).filter((estudiante) => !isEstudianteSuspendido(estudiante)),
+  [seguimientoContexto?.estudiantes]);
+
+  const seguimientoProgresoIndicadores = useMemo(() => {
+    const indicadoresIds = (seguimientoContexto?.indicadores || []).map((item) => Number(item.IndicadorGrupoId));
+    const actividadPorIndicador = seguimientoComponenteTieneActividadesPlaneamiento
+      ? new Map(indicadoresIds.map((id) => [id, getSeguimientoActividadAsignadaIndicador(id)]))
+      : undefined;
+    return crearProgresoIndicadores({
+      indicadoresIds,
+      estudiantesIds: seguimientoEstudiantesEvaluables.map((item) => item.EstudianteId),
+      seguimientos: seguimientoContexto?.seguimientos || [],
+      actividadPorIndicador
+    });
+  }, [seguimientoContexto?.indicadores, seguimientoContexto?.seguimientos, seguimientoContexto?.actividadIndicadores,
+    seguimientoEstudiantesEvaluables, seguimientoComponenteTieneActividadesPlaneamiento,
+    seguimientoActividadesPlaneamiento, seguimientoActividadIndicadoresDraft]);
 
   function seguimientoIndicadorTieneCalificacion(indicadorGrupoId: number) {
     return (seguimientoContexto?.seguimientos || []).some((item) => Number(item.IndicadorGrupoId) === Number(indicadorGrupoId));
@@ -1295,14 +1305,14 @@ export default function GestionProfePage() {
         return mismoIndicador && mismaActividad;
       });
       const estadoFiltro = normalizarSeguimientoKey(seguimientoEstadoFiltro);
-      if (estadoFiltro === "NO_CALIFICADO" && calificados.length > 0) return false;
-      if (estadoFiltro === "CALIFICADO" && calificados.length === 0) return false;
+      const progreso = seguimientoProgresoIndicadores.get(Number(indicador.IndicadorGrupoId));
+      if (!coincideFiltroProgreso(progreso?.estado || "NO_CALIFICADO", estadoFiltro)) return false;
       if (["INICIAL", "INTERMEDIO", "AVANZADO", "AUSENTE", "NO_ENTREGADO"].includes(estadoFiltro)) {
         return calificados.some((s) => normalizarSeguimientoKey(s.NivelNombre).replace(/\s+/g, "_") === estadoFiltro);
       }
       return true;
     });
-  }, [seguimientoContexto?.indicadores, seguimientoContexto?.seguimientos, seguimientoTipo, seguimientoPlaneamientoId, seguimientoEstadoFiltro, seguimientoActividadSeleccionada?.ActividadId, seguimientoIndicadoresActividadAsignados, seguimientoModoHibridoTareas]);
+  }, [seguimientoContexto?.indicadores, seguimientoContexto?.seguimientos, seguimientoTipo, seguimientoPlaneamientoId, seguimientoEstadoFiltro, seguimientoActividadSeleccionada?.ActividadId, seguimientoIndicadoresActividadAsignados, seguimientoModoHibridoTareas, seguimientoProgresoIndicadores]);
 
   const seguimientoIndicadorSeleccionado = useMemo(() => {
     return seguimientoIndicadoresFiltrados.find((item) => String(item.IndicadorGrupoId) === String(seguimientoIndicadorId)) || seguimientoIndicadoresFiltrados[0] || null;
@@ -1378,20 +1388,16 @@ export default function GestionProfePage() {
     });
 
     const totalEstudiantes = seguimientoContexto?.estudiantes?.length || 0;
-    const seguimientos = seguimientoContexto?.seguimientos || [];
-
     let calificados = 0;
+    let parciales = 0;
     let noCalificados = 0;
 
     indicadores.forEach((indicador) => {
-      const estudiantesCalificados = new Set(
-        seguimientos
-          .filter((seguimiento) => Number(seguimiento.IndicadorGrupoId) === Number(indicador.IndicadorGrupoId))
-          .map((seguimiento) => Number(seguimiento.EstudianteId))
-      );
-
-      if (totalEstudiantes > 0 && estudiantesCalificados.size >= totalEstudiantes) {
+      const progreso = seguimientoProgresoIndicadores.get(Number(indicador.IndicadorGrupoId));
+      if (progreso?.estado === "COMPLETO") {
         calificados += 1;
+      } else if (progreso?.estado === "PARCIAL") {
+        parciales += 1;
       } else {
         noCalificados += 1;
       }
@@ -1400,11 +1406,12 @@ export default function GestionProfePage() {
     return {
       total: indicadores.length,
       calificados,
+      parciales,
       noCalificados,
       totalEstudiantes,
     };
 
-  }, [seguimientoContexto?.indicadores, seguimientoContexto?.seguimientos, seguimientoContexto?.estudiantes, seguimientoTipo, seguimientoPlaneamientoId]);
+  }, [seguimientoContexto?.indicadores, seguimientoProgresoIndicadores, seguimientoContexto?.estudiantes, seguimientoTipo, seguimientoPlaneamientoId]);
 
 
 
@@ -10593,18 +10600,26 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         <span style={{ fontSize: "26px", fontWeight: 800 }}>{seguimientoResumenSeccion.total}</span>
                       </div>
                       <div style={{ ...cardStyle, background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1" }}>
-                        <strong>Calificados</strong>
+                        <strong>Completamente calificados</strong>
                         <span style={{ fontSize: "26px", fontWeight: 800 }}>{seguimientoResumenSeccion.calificados}</span>
                       </div>
                       <div style={{ ...cardStyle, background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1" }}>
-                        <strong>No calificados</strong>
+                        <strong>Parcialmente calificados</strong>
+                        <span style={{ fontSize: "26px", fontWeight: 800 }}>{seguimientoResumenSeccion.parciales}</span>
+                      </div>
+                      <div style={{ ...cardStyle, background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1" }}>
+                        <strong>Sin calificar</strong>
                         <span style={{ fontSize: "26px", fontWeight: 800 }}>{seguimientoResumenSeccion.noCalificados}</span>
                       </div>
                       <div style={{ ...cardStyle, background: "#ffffff", color: "#0f172a", border: "1px solid #cbd5e1" }}>
                         <strong>Estudiantes</strong>
                         <span style={{ fontSize: "26px", fontWeight: 800 }}>{seguimientoResumenSeccion.totalEstudiantes}</span>
+                        <small>{seguimientoEstudiantesEvaluables.length} habilitados para calificar · {seguimientoResumenSeccion.totalEstudiantes - seguimientoEstudiantesEvaluables.length} suspendidos</small>
                       </div>
                     </div>
+                    <small style={{ color: "#475569" }}>
+                      El avance cuenta estudiantes habilitados con calificación guardada por indicador. Los suspendidos no impiden completar la calificación; sus notas se conservan.
+                    </small>
 
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "10px" }}>
                       <label style={{
@@ -10664,8 +10679,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                       <label style={{ display: "grid", gap: "6px" }}>
                         <span style={{ color: "#0f172a", fontWeight: 700 }}>Estado del indicador</span>
                         <select style={{ color: "#0f172a", background: "#ffffff", border: "1px solid #94a3b8", borderRadius: "10px", padding: "9px 10px" }} value={seguimientoEstadoFiltro} onChange={(event) => { setSeguimientoEstadoFiltro(event.target.value); setSeguimientoIndicadorId(""); }} disabled={!isTipoIndicadorSeguimiento(seguimientoTipo) || seguimientoModoActividadDirecta}>
-                          <option value="NO_CALIFICADO">No calificado</option>
-                          <option value="CALIFICADO">Calificado</option>
+                          <option value="">Todos</option>
+                          <option value="NO_CALIFICADO">Sin calificar</option>
+                          <option value="PARCIAL">Parcialmente calificado</option>
+                          <option value="COMPLETO">Completamente calificado</option>
+                          <option value="CALIFICADO">Con alguna calificación</option>
                           <option value="INICIAL">Inicial</option>
                           <option value="INTERMEDIO">Intermedio</option>
                           <option value="AVANZADO">Avanzado</option>
@@ -11134,7 +11152,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                               <tbody>
                                 {seguimientoIndicadoresAsignablesPorActividad.map((indicador) => {
                                   const indicadorId = Number(indicador.IndicadorGrupoId);
-                                  const estado = getSeguimientoEstadoAsignacionIndicador(indicadorId);
+                                  const progreso = seguimientoProgresoIndicadores.get(indicadorId);
+                                  const estado = progreso?.estado || "NO_CALIFICADO";
+                                  const asignado = Boolean(getSeguimientoActividadAsignadaIndicador(indicadorId));
                                   const bloqueado = seguimientoIndicadorTieneCalificacion(indicadorId);
                                   return (
                                     <tr key={`mat-ind-${indicadorId}`}>
@@ -11157,7 +11177,13 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                           </td>
                                         );
                                       })}
-                                      <td style={{ padding: "8px", borderTop: "1px solid #e2e8f0", fontWeight: 800, color: estado === "Calificado" ? "#166534" : estado === "No Calificado" ? "#92400e" : "#64748b" }}>{estado}</td>
+                                      <td style={{ padding: "8px", borderTop: "1px solid #e2e8f0", fontWeight: 800, color: estado === "COMPLETO" ? "#166534" : estado === "PARCIAL" ? "#92400e" : "#64748b" }}>
+                                        {etiquetasProgresoIndicador[estado]}
+                                        <small style={{ display: "block", fontWeight: 400 }}>
+                                          {!asignado ? "Sin asignar · " : ""}
+                                          {progreso?.total ? `${progreso.calificados} de ${progreso.total} estudiantes habilitados` : "Sin estudiantes habilitados para calificar"}
+                                        </small>
+                                      </td>
                                     </tr>
                                   );
                                 })}

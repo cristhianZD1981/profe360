@@ -10,6 +10,7 @@ type Institution = {
   CedulaJuridica: string | null;
   CorreoPrincipal: string | null;
   TelefonoPrincipal: string | null;
+  WhatsAppContacto?: string | null;
   Direccion: string | null;
   CodigoPresupuestario?: string | null;
   CodigoPresupuestarioPL?: string | null;
@@ -49,6 +50,7 @@ const initialForm = {
   cedulaJuridica: "",
   correoPrincipal: "",
   telefonoPrincipal: "",
+  whatsappContacto: "",
   direccion: "",
   codigoPresupuestario: "",
   codigoPresupuestarioPL: "",
@@ -566,6 +568,7 @@ export default function InstitucionesPage() {
         cedulaJuridica: form.cedulaJuridica || null,
         correoPrincipal: form.correoPrincipal || null,
         telefonoPrincipal: form.telefonoPrincipal || null,
+        whatsappContacto: form.whatsappContacto.trim() || null,
         direccion: form.direccion || null,
         codigoPresupuestario: form.codigoPresupuestario || null,
         codigoPresupuestarioPL: form.codigoPresupuestarioPL || null,
@@ -647,6 +650,7 @@ export default function InstitucionesPage() {
       cedulaJuridica: item.CedulaJuridica || "",
       correoPrincipal: item.CorreoPrincipal || "",
       telefonoPrincipal: item.TelefonoPrincipal || "",
+      whatsappContacto: item.WhatsAppContacto || "",
       direccion: item.Direccion || "",
       codigoPresupuestario: item.CodigoPresupuestario || "",
       codigoPresupuestarioPL: item.CodigoPresupuestarioPL || "",
@@ -893,6 +897,11 @@ export default function InstitucionesPage() {
               value={form.telefonoPrincipal}
               onChange={(e) => setForm({ ...form, telefonoPrincipal: e.target.value })}
             />
+          </label>
+
+          <label>
+            WhatsApp del colegio para consultas
+            <input type="tel" maxLength={30} placeholder="Ej.: 8641 6420" value={form.whatsappContacto} onChange={(e) => setForm({ ...form, whatsappContacto: e.target.value })} />
           </label>
 
           <label>

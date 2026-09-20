@@ -1063,7 +1063,34 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
         ];
         return `<tr>${row.map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;${rowStyle}">${escapeHtml(c)}</td>`).join("")}</tr>`;
       }).join("");
-      const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte general de asistencia</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`;
+      let detalleHtml = "";
+      if (vistaAsistencia === "ALUMNO" || vistaAsistencia === "SECCION") {
+        const detalleHeaders = [...headers.slice(0, 3), "Materia", "Profesor", ...headers.slice(3)];
+        const detalleThead = `<tr>${detalleHeaders.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
+        // Exportar todos los detalles consultados, independientemente de las filas desplegadas.
+        const detalleTbody = asistenciaRows.map((item, idx) => {
+          const rowStyle = getAdecuacionAsistenciaHtmlStyle(item.adecuacion, getReporteZebraBackground(idx));
+          const identidad = [item.alumno, item.identificacion, item.seccion];
+          const celdas = (values: unknown[]) => values.map((value) => `<td style="border:1px solid #cbd5e1;padding:8px;${rowStyle}">${escapeHtml(value)}</td>`).join("");
+          if (!item.detalle.length) {
+            return `<tr>${celdas(identidad)}<td colspan="9" style="border:1px solid #cbd5e1;padding:8px;${rowStyle}">No hay materias para mostrar.</td></tr>`;
+          }
+          return item.detalle.map((detalle) => `<tr>${celdas([
+            ...identidad,
+            detalle.materia,
+            detalle.profesor,
+            detalle.alertaTemprana,
+            detalle.tardias,
+            detalle.ausenciasJustificadas,
+            detalle.ausenciasInjustificadas,
+            detalle.presentes,
+            detalle.cantidadCorreosEnviados,
+            detalle.cantidadWhatsAppEnviados
+          ])}</tr>`).join("");
+        }).join("");
+        detalleHtml = `<h3>Detalle de asistencia por materia y profesor</h3><table style="border-collapse:collapse">${detalleThead}${detalleTbody}</table>`;
+      }
+      const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Reporte general de asistencia</h3><table style="border-collapse:collapse">${thead}${tbody}</table>${detalleHtml}</body></html>`;
       const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8;" });
       descargarBlob(blob, `reporte-general-asistencia-${vistaAsistencia}.xls`);
       return;

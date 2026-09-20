@@ -319,7 +319,7 @@ router.put("/whatsapp/fallback/conceptos", requireRoles("SUPER_ADMIN"), async (r
   const templates = items.map((item: any) => ({ ...item, tipoMensaje: String(item.tipoMensaje || "").trim().toUpperCase(), nombre: String(item.nombre || "").trim(), templateUuid: String(item.templateUuid || "").trim() }));
   if (templates.some((t: any) => !/^[A-Z][A-Z0-9_]{0,39}$/.test(t.tipoMensaje) || !t.nombre || t.nombre.length > 150 || !t.templateUuid || t.templateUuid.length > 150 || !Number.isInteger(t.cantidadParametrosBody) || t.cantidadParametrosBody < 0 || t.cantidadParametrosBody > 30)
     || new Set(templates.map((t: any) => t.tipoMensaje)).size !== templates.length) return badRequest(res, "Completá conceptos únicos, nombre, UUID y cantidad válida de parámetros");
-  if (templates.some((t: any) => t.tipoMensaje === "COMUNICADO" && (t.nombre !== "notificacion_academica_general" || t.cantidadParametrosBody !== 8))) return badRequest(res, "COMUNICADO debe usar notificacion_academica_general con 8 parámetros");
+  if (templates.some((t: any) => t.tipoMensaje === "COMUNICADO" && (t.nombre !== "notificacion_academica_general" || ![8, 10].includes(t.cantidadParametrosBody)))) return badRequest(res, "COMUNICADO debe usar notificacion_academica_general con 8 o 10 parámetros");
   const pool = await getPool();
   const channelId = await getChannelForTemplates(pool, { fallback: true });
   if (!channelId) return res.status(404).json({ ok: false, message: "Configurá primero el canal de Profe360" });
@@ -1095,6 +1095,7 @@ router.get("/", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATI
           CedulaJuridica,
           CorreoPrincipal,
           TelefonoPrincipal,
+          WhatsAppContacto,
           Direccion,
           CodigoPresupuestario,
           CodigoPresupuestarioPL,
@@ -1144,6 +1145,7 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       cedulaJuridica,
       correoPrincipal,
       telefonoPrincipal,
+      whatsappContacto,
       direccion,
       codigoPresupuestario,
       codigoPresupuestarioPL,
@@ -1155,6 +1157,10 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       regionalEducativa,
       circuitoEducativo
     } = req.body;
+
+    if (whatsappContacto != null && (typeof whatsappContacto !== "string" || whatsappContacto.length > 30 || (whatsappContacto.trim() && !/^\+?[\d ()-]{7,30}$/.test(whatsappContacto.trim())))) {
+      return badRequest(res, "WhatsApp de consultas inválido: use entre 7 y 30 caracteres (números, espacios, +, paréntesis o guiones)");
+    }
 
     if (!tipoClienteId || !nombre) {
       return badRequest(res, "tipoClienteId y nombre son obligatorios");
@@ -1185,6 +1191,7 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
       .input("nombreComercial", sql.NVarChar, nombreComercial || null)
       .input("cedulaJuridica", sql.NVarChar, cedulaJuridica || null)
       .input("correoPrincipal", sql.NVarChar, correoPrincipal || null)
+      .input("whatsappContacto", sql.NVarChar(30), String(whatsappContacto || "").trim() || null)
       .input("telefonoPrincipal", sql.NVarChar, telefonoPrincipal || null)
        .input("direccion", sql.NVarChar, direccion || null)
       .input("codigoPresupuestario", sql.NVarChar, codigoPresupuestario || null)
@@ -1205,6 +1212,7 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
           CedulaJuridica,
           CorreoPrincipal,
           TelefonoPrincipal,
+          WhatsAppContacto,
           Direccion,
           CodigoPresupuestario,
           CodigoPresupuestarioPL,
@@ -1227,6 +1235,7 @@ router.post("/", requireRoles("SUPER_ADMIN"), async (req, res) => {
           @cedulaJuridica,
           @correoPrincipal,
           @telefonoPrincipal,
+          @whatsappContacto,
           @direccion,
           @codigoPresupuestario,
           @codigoPresupuestarioPL,
@@ -1271,6 +1280,7 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTR
       cedulaJuridica,
       correoPrincipal,
       telefonoPrincipal,
+      whatsappContacto,
       direccion,
       codigoPresupuestario,
       codigoPresupuestarioPL,
@@ -1285,6 +1295,10 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTR
 
     if (!id) {
       return badRequest(res, "Id inválido");
+    }
+
+    if (whatsappContacto != null && (typeof whatsappContacto !== "string" || whatsappContacto.length > 30 || (whatsappContacto.trim() && !/^\+?[\d ()-]{7,30}$/.test(whatsappContacto.trim())))) {
+      return badRequest(res, "WhatsApp de consultas inválido: use entre 7 y 30 caracteres (números, espacios, +, paréntesis o guiones)");
     }
 
     if (!nombre) {
@@ -1328,6 +1342,8 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTR
       .input("nombreComercial", sql.NVarChar, nombreComercial || null)
       .input("cedulaJuridica", sql.NVarChar, cedulaJuridica || null)
       .input("correoPrincipal", sql.NVarChar, correoPrincipal || null)
+      .input("actualizarWhatsAppContacto", sql.Bit, Object.prototype.hasOwnProperty.call(req.body, "whatsappContacto"))
+      .input("whatsappContacto", sql.NVarChar(30), String(whatsappContacto || "").trim() || null)
       .input("telefonoPrincipal", sql.NVarChar, telefonoPrincipal || null)
        .input("direccion", sql.NVarChar, direccion || null)
       .input("codigoPresupuestario", sql.NVarChar, codigoPresupuestario || null)
@@ -1348,6 +1364,7 @@ router.put("/:id", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTR
           CedulaJuridica = @cedulaJuridica,
           CorreoPrincipal = @correoPrincipal,
           TelefonoPrincipal = @telefonoPrincipal,
+          WhatsAppContacto = CASE WHEN @actualizarWhatsAppContacto = 1 THEN @whatsappContacto ELSE WhatsAppContacto END,
           Direccion = @direccion,
           CodigoPresupuestario = @codigoPresupuestario,
           CodigoPresupuestarioPL = @codigoPresupuestarioPL,

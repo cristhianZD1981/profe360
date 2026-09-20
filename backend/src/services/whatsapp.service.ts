@@ -1,5 +1,6 @@
 import { getPool, sql } from "../config/database";
 import { decryptWhatsAppSecret } from "../utils/whatsapp-secrets";
+import { agregarContactoConsultas } from "../utils/whatsapp-contacto";
 import { normalizeWhatsAppPhone } from "../utils/whatsapp.utils";
 
 type WhatsAppNotificationInput = {
@@ -138,11 +139,23 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
     return result(input, { enviado: false, modo: "webhook", motivo: "El canal no tiene API Key configurada", whatsappEnvioId: envioId });
   }
 
+  const admiteContacto = ["ASISTENCIA", "BOLETA", "TAREA", "PROYECTO", "COTIDIANO", "EXAMENES", "COMUNICADO"].includes(input.tipoMensaje.toUpperCase());
+  const consultarContacto = async () => {
+    const contacto = await pool.request()
+      .input("institucionId", sql.Int, input.institucionId || null)
+      .query("SELECT TelefonoPrincipal, WhatsAppContacto FROM dbo.Institucion WHERE InstitucionId = @institucionId");
+    return contacto.recordset[0] || {};
+  };
   if (String(channel.TipoCanal || "WABA").toUpperCase() === "WHATSAPP_WEB") {
+    let mensaje = input.mensaje;
+    if (admiteContacto) {
+      const contacto = await consultarContacto();
+      mensaje = agregarContactoConsultas(mensaje, contacto);
+    }
     const response = await fetch("https://api.p.2chat.io/open/whatsapp/send-message", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-User-API-Key": token },
-      body: JSON.stringify({ from_number: channel.NumeroOrigen, to_number: telefono, text: input.mensaje })
+      body: JSON.stringify({ from_number: channel.NumeroOrigen, to_number: telefono, text: mensaje })
     });
     const rawBody = await response.text();
     let body: any = null;
@@ -173,12 +186,21 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
     await updateLog({ estado: "FALLIDO", motivo: "No hay una plantilla APPROVED para este tipo de mensaje" });
     return result(input, { enviado: false, modo: "webhook", motivo: "No hay una plantilla APPROVED para este tipo de mensaje", whatsappEnvioId: envioId });
   }
-  if (input.tipoMensaje.toUpperCase() === "COMUNICADO" && (template.Nombre !== "notificacion_academica_general" || Number(template.CantidadParametrosBody) !== 8)) {
-    await updateLog({ estado: "FALLIDO", motivo: "COMUNICADO requiere la plantilla notificacion_academica_general con 8 parámetros" });
+  if (input.tipoMensaje.toUpperCase() === "COMUNICADO" && (template.Nombre !== "notificacion_academica_general" || ![8, 10].includes(Number(template.CantidadParametrosBody)))) {
+    await updateLog({ estado: "FALLIDO", motivo: "COMUNICADO requiere la plantilla notificacion_academica_general con 8 o 10 parámetros" });
     return result(input, { enviado: false, motivo: "Configuración WABA de COMUNICADO inválida", whatsappEnvioId: envioId });
   }
 
-  const bodyParams = (input.templateParams?.length ? input.templateParams : [String(input.mensaje || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim()])
+  let parametros = input.templateParams;
+  if (admiteContacto && Number(template.CantidadParametrosBody) === 10) {
+    if (parametros?.length !== 8) {
+      await updateLog({ estado: "FALLIDO", motivo: "La plantilla de consultas requiere 8 datos originales y 2 teléfonos" });
+      return result(input, { enviado: false, motivo: "Cantidad de parámetros incompatible", whatsappEnvioId: envioId });
+    }
+    const contacto = await consultarContacto();
+    parametros = [...parametros, String(contacto.TelefonoPrincipal || "No registrado"), String(contacto.WhatsAppContacto || "No registrado")];
+  }
+  const bodyParams = (parametros?.length ? parametros : [String(input.mensaje || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim()])
     .map((item) => String(item || "").replace(/[\r\n\t]+/g, " ").replace(/ {5,}/g, " ").trim().slice(0, 1024));
   const response = await fetch("https://api.p.2chat.io/open/waba/send-message", {
     method: "POST",

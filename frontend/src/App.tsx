@@ -8,6 +8,7 @@ import DashboardPage from "./pages/DashboardPage";
 import InstitucionesPage from "./pages/InstitucionesPage";
 import UsuariosPage from "./pages/UsuariosPage";
 import EstudiantesPage from "./pages/EstudiantesPage";
+import EstudiantesMatriculaPage from "./pages/EstudiantesMatriculaPage";
 import CarnetEstudiantePage from "./pages/CarnetEstudiantePage";
 import AcademicoPage from "./pages/AcademicoPage";
 import AsistenciaPage from "./pages/AsistenciaPage";
@@ -107,6 +108,11 @@ export default function App() {
             }
           />
           <Route path="estudiantes" element={<EstudiantesPage />} />
+          <Route path="estudiantes-matricula" element={
+            <ProtectedRoute allowedRoles={ADMINISTRATIVO_ROLES}>
+              <EstudiantesMatriculaPage />
+            </ProtectedRoute>
+          } />
           <Route
             path="administrativo"
             element={

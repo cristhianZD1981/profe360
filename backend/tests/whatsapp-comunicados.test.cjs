@@ -16,6 +16,7 @@ class Request {
   input(k,_t,v){this.params[k]=v;return this;}
   async query(q){
     queries.push({q,params:{...this.params}});
+    if(q.includes('SELECT TelefonoPrincipal, WhatsAppContacto')) return {recordset:[{TelefonoPrincipal:this.params.institucionId===2?'22223333':'27840616',WhatsAppContacto:this.params.institucionId===2?'88889999':'8641 6420'}]};
     if(q.includes('SELECT TOP 1 c.*')) return {recordset:canal?[canal]:[]};
     if(q.includes('OUTPUT INSERTED.WhatsAppEnvioId')) return {recordset:[{WhatsAppEnvioId:10}]};
     if(q.includes('SELECT TOP 1 *') && q.includes('dbo.WhatsAppPlantilla')) return {recordset:template?[template]:[]};
@@ -61,4 +62,35 @@ test('quitar conceptos desactiva asociaciones sin borrar historial',async()=>{
   assert(queries.some((x)=>x.q.includes('SET Activo=0')&&x.params.tipos==='[]'));
   assert(!queries.some((x)=>/\bDELETE\b/i.test(x.q)));
   assert(!queries.some((x)=>x.q.includes('dbo.WhatsAppEnvio')));
+});
+
+for (const tipoMensaje of ['ASISTENCIA','BOLETA','TAREA','PROYECTO','COTIDIANO','EXAMENES','COMUNICADO']) {
+  test(`${tipoMensaje}: conserva 8 variables y agrega contacto solo al configurar 10`, async()=>{
+    await sendWhatsAppNotification({...input,tipoMensaje});
+    assert.deepEqual(bodies[0].params.body,input.templateParams);
+    assert(!queries.some(x=>x.q.includes('SELECT TelefonoPrincipal, WhatsAppContacto')));
+    template.CantidadParametrosBody=10;
+    assert.equal((await sendWhatsAppNotification({...input,tipoMensaje,institucionId:2})).enviado,true);
+    assert.deepEqual(bodies[1].params.body,[...input.templateParams,'22223333','88889999']);
+    assert.equal((await sendWhatsAppNotification({...input,tipoMensaje,institucionId:1})).enviado,true);
+    assert.deepEqual(bodies[2].params.body.slice(-2),['27840616','8641 6420']);
+  });
+}
+test('canal QR incorpora contactos antes del agradecimiento',async()=>{
+  canal.TipoCanal='WHATSAPP_WEB';
+  const r=await sendWhatsAppNotification({...input,tipoMensaje:'ASISTENCIA',mensaje:'Reporte\n\nGracias por su atención.'});
+  assert.equal(r.enviado,true);
+  assert.match(bodies[0].text,/teléfono 27840616 o al WhatsApp del colegio 8641 6420/);
+  assert.match(bodies[0].text,/Este número es solo informativo.\n\nGracias por su atención.$/);
+});
+test('plantilla nueva rechaza datos incompletos sin llamar al proveedor',async()=>{
+  template.CantidadParametrosBody=10;
+  assert.equal((await sendWhatsAppNotification({...input,templateParams:['incompleto']})).enviado,false);
+  assert.equal(bodies.length,0);
+});
+test('contactos opcionales en texto libre no inventan números',()=>{
+  const {agregarContactoConsultas}=require('../dist/utils/whatsapp-contacto');
+  assert.match(agregarContactoConsultas('Reporte',{}),/comunicarse directamente con el colegio/);
+  assert.match(agregarContactoConsultas('Reporte',{TelefonoPrincipal:'12345678'}),/llamar al teléfono 12345678/);
+  assert.match(agregarContactoConsultas('Reporte',{WhatsAppContacto:'87654321'}),/WhatsApp del colegio 87654321/);
 });

@@ -52,6 +52,11 @@ const items: MenuItem[] = [
   },
   { label: "Estudiantes", path: "/estudiantes" },
   {
+    label: "Estudiantes + Matrícula",
+    path: "/estudiantes-matricula",
+    allowedRoles: ADMINISTRATIVO_ROLES
+  },
+  {
     label: "Matrícula",
     path: "/matricula",
     allowedRoles: ADMINISTRATIVO_ROLES
