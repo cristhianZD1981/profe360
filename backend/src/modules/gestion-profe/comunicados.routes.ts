@@ -3,7 +3,7 @@ import { getPool, sql } from "../../config/database";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { sendEmail } from "../../services/email.service";
 import { sendWhatsAppNotification } from "../../services/whatsapp.service";
-import { normalizeWhatsAppPhone } from "../../utils/whatsapp.utils";
+import { destinosWhatsAppComunicado } from "./comunicados-destinatarios";
 import { ensureComunicados } from "./comunicados.schema";
 
 const ruta = "/mis-grupos/:grupoId/materias/:materiaId/comunicados";
@@ -37,7 +37,7 @@ export function registrarComunicados(router: Router, autorizar: Autorizar) {
       .input("grupoClaseId", sql.Int, grupoClaseId).input("usuarioId", sql.Int, usuarioId);
     const alumnos = await request().query(`
       SELECT DISTINCT e.EstudianteId, e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido,
-        e.AutorizaWhatsAppEncargado
+        e.AutorizaWhatsAppEncargado, e.FechaNacimiento, e.Telefono, e.AceptaWhatsAppEstudiante
       FROM dbo.Matricula ma INNER JOIN dbo.Estudiante e ON e.EstudianteId = ma.EstudianteId
       WHERE e.InstitucionId = @institucionId AND e.Activo = 1
         AND ma.AnioLectivoId = @anioLectivoId AND ISNULL(ma.Estado, N'') <> N'Inactiva'
@@ -116,16 +116,18 @@ export function registrarComunicados(router: Router, autorizar: Autorizar) {
       const asunto = `Comunicado — ${snapshot.alumno} — ${snapshot.materia}`;
       if (params.some((p) => String(p || "").length > 1024)) return res.status(400).json({ ok: false, message: "El mensaje y los datos de la lección superan el máximo de WhatsApp" });
       const contactos = await ctx.request().input("estudianteId", sql.Int, estudianteId).query(`
-        SELECT DISTINCT en.EncargadoId, en.Nombre, en.Correo, en.Telefono
+        SELECT DISTINCT en.EncargadoId, en.Nombre, en.Correo, en.Telefono, ee.AceptaWhatsApp
         FROM dbo.EstudianteEncargado ee INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
         WHERE ee.EstudianteId = @estudianteId AND ISNULL(ee.Activo, 1) = 1
           AND ISNULL(en.Activo, 1) = 1 AND ISNULL(ee.RecibeNotificaciones, 1) = 1
       `);
-      if (!contactos.recordset.length) return res.status(400).json({ ok: false, message: "El alumno no tiene encargados habilitados para recibir notificaciones" });
-      const destinos = contactos.recordset.flatMap((en: any) => [
-        { encargado: en, canal: "CORREO", destino: String(en.Correo || "").trim(), motivo: "Sin correo del encargado" },
-        { encargado: en, canal: "WHATSAPP", destino: normalizeWhatsAppPhone(en.Telefono), motivo: alumno.AutorizaWhatsAppEncargado ? "Sin teléfono del encargado" : "WhatsApp al encargado no autorizado" }
-      ]).map((d: any) => ({ ...d, habilitado: Boolean(d.destino && (d.canal === "CORREO" || alumno.AutorizaWhatsAppEncargado)) }));
+      const destinos: any[] = [
+        ...contactos.recordset.map((en: any) => ({ encargado: en, canal: "CORREO",
+          destino: String(en.Correo || "").trim(), motivo: "Sin correo del encargado", habilitado: Boolean(String(en.Correo || "").trim()) })),
+        ...destinosWhatsAppComunicado({ fechaNacimiento: alumno.FechaNacimiento, hoy: ctx.fecha,
+          estudiante: { EncargadoId: null, Nombre: `${nombre(alumno)} (estudiante)`, Telefono: alumno.Telefono, AceptaWhatsApp: alumno.AceptaWhatsAppEstudiante },
+          encargados: contactos.recordset, autorizaEncargados: alumno.AutorizaWhatsAppEncargado })
+      ];
       const trans = new sql.Transaction(ctx.pool); await trans.begin();
       let comunicadoId: number;
       try {

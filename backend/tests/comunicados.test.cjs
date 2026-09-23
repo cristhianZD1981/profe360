@@ -3,18 +3,18 @@ const assert = require('node:assert/strict');
 const database = require('../dist/config/database');
 const email = require('../dist/services/email.service');
 const whatsapp = require('../dist/services/whatsapp.service');
-let mensajes, destinos, correos, was, autorizados, permisoWA, fallaWA, lecciones;
-beforeEach(() => { mensajes = []; destinos = []; correos = []; was = []; autorizados = true; permisoWA = true; fallaWA = false; lecciones = []; });
+let mensajes, destinos, correos, was, autorizados, permisoWA, fallaWA, lecciones, alumnoExtra, contactosExtra;
+beforeEach(() => { mensajes = []; destinos = []; correos = []; was = []; autorizados = true; permisoWA = true; fallaWA = false; lecciones = []; alumnoExtra = { FechaNacimiento: new Date("2015-01-01T00:00:00Z"), Telefono: "+50688880000" }; contactosExtra = null; });
 class Request {
   constructor() { this.values = {}; }
   input(name, _type, value) { this.values[name] = value; return this; }
   async query(text) {
     const v = this.values;
     if (text.includes('CREATE TABLE dbo.ComunicadoProfe')) return { recordset: [] };
-    if (text.includes('FROM dbo.Matricula ma')) return { recordset: [{ EstudianteId: 1, Nombre: 'Alumno', Identificacion: '001', AutorizaWhatsAppEncargado: permisoWA }] };
+    if (text.includes('FROM dbo.Matricula ma')) return { recordset: [{ EstudianteId: 1, Nombre: 'Alumno', Identificacion: '001', AutorizaWhatsAppEncargado: permisoWA, ...alumnoExtra }] };
     if (text.includes('FROM dbo.HorarioGrupo hg')) return { recordset: lecciones };
     if (text.includes('CROSS JOIN dbo.Institucion')) return { recordset: [{ Nombre: 'Docente', Correo: 'docente@example.test', InstitucionNombre: 'Colegio' }] };
-    if (text.includes('FROM dbo.EstudianteEncargado')) return { recordset: [1,2].map((id) => ({ EncargadoId: id, Nombre: 'Encargado '+id, Correo: `enc${id}@example.test`, Telefono: '+5068888888'+id })) };
+    if (text.includes('FROM dbo.EstudianteEncargado')) return { recordset: contactosExtra ?? [1,2].map((id) => ({ EncargadoId: id, Nombre: 'Encargado '+id, Correo: `enc${id}@example.test`, Telefono: '+5068888888'+id, AceptaWhatsApp: true })) };
     if (text.includes('WITH (UPDLOCK, HOLDLOCK)')) return { recordset: mensajes.filter((m) => m.SolicitudId === v.solicitudId) };
     if (text.includes('INSERT INTO dbo.ComunicadoProfe (')) {
       mensajes.push({ ComunicadoId: mensajes.length+1, SolicitudId: v.solicitudId, UsuarioId: v.usuarioId, InstitucionId: v.institucionId, EstudianteId: v.estudianteId, GrupoId: v.grupoId, MateriaId: v.materiaId, Mensaje: v.mensaje, Estado: 'EN_PROCESO', ContextoJson: v.snapshot, HorarioGrupoId: v.horario, Asunto: v.asunto, Cuerpo: v.texto });
@@ -91,4 +91,41 @@ test('metadatos WABA usan concepto, alumno, sección, materia, fecha, mensaje, p
   const params=parametrosComunicado({ alumno:'A',seccion:'7-1',materia:'M',fecha:'2026-09-06',hora:'10:00:00',leccion:'Primera',profesor:'P',institucion:'I' },'Texto');
   assert.deepEqual(params.slice(0,5),['Comunicado','A','7-1','M','2026-09-06']); assert.equal(params[5],'Texto'); assert.deepEqual(params.slice(6),['P','I']);
   assert.equal(horaComunicado(new Date('2026-09-07T05:30:00Z')),'23:30:00');
+});
+
+
+test('adulto hereda permiso, envía solo al alumno y no duplica solicitud', async () => {
+  alumnoExtra.FechaNacimiento = '2000-01-01';
+  await post(req(), res()); await post(req(), res());
+  assert.equal(was.length, 1); assert.equal(was[0].telefono, alumnoExtra.Telefono);
+  assert.equal(correos.length, 2);
+  const destino = destinos.find(d => d.canal === 'WHATSAPP');
+  assert.equal(destino.encargadoId, null); assert.match(destino.nombre, /estudiante/);
+});
+test('adulto con negativa propia no envía al alumno ni al encargado', async () => {
+  alumnoExtra.FechaNacimiento = '2000-01-01'; alumnoExtra.AceptaWhatsAppEstudiante = false;
+  await post(req(), res()); assert.equal(was.length, 0); assert.equal(correos.length, 2);
+  assert.match(destinos.find(d => d.canal === 'WHATSAPP').motivo, /no acepta/);
+});
+test('adulto autorizado sin encargados recibe su comunicado', async () => {
+  alumnoExtra.FechaNacimiento = '2000-01-01'; alumnoExtra.AceptaWhatsAppEstudiante = true;
+  contactosExtra = []; const r = res(); await post(req(), r);
+  assert.equal(r.code, 200); assert.equal(was.length, 1); assert.equal(correos.length, 0);
+});
+test('menor exige aceptación individual y conserva los demás destinatarios', async () => {
+  contactosExtra = [
+    { EncargadoId: 1, Nombre: 'Acepta', Telefono: '+50688881111', AceptaWhatsApp: true },
+    { EncargadoId: 2, Nombre: 'No acepta', Telefono: '+50688882222', AceptaWhatsApp: false }
+  ];
+  await post(req(), res()); assert.equal(was.length, 1); assert.equal(was[0].telefono, '+50688881111');
+  assert.match(destinos.find(d => d.encargadoId === 2 && d.canal === 'WHATSAPP').motivo, /no acepta/);
+});
+test('nacimiento desconocido o adulto sin teléfono omite WA sin enviarlo al encargado', async () => {
+  alumnoExtra.FechaNacimiento = null;
+  await post(req(), res()); assert.equal(was.length, 0);
+  assert.match(destinos.find(d => d.canal === 'WHATSAPP').motivo, /nacimiento/);
+  alumnoExtra.FechaNacimiento = '2000-01-01'; alumnoExtra.Telefono = '';
+  await post(req({ solicitudId: '22345678-1234-1234-1234-123456789abc' }), res());
+  assert.equal(was.length, 0); assert.equal(correos.length, 4);
+  assert(destinos.some(d => d.canal === 'WHATSAPP' && /teléfono/.test(d.motivo)));
 });

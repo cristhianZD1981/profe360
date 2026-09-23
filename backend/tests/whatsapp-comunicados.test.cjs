@@ -1,12 +1,12 @@
 const { test, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 const database = require('../dist/config/database');
-let queries, bodies, canal, template, failNetwork;
+let queries, bodies, canal, template, failNetwork, consentimientoAlumno;
 const originalFetch=global.fetch;
 const oldMode=process.env.WHATSAPP_MODE, oldKey=process.env.WHATSAPP_2CHAT_API_KEY;
 process.env.WHATSAPP_MODE='webhook'; process.env.WHATSAPP_2CHAT_API_KEY='test-only';
 beforeEach(() => {
-  queries=[]; bodies=[]; failNetwork=false;
+  queries=[]; bodies=[]; failNetwork=false; consentimientoAlumno=null;
   canal={WhatsAppCanalId:1,TipoCanal:'WABA',NumeroOrigen:'+50680000000'};
   template={Nombre:'notificacion_academica_general',TemplateUuid:'template-test',CantidadParametrosBody:8};
 });
@@ -16,6 +16,7 @@ class Request {
   input(k,_t,v){this.params[k]=v;return this;}
   async query(q){
     queries.push({q,params:{...this.params}});
+    if(q.includes("SELECT AceptaWhatsAppEstudiante")) return {recordset:[{AceptaWhatsAppEstudiante:consentimientoAlumno}]};
     if(q.includes('SELECT TelefonoPrincipal, WhatsAppContacto')) return {recordset:[{TelefonoPrincipal:this.params.institucionId===2?'22223333':'27840616',WhatsAppContacto:this.params.institucionId===2?'88889999':'8641 6420'}]};
     if(q.includes('SELECT TOP 1 c.*')) return {recordset:canal?[canal]:[]};
     if(q.includes('OUTPUT INSERTED.WhatsAppEnvioId')) return {recordset:[{WhatsAppEnvioId:10}]};
@@ -93,4 +94,24 @@ test('contactos opcionales en texto libre no inventan números',()=>{
   assert.match(agregarContactoConsultas('Reporte',{}),/comunicarse directamente con el colegio/);
   assert.match(agregarContactoConsultas('Reporte',{TelefonoPrincipal:'12345678'}),/llamar al teléfono 12345678/);
   assert.match(agregarContactoConsultas('Reporte',{WhatsAppContacto:'87654321'}),/WhatsApp del colegio 87654321/);
+});
+
+for (const tipoMensaje of ['ASISTENCIA','BOLETA','TAREA','PROYECTO','COTIDIANO','EXAMENES','COMUNICADO']) {
+  test(`${tipoMensaje}: la negativa propia impide envío al alumno o al encargado`, async () => {
+    consentimientoAlumno = false;
+    for (const telefono of ['+50688881111', '+50688882222']) {
+      const r = await sendWhatsAppNotification({ ...input, tipoMensaje, estudianteId: 17, telefono });
+      assert.equal(r.enviado, false); assert.equal(r.modo, 'omitido'); assert.match(r.motivo, /desactivó/);
+    }
+    assert.equal(bodies.length, 0);
+    assert(queries.every(x => x.q.includes('SELECT AceptaWhatsAppEstudiante')));
+    assert(queries.every(x => x.params.estudianteId === 17 && x.params.institucionId === 1));
+  });
+}
+test('permiso heredado no bloquea los demás flujos; decisión explícita sí', async () => {
+  for (const permiso of [null, true]) {
+    consentimientoAlumno = permiso;
+    assert.equal((await sendWhatsAppNotification({ ...input, estudianteId: 17 })).enviado, true);
+  }
+  assert.equal(bodies.length, 2);
 });

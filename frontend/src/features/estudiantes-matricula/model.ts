@@ -9,20 +9,38 @@ export const validAdecuacion = (value: unknown) => !!comparable(value) && !["reg
 
 export const studentTextKeys = ["identificacion", "nombre", "primerApellido", "segundoApellido", "fechaNacimiento", "tipoIdentificacion", "correo", "telefono", "tipoEstudianteId", "rutaTransporteId", "sexo", "fotoUrl", "nacionalidad", "adecuacion", "nivelFuncionamiento", "discapacidad", "tipoDiscapacidad", "enfermedad", "rutaTransporteHabitual", "observaciones", "observacionMedica"] as const;
 export const studentFlagKeys = ["autorizaWhatsAppEncargado", "repitente", "refugiado", "tieneAdecuacion"] as const;
-export type StudentForm = Record<typeof studentTextKeys[number], string> & Record<typeof studentFlagKeys[number], boolean>;
+export type StudentForm = Record<typeof studentTextKeys[number], string> & Record<typeof studentFlagKeys[number], boolean> & { aceptaWhatsAppEstudiante: boolean | null };
 export const guardianTextKeys = ["tipoEncargado", "titulo", "identificacion", "nombre", "primerApellido", "segundoApellido", "correo", "telefono", "telefonoSecundario", "direccionExacta", "parentesco"] as const;
 export const guardianFlagKeys = ["viveConEstudiante", "esPrincipal", "aceptaWhatsApp", "aceptaCorreo"] as const;
 export type GuardianForm = Record<typeof guardianTextKeys[number], string> & Record<typeof guardianFlagKeys[number], boolean>;
 export const enrollmentTextKeys = ["anioLectivoId", "grupoId", "fechaMatricula", "observacion", "tipoMatricula", "nivelAcademico", "especialidadId", "especialidad", "seccionTexto", "rutaTransporte", "justificacionExcepcion", "correoEnvioBoleta", "observacionesDetalle"] as const;
 export type EnrollmentForm = Record<typeof enrollmentTextKeys[number], string> & { esRepitente: boolean; permiteExcepcionProgresion: boolean };
 const capitalized = (key: string) => key.charAt(0).toUpperCase() + key.slice(1);
+export function phoneDraft(value: unknown) {
+  const phone = asText(value).trim();
+  if (!phone) return "+506 ";
+  if (phone.startsWith("+")) return phone;
+  return `+506 ${phone}`;
+}
+export function phonePayload(value: unknown) {
+  const phone = asText(value).trim();
+  if (!phone || /^\+506[\s().-]*$/.test(phone)) return null;
+  return phone.startsWith("+") ? phone.replace(/[\s().-]/g, "") : `+506${phone.replace(/\D/g, "")}`;
+}
 
-export function studentForm(record: RecordData = {}): StudentForm {
+export function studentForm(record: RecordData = {}, routes: RecordData[] = []): StudentForm {
   const form = Object.fromEntries([
     ...studentTextKeys.map(key => [key, asText(record[capitalized(key)])]),
     ...studentFlagKeys.map(key => [key, asFlag(record[capitalized(key)])])
   ]) as StudentForm;
+  form.aceptaWhatsAppEstudiante = record.AceptaWhatsAppEstudiante == null ? null : asFlag(record.AceptaWhatsAppEstudiante);
   form.fechaNacimiento = asDate(record.FechaNacimiento);
+  form.telefono = phoneDraft(form.telefono);
+  form.rutaTransporteHabitual ||= asText(record.RutaTransporteDescripcion);
+  if (!form.rutaTransporteId && form.rutaTransporteHabitual.trim()) {
+    const matches = routes.filter(route => comparable(route.Descripcion) === comparable(form.rutaTransporteHabitual));
+    if (matches.length === 1) form.rutaTransporteId = asText(matches[0].RutaTransporteId);
+  }
   form.tieneAdecuacion = record.TieneAdecuacion == null ? validAdecuacion(record.Adecuacion) : asFlag(record.TieneAdecuacion);
   return form;
 }
@@ -33,6 +51,8 @@ export function guardianForm(record: RecordData = {}): GuardianForm {
     ...guardianFlagKeys.map(key => [key, asFlag(record[capitalized(key)])])
   ]) as GuardianForm;
   form.tipoEncargado ||= "ENCARGADO";
+  form.telefono = phoneDraft(form.telefono);
+  form.telefonoSecundario = phoneDraft(form.telefonoSecundario);
   return form;
 }
 
@@ -62,6 +82,7 @@ export function enrollmentForm(record: RecordData = {}, year = "", today = ""): 
 export function studentPayload(form: StudentForm, guardians: GuardianForm[]) {
   return {
     ...form,
+    telefono: phonePayload(form.telefono),
     identificacion: form.identificacion.trim(), nombre: form.nombre.trim(),
     primerApellido: form.primerApellido.trim(), segundoApellido: form.segundoApellido.trim(),
     correo: form.correo.trim() || null,
@@ -69,8 +90,13 @@ export function studentPayload(form: StudentForm, guardians: GuardianForm[]) {
     rutaTransporteId: Number(form.rutaTransporteId) || null,
     adecuacion: form.tieneAdecuacion ? form.adecuacion : null,
     tipoDiscapacidad: comparable(form.discapacidad) === "si" ? form.tipoDiscapacidad : null,
-    encargados: guardians.filter(g => guardianTextKeys.some(key => !["tipoEncargado", "titulo", "parentesco"].includes(key) && g[key].trim())).map(g => ({
-      ...g, recibeNotificaciones: g.aceptaWhatsApp || g.aceptaCorreo
+    encargados: guardians.filter(g => guardianTextKeys.some(key => {
+      if (["tipoEncargado", "titulo", "parentesco"].includes(key)) return false;
+      if (key === "telefono" || key === "telefonoSecundario") return !!phonePayload(g[key]);
+      return g[key].trim() !== "";
+    })).map(g => ({
+      ...g, telefono: phonePayload(g.telefono), telefonoSecundario: phonePayload(g.telefonoSecundario),
+      recibeNotificaciones: g.aceptaWhatsApp || g.aceptaCorreo
     }))
   };
 }
@@ -79,6 +105,34 @@ export function enrollmentPayload(form: EnrollmentForm, studentId: number) {
   return { ...form, estudianteId: studentId, anioLectivoId: Number(form.anioLectivoId), grupoId: Number(form.grupoId),
     nivelAcademico: Number(form.nivelAcademico) || null, especialidadId: Number(form.especialidadId) || null,
     fechaMatricula: form.fechaMatricula || null, correoEnvioBoleta: form.correoEnvioBoleta.trim() || null };
+}
+
+export function transportDescription(student: StudentForm, routes: RecordData[]) {
+  const route = routes.find(r => asText(r.RutaTransporteId) === student.rutaTransporteId);
+  return route ? asText(route.Descripcion) : student.rutaTransporteHabitual;
+}
+
+export function groupLevel(group: RecordData | undefined) {
+  if (!group) return "";
+  const sectionLevel = asText(group.Nombre).trim().match(/^(\d{1,2})\s*[-–]/)?.[1];
+  return sectionLevel ? String(Number(sectionLevel)) : asText(group.NivelAcademico);
+}
+
+export function levelName(level: string) {
+  const names = ["", "Primero", "Segundo", "Tercero", "Cuarto", "Quinto", "Sexto", "Séptimo", "Octavo", "Noveno", "Décimo", "Undécimo", "Duodécimo"];
+  return names[Number(level)] || (level ? `Nivel ${level}` : "Sin nivel configurado");
+}
+
+export function sortedGroups(groups: RecordData[]) {
+  return [...groups].sort((a, b) => asText(a.Nombre).localeCompare(asText(b.Nombre), "es", { numeric: true, sensitivity: "base" }));
+}
+
+export function automaticEnrollment(form: EnrollmentForm, student: StudentForm, guardians: GuardianForm[], groups: RecordData[], routes: RecordData[]): EnrollmentForm {
+  const group = groups.find(g => asText(g.GrupoId) === form.grupoId && asText(g.AnioLectivoId) === form.anioLectivoId);
+  const contact = guardians.find(g => g.esPrincipal && g.correo.trim()) || guardians.find(g => g.correo.trim());
+  return { ...form, nivelAcademico: group ? groupLevel(group) : form.nivelAcademico,
+    seccionTexto: group ? asText(group.Nombre) : form.seccionTexto,
+    rutaTransporte: transportDescription(student, routes), correoEnvioBoleta: contact?.correo.trim() || "" };
 }
 
 export function studentError(form: StudentForm) {

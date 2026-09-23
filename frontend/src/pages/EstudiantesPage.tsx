@@ -1,3 +1,4 @@
+import { aceptaWhatsAppAlumno, esMayorParaWhatsApp } from "../utils/consentimientoWhatsApp";
 ﻿import { FormEvent, useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRef } from "react";
@@ -39,6 +40,7 @@ type Student = {
   RutaTransporteDescripcion?: string | null;
   RutaTransporteHabitual: string | null;
   AutorizaWhatsAppEncargado?: boolean | null;
+  AceptaWhatsAppEstudiante?: boolean | null;
   TieneAdecuacion?: boolean | null;
   ObservacionMedica: string | null;
   Activo?: boolean;
@@ -245,6 +247,7 @@ const initialForm = {
   tipoEstudianteId: "",
   rutaTransporteId: "",
   autorizaWhatsAppEncargado: false,
+  aceptaWhatsAppEstudiante: null as boolean | null,
   sexo: "",
   fotoUrl: "",
   nacionalidad: "",
@@ -924,6 +927,7 @@ export default function EstudiantesPage() {
         tipoEstudianteId: form.tipoEstudianteId ? Number(form.tipoEstudianteId) : null,
         rutaTransporteId: form.rutaTransporteId ? Number(form.rutaTransporteId) : null,
         autorizaWhatsAppEncargado: !!form.autorizaWhatsAppEncargado,
+        aceptaWhatsAppEstudiante: form.aceptaWhatsAppEstudiante,
         sexo: form.sexo || null,
         fotoUrl: form.fotoUrl || null,
         nacionalidad: form.nacionalidad || null,
@@ -1011,6 +1015,7 @@ export default function EstudiantesPage() {
         tipoEstudianteId: estudiante?.TipoEstudianteId ? String(estudiante.TipoEstudianteId) : "",
         rutaTransporteId: estudiante?.RutaTransporteId ? String(estudiante.RutaTransporteId) : "",
         autorizaWhatsAppEncargado: !!estudiante?.AutorizaWhatsAppEncargado,
+        aceptaWhatsAppEstudiante: estudiante?.AceptaWhatsAppEstudiante ?? null,
         sexo: estudiante?.Sexo || "",
         fotoUrl: estudiante?.FotoUrl || "",
         nacionalidad: estudiante?.Nacionalidad || "",
@@ -1844,6 +1849,16 @@ export default function EstudiantesPage() {
                 <small style={{ display: "block", opacity: 0.75 }}>
                   Marcar Sí cuando exista visto bueno para enviar información institucional por WhatsApp.
                 </small>
+              </span>
+            </label>
+
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <input type="checkbox"
+                checked={aceptaWhatsAppAlumno(form.aceptaWhatsAppEstudiante, !!form.autorizaWhatsAppEncargado, buildEncargadosPayload())}
+                disabled={!esMayorParaWhatsApp(form.fechaNacimiento, getCostaRicaIsoDate())}
+                onChange={e => setForm({ ...form, aceptaWhatsAppEstudiante: e.target.checked })} />
+              <span>El estudiante acepta WhatsApp
+                <small style={{ display: "block", opacity: 0.75 }}>Hereda la autorización del encargado. Solo puede modificarse desde los 18 años. Al desactivarlo, no se envían WhatsApp sobre este alumno a él ni a sus encargados.</small>
               </span>
             </label>
 

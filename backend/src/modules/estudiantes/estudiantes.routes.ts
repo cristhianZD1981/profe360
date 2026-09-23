@@ -1,3 +1,4 @@
+import { validarPermisoEstudiante } from "../gestion-profe/comunicados-destinatarios";
 import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -499,6 +500,7 @@ async function createStudentWithTransaction(params: {
     tipoEstudianteId,
     rutaTransporteId,
     autorizaWhatsAppEncargado,
+    aceptaWhatsAppEstudiante,
     repitente,
     refugiado,
     tieneAdecuacion,
@@ -514,6 +516,8 @@ async function createStudentWithTransaction(params: {
     movimiento,
     encargados = []
   } = payload;
+  const permisoError = validarPermisoEstudiante(aceptaWhatsAppEstudiante, fechaNacimiento);
+  if (permisoError) throw new Error(permisoError);
   const tipoEstudianteIdResolved = await resolveTipoEstudianteId(transaction, institucionId, tipoEstudianteId);
   const rutaTransporteIdResolved = await resolveRutaTransporteId(transaction, institucionId, rutaTransporteId);
   const tieneAdecuacionNormalizada = !!tieneAdecuacion && isValidAdecuacionValue(adecuacion);
@@ -572,6 +576,7 @@ async function createStudentWithTransaction(params: {
     .input("tipoEstudianteId", sql.Int, tipoEstudianteIdResolved)
     .input("rutaTransporteId", sql.Int, rutaTransporteIdResolved)
     .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
+    .input("aceptaWhatsAppEstudiante", sql.Bit, aceptaWhatsAppEstudiante ?? null)
     .input("repitente", sql.Bit, !!repitente)
     .input("refugiado", sql.Bit, !!refugiado)
     .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
@@ -607,6 +612,7 @@ async function createStudentWithTransaction(params: {
         TipoEstudianteId,
         RutaTransporteId,
         AutorizaWhatsAppEncargado,
+        AceptaWhatsAppEstudiante,
         Repitente,
         Refugiado,
         TieneAdecuacion,
@@ -639,6 +645,7 @@ async function createStudentWithTransaction(params: {
         @tipoEstudianteId,
         @rutaTransporteId,
         @autorizaWhatsAppEncargado,
+        @aceptaWhatsAppEstudiante,
         @repitente,
         @refugiado,
         @tieneAdecuacion,
@@ -1571,7 +1578,7 @@ router.get("/", async (req, res) => {
             te.Descripcion AS TipoEstudianteDescripcion,
             e.RutaTransporteId,
             rt.Descripcion AS RutaTransporteDescripcion,
-            e.AutorizaWhatsAppEncargado,
+            e.AutorizaWhatsAppEncargado, e.AceptaWhatsAppEstudiante,
             e.Repitente,
             e.Refugiado,
             e.TieneAdecuacion,
@@ -2700,7 +2707,7 @@ router.get("/:id/detalle", async (req, res) => {
           te.Descripcion AS TipoEstudianteDescripcion,
           e.RutaTransporteId,
           rt.Descripcion AS RutaTransporteDescripcion,
-          e.AutorizaWhatsAppEncargado,
+          e.AutorizaWhatsAppEncargado, e.AceptaWhatsAppEstudiante,
           e.Repitente,
           e.Refugiado,
           e.TieneAdecuacion,
@@ -2845,7 +2852,7 @@ router.get("/:id/carnet", async (req, res) => {
           e.QrContenido,
           e.Nacionalidad,
           e.RutaTransporteId,
-          e.AutorizaWhatsAppEncargado,
+          e.AutorizaWhatsAppEncargado, e.AceptaWhatsAppEstudiante,
           e.Repitente,
           e.Refugiado,
           e.TieneAdecuacion,
@@ -2924,6 +2931,7 @@ router.post(
         tipoEstudianteId,
         rutaTransporteId,
         autorizaWhatsAppEncargado,
+        aceptaWhatsAppEstudiante,
         repitente,
         refugiado,
         tieneAdecuacion,
@@ -2956,6 +2964,9 @@ router.post(
       }
       const telefonoNormalizado = normalizePhoneWithDefaultCountryCode(telefono);
 
+      const permisoError = validarPermisoEstudiante(aceptaWhatsAppEstudiante, fechaNacimiento);
+      if (permisoError) return badRequest(res, permisoError);
+
       await transaction.begin();
 
       const estudiante = await createStudentWithTransaction({
@@ -2973,6 +2984,7 @@ router.post(
           tipoEstudianteId,
           rutaTransporteId,
           autorizaWhatsAppEncargado,
+          aceptaWhatsAppEstudiante,
           repitente,
           refugiado,
           tieneAdecuacion: tieneAdecuacionNormalizada,
@@ -3052,6 +3064,7 @@ router.put(
         tipoEstudianteId,
         rutaTransporteId,
         autorizaWhatsAppEncargado,
+        aceptaWhatsAppEstudiante,
         repitente,
         refugiado,
         tieneAdecuacion,
@@ -3080,6 +3093,9 @@ router.put(
       if (!req.auth?.institucionId) {
         return badRequest(res, "El usuario no tiene institución asignada");
       }
+
+      const permisoError = validarPermisoEstudiante(aceptaWhatsAppEstudiante, fechaNacimiento);
+      if (permisoError) return badRequest(res, permisoError);
 
       await transaction.begin();
 
@@ -3157,6 +3173,7 @@ router.put(
         .input("tipoEstudianteId", sql.Int, tipoEstudianteId ? Number(tipoEstudianteId) : null)
         .input("rutaTransporteId", sql.Int, rutaTransporteId ? Number(rutaTransporteId) : null)
         .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
+        .input("aceptaWhatsAppEstudiante", sql.Bit, aceptaWhatsAppEstudiante ?? null)
         .input("repitente", sql.Bit, !!repitente)
         .input("refugiado", sql.Bit, !!refugiado)
         .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
@@ -3191,6 +3208,7 @@ router.put(
             TipoEstudianteId = @tipoEstudianteId,
             RutaTransporteId = @rutaTransporteId,
             AutorizaWhatsAppEncargado = @autorizaWhatsAppEncargado,
+            AceptaWhatsAppEstudiante = COALESCE(@aceptaWhatsAppEstudiante, AceptaWhatsAppEstudiante),
             Repitente = @repitente,
             Refugiado = @refugiado,
             TieneAdecuacion = @tieneAdecuacion,

@@ -25,6 +25,19 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
   if (!telefono) return result(input, { enviado: false, modo: "omitido", motivo: "Sin teléfono válido" });
 
   const pool = await getPool();
+  // Una negativa explícita del alumno bloquea cualquier WhatsApp relacionado
+  // con él, aunque otro flujo intente dirigirlo a su encargado.
+  if (input.estudianteId && input.institucionId) {
+    const consentimiento = await pool.request()
+      .input("estudianteId", sql.Int, input.estudianteId)
+      .input("institucionId", sql.Int, input.institucionId)
+      .query(`SELECT AceptaWhatsAppEstudiante FROM dbo.Estudiante
+        WHERE EstudianteId = @estudianteId AND InstitucionId = @institucionId`);
+    const permiso = consentimiento.recordset[0]?.AceptaWhatsAppEstudiante;
+    if (permiso === false || permiso === 0) {
+      return result(input, { enviado: false, modo: "omitido", motivo: "El estudiante desactivó la recepción de WhatsApp; tampoco se envía al encargado" });
+    }
+  }
   const channelResult = await pool.request()
     .input("institucionId", sql.Int, input.institucionId || null)
     .query(`

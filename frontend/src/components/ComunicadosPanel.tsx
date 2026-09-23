@@ -51,14 +51,14 @@ export default function ComunicadosPanel({ grupo }: { grupo: Grupo }) {
   return <section className="comunicados-panel" style={{ padding: 16, background: "#fff", color: "#0f172a", borderRadius: 12, display: "grid", gap: 12 }}>
     <h3>Comunicados{grupo.GrupoNombre ? ` — ${grupo.GrupoNombre}` : ""}</h3>
     {data ? <strong>Lista de la clase: {data.alumnos.length} alumnos</strong> : null}
-    <p>Envío individual a los encargados habilitados por WhatsApp y correo, con copia al profesor.</p>
+    <p>WhatsApp al encargado si el alumno es menor de 18 años, o al alumno si es mayor de edad, con teléfono y autorización activos. Los correos se envían a los encargados con copia al profesor.</p>
     <div style={{ display: "flex", gap: 8 }}><input placeholder="Buscar alumno por nombre o identificación" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} /><button type="button" onClick={() => void cargar()} disabled={loading || sending}>{loading ? "Cargando…" : "Actualizar historial"}</button></div>
     {error ? <p role="alert" style={{ color: "#b91c1c" }}>{error}</p> : null}
     {info ? <p role="status">{info}</p> : null}
     {alumno ? <div ref={formulario} style={{ scrollMarginTop: 80, padding: 14, border: "1px solid #93c5fd", background: "#eff6ff", display: "grid", gap: 10 }}>
-      <h4>Comunicado a los encargados de {fullName(alumno)}</h4>
+      <h4>Comunicado sobre {fullName(alumno)}</h4>
       <p>Fecha: {data.fecha} · Hora: {data.hora} · Materia: {data.materia}<br />Profesor: {data.profesor} · Institución: {data.institucion}<br />Copia a: {data.correoProfesor || "Sin correo registrado"}</p>
-      <label>Mensaje al encargado<textarea rows={6} maxLength={800} disabled={sending || incierto} value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribí el comunicado…" /></label>
+      <label>Mensaje<textarea rows={6} maxLength={800} disabled={sending || incierto} value={mensaje} onChange={(e) => setMensaje(e.target.value)} placeholder="Escribí el comunicado…" /></label>
       <small>{mensaje.length}/800 caracteres</small>
       <div style={{ display: "flex", gap: 8 }}>
         <button type="button" className="primary-btn" onClick={() => void enviar()} disabled={sending || !mensaje.trim() || !data.correoProfesor}>{sending ? "Procesando envíos…" : incierto ? "Verificar solicitud sin duplicar envío" : "Enviar por WhatsApp y correo"}</button>
@@ -79,7 +79,7 @@ export default function ComunicadosPanel({ grupo }: { grupo: Grupo }) {
               {h.destinos.map((d: any, i: number) => <div key={i}>{d.Canal} · {d.EncargadoNombre} · {d.Destino || "Sin contacto"}: <strong>{d.Estado}</strong>{d.Motivo ? ` — ${d.Motivo}` : ""}{d.CopiaProfesor ? ` · Copia: ${d.CopiaProfesor}` : ""}</div>)}
             </article>)}
           </details>}</td>
-          <td><button type="button" onClick={() => void abrir(a.EstudianteId)} disabled={sending || loading}>Enviar comunicado al encargado</button></td>
+          <td><button type="button" onClick={() => void abrir(a.EstudianteId)} disabled={sending || loading}>Enviar comunicado</button></td>
         </tr>;
       })}{!loading && !error && !alumnos.length ? <tr><td colSpan={4}>{busqueda ? "No hay alumnos que coincidan con la búsqueda." : "No hay alumnos matriculados en esta clase."}</td></tr> : null}</tbody>
     </table></div>
