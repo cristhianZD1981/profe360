@@ -2875,7 +2875,10 @@ router.get("/:id/carnet", async (req, res) => {
           g.Nombre AS GrupoNombre,
           g.Nivel AS GrupoNivel,
           g.NivelAcademico,
-          g.Especialidad AS GrupoEspecialidad
+          g.Especialidad AS GrupoEspecialidad,
+          encargado.EncargadoNombre,
+          encargado.EncargadoParentesco,
+          encargado.EncargadoTelefono
         FROM dbo.Estudiante e
         INNER JOIN dbo.Institucion i
           ON i.InstitucionId = e.InstitucionId
@@ -2884,6 +2887,25 @@ router.get("/:id/carnet", async (req, res) => {
          AND m.Estado = N'Activa'
         LEFT JOIN dbo.Grupo g
           ON g.GrupoId = m.GrupoId
+        OUTER APPLY (
+          SELECT TOP 1
+            LTRIM(RTRIM(CONCAT(
+              ISNULL(NULLIF(enc.Titulo, N'') + N' ', N''),
+              ISNULL(enc.Nombre, N''), N' ',
+              ISNULL(enc.PrimerApellido, N''), N' ',
+              ISNULL(enc.SegundoApellido, N'')
+            ))) AS EncargadoNombre,
+            ee.Parentesco AS EncargadoParentesco,
+            enc.Telefono AS EncargadoTelefono
+          FROM dbo.EstudianteEncargado ee
+          INNER JOIN dbo.Encargado enc
+            ON enc.EncargadoId = ee.EncargadoId
+          WHERE ee.EstudianteId = e.EstudianteId
+            AND ee.Activo = 1
+          ORDER BY
+            CASE WHEN ee.EsPrincipal = 1 THEN 0 ELSE 1 END,
+            ee.EstudianteEncargadoId DESC
+        ) encargado
         WHERE e.EstudianteId = @id
           AND e.InstitucionId = @institucionId
         ORDER BY m.MatriculaId DESC

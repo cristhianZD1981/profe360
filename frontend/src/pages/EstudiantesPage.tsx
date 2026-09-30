@@ -487,6 +487,7 @@ export default function EstudiantesPage() {
     canManageStudents ||
     isProfesorRole ||
     roles.includes("PROFESOR_GUIA");
+  const canViewStudentSchedule = canManageStudents || isProfesorRole;
 
   const detalleEncargadoPrincipal = useMemo(
     () =>
@@ -2480,6 +2481,23 @@ export default function EstudiantesPage() {
                         >
                           Ver carnet
                         </button>
+
+                        {canViewStudentSchedule && (
+                          <button
+                            type="button"
+                            onClick={() => window.open(`/horario-estudiante/${item.EstudianteId}`, "HorarioEstudiante", "popup=yes,width=1280,height=900,resizable=yes,scrollbars=yes")}
+                            style={{
+                              border: "1px solid #bae6fd",
+                              background: "#f0f9ff",
+                              color: "#0369a1",
+                              borderRadius: "8px",
+                              padding: "6px 10px",
+                              cursor: "pointer"
+                            }}
+                          >
+                            Horario
+                          </button>
+                        )}
 
                         {canManageStudents && item.Activo && (
                           <button

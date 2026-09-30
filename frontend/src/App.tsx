@@ -14,6 +14,7 @@ import AcademicoPage from "./pages/AcademicoPage";
 import AsistenciaPage from "./pages/AsistenciaPage";
 import ReportesPage from "./pages/ReportesPage";
 import HorariosPage from "./pages/HorariosPage";
+import HorarioEstudiantePopupPage from "./pages/HorarioEstudiantePopupPage";
 import BoletaMatriculaPage from "./pages/BoletaMatriculaPage";
 import BoletaConductaPage from "./pages/BoletaConductaPage";
 import GestionProfePage from "./pages/GestionProfePage";
@@ -66,6 +67,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <CarnetEstudiantePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/horario-estudiante/:id"
+          element={
+            <ProtectedRoute>
+              <HorarioEstudiantePopupPage />
             </ProtectedRoute>
           }
         />
