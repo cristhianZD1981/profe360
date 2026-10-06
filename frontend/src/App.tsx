@@ -26,10 +26,12 @@ import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage
 import AssistantAdminPage from "./pages/AssistantAdminPage";
 import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
 import SuperAdminConsecutivosPage from "./pages/SuperAdminConsecutivosPage";
+import SuperAdminCatalogosMatriculaPage from "./pages/SuperAdminCatalogosMatriculaPage";
 import SuperAdminWhatsAppPage from "./pages/SuperAdminWhatsAppPage";
 import HabilidadesPlaneamientoAcademicoPage from "./pages/HabilidadesPlaneamientoAcademicoPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
 import GruposClasePage from "./pages/GruposClasePage";
+import SuperAdminInstitutionScope from "./components/SuperAdminInstitutionScope";
 
 const ADMINISTRATIVO_ROLES = [
   "SUPER_ADMIN",
@@ -116,10 +118,19 @@ export default function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="estudiantes" element={<EstudiantesPage />} />
+          <Route path="estudiantes" element={
+            <ProtectedRoute allowedRoles={SUPER_ADMIN_ROLES}>
+              <SuperAdminInstitutionScope><EstudiantesPage /></SuperAdminInstitutionScope>
+            </ProtectedRoute>
+          } />
           <Route path="estudiantes-matricula" element={
             <ProtectedRoute allowedRoles={ADMINISTRATIVO_ROLES}>
-              <EstudiantesMatriculaPage />
+              <SuperAdminInstitutionScope><EstudiantesMatriculaPage /></SuperAdminInstitutionScope>
+            </ProtectedRoute>
+          } />
+          <Route path="estudiante" element={
+            <ProtectedRoute allowedRoles={["PROFESOR", "PROFESOR_GUIA"]}>
+              <EstudiantesMatriculaPage teacherView />
             </ProtectedRoute>
           } />
           <Route
@@ -148,6 +159,7 @@ export default function App() {
                     "horarios",
                     "fechasClase",
                     "diasLectivos",
+                    "faltasConducta",
                     "feriados",
                     "consecutivos",
                     "configuracionCorreo",
@@ -195,9 +207,11 @@ export default function App() {
             path="matricula"
             element={
               <ProtectedRoute
-                allowedRoles={ADMINISTRATIVO_ROLES}
+                allowedRoles={SUPER_ADMIN_ROLES}
               >
-                <AcademicoPage initialTab="matriculas" visibleTabs={["matriculas"]} />
+                <SuperAdminInstitutionScope>
+                  <AcademicoPage initialTab="matriculas" visibleTabs={["matriculas"]} />
+                </SuperAdminInstitutionScope>
               </ProtectedRoute>
             }
           />
@@ -286,6 +300,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="super-admin/catalogos-matricula" element={<ProtectedRoute allowedRoles={SUPER_ADMIN_ROLES}><SuperAdminCatalogosMatriculaPage /></ProtectedRoute>} />
           <Route
             path="super-admin/consecutivos"
             element={
@@ -339,3 +354,4 @@ export default function App() {
     </AuthProvider>
   );
 }
+

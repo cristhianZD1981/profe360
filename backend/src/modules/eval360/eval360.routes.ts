@@ -27,6 +27,7 @@ import { sendWhatsAppNotification } from "../../services/whatsapp.service";
 import { env } from "../../config/env";
 
 import { parseDateInputAsLocalDate } from "../../utils/date.utils";
+import { getGuardianEmailCopiesByStudent, mergeEmailCopies } from "../../utils/guardian-email-copies";
 
 import { buildWhatsAppWabaPayload, normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 
@@ -18676,6 +18677,11 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
     const resultadosNotificacion: any[] = [];
 
+    const correosEncargadosPorEstudiante = await getGuardianEmailCopiesByStudent(
+      pool,
+      notificacionesPendientes.map((aviso: any) => Number(aviso.estudianteId))
+    );
+
     const correoCfg = await getCorreoNotificacionConfig(pool, Number(contextoCorreo.InstitucionId || 0), tipoUso);
 
     for (const aviso of notificacionesPendientes) {
@@ -18766,7 +18772,11 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
             to: aviso.correoEstudiante,
 
-            cc: correoProfesorCopia || undefined,
+            cc: (mergeEmailCopies(
+              aviso.correoEstudiante,
+              correoProfesorCopia,
+              correosEncargadosPorEstudiante.get(Number(aviso.estudianteId)) || []
+            ) || []).join(", ") || undefined,
 
             subject: subjectFinal,
 
@@ -19608,6 +19618,11 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
     const resultadosNotificacion: any[] = [];
 
+    const correosEncargadosPorEstudiante = await getGuardianEmailCopiesByStudent(
+      pool,
+      notificacionesPendientes.map((aviso: any) => Number(aviso.estudianteId))
+    );
+
 
 
     for (const aviso of notificacionesPendientes) {
@@ -19662,7 +19677,11 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
             to: aviso.correoEstudiante,
 
-            cc: correoProfesorCopia || undefined,
+            cc: (mergeEmailCopies(
+              aviso.correoEstudiante,
+              correoProfesorCopia,
+              correosEncargadosPorEstudiante.get(Number(aviso.estudianteId)) || []
+            ) || []).join(", ") || undefined,
 
             subject: tituloFinal,
 

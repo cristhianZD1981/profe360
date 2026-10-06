@@ -50,7 +50,7 @@ const items: MenuItem[] = [
     path: "/usuarios",
     allowedRoles: ADMINISTRATIVO_ROLES
   },
-  { label: "Estudiantes", path: "/estudiantes" },
+  { label: "Estudiantes", path: "/estudiantes", allowedRoles: SUPER_ADMIN_ROLES },
   {
     label: "Estudiantes + Matrícula",
     path: "/estudiantes-matricula",
@@ -59,13 +59,14 @@ const items: MenuItem[] = [
   {
     label: "Matrícula",
     path: "/matricula",
-    allowedRoles: ADMINISTRATIVO_ROLES
+    allowedRoles: SUPER_ADMIN_ROLES
   },
   {
     label: "Gestión del Profe",
     path: "/gestion-profe",
     allowedRoles: GESTION_PROFE_ROLES
   },
+  { label: "Estudiante", path: "/estudiante", allowedRoles: ["PROFESOR", "PROFESOR_GUIA"] },
   {
     label: "Grupos de clase",
     path: "/grupos-clase",
@@ -346,6 +347,7 @@ export default function Layout() {
                     >
                       Mantenimiento secciones
                     </button>
+                    <button type="button" role="menuitem" style={adminMenuItemStyle} onClick={() => { setShowAdminMenu(false); navigate("/super-admin/catalogos-matricula"); }}>Catálogos de matrícula</button>
                     <button
                       type="button"
                       role="menuitem"
@@ -570,5 +572,6 @@ export default function Layout() {
     </div>
   );
 }
+
 
 

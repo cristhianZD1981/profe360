@@ -1,9 +1,11 @@
 ﻿import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import api from "../lib/http";
 
 export default function BoletaMatriculaPage() {
   const { matriculaId } = useParams();
+  const [searchParams] = useSearchParams();
+  const soloWhatsApp = searchParams.get("solo") === "whatsapp";
   const [loading, setLoading] = useState(true);
   const [html, setHtml] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -13,7 +15,7 @@ export default function BoletaMatriculaPage() {
     setErrorMessage("");
 
     try {
-      const response = await api.get(`/boletas/matricula/${matriculaId}`);
+      const response = await api.get(`/boletas/matricula/${matriculaId}`, { params: soloWhatsApp ? { solo: "whatsapp" } : undefined });
       const data = response.data?.data;
       setHtml(data?.html || "");
     } catch (error: any) {
@@ -44,7 +46,7 @@ export default function BoletaMatriculaPage() {
             marginBottom: "12px"
           }}
         >
-          <h3 style={{ margin: 0 }}>Boleta de matrícula</h3>
+          <h3 style={{ margin: 0 }}>{soloWhatsApp ? "Autorización de WhatsApp" : "Boleta de matrícula"}</h3>
 
           <button
             type="button"

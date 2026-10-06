@@ -16,7 +16,7 @@ BEGIN
     CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_EstudianteSuspension_CreatedAt DEFAULT(SYSDATETIME()),
     UpdatedAt DATETIME2 NULL,
     CONSTRAINT CK_EstudianteSuspension_Motivo
-      CHECK (Motivo IN (N'Medida Precautoria', N'Acción Correctiva', N'Accion Correctiva')),
+      CHECK (Motivo IN (N'Medida Precautoria', N'Acción Correctiva', N'Accion Correctiva', N'Situación Médica')),
     CONSTRAINT CK_EstudianteSuspension_Fechas
       CHECK (FechaFin >= FechaInicio),
     CONSTRAINT FK_EstudianteSuspension_Institucion

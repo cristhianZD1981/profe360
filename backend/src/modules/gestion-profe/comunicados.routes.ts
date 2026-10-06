@@ -116,7 +116,7 @@ export function registrarComunicados(router: Router, autorizar: Autorizar) {
       const asunto = `Comunicado — ${snapshot.alumno} — ${snapshot.materia}`;
       if (params.some((p) => String(p || "").length > 1024)) return res.status(400).json({ ok: false, message: "El mensaje y los datos de la lección superan el máximo de WhatsApp" });
       const contactos = await ctx.request().input("estudianteId", sql.Int, estudianteId).query(`
-        SELECT DISTINCT en.EncargadoId, en.Nombre, en.Correo, en.Telefono, ee.AceptaWhatsApp
+        SELECT DISTINCT en.EncargadoId, en.Nombre, en.Correo, en.Telefono, ee.AceptaWhatsApp, ee.EsPrincipal
         FROM dbo.EstudianteEncargado ee INNER JOIN dbo.Encargado en ON en.EncargadoId = ee.EncargadoId
         WHERE ee.EstudianteId = @estudianteId AND ISNULL(ee.Activo, 1) = 1
           AND ISNULL(en.Activo, 1) = 1 AND ISNULL(ee.RecibeNotificaciones, 1) = 1
@@ -126,7 +126,7 @@ export function registrarComunicados(router: Router, autorizar: Autorizar) {
           destino: String(en.Correo || "").trim(), motivo: "Sin correo del encargado", habilitado: Boolean(String(en.Correo || "").trim()) })),
         ...destinosWhatsAppComunicado({ fechaNacimiento: alumno.FechaNacimiento, hoy: ctx.fecha,
           estudiante: { EncargadoId: null, Nombre: `${nombre(alumno)} (estudiante)`, Telefono: alumno.Telefono, AceptaWhatsApp: alumno.AceptaWhatsAppEstudiante },
-          encargados: contactos.recordset, autorizaEncargados: alumno.AutorizaWhatsAppEncargado })
+          encargados: contactos.recordset.filter((contacto: any) => Boolean(contacto.EsPrincipal)), autorizaEncargados: alumno.AutorizaWhatsAppEncargado })
       ];
       const trans = new sql.Transaction(ctx.pool); await trans.begin();
       let comunicadoId: number;

@@ -8,13 +8,13 @@ const comparable = (value: unknown) => asText(value).normalize("NFD").replace(/[
 export const validAdecuacion = (value: unknown) => !!comparable(value) && !["regular", "sin adecuacion", "seleccione", "no"].includes(comparable(value));
 
 export const studentTextKeys = ["identificacion", "nombre", "primerApellido", "segundoApellido", "fechaNacimiento", "tipoIdentificacion", "correo", "telefono", "tipoEstudianteId", "rutaTransporteId", "sexo", "fotoUrl", "nacionalidad", "adecuacion", "nivelFuncionamiento", "discapacidad", "tipoDiscapacidad", "enfermedad", "rutaTransporteHabitual", "observaciones", "observacionMedica"] as const;
-export const studentFlagKeys = ["autorizaWhatsAppEncargado", "repitente", "refugiado", "tieneAdecuacion"] as const;
+export const studentFlagKeys = ["autorizaWhatsAppEncargado", "repitente", "refugiado", "becaTransporte", "tieneAdecuacion"] as const;
 export type StudentForm = Record<typeof studentTextKeys[number], string> & Record<typeof studentFlagKeys[number], boolean> & { aceptaWhatsAppEstudiante: boolean | null };
 export const guardianTextKeys = ["tipoEncargado", "titulo", "identificacion", "nombre", "primerApellido", "segundoApellido", "correo", "telefono", "telefonoSecundario", "direccionExacta", "parentesco"] as const;
 export const guardianFlagKeys = ["viveConEstudiante", "esPrincipal", "aceptaWhatsApp", "aceptaCorreo"] as const;
 export type GuardianForm = Record<typeof guardianTextKeys[number], string> & Record<typeof guardianFlagKeys[number], boolean>;
-export const enrollmentTextKeys = ["anioLectivoId", "grupoId", "fechaMatricula", "observacion", "tipoMatricula", "nivelAcademico", "especialidadId", "especialidad", "seccionTexto", "rutaTransporte", "justificacionExcepcion", "correoEnvioBoleta", "observacionesDetalle"] as const;
-export type EnrollmentForm = Record<typeof enrollmentTextKeys[number], string> & { esRepitente: boolean; permiteExcepcionProgresion: boolean };
+export const enrollmentTextKeys = ["anioLectivoId", "grupoId", "fechaMatricula", "observacion", "tipoMatricula", "nivelAcademico", "especialidadId", "especialidad", "seccionTexto", "rutaTransporte", "correoEnvioBoleta"] as const;
+export type EnrollmentForm = Record<typeof enrollmentTextKeys[number], string>;
 const capitalized = (key: string) => key.charAt(0).toUpperCase() + key.slice(1);
 export function phoneDraft(value: unknown) {
   const phone = asText(value).trim();
@@ -64,18 +64,12 @@ export function guardiansForm(records: RecordData[] = []): GuardianForm[] {
 }
 
 export function enrollmentForm(record: RecordData = {}, year = "", today = ""): EnrollmentForm {
-  const form = Object.fromEntries([
-    ...enrollmentTextKeys.map(key => [key, asText(record[capitalized(key)])]),
-    ["esRepitente", asFlag(record.EsRepitente)],
-    ["permiteExcepcionProgresion", asFlag(record.PermiteExcepcionProgresion)]
-  ]) as EnrollmentForm;
+  const form = Object.fromEntries(enrollmentTextKeys.map(key => [key, asText(record[capitalized(key)])])) as EnrollmentForm;
   form.anioLectivoId ||= year;
   form.fechaMatricula = asDate(record.FechaMatricula) || today;
   form.nivelAcademico ||= asText(record.GrupoNivelAcademico);
   form.especialidad ||= asText(record.EspecialidadDescripcion || record.GrupoEspecialidad);
   form.seccionTexto ||= asText(record.GrupoNombre);
-  form.esRepitente = asFlag(record.EsRepitente);
-  form.permiteExcepcionProgresion = asFlag(record.PermiteExcepcionProgresion);
   return form;
 }
 
@@ -96,6 +90,8 @@ export function studentPayload(form: StudentForm, guardians: GuardianForm[]) {
       return g[key].trim() !== "";
     })).map(g => ({
       ...g, telefono: phonePayload(g.telefono), telefonoSecundario: phonePayload(g.telefonoSecundario),
+      aceptaWhatsApp: g.esPrincipal && g.aceptaWhatsApp,
+      aceptaCorreo: !!g.correo.trim() && g.aceptaCorreo,
       recibeNotificaciones: g.aceptaWhatsApp || g.aceptaCorreo
     }))
   };
@@ -104,7 +100,8 @@ export function studentPayload(form: StudentForm, guardians: GuardianForm[]) {
 export function enrollmentPayload(form: EnrollmentForm, studentId: number) {
   return { ...form, estudianteId: studentId, anioLectivoId: Number(form.anioLectivoId), grupoId: Number(form.grupoId),
     nivelAcademico: Number(form.nivelAcademico) || null, especialidadId: Number(form.especialidadId) || null,
-    fechaMatricula: form.fechaMatricula || null, correoEnvioBoleta: form.correoEnvioBoleta.trim() || null };
+    fechaMatricula: form.fechaMatricula || null, correoEnvioBoleta: form.correoEnvioBoleta.trim() || null,
+    observacionesDetalle: form.observacion.trim() || null, esRepitente: false, permiteExcepcionProgresion: false, justificacionExcepcion: null };
 }
 
 export function transportDescription(student: StudentForm, routes: RecordData[]) {
@@ -124,7 +121,11 @@ export function levelName(level: string) {
 }
 
 export function sortedGroups(groups: RecordData[]) {
-  return [...groups].sort((a, b) => asText(a.Nombre).localeCompare(asText(b.Nombre), "es", { numeric: true, sensitivity: "base" }));
+  return [...groups].sort((a, b) => {
+    const nivelA = Number(groupLevel(a)) || Number.MAX_SAFE_INTEGER;
+    const nivelB = Number(groupLevel(b)) || Number.MAX_SAFE_INTEGER;
+    return nivelA - nivelB || asText(a.Nombre).localeCompare(asText(b.Nombre), "es", { numeric: true, sensitivity: "base" });
+  });
 }
 
 export function automaticEnrollment(form: EnrollmentForm, student: StudentForm, guardians: GuardianForm[], groups: RecordData[], routes: RecordData[]): EnrollmentForm {
@@ -149,24 +150,13 @@ export function previousEnrollment(history: RecordData[], year: string) {
   // Mantener el mismo criterio por AnioLectivoId del servicio de progresión.
   return [...history].filter(r => Number(r.AnioLectivoId) < Number(year)).sort((a, b) => Number(b.AnioLectivoId) - Number(a.AnioLectivoId) || Number(b.MatriculaId) - Number(a.MatriculaId))[0];
 }
-export function progressionError(form: EnrollmentForm, history: RecordData[]) {
-  const last = previousEnrollment(history, form.anioLectivoId);
-  const before = Number(last?.GrupoNivelAcademico || last?.NivelAcademico || 0);
-  const next = Number(form.nivelAcademico);
-  if (!before || !next) return "";
-  if (before === next) return form.esRepitente ? "" : `El último nivel es ${before}. Marcá «Es repitente» para matricularlo en el mismo nivel.`;
-  if (next === before + 1) return "";
-  if (!form.permiteExcepcionProgresion) return `El siguiente nivel esperado es ${before + 1}. Este cambio requiere una excepción de progresión.`;
-  return form.justificacionExcepcion.trim() ? "" : "Indicá la justificación de la excepción de progresión.";
-}
-
 export function enrollmentError(form: EnrollmentForm, history: RecordData[], editingId: number | null, groups: RecordData[], years: RecordData[], specialties: RecordData[]) {
   if (!form.anioLectivoId || !form.grupoId) return "Seleccioná el año lectivo y el grupo.";
   if (!years.some(y => asText(y.AnioLectivoId) === form.anioLectivoId && asFlag(y.Activo))) return "Seleccioná un año lectivo activo.";
   if (!groups.some(g => asText(g.GrupoId) === form.grupoId && asText(g.AnioLectivoId) === form.anioLectivoId && asFlag(g.Activo))) return "El grupo debe estar activo y pertenecer al año lectivo seleccionado.";
   if (form.especialidadId && !specialties.some(s => asText(s.EspecialidadId) === form.especialidadId && asFlag(s.Activo))) return "La especialidad seleccionada está inactiva o no está disponible.";
   if (history.some(r => asText(r.AnioLectivoId) === form.anioLectivoId && isActiveEnrollment(r) && Number(r.MatriculaId) !== editingId)) return "Ya hay una matrícula activa en este año. Abrí esa matrícula para editarla o trasladarla.";
-  return progressionError(form, history);
+  return "";
 }
 
 // La ficha y la matrícula son dos operaciones existentes. Registrar el éxito de

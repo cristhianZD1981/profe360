@@ -265,6 +265,16 @@ type BloqueHorario = {
   OrdenVisual: number;
 };
 
+type FaltaConducta = {
+  FaltaConductaId: number;
+  TipoFalta: string;
+  Falta: string;
+  Articulo: string;
+  Activo: boolean;
+  OrdenVisual: number;
+  CantidadRegistros?: number;
+};
+
 type GrupoMateria = {
   GrupoMateriaId: number;
   GrupoId: number;
@@ -787,6 +797,7 @@ type TabKey =
   | "fechasClase"
   | "feriados"
   | "diasLectivos"
+  | "faltasConducta"
   | "configuracionCorreo"
   | "mensajes";
 
@@ -809,6 +820,7 @@ type FormSectionKey =
   | "horarios"
   | "feriados"
   | "diasLectivos"
+  | "faltasConducta"
   | "configuracionCorreo";
 
 const initialOpenSections: Record<FormSectionKey, boolean> = {
@@ -829,6 +841,7 @@ const initialOpenSections: Record<FormSectionKey, boolean> = {
   horarios: false,
   feriados: false,
   diasLectivos: false,
+  faltasConducta: false,
   configuracionCorreo: false
 };
 
@@ -878,6 +891,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [whatsappQrConnected, setWhatsappQrConnected] = useState(false);
   const [bloquesCatalogo, setBloquesCatalogo] = useState<BloqueHorario[]>([]);
   const [bloques, setBloques] = useState<BloqueHorario[]>([]);
+  const [faltasConducta, setFaltasConducta] = useState<FaltaConducta[]>([]);
   const [gruposMateria, setGruposMateria] = useState<GrupoMateria[]>([]);
   const [horarios, setHorarios] = useState<HorarioGrupo[]>([]);
   const [fechasClase, setFechasClase] = useState<FechaClase[]>([]);
@@ -900,6 +914,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [sustitucionForm, setSustitucionForm] = useState(initialSustitucionForm);
   const [profeGuia12Form, setProfeGuia12Form] = useState(initialProfeGuia12Form);
   const [bloqueForm, setBloqueForm] = useState(initialBloqueForm);
+  const [faltaConductaForm, setFaltaConductaForm] = useState({ tipoFalta: "", falta: "", articulo: "", ordenVisual: "1", activo: true });
   const [grupoMateriaForm, setGrupoMateriaForm] = useState(initialGrupoMateriaForm);
   const [horarioForm, setHorarioForm] = useState(initialHorarioForm);
   const [fechaClaseForm, setFechaClaseForm] = useState(initialFechaClaseForm);
@@ -925,6 +940,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [editingAsignacionId, setEditingAsignacionId] = useState<number | null>(null);
   const [editingProfeGuia12Id, setEditingProfeGuia12Id] = useState<number | null>(null);
   const [editingBloqueId, setEditingBloqueId] = useState<number | null>(null);
+  const [editingFaltaConductaId, setEditingFaltaConductaId] = useState<number | null>(null);
   const [editingGrupoMateriaId, setEditingGrupoMateriaId] = useState<number | null>(null);
   const [editingHorarioId, setEditingHorarioId] = useState<number | null>(null);
   const [editingFechaClaseId, setEditingFechaClaseId] = useState<number | null>(null);
@@ -1012,6 +1028,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
   const [sustitucionProgress, setSustitucionProgress] = useState(0);
   const [loadingProfeGuia12, setLoadingProfeGuia12] = useState(false);
   const [loadingBloque, setLoadingBloque] = useState(false);
+  const [loadingFaltaConducta, setLoadingFaltaConducta] = useState(false);
   const [loadingGrupoMateria, setLoadingGrupoMateria] = useState(false);
   const [loadingHorario, setLoadingHorario] = useState(false);
   const [loadingFechaClase, setLoadingFechaClase] = useState(false);
@@ -1325,6 +1342,16 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
     setBloques(response.data?.data || []);
   }
 
+  async function loadBloquesCatalogo() {
+    const response = await api.get("/academico/bloques-horarios");
+    setBloquesCatalogo(response.data?.data || []);
+  }
+
+  async function loadFaltasConducta() {
+    const response = await api.get("/boletas/conducta/admin/faltas");
+    setFaltasConducta(response.data?.data || []);
+  }
+
   async function loadGruposMateria(query = "", incluirInactivos = incluirGrupoMateriaInactivas) {
     const response = await api.get("/academico/grupos-materia", {
       params: { q: query, incluirInactivos }
@@ -1514,7 +1541,7 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           await Promise.all([loadCatalogos(), loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas)]);
           break;
         case "horarios":
-          await Promise.all([loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas), loadBloques(bloqueSearch), loadHorarios(horarioSearch, incluirHorariosInactivos)]);
+          await Promise.all([loadGruposMateria(grupoMateriaSearch, incluirGrupoMateriaInactivas), loadBloques(bloqueSearch), loadBloquesCatalogo(), loadHorarios(horarioSearch, incluirHorariosInactivos)]);
           break;
         case "fechasClase":
           await Promise.all([
@@ -1529,6 +1556,9 @@ export default function AcademicoPage({ initialTab = "anios", visibleTabs }: Aca
           break;
         case "diasLectivos":
           await loadDiasLectivos();
+          break;
+        case "faltasConducta":
+          await loadFaltasConducta();
           break;
         case "configuracionCorreo":
           await Promise.all([loadCatalogos(), loadCorreoNotificacionConfigs(), loadBoletaConductaConfig()]);
@@ -3909,11 +3939,98 @@ function resetMatriculaForm() {
     }
   }
 
+  function resetFaltaConductaForm() {
+    setEditingFaltaConductaId(null);
+    setFaltaConductaForm({ tipoFalta: "", falta: "", articulo: "", ordenVisual: "1", activo: true });
+  }
+
+  function handleEditFaltaConducta(item: FaltaConducta) {
+    clearMessages();
+    setEditingFaltaConductaId(item.FaltaConductaId);
+    setFaltaConductaForm({
+      tipoFalta: item.TipoFalta,
+      falta: item.Falta,
+      articulo: item.Articulo,
+      ordenVisual: String(item.OrdenVisual || 0),
+      activo: Boolean(item.Activo)
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function handleFaltaConductaSubmit(event: FormEvent) {
+    event.preventDefault();
+    setLoadingFaltaConducta(true);
+    clearMessages();
+    try {
+      const payload = {
+        tipoFalta: faltaConductaForm.tipoFalta.trim(),
+        falta: faltaConductaForm.falta.trim(),
+        articulo: faltaConductaForm.articulo.trim(),
+        ordenVisual: Number(faltaConductaForm.ordenVisual),
+        activo: faltaConductaForm.activo
+      };
+      if (editingFaltaConductaId !== null) {
+        await api.put(`/boletas/conducta/admin/faltas/${editingFaltaConductaId}`, payload);
+        setMessage("Falta de conducta actualizada correctamente");
+      } else {
+        await api.post("/boletas/conducta/admin/faltas", payload);
+        setMessage("Falta de conducta agregada correctamente");
+      }
+      resetFaltaConductaForm();
+      await loadFaltasConducta();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la falta de conducta");
+    } finally {
+      setLoadingFaltaConducta(false);
+    }
+  }
+
+  async function handleToggleFaltaConducta(item: FaltaConducta) {
+    setLoadingFaltaConducta(true);
+    clearMessages();
+    try {
+      await api.put(`/boletas/conducta/admin/faltas/${item.FaltaConductaId}`, {
+        tipoFalta: item.TipoFalta,
+        falta: item.Falta,
+        articulo: item.Articulo,
+        ordenVisual: item.OrdenVisual,
+        activo: !item.Activo
+      });
+      setMessage(item.Activo ? "Falta inactivada correctamente" : "Falta activada correctamente");
+      await loadFaltasConducta();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo cambiar el estado de la falta");
+    } finally {
+      setLoadingFaltaConducta(false);
+    }
+  }
+
+  async function handleDeleteFaltaConducta(item: FaltaConducta) {
+    if (Number(item.CantidadRegistros || 0) > 0) {
+      setErrorMessage("Esta falta tiene boletas asociadas; solo se puede inactivar.");
+      return;
+    }
+    if (!window.confirm("¿Eliminar esta falta de conducta?")) return;
+    setLoadingFaltaConducta(true);
+    clearMessages();
+    try {
+      await api.delete(`/boletas/conducta/admin/faltas/${item.FaltaConductaId}`);
+      setMessage("Falta de conducta eliminada correctamente");
+      if (editingFaltaConductaId === item.FaltaConductaId) resetFaltaConductaForm();
+      await loadFaltasConducta();
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo eliminar la falta de conducta");
+    } finally {
+      setLoadingFaltaConducta(false);
+    }
+  }
+
   const tabButtons: { key: TabKey; label: string; tone: string; help: string }[] = [
     { key: "anios", label: "Año Lectivo", tone: "#2563eb", help: "Base del curso lectivo" },
     { key: "periodos", label: "Periodos", tone: "#2563eb", help: "Trimestres o periodos" },
     { key: "periodosProfesor", label: "Periodos por Profesor", tone: "#2563eb", help: "Disponibilidad docente por periodo" },
     { key: "diasLectivos", label: "Días Lectivos", tone: "#2563eb", help: "Días hábiles de clase" },
+    { key: "faltasConducta", label: "Faltas de conducta", tone: "#be123c", help: "Catálogo para boletas de conducta" },
     { key: "feriados", label: "Feriados", tone: "#2563eb", help: "Excepciones del calendario" },
     { key: "consecutivos", label: "Consecutivos", tone: "#2563eb", help: "Boletas y certificaciones" },
     { key: "grupos", label: "Gestión de grupos", tone: "#0d9488", help: "Secciones del centro educativo" },
@@ -3939,7 +4056,8 @@ function resetMatriculaForm() {
   const canManageTeacherPeriods = Boolean(user?.roles?.some((role) => role === "ADMIN_INSTITUCIONAL" || role === "ADMINISTRATIVO"));
   const visibleTabButtons = (visibleTabs?.length
     ? tabButtons.filter((item) => visibleTabs.includes(item.key))
-    : tabButtons).filter((item) => item.key !== "periodosProfesor" || canManageTeacherPeriods);
+    : tabButtons).filter((item) => item.key !== "periodosProfesor" || canManageTeacherPeriods)
+    .filter((item) => item.key !== "faltasConducta" || canManageTeacherPeriods);
 
   function getTabButtonStyle(item: (typeof tabButtons)[number]) {
     const isActive = tab === item.key;
@@ -6770,6 +6888,56 @@ function resetMatriculaForm() {
                       </tr>
                     ))}
                     {!diasLectivos.length && <tr><td colSpan={2} style={{ textAlign: "center", padding: "16px" }}>No hay días lectivos configurados</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {tab === "faltasConducta" && (
+          <div className={isSectionOpen("faltasConducta") ? "two-col" : "stack"}>
+            <section className="card" style={{ marginBottom: 0 }}>
+              {isSectionOpen("faltasConducta") ? (
+                <>
+                  <h3>{editingFaltaConductaId !== null ? "Editar falta de conducta" : "Agregar falta de conducta"}</h3>
+                  <form className="form" onSubmit={handleFaltaConductaSubmit}>
+                    <label>Tipo de falta<input required maxLength={120} value={faltaConductaForm.tipoFalta} onChange={(event) => setFaltaConductaForm({ ...faltaConductaForm, tipoFalta: event.target.value })} placeholder="Ejemplo: Faltas leves" /></label>
+                    <label>Falta<textarea required maxLength={1200} rows={4} value={faltaConductaForm.falta} onChange={(event) => setFaltaConductaForm({ ...faltaConductaForm, falta: event.target.value })} /></label>
+                    <label>Artículo<input required maxLength={250} value={faltaConductaForm.articulo} onChange={(event) => setFaltaConductaForm({ ...faltaConductaForm, articulo: event.target.value })} placeholder="Ejemplo: 154, Inciso a" /></label>
+                    <label>Orden visual<input required type="number" min={0} value={faltaConductaForm.ordenVisual} onChange={(event) => setFaltaConductaForm({ ...faltaConductaForm, ordenVisual: event.target.value })} /></label>
+                    {editingFaltaConductaId !== null && <label style={{ display: "flex", alignItems: "center", gap: 8 }}><input type="checkbox" checked={faltaConductaForm.activo} onChange={(event) => setFaltaConductaForm({ ...faltaConductaForm, activo: event.target.checked })} />Activa</label>}
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button className="primary-btn" disabled={loadingFaltaConducta}>{loadingFaltaConducta ? "Guardando..." : editingFaltaConductaId !== null ? "Actualizar" : "Guardar"}</button>
+                      <button type="button" onClick={() => { resetFaltaConductaForm(); closeSection("faltasConducta"); }} style={{ border: "1px solid #d1d5db", borderRadius: 10, padding: "10px 14px", background: "#fff", cursor: "pointer" }}>Cancelar</button>
+                    </div>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <h3>Catálogo de faltas para boletas de conducta</h3>
+                  <p style={{ marginTop: 0, opacity: 0.85 }}>Las faltas activas estarán disponibles al generar boletas. Si una falta ya tiene boletas vinculadas, solo se puede inactivar.</p>
+                  <button type="button" className="primary-btn" onClick={() => { clearMessages(); resetFaltaConductaForm(); openSection("faltasConducta"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Agregar falta</button>
+                </>
+              )}
+            </section>
+            <section className="card" style={{ marginBottom: 0 }}>
+              <h3>Listado de faltas</h3>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Tipo de falta</th><th>Falta</th><th>Artículo</th><th>Estado</th><th>Boletas asociadas</th><th>Acciones</th></tr></thead>
+                  <tbody>
+                    {faltasConducta.map((item) => (
+                      <tr key={item.FaltaConductaId}>
+                        <td>{item.TipoFalta}</td><td>{item.Falta}</td><td>{item.Articulo}</td><td>{item.Activo ? "Activa" : "Inactiva"}</td><td>{Number(item.CantidadRegistros || 0)}</td>
+                        <td><div className="conduct-fault-actions" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <button type="button" onClick={() => handleEditFaltaConducta(item)}>Editar</button>
+                          <button type="button" disabled={loadingFaltaConducta} onClick={() => void handleToggleFaltaConducta(item)}>{item.Activo ? "Inactivar" : "Activar"}</button>
+                          <button type="button" disabled={loadingFaltaConducta || Number(item.CantidadRegistros || 0) > 0} title={Number(item.CantidadRegistros || 0) > 0 ? "Tiene boletas asociadas; solo se puede inactivar" : "Eliminar falta"} onClick={() => void handleDeleteFaltaConducta(item)}>Eliminar</button>
+                        </div></td>
+                      </tr>
+                    ))}
+                    {!faltasConducta.length && <tr><td colSpan={6} style={{ textAlign: "center", padding: 16 }}>No hay faltas registradas.</td></tr>}
                   </tbody>
                 </table>
               </div>

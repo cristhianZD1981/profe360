@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { horarioGruposClaseSql, combinarHorarios } from "./horario-grupos-clase";
 import { registrarComunicados } from "./comunicados.routes";
 import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql, timedQuery } from "../../config/database";
@@ -24,6 +25,7 @@ import { Document, Header, ImageRun, Packer, Paragraph, Table, TableRow, TableCe
 import { sendEmail, sendEmailsBatch } from "../../services/email.service";
 import { sendWhatsAppNotification } from "../../services/whatsapp.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
+import { getGuardianEmailCopiesByStudent, mergeEmailCopies } from "../../utils/guardian-email-copies";
 import { buildWhatsAppWabaPayload, normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
 import {
   getGrupoClaseEstudiantesPermitidos,
@@ -58,7 +60,7 @@ let estudianteApoyoColumnsCache: { at: number; columns: {
 } } | null = null;
 const MIS_GRUPOS_PERF_LOG_PATH = join(tmpdir(), "profe360-mis-grupos-perf.jsonl");
 const ALERTA_TEMPRANA_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const ALERTA_TEMPRANA_TEMPLATE_FILE = "BOLETA_AT.xlsx";
+const ALERTA_TEMPRANA_TEMPLATE_FILE = "BOLETA_AT_III_CICLO.xlsx";
 
 function writeLocalMisGruposPerfTrace(trace: Record<string, unknown>) {
   if (process.env.NODE_ENV === "production" || process.env.RENDER) return;
@@ -452,6 +454,9 @@ async function construirAlertaTempranaDocx(data: any) {
 }
 
 function formatFechaAlertaTemprana(value: any) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Intl.DateTimeFormat("es-CR", { timeZone: "America/Costa_Rica", day: "2-digit", month: "2-digit", year: "numeric" }).format(value);
+  }
   const iso = String(value || "").slice(0, 10);
   const parts = iso.split("-");
   return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
@@ -463,14 +468,24 @@ function setAlertaCell(sheet: any, address: string, value: any) {
 
 async function construirAlertaTempranaExcel(data: any) {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(getAlertaTempranaTemplatePath());
+  const templatePath = getAlertaTempranaTemplatePath();
+  const templateBuffer = await readFile(templatePath);
+  await workbook.xlsx.readFile(templatePath);
   const fecha = formatFechaAlertaTemprana(data.fechaEmision);
   const alerts = Array.isArray(data.notificaciones) ? data.notificaciones : [];
   const messages = alerts.map((item: any) => String(item.mensaje || "").trim()).filter(Boolean);
   const actions = alerts.map((item: any) => String(item.accion || "").trim()).filter(Boolean);
   const dates = alerts.map((item: any) => formatFechaAlertaTemprana(item.fecha || data.fechaEmision)).join("\n");
-  const channels = alerts.flatMap((item: any) => Array.isArray(item.canales) ? item.canales : []).filter(Boolean);
-  const contacts = alerts.map((item: any) => String(item.personaContactada || data.personaContactada || "").trim()).filter(Boolean);
+  const contactRows = alerts.flatMap((item: any) => {
+    const channels = Array.isArray(item.canales) && item.canales.length ? item.canales : [""];
+    return channels.map((channel: string) => ({
+      date: formatFechaAlertaTemprana(item.fecha || data.fechaEmision),
+      action: String(item.accion || item.mensaje || "").trim(),
+      channel,
+      person: String(item.personaContactada || data.personaContactada || "").trim(),
+      responsible: String(data.docenteNombre || "").trim()
+    }));
+  });
 
   const guia = workbook.worksheets[0];
   const boleta = workbook.worksheets.find((sheet) => sheet.name.startsWith("2.")) || workbook.worksheets[1];
@@ -478,52 +493,54 @@ async function construirAlertaTempranaExcel(data: any) {
   const plan = workbook.worksheets.find((sheet) => sheet.name.startsWith("4.")) || workbook.worksheets[3];
 
   await agregarEncabezadoExcel(workbook, guia, data, 0);
-  await agregarEncabezadoExcel(workbook, boleta, data, 0);
-  await agregarEncabezadoExcel(workbook, seguimiento, data, 1);
-  await agregarEncabezadoExcel(workbook, plan, data, 1);
 
   setAlertaCell(guia, "A1", `Estrategia de Alerta Temprana (AT)\n${data.colegioNombre || ""}`);
 
-  setAlertaCell(boleta, "A1", `BOLETA DE ALERTA TEMPRANA\n${data.colegioNombre || ""}`);
+  setAlertaCell(boleta, "C2", data.colegioNombre);
   setAlertaCell(boleta, "E3", data.estudianteNombre);
-  setAlertaCell(boleta, "J3", data.cedula);
-  setAlertaCell(boleta, "L3", data.telefonoEstudiante);
-  setAlertaCell(boleta, "E4", data.edad);
+  setAlertaCell(boleta, "L3", data.cedula);
+  setAlertaCell(boleta, "E4", formatFechaAlertaTemprana(data.fechaNacimiento));
   setAlertaCell(boleta, "J4", data.seccion);
-  setAlertaCell(boleta, "L4", fecha);
+  setAlertaCell(boleta, "L4", data.telefonoEstudiante);
   setAlertaCell(boleta, "E5", data.personaContactada);
-  setAlertaCell(boleta, "K5", data.telefonoEncargado);
-  setAlertaCell(boleta, "E6", data.colegioNombre);
+  setAlertaCell(boleta, "K5", fecha);
+  setAlertaCell(boleta, "E6", data.telefonoEncargado);
   setAlertaCell(boleta, "K6", data.docenteNombre);
 
   setAlertaCell(seguimiento, "A2", `SEGUIMIENTO DE LA ALERTA TEMPRANA\n${data.colegioNombre || ""}`);
   setAlertaCell(seguimiento, "F28", fecha);
   setAlertaCell(seguimiento, "F29", fecha);
-  setAlertaCell(seguimiento, "F30", data.docenteNombre);
-  setAlertaCell(seguimiento, "F31", data.directorNombre);
+  setAlertaCell(seguimiento, "G30", data.docenteNombre);
+  setAlertaCell(seguimiento, "G31", data.directorNombre);
 
-  setAlertaCell(plan, "B2", `PLAN DE ATENCIÓN AL ESTUDIANTE EN RIESGO DE EXCLUSIÓN\n${data.colegioNombre || ""}`);
-  setAlertaCell(plan, "D4", data.estudianteNombre);
+  setAlertaCell(plan, "C2", "PLAN DE ATENCIÓN AL ESTUDIANTE EN RIESGO DE EXCLUSIÓN");
+  setAlertaCell(plan, "C4", data.estudianteNombre);
   setAlertaCell(plan, "C5", data.cedula);
-  setAlertaCell(plan, "C6", data.seccion);
-  setAlertaCell(plan, "C7", `${data.personaContactada || ""}${data.telefonoEncargado ? ` - ${data.telefonoEncargado}` : ""}`);
-  setAlertaCell(plan, "C8", actions.join("\n"));
+  setAlertaCell(plan, "F5", data.seccion);
+  setAlertaCell(plan, "C6", data.personaContactada);
+  setAlertaCell(plan, "F6", data.telefonoEncargado);
+  setAlertaCell(plan, "C7", actions.join("\n"));
   setAlertaCell(plan, "B13", actions.join("\n"));
   setAlertaCell(plan, "D13", dates);
   setAlertaCell(plan, "E13", "");
   setAlertaCell(plan, "F13", data.docenteNombre);
   setAlertaCell(plan, "G13", messages.join("\n"));
-  setAlertaCell(plan, "B22", dates);
-  setAlertaCell(plan, "C22", channels.join("\n"));
-  setAlertaCell(plan, "D22", contacts.join("\n"));
-  setAlertaCell(plan, "E22", messages.join("\n"));
+  contactRows.slice(0, 10).forEach((entry: any, index: number) => {
+    const row = 21 + index;
+    setAlertaCell(plan, `B${row}`, entry.date);
+    setAlertaCell(plan, `C${row}`, entry.action);
+    setAlertaCell(plan, `F${row}`, entry.channel);
+    setAlertaCell(plan, `G${row}`, entry.person);
+    setAlertaCell(plan, `H${row}`, entry.responsible);
+  });
 
   [boleta, seguimiento, plan].forEach((sheet: any) => {
     sheet.eachRow((row: any) => row.eachCell((cell: any) => {
       if (typeof cell.value === "string" && cell.value.includes("\n")) cell.alignment = { ...cell.alignment, wrapText: true, vertical: "top" };
     }));
   });
-  return workbook.xlsx.writeBuffer();
+  const output = await workbook.xlsx.writeBuffer();
+  return preservarFormasPlantillaExcel(Buffer.from(output), templateBuffer);
 }
 
 function formatDateApoyoCR(value = new Date()) {
@@ -1041,6 +1058,66 @@ async function buildApoyoEducativoDocx(data: any) {
 function getXmlAttr(xml: string, attr: string) {
   const escaped = attr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return xml.match(new RegExp(`${escaped}="([^"]+)"`))?.[1] || "";
+}
+
+async function preservarFormasPlantillaExcel(generatedBuffer: Uint8Array, templateBuffer: Uint8Array) {
+  const generatedZip = await JSZip.loadAsync(generatedBuffer);
+  const templateZip = await JSZip.loadAsync(templateBuffer);
+  const templateDrawings = Object.keys(templateZip.files).filter((path) => /^xl\/drawings\/drawing\d+\.xml$/.test(path));
+
+  for (const drawingPath of templateDrawings) {
+    const drawingNumber = Number(drawingPath.match(/drawing(\d+)\.xml$/)?.[1]);
+    if (!drawingNumber) continue;
+    const generatedDrawingPath = `xl/drawings/drawing${drawingNumber}.xml`;
+    const [sourceDrawing, sourceRels, outputDrawing, outputRels] = await Promise.all([
+      templateZip.file(drawingPath)?.async("string"),
+      templateZip.file(`xl/drawings/_rels/drawing${drawingNumber}.xml.rels`)?.async("string"),
+      generatedZip.file(generatedDrawingPath)?.async("string"),
+      generatedZip.file(`xl/drawings/_rels/drawing${drawingNumber}.xml.rels`)?.async("string")
+    ]);
+    if (!sourceDrawing || !outputDrawing) continue;
+
+    const sourceRelationships = new Map<string, string>();
+    for (const match of sourceRels?.matchAll(/<Relationship\b[^>]*\/>/g) || []) {
+      const id = getXmlAttr(match[0], "Id");
+      const target = getXmlAttr(match[0], "Target");
+      if (id && target) sourceRelationships.set(id, target);
+    }
+    let relationshipsXml = outputRels || '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+    let nextRelationship = 1;
+    for (const match of relationshipsXml.matchAll(/Id="rId(\d+)"/g)) nextRelationship = Math.max(nextRelationship, Number(match[1]) + 1);
+
+    const shapeAnchors = sourceDrawing.match(/<xdr:(?:oneCellAnchor|twoCellAnchor)\b[\s\S]*?<\/xdr:(?:oneCellAnchor|twoCellAnchor)>/g) || [];
+    let restoredAnchors = "";
+    for (let index = 0; index < shapeAnchors.length; index += 1) {
+      let anchor = shapeAnchors[index];
+      if (!/<xdr:sp(?:\s|>)/.test(anchor)) continue;
+      for (const match of [...anchor.matchAll(/r:embed="([^"]+)"/g)]) {
+        const sourceId = match[1];
+        const target = sourceRelationships.get(sourceId);
+        if (!target) continue;
+        const sourceMediaPath = `xl/drawings/${target.replace(/^\.\.\//, "")}`.replace("xl/drawings/media/", "xl/media/");
+        const media = await templateZip.file(sourceMediaPath)?.async("uint8array");
+        if (!media) continue;
+        const mediaName = `template-shape-${drawingNumber}-${index}-${target.split("/").pop()}`;
+        generatedZip.file(`xl/media/${mediaName}`, media);
+        const relationshipId = `rIdTemplateShape${drawingNumber}_${index}_${nextRelationship++}`;
+        const escapedSourceId = sourceId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        anchor = anchor.replace(new RegExp(`r:embed="${escapedSourceId}"`, "g"), `r:embed="${relationshipId}"`);
+        relationshipsXml = relationshipsXml.replace(
+          "</Relationships>",
+          `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${mediaName}"/></Relationships>`
+        );
+      }
+      restoredAnchors += anchor;
+    }
+
+    if (!restoredAnchors) continue;
+    generatedZip.file(generatedDrawingPath, outputDrawing.replace("</xdr:wsDr>", `${restoredAnchors}</xdr:wsDr>`));
+    generatedZip.file(`xl/drawings/_rels/drawing${drawingNumber}.xml.rels`, relationshipsXml);
+  }
+
+  return Buffer.from(await generatedZip.generateAsync({ type: "nodebuffer" }));
 }
 
 function upsertContentTypeOverride(contentTypesXml: string, partName: string, contentType: string) {
@@ -2714,6 +2791,30 @@ router.get("/mi-horario", async (req, res) => {
       periodoId = periodoId || toOptionalNumber(asignacionBase.recordset[0]?.PeriodoId);
     }
 
+    if ((!anioLectivoId || !periodoId) && await hasGrupoClaseSchema(pool)) {
+      const baseClase = await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("usuarioId", sql.Int, horarioUsuarioId)
+        .input("anioLectivoId", sql.Int, anioLectivoId)
+        .input("periodoId", sql.Int, periodoId)
+        .query(`
+          SELECT TOP 1 gc.AnioLectivoId, p.PeriodoId
+          FROM dbo.GrupoClase gc
+          JOIN dbo.AnioLectivo al ON al.AnioLectivoId = gc.AnioLectivoId
+          JOIN dbo.Periodo p ON p.AnioLectivoId = gc.AnioLectivoId
+            AND ((gc.AplicaTodosPeriodos = 1 AND p.Activo = 1)
+              OR (gc.AplicaTodosPeriodos = 0 AND gc.PeriodoId = p.PeriodoId))
+          WHERE gc.InstitucionId = @institucionId AND gc.Activo = 1
+            AND gc.GrupoClaseCanonicoId IS NULL
+            AND (@anioLectivoId IS NULL OR gc.AnioLectivoId = @anioLectivoId)
+            AND (@periodoId IS NULL OR p.PeriodoId = @periodoId)
+            AND EXISTS (SELECT 1 FROM dbo.GrupoClaseDocente d
+              WHERE d.GrupoClaseId = gc.GrupoClaseId AND d.UsuarioId = @usuarioId AND d.Activo = 1)
+          ORDER BY al.Activo DESC, gc.AnioLectivoId DESC, p.NumeroOrden DESC
+        `);
+      anioLectivoId = anioLectivoId || toOptionalNumber(baseClase.recordset[0]?.AnioLectivoId);
+      periodoId = periodoId || toOptionalNumber(baseClase.recordset[0]?.PeriodoId);
+    }
     if (!anioLectivoId || !periodoId) {
       return ok(res, { bloques: [], entradas: [] });
     }
@@ -2859,9 +2960,19 @@ router.get("/mi-horario", async (req, res) => {
       ORDER BY DiaSemana, BloqueHorarioId, GrupoNombre, MateriaNombre
     `);
 
+    let entradasHorario = entradas.recordset || [];
+    if (await hasGrupoClaseSchema(pool)) {
+      const clases = await pool.request()
+        .input("institucionId", sql.Int, institucionId)
+        .input("usuarioId", sql.Int, horarioUsuarioId)
+        .input("anioLectivoId", sql.Int, anioLectivoId)
+        .input("periodoId", sql.Int, periodoId)
+        .query(horarioGruposClaseSql);
+      entradasHorario = combinarHorarios(entradasHorario, clases.recordsets[0] || [], clases.recordsets[1] || []);
+    }
     return ok(res, {
       bloques: bloques.recordset || [],
-      entradas: entradas.recordset || []
+      entradas: entradasHorario
     });
   } catch (error) {
     console.error("Error cargando mi horario:", error);
@@ -2965,6 +3076,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
           e.PrimerApellido,
           e.SegundoApellido,
           e.Adecuacion AS TipoAdecuacion,
+          e.Activo AS Activo,
           e.Correo,
           e.Telefono,
           enc.NombreCompleto AS EncargadoPrincipalNombre,
@@ -3041,7 +3153,6 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId", async (req, res) => {
             )
           )
           AND ma.Estado <> N'Inactiva'
-          AND e.Activo = 1
         ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
       `);
 
@@ -5723,7 +5834,7 @@ router.post("/alerta-temprana/generar", async (req, res) => {
       const fechaEmision = getCostaRicaIsoDate();
       const seccion = String(context.asignacion.GrupoNombre || "");
       const edad = calcularEdad(student.FechaNacimiento);
-      const data = { estudianteNombre: studentName, cedula: student.Identificacion, telefonoEstudiante: student.Telefono, edad, seccion, fechaEmision, personaContactada: student.EncargadoNombre, telefonoEncargado: student.EncargadoTelefono, colegioNombre: context.colegioNombre, logoUrl: context.logoUrl, membreteUrl: context.membreteUrl, docenteNombre: context.docenteNombre, directorNombre, notificaciones: notifications };
+      const data = { estudianteNombre: studentName, cedula: student.Identificacion, telefonoEstudiante: student.Telefono, fechaNacimiento: student.FechaNacimiento, edad, seccion, fechaEmision, personaContactada: student.EncargadoNombre, telefonoEncargado: student.EncargadoTelefono, colegioNombre: context.colegioNombre, logoUrl: context.logoUrl, membreteUrl: context.membreteUrl, docenteNombre: context.docenteNombre, directorNombre, notificaciones: notifications };
       const excel = await construirAlertaTempranaExcel(data);
       const fileBase = `${safeAlertaFilePart(student.Identificacion, `estudiante-${studentId}`)}-${safeAlertaFilePart(studentName)}-${safeAlertaFilePart(seccion)}-${fechaEmision}`;
       const provisionalFileName = `${fileBase}.xlsx`;
@@ -5915,6 +6026,7 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
           e.PrimerApellido,
           e.SegundoApellido,
           e.Adecuacion AS TipoAdecuacion,
+          e.Activo AS Activo,
           ma.MatriculaId,
           ${suspensionVigenteSelectSql}
         FROM dbo.Matricula ma
@@ -5923,7 +6035,6 @@ router.get("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, re
         WHERE ma.AnioLectivoId = @anioLectivoId
           ${filtroEstudiantesGrupo}
           AND ma.Estado <> N'Inactiva'
-          AND e.Activo = 1
         ORDER BY e.PrimerApellido, e.SegundoApellido, e.Nombre
       `);
 
@@ -6330,6 +6441,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
       list.push(item);
       porEstudiante.set(Number(item.estudianteId), list);
     }
+    const correosEncargadosPorEstudiante = await getGuardianEmailCopiesByStudent(pool, [...porEstudiante.keys()]);
     const correoCfg = await getCorreoNotificacionConfig(pool, Number(getAuth(req).institucionId || 0), "ASISTENCIA");
     const institucionNombreResult = await pool.request()
       .input("institucionId", sql.Int, Number(getAuth(req).institucionId || 0))
@@ -6404,7 +6516,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
           correosPendientes.push({ estudianteId, input: {
             from: String(correoCfg?.FromEmail || ""),
             to: estudiante.Correo,
-            cc: correoProfesorCopia || undefined,
+            cc: mergeEmailCopies(estudiante.Correo, correoProfesorCopia, correosEncargadosPorEstudiante.get(estudianteId) || []),
             subject,
             text: texto,
             html: `<p>${toHtmlWithLineBreaks(texto)}</p>`,

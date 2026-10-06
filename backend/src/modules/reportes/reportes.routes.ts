@@ -4091,12 +4091,16 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
   const tipoEducacion = String(req.body?.tipoEducacion || "").trim().toUpperCase();
   const motivoTramite = String(req.body?.motivoTramite || "").trim().toUpperCase();
   const otroColegioDestino = String(req.body?.otroColegioDestino || "").trim();
+  const consecutivoSolicitado = Number(req.body?.consecutivo);
   const fechaEmision = parseDateInputAsLocalDate(
     req.body?.fechaEmision || getCostaRicaIsoDate()
   );
   const userId = Number(req.auth?.userId || req.auth?.usuarioId || req.auth?.id || 0);
 
   if (!estudianteId) return badRequest(res, "Seleccioná el estudiante");
+  if (!Number.isSafeInteger(consecutivoSolicitado) || consecutivoSolicitado < 1) {
+    return badRequest(res, "Ingresá un número consecutivo válido para la certificación");
+  }
   if (!["GENERAL BASICA", "DIVERSIFICADA", "ESPECIAL"].includes(tipoEducacion)) {
     return badRequest(res, "Tipo de educación inválido");
   }
@@ -4168,6 +4172,7 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
     .query(`
       SELECT TOP 1
         e.EstudianteId,
+        e.Activo AS EstudianteActivo,
         e.Identificacion,
         e.Nombre,
         e.PrimerApellido,
@@ -4251,10 +4256,22 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
       FROM dbo.CertificacionEstudioConfig
       WHERE InstitucionId=@institucionId;
     `);
-    const next = Number(config.recordset[0]?.SiguienteNumero || 1);
+    const next = consecutivoSolicitado;
     const prefijo = String(config.recordset[0]?.Prefijo || "CERTIFICACION").trim() || "CERTIFICACION";
     const anioLectivoConfig = String(config.recordset[0]?.AnioLectivo || cursoLectivo).trim() || cursoLectivo;
     const codigoConstancia = buildConsecutivoCodigo(prefijo, next, anioLectivoConfig);
+    const consecutivoExistente = await new sql.Request(transaction)
+      .input("institucionId", sql.Int, institucionId)
+      .input("consecutivo", sql.Int, next)
+      .query(`
+        SELECT TOP 1 CertificacionEstudioId
+        FROM dbo.CertificacionEstudioRegistro WITH (UPDLOCK, HOLDLOCK)
+        WHERE InstitucionId = @institucionId AND Consecutivo = @consecutivo;
+      `);
+    if (consecutivoExistente.recordset.length) {
+      await transaction.rollback();
+      return badRequest(res, `El número ${next} ya fue utilizado en otra certificación de esta institución`);
+    }
     const htmlFinal = buildConstanciaHtmlV2({
       institucion,
       codigoConstancia,
@@ -4277,15 +4294,6 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
       otroColegioDestino,
       fechaEmision
     });
-
-    await new sql.Request(transaction)
-      .input("institucionId", sql.Int, institucionId)
-      .query(`
-        UPDATE dbo.CertificacionEstudioConfig
-        SET SiguienteNumero = SiguienteNumero + 1,
-            UpdatedAt = SYSDATETIME()
-        WHERE InstitucionId = @institucionId;
-      `);
 
     const insertResult = await new sql.Request(transaction)
       .input("institucionId", sql.Int, institucionId)
@@ -4315,6 +4323,25 @@ router.post("/certificaciones/constancia-estudio/generar", async (req, res) => {
           (@institucionId, @consecutivo, @codigoConstancia, @estudianteId, @grupoId, @estudianteNombre, @identificacion, @grupoNombre, @suscrito, @puesto, @codigoPresupuestario, @tipoEducacion, @motivoTramite, @cursoLectivo, @otroColegioDestino, @lugarEmision, @htmlSnapshot, @fechaEmision, @createdByUsuarioId);
       `);
     const certificacionEstudioId = Number(insertResult.recordset?.[0]?.CertificacionEstudioId || 0);
+
+    if (motivoTramite === "TRASLADO" && Number(estudiante.EstudianteActivo) === 1) {
+      await new sql.Request(transaction)
+        .input("institucionId", sql.Int, institucionId)
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("usuarioId", sql.Int, userId || null)
+        .input("fechaEvento", sql.Date, getCostaRicaIsoDate())
+        .input("observacion", sql.NVarChar(1000), `Inactivado al generar la certificación ${codigoConstancia} para traslado a ${otroColegioDestino}.`)
+        .query(`
+          INSERT INTO dbo.EstudianteInactivacion
+            (InstitucionId, EstudianteId, Motivo, Observacion, FechaInactivacion, Activo, UsuarioInactivaId, CreatedAt, UpdatedAt)
+          VALUES
+            (@institucionId, @estudianteId, N'Traslado', @observacion, @fechaEvento, 1, @usuarioId, SYSDATETIME(), SYSDATETIME());
+
+          UPDATE dbo.Estudiante
+          SET Activo = 0, UpdatedAt = SYSDATETIME()
+          WHERE InstitucionId = @institucionId AND EstudianteId = @estudianteId AND Activo = 1;
+        `);
+    }
 
     await transaction.commit();
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { autorizarReporteGuia } from "../reportes/profe-guia-access";
-import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
+import { applyInstitutionScope, requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { env } from "../../config/env";
 import { ok, badRequest } from "../../utils/http";
@@ -8,11 +8,13 @@ import { sendEmail } from "../../services/email.service";
 import { sendWhatsAppNotification } from "../../services/whatsapp.service";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import { buildWhatsAppWabaPayload, normalizeWhatsAppPhone, resolveWhatsAppPhonesForNotification } from "../../utils/whatsapp.utils";
+import { getGuardianEmailCopiesByStudent, mergeEmailCopies } from "../../utils/guardian-email-copies";
 
 const router = Router();
 const MAIL_FROM_NOTIFICACIONES = "info@profe360cr.com";
 
 router.use(requireAuth);
+router.use(applyInstitutionScope());
 router.use(
   requireRoles(
     "SUPER_ADMIN",
@@ -22,6 +24,8 @@ router.use(
     "PROFESOR"
   )
 );
+
+const ADMIN_CONDUCTA_ROLES = ["ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"];
 
 function escapeHtml(value: any) {
   return String(value ?? "")
@@ -221,6 +225,17 @@ function calcularEdadAlPrimeroFeb(fechaNacimiento?: any, anioLectivo?: string | 
   return String(edad);
 }
 
+function esMayorEdadHoy(fechaNacimiento?: any) {
+  if (!fechaNacimiento) return false;
+  const nacimiento = fechaNacimiento instanceof Date
+    ? (Number.isNaN(fechaNacimiento.getTime()) ? "" : fechaNacimiento.toISOString().slice(0, 10))
+    : String(fechaNacimiento).slice(0, 10);
+  const hoy = getCostaRicaIsoDate();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(nacimiento) || nacimiento > hoy) return false;
+  const edad = Number(hoy.slice(0, 4)) - Number(nacimiento.slice(0, 4)) - (hoy.slice(5) < nacimiento.slice(5) ? 1 : 0);
+  return edad >= 18;
+}
+
 function mapEncargado(encargado: any) {
   return {
     tipo: encargado?.TipoEncargado || "",
@@ -232,8 +247,78 @@ function mapEncargado(encargado: any) {
     parentesco: encargado?.Parentesco || "",
     principal: !!encargado?.EsPrincipal,
     notificaciones: !!encargado?.RecibeNotificaciones,
+    aceptaWhatsApp: !!encargado?.AceptaWhatsApp,
+    aceptaCorreo: !!encargado?.AceptaCorreo,
     viveConEstudiante: !!encargado?.ViveConEstudiante
   };
+}
+
+async function cargarBoletaMatricula(pool: any, matriculaId: number, institucionId: number) {
+  const result = await pool.request()
+    .input("matriculaId", sql.Int, matriculaId)
+    .input("institucionId", sql.Int, institucionId)
+    .query(`
+      SELECT TOP 1 m.MatriculaId, m.EstudianteId, m.GrupoId, m.AnioLectivoId, m.Estado, m.FechaMatricula, m.Observacion,
+        md.MatriculaDetalleId, md.TipoMatricula, md.NivelAcademico, md.Especialidad, md.SeccionTexto, md.RutaTransporte,
+        md.EsRepitente, md.PermiteExcepcionProgresion, md.JustificacionExcepcion, md.CorreoEnvioBoleta,
+        md.Observaciones AS ObservacionesDetalle,
+        e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido, e.FechaNacimiento,
+        e.AceptaWhatsAppEstudiante, e.BecaTransporte, e.Sexo, e.Correo, e.Telefono, e.FotoUrl, e.CodigoCarnet,
+        e.QrContenido, e.Nacionalidad, e.Adecuacion, e.Discapacidad, e.Enfermedad, e.RutaTransporteHabitual, e.ObservacionMedica,
+        i.Nombre AS InstitucionNombre, i.NombreComercial AS InstitucionNombreComercial, i.LogoUrl, i.MembreteUrl,
+        i.NombreOficialBoleta, i.RegionalEducativa, i.CircuitoEducativo,
+        g.Nombre AS GrupoNombre, g.Nivel AS GrupoNivel, g.NivelAcademico AS GrupoNivelAcademico,
+        g.Especialidad AS GrupoEspecialidad, a.Nombre AS AnioNombre
+      FROM dbo.Matricula m
+      INNER JOIN dbo.Estudiante e ON e.EstudianteId = m.EstudianteId
+      INNER JOIN dbo.Institucion i ON i.InstitucionId = e.InstitucionId
+      INNER JOIN dbo.Grupo g ON g.GrupoId = m.GrupoId
+      INNER JOIN dbo.AnioLectivo a ON a.AnioLectivoId = m.AnioLectivoId
+      LEFT JOIN dbo.MatriculaDetalle md ON md.MatriculaId = m.MatriculaId
+      WHERE m.MatriculaId = @matriculaId AND e.InstitucionId = @institucionId
+    `);
+  const row = result.recordset[0];
+  if (!row) return null;
+
+  const encargadosResult = await pool.request()
+    .input("estudianteId", sql.Int, row.EstudianteId)
+    .query(`
+      SELECT ee.EstudianteEncargadoId, ee.Parentesco, ee.EsPrincipal, ee.RecibeNotificaciones,
+        ee.ViveConEstudiante, ee.AceptaWhatsApp, ee.AceptaCorreo,
+        e.EncargadoId, e.TipoEncargado, e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido,
+        e.Correo, e.Telefono, e.DireccionExacta
+      FROM dbo.EstudianteEncargado ee
+      INNER JOIN dbo.Encargado e ON e.EncargadoId = ee.EncargadoId
+      WHERE ee.EstudianteId = @estudianteId AND ee.Activo = 1
+      ORDER BY CASE e.TipoEncargado WHEN 'MADRE' THEN 1 WHEN 'PADRE' THEN 2 ELSE 3 END,
+        ee.EstudianteEncargadoId DESC
+    `);
+
+  const institucion = {
+    Nombre: row.InstitucionNombre, NombreComercial: row.InstitucionNombreComercial, LogoUrl: row.LogoUrl,
+    MembreteUrl: row.MembreteUrl, NombreOficialBoleta: row.NombreOficialBoleta,
+    RegionalEducativa: row.RegionalEducativa, CircuitoEducativo: row.CircuitoEducativo
+  };
+  const estudiante = {
+    EstudianteId: row.EstudianteId, Identificacion: row.Identificacion, Nombre: row.Nombre,
+    PrimerApellido: row.PrimerApellido, SegundoApellido: row.SegundoApellido, FechaNacimiento: row.FechaNacimiento,
+    AceptaWhatsAppEstudiante: row.AceptaWhatsAppEstudiante, BecaTransporte: !!row.BecaTransporte,
+    Sexo: row.Sexo, Correo: row.Correo, Telefono: row.Telefono, FotoUrl: row.FotoUrl,
+    CodigoCarnet: row.CodigoCarnet, QrContenido: row.QrContenido, Nacionalidad: row.Nacionalidad,
+    Adecuacion: row.Adecuacion, Discapacidad: row.Discapacidad, Enfermedad: row.Enfermedad,
+    RutaTransporteHabitual: row.RutaTransporteHabitual, ObservacionMedica: row.ObservacionMedica
+  };
+  const matricula = {
+    MatriculaId: row.MatriculaId, Estado: row.Estado, FechaMatricula: row.FechaMatricula,
+    Observacion: row.Observacion, TipoMatricula: row.TipoMatricula, NivelAcademico: row.NivelAcademico,
+    Especialidad: row.Especialidad, SeccionTexto: row.SeccionTexto, RutaTransporte: row.RutaTransporte,
+    EsRepitente: row.EsRepitente, PermiteExcepcionProgresion: row.PermiteExcepcionProgresion,
+    JustificacionExcepcion: row.JustificacionExcepcion, CorreoEnvioBoleta: row.CorreoEnvioBoleta,
+    ObservacionesDetalle: row.ObservacionesDetalle, GrupoNombre: row.GrupoNombre, GrupoNivel: row.GrupoNivel,
+    GrupoNivelAcademico: row.GrupoNivelAcademico, GrupoEspecialidad: row.GrupoEspecialidad, AnioNombre: row.AnioNombre
+  };
+  const encargados = encargadosResult.recordset.map(mapEncargado);
+  return { institucion, estudiante, matricula, encargados, html: buildBoletaHtml({ institucion, estudiante, matricula, encargados }) };
 }
 
 function getAuthUserId(req: any) {
@@ -599,6 +684,64 @@ function buildBoletaHtml(params: {
     institucion?.NombreComercial ||
     institucion?.Nombre ||
     "";
+  const encargadoPrincipal = encargados.find((item) => item.principal) || null;
+  const autorizacionEncargado = !!encargadoPrincipal?.aceptaWhatsApp;
+  const estudianteMayorEdad = esMayorEdadHoy(estudiante?.FechaNacimiento);
+  const autorizacionEstudiante = estudianteMayorEdad && (estudiante?.AceptaWhatsAppEstudiante === true || estudiante?.AceptaWhatsAppEstudiante === 1);
+  const incluirAutorizacionWhatsApp = autorizacionEncargado || autorizacionEstudiante;
+  const nombreEstudiante = fullName(estudiante);
+  const nombreFirmante = encargadoPrincipal?.nombre || "";
+  const cedulaFirmante = encargadoPrincipal?.identificacion || "";
+  const telefonoAutorizado = estudianteMayorEdad
+    ? (autorizacionEstudiante ? (estudiante?.Telefono || "") : "")
+    : (autorizacionEncargado ? (encargadoPrincipal?.telefono || "") : "");
+  const fechaAutorizacion = formatDateCR(new Date(`${getCostaRicaIsoDate()}T12:00:00`));
+  const checkbox = (checked: boolean) => checked ? "&#9745;" : "&#9744;";
+  const authorizationLogo = institucion?.LogoUrl
+    ? `<img class="institution-logo" src="${escapeHtml(institucion.LogoUrl)}" alt="Logo del colegio" />`
+    : "";
+  const autorizacionWhatsAppHtml = incluirAutorizacionWhatsApp ? `
+    <section class="page authorization-page">
+      ${authorizationLogo}
+      <h1>AUTORIZACIÓN PARA EL ENVÍO DE COMUNICADOS INSTITUCIONALES POR WHATSAPP</h1>
+      <div class="school-name">${escapeHtml(nombreInstitucionCabecera)}</div>
+      <p>La presente autorización tiene como finalidad permitir a la institución educativa utilizar la aplicación WhatsApp como medio oficial complementario de comunicación para el envío de información relacionada con el proceso educativo, administrativo y formativo del estudiante.</p>
+      <p>Yo, <strong>${escapeHtml(nombreFirmante)}</strong>, portador(a) de la cédula de identidad número <strong>${escapeHtml(cedulaFirmante)}</strong>, en calidad de:</p>
+      <div class="identity-checks"><span>${checkbox(autorizacionEncargado)} Encargado(a) legal del estudiante</span><span>${checkbox(autorizacionEstudiante)} Estudiante mayor de edad</span></div>
+      <p>Autorizo a la institución educativa a utilizar el siguiente número telefónico para el envío de comunicados oficiales mediante WhatsApp:</p>
+      <table class="student-data"><tr><td><strong>Número telefónico autorizado</strong><br/>${escapeHtml(telefonoAutorizado)}</td><td><strong>Teléfono del encargado principal</strong><br/>${escapeHtml(encargadoPrincipal?.telefono || "")}</td></tr><tr><td><strong>Nombre de la persona estudiante</strong><br/>${escapeHtml(nombreEstudiante)}</td><td><strong>Sección / nivel</strong><br/>${escapeHtml(matricula?.SeccionTexto || matricula?.GrupoNombre || "")}</td></tr></table>
+      ${estudianteMayorEdad ? `<p><strong>Consentimiento de persona mayor de edad:</strong> la aceptación del encargado no habilita el envío de mensajes al encargado; el envío se dirige únicamente a la persona estudiante si marcó su autorización.</p>` : ""}
+      <p>En la siguiente página se detallan las condiciones de esta autorización y los datos del encargado principal.</p>
+    </section>
+    <section class="page authorization-page">
+      ${authorizationLogo}
+      <h1>AUTORIZACIÓN PARA EL ENVÍO DE COMUNICADOS INSTITUCIONALES POR WHATSAPP</h1>
+      <div class="school-name">${escapeHtml(nombreInstitucionCabecera)}</div>
+      <p>Declaro que he sido informado(a) y acepto las siguientes condiciones:</p>
+      <ol class="terms">
+        <li>El uso de WhatsApp será exclusivamente para fines informativos, educativos y administrativos relacionados con la institución educativa.</li>
+        <li>Los comunicados podrán incluir avisos académicos, administrativos, recordatorios, convocatorias, actividades institucionales, citaciones, suspensión de lecciones, información disciplinaria general y cualquier otra información relacionada con el proceso educativo.</li>
+        <li>La institución educativa procurará el uso responsable, adecuado y confidencial de los datos suministrados, conforme a la normativa vigente aplicable.</li>
+        <li>El número telefónico autorizado será utilizado únicamente para comunicaciones institucionales y no será compartido con terceros ajenos al centro educativo, salvo obligación legal.</li>
+        <li>Esta autorización podrá ser revocada en cualquier momento mediante solicitud escrita presentada ante la institución educativa.</li>
+        <li>El envío de mensajes mediante WhatsApp no implica la obligación de responder consultas fuera del horario laboral establecido por la institución.</li>
+        <li>La institución educativa no se hace responsable por problemas técnicos, fallas del servicio de telefonía móvil, cambios de número telefónico no reportados oportunamente o limitaciones propias de la aplicación.</li>
+        <li>Es responsabilidad del firmante mantener actualizado el número telefónico autorizado para recibir los comunicados institucionales.</li>
+      </ol>
+      <p>En señal de conformidad, firmo la presente autorización.</p>
+      <div class="signature-area">
+        <div class="signature-line"></div><strong>Firma</strong>
+        <p><strong>Nombre completo del encargado:</strong> ${escapeHtml(encargadoPrincipal?.nombre || "")}</p>
+        <p><strong>Número de cédula:</strong> ${escapeHtml(encargadoPrincipal?.identificacion || "")}</p>
+        <p><strong>Fecha de autorización:</strong> ${escapeHtml(fechaAutorizacion)}</p>
+      </div>
+    </section>` : "";
+  const becaTransporteHtml = estudiante?.BecaTransporte ? `
+    <section class="page transport-scholarship-page">
+      ${authorizationLogo}
+      <h1>BECA DE TRANSPORTE</h1>
+      <div class="school-name">${escapeHtml(nombreInstitucionCabecera)}</div>
+    </section>` : "";
 
   return `
 <!DOCTYPE html>
@@ -791,6 +934,52 @@ function buildBoletaHtml(params: {
       font-size: 12px;
     }
 
+    .authorization-page, .transport-scholarship-page {
+      width: 900px;
+      min-height: 1120px;
+      margin: 18px auto;
+      padding: 34px 48px;
+      background: #fff;
+      border: 1px solid #cfcfcf;
+      color: #111827;
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.45;
+    }
+
+    .authorization-page h1, .transport-scholarship-page h1 {
+      color: #111827;
+      text-align: center;
+      font-size: 17px;
+      line-height: 1.25;
+      margin: 8px 72px 8px 0;
+    }
+
+    .authorization-page .institution-logo, .transport-scholarship-page .institution-logo {
+      float: right;
+      width: 72px;
+      height: 72px;
+      object-fit: contain;
+      margin: 0 0 8px 14px;
+    }
+
+    .authorization-page .school-name, .transport-scholarship-page .school-name {
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+      margin: 0 80px 20px 0;
+    }
+
+    .authorization-page p { margin: 10px 0; font-size: 11.5px; }
+    .authorization-page .identity-checks { display:flex; flex-wrap:wrap; gap:8px 24px; margin:12px 0; font-size:12px; }
+    .authorization-page .student-data { width:100%; border-collapse:collapse; margin:16px 0; font-size:11.5px; }
+    .authorization-page .student-data td { border:1px solid #8b8b8b; padding:8px; vertical-align:top; }
+    .authorization-page .print-line { display:inline-block; min-width:180px; border-bottom:1px solid #333; min-height:18px; }
+    .authorization-page .terms { padding-left:22px; margin:8px 0 14px; }
+    .authorization-page .terms li { margin:0 0 8px; font-size:10.5px; }
+    .authorization-page .signature-area { margin-top:30px; font-size:11.5px; }
+    .authorization-page .signature-line { width:55%; border-bottom:1px solid #333; height:34px; margin:20px 0 4px; }
+    .transport-scholarship-page h1 { margin:170px 80px 0; font-size:20px; }
+
     .footer {
       margin-top: 6px;
       font-size: 9px;
@@ -801,6 +990,36 @@ function buildBoletaHtml(params: {
     }
 
     @media print {
+      @page { size: letter portrait; margin: 0.28in; }
+      body > .page:first-child {
+        width: 100%; height: 10.4in; margin: 0; padding: 0 7px 8px;
+        overflow: hidden; zoom: .9; border: 0; box-shadow: none;
+      }
+      body > .page:first-child .top-header { min-height: 62px; padding: 2px 0; }
+      body > .page:first-child .top-left,
+      body > .page:first-child .top-center,
+      body > .page:first-child .top-right { min-height: 58px; }
+      body > .page:first-child .top-left img { max-height: 56px; }
+      body > .page:first-child .top-right img { width: 54px; height: 54px; }
+      body > .page:first-child .titulo { font-size: 16px; margin: 4px 0; padding: 2px 0; }
+      body > .page:first-child .box { margin-bottom: 4px; padding: 2px; }
+      body > .page:first-child .box-title { font-size: 10px; padding: 1px 4px; margin-bottom: 2px; }
+      body > .page:first-child .form-table { font-size: 9px; }
+      body > .page:first-child .form-table td { padding: 1px 3px; }
+      body > .page:first-child .label { font-size: 8px; }
+      body > .page:first-child .value { min-height: 11px; margin-top: 1px; font-size: 9px; line-height: 1.05; }
+      body > .page:first-child .firma-wrap { gap: 12px; margin-top: 10px; margin-bottom: 5px; }
+      body > .page:first-child .firma-box { height: 52px; }
+      body > .page:first-child .firma-linea { height: 32px; }
+      body > .page:first-child .firma-label { font-size: 8px; }
+      body > .page:first-child .observaciones-grid { gap: 8px; }
+      body > .page:first-child .observaciones-box { min-height: 38px; padding: 3px; font-size: 9px; }
+      body > .page:first-child .footer { font-size: 7px; margin-top: 3px; padding-top: 2px; }
+      .authorization-page, .transport-scholarship-page {
+        width:auto; min-height:0; height:10.4in; margin:0; padding:0.35in 0.5in;
+        border:0; box-shadow:none; break-before:page; page-break-before:always;
+      }
+      .transport-scholarship-page h1 { margin-top:1.7in; }
       body {
         background: #fff;
       }
@@ -978,6 +1197,8 @@ function buildBoletaHtml(params: {
       ${institucion?.CircuitoEducativo ? " | " + escapeHtml(institucion.CircuitoEducativo) : ""}
     </div>
   </div>
+  ${autorizacionWhatsAppHtml}
+  ${becaTransporteHtml}
 </body>
 </html>
   `;
@@ -985,6 +1206,11 @@ function buildBoletaHtml(params: {
 
 router.get("/matricula/:matriculaId", async (req, res) => {
   try {
+    const esProfesor = req.auth?.roles?.some(role => ["PROFESOR", "PROFESOR_GUIA"].includes(role)) ?? false;
+    const soloWhatsApp = String(req.query.solo || "").toLowerCase() === "whatsapp";
+    if (esProfesor && !soloWhatsApp) {
+      return res.status(403).json({ ok: false, message: "El perfil docente solo puede imprimir la autorización de WhatsApp" });
+    }
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
 
@@ -1024,6 +1250,8 @@ router.get("/matricula/:matriculaId", async (req, res) => {
           e.PrimerApellido,
           e.SegundoApellido,
           e.FechaNacimiento,
+          e.AceptaWhatsAppEstudiante,
+          e.BecaTransporte,
           e.Sexo,
           e.Correo,
           e.Telefono,
@@ -1090,6 +1318,8 @@ router.get("/matricula/:matriculaId", async (req, res) => {
           e.SegundoApellido,
           e.Correo,
           e.Telefono,
+          ee.AceptaWhatsApp,
+          ee.AceptaCorreo,
           e.DireccionExacta
         FROM dbo.EstudianteEncargado ee
         INNER JOIN dbo.Encargado e
@@ -1122,6 +1352,8 @@ router.get("/matricula/:matriculaId", async (req, res) => {
       PrimerApellido: row.PrimerApellido,
       SegundoApellido: row.SegundoApellido,
       FechaNacimiento: row.FechaNacimiento,
+      AceptaWhatsAppEstudiante: row.AceptaWhatsAppEstudiante,
+      BecaTransporte: !!row.BecaTransporte,
       Sexo: row.Sexo,
       Correo: row.Correo,
       Telefono: row.Telefono,
@@ -1159,12 +1391,20 @@ router.get("/matricula/:matriculaId", async (req, res) => {
     };
 
     const encargados = encargadosResult.recordset.map(mapEncargado);
-    const html = buildBoletaHtml({
+    let html = buildBoletaHtml({
       institucion,
       matricula,
       estudiante,
       encargados
     });
+
+    if (soloWhatsApp) {
+      const authorizationPages = html.match(/<section class="page authorization-page">[\s\S]*?<\/section>/g) || [];
+      if (!authorizationPages.length) {
+        return res.status(409).json({ ok: false, message: "El expediente no tiene autorizaciones de WhatsApp activas para imprimir" });
+      }
+      html = html.replace(/<body[^>]*>[\s\S]*?<\/body>/i, `<body>${authorizationPages.join("\n")}</body>`);
+    }
 
     return ok(
       res,
@@ -1183,6 +1423,190 @@ router.get("/matricula/:matriculaId", async (req, res) => {
       ok: false,
       message: "No se pudo generar la boleta de matrícula"
     });
+  }
+});
+
+router.post("/matricula/:matriculaId/enviar-correo", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const matriculaId = Number(req.params.matriculaId);
+    if (!Number.isInteger(matriculaId) || matriculaId <= 0) return badRequest(res, "Matrícula inválida");
+
+    const boleta = await cargarBoletaMatricula(await getPool(), matriculaId, institucionId);
+    if (!boleta) return res.status(404).json({ ok: false, message: "No se encontró la matrícula indicada" });
+    const destinatarios: string[] = [...new Set<string>(boleta.encargados
+      .filter((encargado: any) => encargado.aceptaCorreo && /^\S+@\S+\.\S+$/.test(String(encargado.correo || "").trim()))
+      .map((encargado: any) => String(encargado.correo).trim().toLowerCase()))];
+    if (!destinatarios.length) {
+      return res.status(403).json({ ok: false, message: "Al menos un encargado debe tener un correo válido y aceptar recibir correos para enviar la boleta." });
+    }
+
+    const estudianteNombre = fullName(boleta.estudiante);
+    const asunto = `Boleta de matrícula ${boleta.matricula.AnioNombre || ""} · ${estudianteNombre}`;
+    const resultado = await sendEmail({
+      to: destinatarios,
+      subject: asunto,
+      text: `Adjuntamos la boleta de matrícula de ${estudianteNombre} para el año lectivo ${boleta.matricula.AnioNombre || ""}.`,
+      html: boleta.html
+    });
+    if (!resultado.enviado) {
+      return res.status(503).json({ ok: false, message: resultado.motivo || "El servicio de correo no está configurado." });
+    }
+    return ok(res, { enviado: true, destinatarios }, "Boleta enviada por correo correctamente");
+  } catch (error) {
+    console.error("Error enviando boleta de matrícula por correo:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo enviar la boleta de matrícula por correo" });
+  }
+});
+
+router.get("/conducta/faltas", async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (!institucionId) return;
+    const pool = await getPool();
+    await ensureBoletaConductaTables(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT FaltaConductaId, TipoFalta, Falta, Articulo
+        FROM dbo.CatalogoFaltaConducta
+        WHERE InstitucionId = @institucionId AND Activo = 1
+        ORDER BY OrdenVisual, FaltaConductaId
+      `);
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error cargando las faltas de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron cargar las faltas de conducta" });
+  }
+});
+
+router.get("/conducta/admin/faltas", requireRoles(...ADMIN_CONDUCTA_ROLES), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (!institucionId) return;
+    const pool = await getPool();
+    await ensureBoletaConductaTables(pool);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT f.FaltaConductaId, f.TipoFalta, f.Falta, f.Articulo, f.Activo, f.OrdenVisual,
+          COUNT(b.BoletaConductaId) AS CantidadRegistros
+        FROM dbo.CatalogoFaltaConducta f
+        LEFT JOIN dbo.BoletaConducta b
+          ON b.FaltaConductaId = f.FaltaConductaId AND b.InstitucionId = f.InstitucionId
+        WHERE f.InstitucionId = @institucionId
+        GROUP BY f.FaltaConductaId, f.TipoFalta, f.Falta, f.Articulo, f.Activo, f.OrdenVisual
+        ORDER BY f.OrdenVisual, f.FaltaConductaId
+      `);
+    return ok(res, result.recordset);
+  } catch (error) {
+    console.error("Error cargando el mantenimiento de faltas de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo cargar el mantenimiento de faltas de conducta" });
+  }
+});
+
+router.post("/conducta/admin/faltas", requireRoles(...ADMIN_CONDUCTA_ROLES), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (!institucionId) return;
+    const tipoFalta = String(req.body?.tipoFalta || "").trim();
+    const falta = String(req.body?.falta || "").trim();
+    const articulo = String(req.body?.articulo || "").trim();
+    const ordenVisual = Number(req.body?.ordenVisual || 0);
+    if (!tipoFalta || !falta || !articulo || !Number.isInteger(ordenVisual) || ordenVisual < 0) {
+      return badRequest(res, "Tipo de falta, falta, artículo y orden son obligatorios");
+    }
+    const pool = await getPool();
+    const duplicate = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("falta", sql.NVarChar(1200), falta)
+      .query("SELECT TOP 1 FaltaConductaId FROM dbo.CatalogoFaltaConducta WHERE InstitucionId = @institucionId AND Falta = @falta");
+    if (duplicate.recordset.length) return res.status(409).json({ ok: false, message: "Ya existe una falta con esa descripción" });
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoFalta", sql.NVarChar(120), tipoFalta)
+      .input("falta", sql.NVarChar(1200), falta)
+      .input("articulo", sql.NVarChar(250), articulo)
+      .input("ordenVisual", sql.Int, ordenVisual)
+      .query(`
+        INSERT INTO dbo.CatalogoFaltaConducta (InstitucionId, TipoFalta, Falta, Articulo, OrdenVisual, Activo, CreatedAt)
+        OUTPUT INSERTED.FaltaConductaId
+        VALUES (@institucionId, @tipoFalta, @falta, @articulo, @ordenVisual, 1, SYSDATETIME())
+      `);
+    return res.status(201).json({ ok: true, data: { FaltaConductaId: result.recordset[0]?.FaltaConductaId }, message: "Falta agregada correctamente" });
+  } catch (error) {
+    console.error("Error agregando falta de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo agregar la falta" });
+  }
+});
+
+router.put("/conducta/admin/faltas/:id", requireRoles(...ADMIN_CONDUCTA_ROLES), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (!institucionId) return;
+    const id = Number(req.params.id);
+    const tipoFalta = String(req.body?.tipoFalta || "").trim();
+    const falta = String(req.body?.falta || "").trim();
+    const articulo = String(req.body?.articulo || "").trim();
+    const ordenVisual = Number(req.body?.ordenVisual || 0);
+    const activo = req.body?.activo === true;
+    if (!Number.isInteger(id) || id <= 0 || !tipoFalta || !falta || !articulo || !Number.isInteger(ordenVisual) || ordenVisual < 0) {
+      return badRequest(res, "Datos de la falta inválidos");
+    }
+    const pool = await getPool();
+    const duplicate = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("falta", sql.NVarChar(1200), falta)
+      .query("SELECT TOP 1 FaltaConductaId FROM dbo.CatalogoFaltaConducta WHERE InstitucionId = @institucionId AND FaltaConductaId <> @id AND Falta = @falta");
+    if (duplicate.recordset.length) return res.status(409).json({ ok: false, message: "Ya existe otra falta con esa descripción" });
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .input("tipoFalta", sql.NVarChar(120), tipoFalta)
+      .input("falta", sql.NVarChar(1200), falta)
+      .input("articulo", sql.NVarChar(250), articulo)
+      .input("ordenVisual", sql.Int, ordenVisual)
+      .input("activo", sql.Bit, activo)
+      .query(`
+        UPDATE dbo.CatalogoFaltaConducta
+        SET TipoFalta = @tipoFalta, Falta = @falta, Articulo = @articulo,
+            OrdenVisual = @ordenVisual, Activo = @activo, UpdatedAt = SYSDATETIME()
+        OUTPUT INSERTED.FaltaConductaId
+        WHERE FaltaConductaId = @id AND InstitucionId = @institucionId
+      `);
+    if (!result.recordset.length) return res.status(404).json({ ok: false, message: "Falta no encontrada" });
+    return ok(res, { FaltaConductaId: id }, "Falta actualizada correctamente");
+  } catch (error) {
+    console.error("Error actualizando falta de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo actualizar la falta" });
+  }
+});
+
+router.delete("/conducta/admin/faltas/:id", requireRoles(...ADMIN_CONDUCTA_ROLES), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (!institucionId) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return badRequest(res, "Falta inválida");
+    const pool = await getPool();
+    const linked = await pool.request()
+      .input("id", sql.Int, id)
+      .input("institucionId", sql.Int, institucionId)
+      .query(`
+        SELECT COUNT(*) AS Total FROM dbo.BoletaConducta
+        WHERE FaltaConductaId = @id AND InstitucionId = @institucionId
+      `);
+    if (Number(linked.recordset[0]?.Total || 0) > 0) {
+      return res.status(409).json({ ok: false, message: "La falta tiene boletas asociadas; solo se puede inactivar" });
+    }
+    await pool.request().input("id", sql.Int, id).input("institucionId", sql.Int, institucionId)
+      .query("DELETE FROM dbo.CatalogoFaltaConducta WHERE FaltaConductaId = @id AND InstitucionId = @institucionId");
+    return ok(res, { FaltaConductaId: id }, "Falta eliminada correctamente");
+  } catch (error) {
+    console.error("Error eliminando falta de conducta:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo eliminar la falta" });
   }
 });
 
@@ -1292,10 +1716,23 @@ router.post("/conducta", async (req, res) => {
     await ensureBoletaConductaTables(pool);
 
     const estudianteId = Number(req.body.estudianteId || 0);
-    const detalleHechos = String(req.body.detalleHechos || "").trim();
+    const faltaConductaId = Number(req.body.faltaConductaId || 0) || null;
+    const segunNormativaInterna = req.body.segunNormativaInterna === true;
+    let detalleHechos = String(req.body.detalleHechos || "").trim();
     const lugarAcontecimiento = String(req.body.lugarAcontecimiento || "").trim();
     if (!Number.isFinite(estudianteId) || estudianteId <= 0) return badRequest(res, "Estudiante inválido");
-    if (!detalleHechos) return badRequest(res, "Debés indicar el detalle de los hechos");
+    if (faltaConductaId) {
+      const selectedFalta = await pool.request()
+        .input("faltaConductaId", sql.Int, faltaConductaId)
+        .input("institucionId", sql.Int, institucionId)
+        .query(`SELECT Falta FROM dbo.CatalogoFaltaConducta WHERE FaltaConductaId = @faltaConductaId AND InstitucionId = @institucionId AND Activo = 1`);
+      if (!selectedFalta.recordset.length) return badRequest(res, "La falta seleccionada no está disponible");
+      detalleHechos = String(selectedFalta.recordset[0].Falta || "").trim();
+    } else if (segunNormativaInterna) {
+      if (!detalleHechos) return badRequest(res, "Debés escribir el detalle según la normativa interna");
+    } else if (!detalleHechos) {
+      return badRequest(res, "Debés seleccionar una falta o indicar el detalle de los hechos");
+    }
     if (!lugarAcontecimiento) return badRequest(res, "Debés indicar el lugar del acontecimiento");
 
     await transaction.begin();
@@ -1372,16 +1809,17 @@ router.post("/conducta", async (req, res) => {
       .input("grupoId", sql.Int, row.GrupoId ? Number(row.GrupoId) : null)
       .input("matriculaId", sql.Int, row.MatriculaId ? Number(row.MatriculaId) : null)
       .input("seccion", sql.NVarChar(100), String(row.Seccion || ""))
+      .input("faltaConductaId", sql.Int, faltaConductaId)
       .input("detalleHechos", sql.NVarChar(sql.MAX), detalleHechos)
       .input("lugarAcontecimiento", sql.NVarChar(300), lugarAcontecimiento)
       .input("usuarioReportaId", sql.Int, getAuthUserId(req))
       .input("nombreFuncionario", sql.NVarChar(200), funcionarioNombre || null)
       .query(`
         INSERT INTO dbo.BoletaConducta
-          (InstitucionId, Consecutivo, CodigoBoleta, Fecha, EstudianteId, GrupoId, MatriculaId, Seccion, DetalleHechos, LugarAcontecimiento, UsuarioReportaId, NombreFuncionario, CreatedAt)
+          (InstitucionId, Consecutivo, CodigoBoleta, Fecha, EstudianteId, GrupoId, MatriculaId, Seccion, FaltaConductaId, DetalleHechos, LugarAcontecimiento, UsuarioReportaId, NombreFuncionario, CreatedAt)
         OUTPUT INSERTED.BoletaConductaId
         VALUES
-          (@institucionId, @consecutivo, @codigoBoleta, @fecha, @estudianteId, @grupoId, @matriculaId, @seccion, @detalleHechos, @lugarAcontecimiento, @usuarioReportaId, @nombreFuncionario, SYSDATETIME())
+          (@institucionId, @consecutivo, @codigoBoleta, @fecha, @estudianteId, @grupoId, @matriculaId, @seccion, @faltaConductaId, @detalleHechos, @lugarAcontecimiento, @usuarioReportaId, @nombreFuncionario, SYSDATETIME())
       `);
     const boletaConductaId = Number(insertResult.recordset[0]?.BoletaConductaId || 0);
 
@@ -1395,7 +1833,7 @@ router.post("/conducta", async (req, res) => {
       `);
 
     await transaction.commit();
-    return ok(res, { boletaConductaId }, "Boleta de conducta generada correctamente");
+    return ok(res, { boletaConductaId, codigoBoleta, consecutivo }, "Boleta de conducta generada correctamente");
   } catch (error) {
     try { if ((transaction as any)._aborted === false) await transaction.rollback(); } catch {}
     console.error("Error generando boleta de conducta:", error);
@@ -1546,8 +1984,12 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
 
     const correoEstudiante = String(row.EstudianteCorreo || `${String(row.Identificacion || "").trim()}@mep.go.cr`).trim();
     if (!correoEstudiante) return badRequest(res, "El estudiante no tiene correo registrado");
-    const correosCopia = resolveNotificationCc(req, row.ProfesorCorreo, row.ProfesorGuiaCorreo)
-      .filter((correo: string) => correo.toLowerCase() !== correoEstudiante.toLowerCase());
+    const correosEncargados = await getGuardianEmailCopiesByStudent(pool, [Number(row.EstudianteId)]);
+    const correosCopia = mergeEmailCopies(
+      correoEstudiante,
+      resolveNotificationCc(req, row.ProfesorCorreo, row.ProfesorGuiaCorreo),
+      correosEncargados.get(Number(row.EstudianteId)) || []
+    ) || [];
     const correosCopiaTexto = correosCopia.join(", ") || null;
     const estudianteNombre = fullName(row);
     const fechaIso = String(row.Fecha || "").slice(0, 10);

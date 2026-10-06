@@ -128,7 +128,10 @@ const SUSPENSION_ROW_BG = "#ffe4e6";
 
 function isEstudianteSuspendido(item?: any) {
   const value = String(item?.Suspendido ?? "").trim().toLowerCase();
-  return item?.Suspendido === true
+  return item?.Activo === false
+    || item?.Activo === 0
+    || String(item?.Activo ?? "").trim() === "0"
+    || item?.Suspendido === true
     || item?.Suspendido === 1
     || value === "true"
     || value === "1"
@@ -140,6 +143,9 @@ function isEstudianteSuspendido(item?: any) {
 
 function getSuspensionTooltip(item?: any) {
   if (!isEstudianteSuspendido(item)) return "";
+  if (item?.Activo === false || item?.Activo === 0 || String(item?.Activo ?? "").trim() === "0") {
+    return `Alumno Inactivo${item?.MotivoInactivacion ? `, Motivo: ${item.MotivoInactivacion}` : ""}${item?.ObservacionInactivacion ? ` — ${item.ObservacionInactivacion}` : ""}`;
+  }
   const motivo = String(item?.MotivoSuspension || "No indicado").trim();
   const fechaFin = String(item?.FechaFinSuspension || "").slice(0, 10) || "sin fecha fin";
   return `Alumno Suspendido, Motivo: ${motivo}, hasta: ${fechaFin}`;
@@ -152,6 +158,7 @@ function getGestionRowBg(item: any, fallback: string) {
 function getHorarioGrupoMateriaKey(item?: any) {
   if (!item) return "";
   return [
+    Number(item.GrupoClaseId || 0),
     Number(item.GrupoId || 0),
     Number(item.MateriaId || 0)
   ].join("|");
@@ -160,6 +167,7 @@ function getHorarioGrupoMateriaKey(item?: any) {
 function getHorarioAsignacionKey(item?: any) {
   if (!item) return "";
   return [
+    Number(item.GrupoClaseId || 0),
     Number(item.GrupoId || 0),
     Number(item.MateriaId || 0),
     Number(item.AnioLectivoId || 0),
@@ -8430,6 +8438,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
 
   async function seleccionarMateriaDesdeHorario(entrada: HorarioEntrada) {
     const candidatos = grupos.filter((grupo) =>
+      Number(grupo.GrupoClaseId || 0) === Number(entrada.GrupoClaseId || 0) &&
       Number(grupo.GrupoId) === Number(entrada.GrupoId) &&
       Number(grupo.MateriaId) === Number(entrada.MateriaId)
     );
@@ -8529,7 +8538,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                               const texto = `${entrada.GrupoNombre} ${entrada.MateriaNombre}`.trim();
                               return (
                                 <button
-                                  key={`${prefix}-${entrada.HorarioGrupoId}-${entrada.BloqueHorarioId}-${entrada.DiaSemana}`}
+                                  key={`${prefix}-${entrada.GrupoClaseId || 0}-${entrada.HorarioGrupoId}-${entrada.BloqueHorarioId}-${entrada.DiaSemana}`}
                                   type="button"
                                   onClick={() => seleccionarMateriaDesdeHorario(entrada)}
                                   title="Seleccionar esta seccion y materia"
@@ -8775,7 +8784,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                     {horarioPendientes.slice(0, 12).map((item) => (
                       <span
-                        key={`pendiente-horario-${item.AsignacionDocenteId}`}
+                        key={`pendiente-horario-${getHorarioAsignacionKey(item)}`}
                         style={{
                           border: "1px solid #fdba74",
                           background: "#ffffff",
@@ -8824,7 +8833,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                   const texto = `${entrada.GrupoNombre} ${entrada.MateriaNombre}`.trim();
                                   return (
                                     <button
-                                      key={`${entrada.HorarioGrupoId}-${entrada.BloqueHorarioId}-${entrada.DiaSemana}`}
+                                      key={`${entrada.GrupoClaseId || 0}-${entrada.HorarioGrupoId}-${entrada.BloqueHorarioId}-${entrada.DiaSemana}`}
                                       type="button"
                                       onClick={() => seleccionarMateriaDesdeHorario(entrada)}
                                       title="Seleccionar esta sección y materia"
@@ -10488,7 +10497,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             {horarioPendientes.slice(0, 12).map((item) => (
                               <span
-                                key={`panel-pendiente-horario-${item.AsignacionDocenteId}`}
+                                key={`panel-pendiente-horario-${getHorarioAsignacionKey(item)}`}
                                 style={{
                                   border: "1px solid #fdba74",
                                   background: "#ffffff",

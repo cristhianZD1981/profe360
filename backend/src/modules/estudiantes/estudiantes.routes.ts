@@ -3,10 +3,11 @@ import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
-import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
+import { applyInstitutionScope, requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
 import { hashPassword } from "../../utils/password";
+import { getCostaRicaIsoDate } from "../../utils/date.utils";
 import {
   MOTIVOS_SUSPENSION_ESTUDIANTE,
   getSuspensionVigenteApplySql,
@@ -26,9 +27,13 @@ const STUDENT_IMPORT_ROLES = [
 ];
 
 router.use(requireAuth);
+router.use((req, res, next) => {
+  if (req.path.startsWith("/catalogos-matricula")) return next();
+  return applyInstitutionScope({ required: true })(req, res, next);
+});
 
 type EncargadoPayload = {
-  tipoEncargado: "MADRE" | "PADRE" | "ENCARGADO";
+  tipoEncargado: string;
   titulo?: string | null;
   identificacion?: string | null;
   nombre?: string | null;
@@ -190,12 +195,10 @@ async function ensureParentPortalUser(params: { transaction: any; institucionId:
 function normalizeEncargados(encargados: any[]): EncargadoPayload[] {
   if (!Array.isArray(encargados)) return [];
 
+  let principalAsignado = false;
   return encargados
     .map((item) => ({
-      tipoEncargado: String(item?.tipoEncargado || "").toUpperCase() as
-        | "MADRE"
-        | "PADRE"
-        | "ENCARGADO",
+      tipoEncargado: String(item?.tipoEncargado || "ENCARGADO").trim(),
       titulo: item?.titulo || null,
       identificacion: item?.identificacion || null,
       nombre: item?.nombre || null,
@@ -207,15 +210,14 @@ function normalizeEncargados(encargados: any[]): EncargadoPayload[] {
       direccionExacta: item?.direccionExacta || null,
       parentesco: item?.parentesco || null,
       viveConEstudiante: !!item?.viveConEstudiante,
-      esPrincipal: !!item?.esPrincipal,
-      aceptaWhatsApp: !!item?.aceptaWhatsApp,
-      aceptaCorreo: !!item?.aceptaCorreo,
-      recibeNotificaciones: item?.recibeNotificaciones === false ? false : true
+      esPrincipal: !!item?.esPrincipal && !principalAsignado,
+      aceptaWhatsApp: !!item?.esPrincipal && !!item?.aceptaWhatsApp,
+      aceptaCorreo: !!String(item?.correo || "").trim() && !!item?.aceptaCorreo,
+      recibeNotificaciones: (!!item?.esPrincipal && !!item?.aceptaWhatsApp) || (!!String(item?.correo || "").trim() && !!item?.aceptaCorreo)
     }))
+    .map((item) => { if (item.esPrincipal) principalAsignado = true; return item; })
     .filter((item) => {
-      if (!["MADRE", "PADRE", "ENCARGADO"].includes(item.tipoEncargado)) {
-        return false;
-      }
+      if (!item.tipoEncargado) return false;
 
       const tieneContenido =
         !!item.nombre ||
@@ -503,6 +505,7 @@ async function createStudentWithTransaction(params: {
     aceptaWhatsAppEstudiante,
     repitente,
     refugiado,
+    becaTransporte,
     tieneAdecuacion,
     adecuacion,
     nivelFuncionamiento,
@@ -579,6 +582,7 @@ async function createStudentWithTransaction(params: {
     .input("aceptaWhatsAppEstudiante", sql.Bit, aceptaWhatsAppEstudiante ?? null)
     .input("repitente", sql.Bit, !!repitente)
     .input("refugiado", sql.Bit, !!refugiado)
+    .input("becaTransporte", sql.Bit, !!becaTransporte)
     .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
     .input("adecuacion", sql.NVarChar, adecuacionNormalizada)
     .input("nivelFuncionamiento", sql.NVarChar, nivelFuncionamiento || null)
@@ -615,6 +619,7 @@ async function createStudentWithTransaction(params: {
         AceptaWhatsAppEstudiante,
         Repitente,
         Refugiado,
+        BecaTransporte,
         TieneAdecuacion,
         Adecuacion,
         NivelFuncionamiento,
@@ -648,6 +653,7 @@ async function createStudentWithTransaction(params: {
         @aceptaWhatsAppEstudiante,
         @repitente,
         @refugiado,
+        @becaTransporte,
         @tieneAdecuacion,
         @adecuacion,
         @nivelFuncionamiento,
@@ -747,6 +753,7 @@ async function importStudentWithTransaction(params: {
     autorizaWhatsAppEncargado,
     repitente,
     refugiado,
+    becaTransporte,
     tieneAdecuacion,
     adecuacion,
     nivelFuncionamiento,
@@ -790,6 +797,7 @@ async function importStudentWithTransaction(params: {
     .input("autorizaWhatsAppEncargado", sql.Bit, !!autorizaWhatsAppEncargado)
     .input("repitente", sql.Bit, !!repitente)
     .input("refugiado", sql.Bit, !!refugiado)
+    .input("becaTransporte", sql.Bit, !!becaTransporte)
     .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
     .input("adecuacion", sql.NVarChar, adecuacionNormalizada)
     .input("nivelFuncionamiento", sql.NVarChar, nivelFuncionamiento || null)
@@ -819,6 +827,7 @@ async function importStudentWithTransaction(params: {
           AutorizaWhatsAppEncargado = @autorizaWhatsAppEncargado,
           Repitente = @repitente,
           Refugiado = @refugiado,
+          BecaTransporte = @becaTransporte,
           TieneAdecuacion = @tieneAdecuacion,
           Adecuacion = @adecuacion,
           NivelFuncionamiento = @nivelFuncionamiento,
@@ -1581,6 +1590,7 @@ router.get("/", async (req, res) => {
             e.AutorizaWhatsAppEncargado, e.AceptaWhatsAppEstudiante,
             e.Repitente,
             e.Refugiado,
+            e.BecaTransporte,
             e.TieneAdecuacion,
             e.Adecuacion,
             e.NivelFuncionamiento,
@@ -1591,6 +1601,9 @@ router.get("/", async (req, res) => {
             e.Observaciones,
             e.ObservacionMedica,
             e.Activo,
+            CASE WHEN ISNULL(e.Activo, 1) = 0 THEN N'Inactivo' WHEN suspension.EstudianteSuspensionId IS NOT NULL THEN N'Suspendido' ELSE N'Activo' END AS EstadoEstudiante,
+            inactivacion.Motivo AS MotivoInactivacion,
+            inactivacion.Observacion AS ObservacionInactivacion,
             matriculaActual.Seccion,
             matriculaActual.GrupoNombre,
             matriculaActual.GrupoNivel,
@@ -1601,6 +1614,12 @@ router.get("/", async (req, res) => {
           LEFT JOIN dbo.RutaTransporte rt
             ON rt.RutaTransporteId = e.RutaTransporteId
           ${getSuspensionVigenteApplySql("e")}
+          OUTER APPLY (
+            SELECT TOP 1 i.Motivo, i.Observacion
+            FROM dbo.EstudianteInactivacion i
+            WHERE i.InstitucionId = e.InstitucionId AND i.EstudianteId = e.EstudianteId AND i.Activo = 1
+            ORDER BY i.FechaInactivacion DESC, i.EstudianteInactivacionId DESC
+          ) inactivacion
           OUTER APPLY (
             SELECT TOP 1
               COALESCE(
@@ -2469,11 +2488,12 @@ router.post(
         .input("institucionId", sql.Int, institucionId)
         .input("estudianteId", sql.Int, estudianteId)
         .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .input("fechaEvento", sql.Date, getCostaRicaIsoDate())
         .query(`
           UPDATE dbo.EstudianteSuspension
           SET Activo = 0,
               UsuarioLevantaId = @usuarioId,
-              FechaLevantamiento = SYSDATETIME(),
+              FechaLevantamiento = @fechaEvento,
               UpdatedAt = SYSDATETIME()
           WHERE InstitucionId = @institucionId
             AND EstudianteId = @estudianteId
@@ -2563,6 +2583,53 @@ router.put(
   }
 );
 
+router.get(
+  "/:id/estados-historial",
+  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO", "PROFESOR_GUIA", "PROFESOR"),
+  async (req, res) => {
+    try {
+      const estudianteId = Number(req.params.id);
+      const institucionId = Number(req.auth?.institucionId || 0);
+      if (!estudianteId || !institucionId) return badRequest(res, "Estudiante o institución inválidos");
+      const pool = await getPool();
+      const estudiante = await pool.request()
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("institucionId", sql.Int, institucionId)
+        .query("SELECT 1 AS Encontrado FROM dbo.Estudiante WHERE EstudianteId=@estudianteId AND InstitucionId=@institucionId");
+      if (!estudiante.recordset.length) return res.status(404).json({ ok: false, message: "Estudiante no encontrado" });
+
+      const [suspensiones, inactivaciones] = await Promise.all([
+        pool.request().input("estudianteId", sql.Int, estudianteId).input("institucionId", sql.Int, institucionId).query(`
+          SELECT s.EstudianteSuspensionId, s.Motivo, s.FechaInicio, s.FechaFin, s.Observacion,
+            s.Activo, s.CreatedAt, s.FechaLevantamiento,
+            LTRIM(RTRIM(CONCAT(ISNULL(uc.Nombre, N''), N' ', ISNULL(uc.PrimerApellido, N''), N' ', ISNULL(uc.SegundoApellido, N'')))) AS UsuarioCrea,
+            LTRIM(RTRIM(CONCAT(ISNULL(ul.Nombre, N''), N' ', ISNULL(ul.PrimerApellido, N''), N' ', ISNULL(ul.SegundoApellido, N'')))) AS UsuarioLevanta
+          FROM dbo.EstudianteSuspension s
+          LEFT JOIN dbo.Usuario uc ON uc.UsuarioId=s.UsuarioCreaId
+          LEFT JOIN dbo.Usuario ul ON ul.UsuarioId=s.UsuarioLevantaId
+          WHERE s.InstitucionId=@institucionId AND s.EstudianteId=@estudianteId
+          ORDER BY s.FechaInicio DESC, s.EstudianteSuspensionId DESC
+        `),
+        pool.request().input("estudianteId", sql.Int, estudianteId).input("institucionId", sql.Int, institucionId).query(`
+          SELECT i.EstudianteInactivacionId, i.Motivo, i.Observacion, i.FechaInactivacion,
+            i.Activo, i.FechaReactivacion,
+            LTRIM(RTRIM(CONCAT(ISNULL(ui.Nombre, N''), N' ', ISNULL(ui.PrimerApellido, N''), N' ', ISNULL(ui.SegundoApellido, N'')))) AS UsuarioInactiva,
+            LTRIM(RTRIM(CONCAT(ISNULL(ur.Nombre, N''), N' ', ISNULL(ur.PrimerApellido, N''), N' ', ISNULL(ur.SegundoApellido, N'')))) AS UsuarioReactiva
+          FROM dbo.EstudianteInactivacion i
+          LEFT JOIN dbo.Usuario ui ON ui.UsuarioId=i.UsuarioInactivaId
+          LEFT JOIN dbo.Usuario ur ON ur.UsuarioId=i.UsuarioReactivaId
+          WHERE i.InstitucionId=@institucionId AND i.EstudianteId=@estudianteId
+          ORDER BY i.FechaInactivacion DESC, i.EstudianteInactivacionId DESC
+        `)
+      ]);
+      return ok(res, { suspensiones: suspensiones.recordset, inactivaciones: inactivaciones.recordset });
+    } catch (error) {
+      console.error("Error consultando historial de estados del estudiante:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo consultar el historial de estados" });
+    }
+  }
+);
+
 router.delete(
   "/:id/suspension/:suspensionId",
   requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
@@ -2581,11 +2648,12 @@ router.delete(
         .input("estudianteId", sql.Int, estudianteId)
         .input("suspensionId", sql.Int, suspensionId)
         .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .input("fechaEvento", sql.Date, getCostaRicaIsoDate())
         .query(`
           UPDATE dbo.EstudianteSuspension
           SET Activo = 0,
               UsuarioLevantaId = @usuarioId,
-              FechaLevantamiento = SYSDATETIME(),
+              FechaLevantamiento = @fechaEvento,
               UpdatedAt = SYSDATETIME()
           OUTPUT INSERTED.*
           WHERE EstudianteSuspensionId = @suspensionId
@@ -2710,6 +2778,7 @@ router.get("/:id/detalle", async (req, res) => {
           e.AutorizaWhatsAppEncargado, e.AceptaWhatsAppEstudiante,
           e.Repitente,
           e.Refugiado,
+          e.BecaTransporte,
           e.TieneAdecuacion,
           e.Adecuacion,
           e.NivelFuncionamiento,
@@ -2720,6 +2789,9 @@ router.get("/:id/detalle", async (req, res) => {
           e.Observaciones,
           e.ObservacionMedica,
           e.Activo,
+          CASE WHEN ISNULL(e.Activo, 1) = 0 THEN N'Inactivo' WHEN suspension.EstudianteSuspensionId IS NOT NULL THEN N'Suspendido' ELSE N'Activo' END AS EstadoEstudiante,
+          inactivacion.Motivo AS MotivoInactivacion,
+          inactivacion.Observacion AS ObservacionInactivacion,
           matriculaActual.Seccion,
           matriculaActual.GrupoNombre,
           matriculaActual.GrupoNivel,
@@ -2730,6 +2802,12 @@ router.get("/:id/detalle", async (req, res) => {
         LEFT JOIN dbo.RutaTransporte rt
           ON rt.RutaTransporteId = e.RutaTransporteId
         ${getSuspensionVigenteApplySql("e")}
+        OUTER APPLY (
+          SELECT TOP 1 i.Motivo, i.Observacion
+          FROM dbo.EstudianteInactivacion i
+          WHERE i.InstitucionId = e.InstitucionId AND i.EstudianteId = e.EstudianteId AND i.Activo = 1
+          ORDER BY i.FechaInactivacion DESC, i.EstudianteInactivacionId DESC
+        ) inactivacion
         OUTER APPLY (
           SELECT TOP 1
             COALESCE(
@@ -2817,6 +2895,47 @@ router.get("/:id/detalle", async (req, res) => {
   }
 });
 
+router.get(
+  "/:id/matriculas-historial",
+  requireRoles("PROFESOR", "PROFESOR_GUIA"),
+  async (req, res) => {
+    const estudianteId = Number(req.params.id);
+    const institucionId = Number(req.auth?.institucionId || 0);
+    if (!Number.isInteger(estudianteId) || estudianteId <= 0 || !institucionId) {
+      return badRequest(res, "Estudiante o institución inválidos");
+    }
+    try {
+      const pool = await getPool();
+      const result = await pool.request()
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("institucionId", sql.Int, institucionId)
+        .query(`
+          SELECT m.MatriculaId, m.EstudianteId, m.GrupoId, m.AnioLectivoId, m.Estado,
+            m.FechaMatricula, m.Observacion, md.MatriculaDetalleId, md.TipoMatricula,
+            md.NivelAcademico, md.EspecialidadId, md.Especialidad,
+            esp.Descripcion AS EspecialidadDescripcion, esp.PermiteMultiplesPorSeccion,
+            md.SeccionTexto, md.RutaTransporte, md.EsRepitente,
+            md.PermiteExcepcionProgresion, md.JustificacionExcepcion,
+            md.CorreoEnvioBoleta, md.Observaciones AS ObservacionesDetalle,
+            g.Nombre AS GrupoNombre, g.Nivel AS GrupoNivel, g.NivelAcademico AS GrupoNivelAcademico,
+            g.Especialidad AS GrupoEspecialidad, a.Nombre AS AnioNombre
+          FROM dbo.Matricula m
+          INNER JOIN dbo.Estudiante e ON e.EstudianteId=m.EstudianteId
+          INNER JOIN dbo.Grupo g ON g.GrupoId=m.GrupoId
+          INNER JOIN dbo.AnioLectivo a ON a.AnioLectivoId=m.AnioLectivoId
+          LEFT JOIN dbo.MatriculaDetalle md ON md.MatriculaId=m.MatriculaId
+          LEFT JOIN dbo.Especialidad esp ON esp.EspecialidadId=md.EspecialidadId
+          WHERE m.EstudianteId=@estudianteId AND e.InstitucionId=@institucionId
+          ORDER BY m.AnioLectivoId DESC, m.MatriculaId DESC
+        `);
+      return ok(res, result.recordset);
+    } catch (error) {
+      console.error("Error consultando matrículas del estudiante para el perfil docente:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo consultar el historial de matrícula" });
+    }
+  }
+);
+
 router.get("/:id/carnet", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -2855,6 +2974,7 @@ router.get("/:id/carnet", async (req, res) => {
           e.AutorizaWhatsAppEncargado, e.AceptaWhatsAppEstudiante,
           e.Repitente,
           e.Refugiado,
+          e.BecaTransporte,
           e.TieneAdecuacion,
           e.Adecuacion,
           e.NivelFuncionamiento,
@@ -2956,6 +3076,7 @@ router.post(
         aceptaWhatsAppEstudiante,
         repitente,
         refugiado,
+        becaTransporte,
         tieneAdecuacion,
         sexo,
         fotoUrl,
@@ -3089,6 +3210,7 @@ router.put(
         aceptaWhatsAppEstudiante,
         repitente,
         refugiado,
+        becaTransporte,
         tieneAdecuacion,
         sexo,
         fotoUrl,
@@ -3198,6 +3320,7 @@ router.put(
         .input("aceptaWhatsAppEstudiante", sql.Bit, aceptaWhatsAppEstudiante ?? null)
         .input("repitente", sql.Bit, !!repitente)
         .input("refugiado", sql.Bit, !!refugiado)
+        .input("becaTransporte", sql.Bit, !!becaTransporte)
         .input("tieneAdecuacion", sql.Bit, tieneAdecuacionNormalizada)
         .input("sexo", sql.NVarChar, sexo || null)
         .input("fotoUrl", sql.NVarChar, fotoUrl || null)
@@ -3233,6 +3356,7 @@ router.put(
             AceptaWhatsAppEstudiante = COALESCE(@aceptaWhatsAppEstudiante, AceptaWhatsAppEstudiante),
             Repitente = @repitente,
             Refugiado = @refugiado,
+            BecaTransporte = @becaTransporte,
             TieneAdecuacion = @tieneAdecuacion,
             Sexo = @sexo,
             FotoUrl = @fotoUrl,
@@ -3318,28 +3442,111 @@ router.put(
   }
 );
 
+router.patch(
+  "/:id/consentimiento-whatsapp",
+  requireRoles("PROFESOR", "PROFESOR_GUIA"),
+  async (req, res) => {
+    const estudianteId = Number(req.params.id);
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const aceptaWhatsAppEncargado = req.body?.aceptaWhatsAppEncargado;
+    const aceptaWhatsAppEstudiante = req.body?.aceptaWhatsAppEstudiante;
+    if (!Number.isInteger(estudianteId) || estudianteId <= 0 || !institucionId) {
+      return badRequest(res, "Estudiante o institución inválidos");
+    }
+    if (typeof aceptaWhatsAppEncargado !== "boolean" || !(aceptaWhatsAppEstudiante === null || typeof aceptaWhatsAppEstudiante === "boolean")) {
+      return badRequest(res, "Indicá autorizaciones de WhatsApp válidas");
+    }
+
+    const pool = await getPool();
+    const transaction = new sql.Transaction(pool);
+    try {
+      await transaction.begin();
+      const student = await transaction.request()
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("institucionId", sql.Int, institucionId)
+        .query("SELECT TOP 1 FechaNacimiento FROM dbo.Estudiante WHERE EstudianteId=@estudianteId AND InstitucionId=@institucionId");
+      if (!student.recordset.length) {
+        await transaction.rollback();
+        return res.status(404).json({ ok: false, message: "Estudiante no encontrado" });
+      }
+
+      const permisoError = validarPermisoEstudiante(aceptaWhatsAppEstudiante, student.recordset[0].FechaNacimiento);
+      if (permisoError) {
+        await transaction.rollback();
+        return badRequest(res, permisoError);
+      }
+
+      await transaction.request()
+        .input("estudianteId", sql.Int, estudianteId)
+        .input("institucionId", sql.Int, institucionId)
+        .input("aceptaWhatsAppEncargado", sql.Bit, aceptaWhatsAppEncargado)
+        .input("aceptaWhatsAppEstudiante", sql.Bit, aceptaWhatsAppEstudiante)
+        .query(`
+          UPDATE dbo.Estudiante
+          SET AutorizaWhatsAppEncargado=@aceptaWhatsAppEncargado,
+              AceptaWhatsAppEstudiante=COALESCE(@aceptaWhatsAppEstudiante, AceptaWhatsAppEstudiante),
+              UpdatedAt=SYSDATETIME()
+          WHERE EstudianteId=@estudianteId AND InstitucionId=@institucionId;
+
+          UPDATE ee
+          SET AceptaWhatsApp=@aceptaWhatsAppEncargado,
+              RecibeNotificaciones=CASE WHEN @aceptaWhatsAppEncargado=1 OR ISNULL(ee.AceptaCorreo,0)=1 THEN 1 ELSE 0 END
+          FROM dbo.EstudianteEncargado ee
+          WHERE ee.EstudianteId=@estudianteId AND ee.Activo=1 AND ee.EsPrincipal=1;
+        `);
+
+      await transaction.commit();
+      return ok(res, { estudianteId, aceptaWhatsAppEncargado, aceptaWhatsAppEstudiante }, "Autorización de WhatsApp actualizada correctamente");
+    } catch (error) {
+      try { await transaction.rollback(); } catch {}
+      console.error("Error actualizando la autorización de WhatsApp del estudiante:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo actualizar la autorización de WhatsApp" });
+    }
+  }
+);
+
 router.delete(
   "/:id",
   requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
   async (req, res) => {
+    const transaction = new sql.Transaction(await getPool());
     try {
       const id = Number(req.params.id);
+      const motivo = String(req.body?.motivo || "").trim();
+      const observacion = String(req.body?.observacion || "").trim().slice(0, 1000) || null;
 
       if (!id) {
         return badRequest(res, "Id inválido");
+      }
+      if (!["Traslado", "Abandono"].includes(motivo)) {
+        return badRequest(res, "Seleccioná Traslado o Abandono como causa de inactivación");
       }
 
       if (!req.auth?.institucionId) {
         return badRequest(res, "El usuario no tiene institución asignada");
       }
 
-      const pool = await getPool();
-
-      const result = await pool
-        .request()
+      await transaction.begin();
+      const result = await new sql.Request(transaction)
         .input("id", sql.Int, id)
         .input("institucionId", sql.Int, req.auth.institucionId)
+        .input("motivo", sql.NVarChar(30), motivo)
+        .input("observacion", sql.NVarChar(1000), observacion)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .input("fechaEvento", sql.Date, getCostaRicaIsoDate())
         .query(`
+          IF NOT EXISTS (
+            SELECT 1 FROM dbo.Estudiante WHERE EstudianteId = @id AND InstitucionId = @institucionId AND Activo = 1
+          )
+          BEGIN
+            SELECT CAST(NULL AS INT) AS EstudianteId;
+          END
+          ELSE
+          BEGIN
+            INSERT INTO dbo.EstudianteInactivacion
+              (InstitucionId, EstudianteId, Motivo, Observacion, FechaInactivacion, Activo, UsuarioInactivaId, CreatedAt, UpdatedAt)
+            VALUES
+              (@institucionId, @id, @motivo, @observacion, @fechaEvento, 1, @usuarioId, SYSDATETIME(), SYSDATETIME());
           UPDATE dbo.Estudiante
           SET
             Activo = 0,
@@ -3347,19 +3554,26 @@ router.delete(
           OUTPUT INSERTED.EstudianteId
           WHERE EstudianteId = @id
             AND InstitucionId = @institucionId
+          END
         `);
 
-      if (!result.recordset.length) {
+      if (!result.recordset.length || !result.recordset[0]?.EstudianteId) {
+        await transaction.rollback();
         return res.status(404).json({
           ok: false,
           message: "Estudiante no encontrado"
         });
       }
+      await transaction.commit();
 
       return ok(res, {
-          message: "Estudiante eliminado correctamente"
+          message: "Estudiante inactivado correctamente",
+          estudianteId: result.recordset[0].EstudianteId,
+          motivo,
+          observacion
       });
     } catch (error) {
+      try { await transaction.rollback(); } catch {}
       console.error("Error al eliminar estudiante:", error);
       return res.status(500).json({
         ok: false,
@@ -3369,10 +3583,63 @@ router.delete(
   }
 );
 
+router.put(
+  "/:id/inactivacion",
+  requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const institucionId = Number(req.auth?.institucionId || 0);
+      const motivo = String(req.body?.motivo || "").trim();
+      const observacion = String(req.body?.observacion || "").trim().slice(0, 1000) || null;
+      if (!id || !institucionId) return badRequest(res, "Estudiante o institución inválidos");
+      if (!["Traslado", "Abandono"].includes(motivo)) return badRequest(res, "Seleccioná Traslado o Abandono como causa de inactivación");
+      const pool = await getPool();
+      const result = await pool.request()
+        .input("id", sql.Int, id)
+        .input("institucionId", sql.Int, institucionId)
+        .input("motivo", sql.NVarChar(30), motivo)
+        .input("observacion", sql.NVarChar(1000), observacion)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .input("fechaEvento", sql.Date, getCostaRicaIsoDate())
+        .query(`
+          DECLARE @inactivacionId INT = (
+            SELECT TOP 1 EstudianteInactivacionId FROM dbo.EstudianteInactivacion
+            WHERE InstitucionId = @institucionId AND EstudianteId = @id AND Activo = 1
+            ORDER BY FechaInactivacion DESC, EstudianteInactivacionId DESC
+          );
+          IF @inactivacionId IS NOT NULL
+          BEGIN
+            UPDATE dbo.EstudianteInactivacion
+            SET Motivo = @motivo, Observacion = @observacion,
+                UsuarioInactivaId = @usuarioId, UpdatedAt = SYSDATETIME()
+            OUTPUT INSERTED.*
+            WHERE EstudianteInactivacionId = @inactivacionId;
+          END
+          ELSE IF EXISTS (SELECT 1 FROM dbo.Estudiante WHERE InstitucionId = @institucionId AND EstudianteId = @id AND Activo = 0)
+          BEGIN
+            INSERT INTO dbo.EstudianteInactivacion
+              (InstitucionId, EstudianteId, Motivo, Observacion, FechaInactivacion, Activo, UsuarioInactivaId, CreatedAt, UpdatedAt)
+            OUTPUT INSERTED.*
+            VALUES
+              (@institucionId, @id, @motivo, @observacion, @fechaEvento, 1, @usuarioId, SYSDATETIME(), SYSDATETIME());
+          END
+        `);
+      if (!result.recordset.length) return res.status(404).json({ ok: false, message: "No hay una inactivación vigente para modificar" });
+      return ok(res, result.recordset[0], "Causa de inactivación actualizada");
+    } catch (error) {
+      console.error("Error actualizando inactivación:", error);
+      return res.status(500).json({ ok: false, message: "No se pudo actualizar la inactivación" });
+    }
+  }
+);
+
 router.patch(
   "/:id/reactivar",
   requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"),
   async (req, res) => {
+    const pool = await getPool();
+    const transaction = new sql.Transaction(pool);
     try {
       const id = Number(req.params.id);
 
@@ -3384,10 +3651,8 @@ router.patch(
         return badRequest(res, "El usuario no tiene institución asignada");
       }
 
-      const pool = await getPool();
-
-      const result = await pool
-        .request()
+      await transaction.begin();
+      const result = await new sql.Request(transaction)
         .input("id", sql.Int, id)
         .input("institucionId", sql.Int, req.auth.institucionId)
         .query(`
@@ -3401,17 +3666,32 @@ router.patch(
         `);
 
       if (!result.recordset.length) {
+        await transaction.rollback();
         return res.status(404).json({
           ok: false,
           message: "Estudiante no encontrado"
         });
       }
 
+      await new sql.Request(transaction)
+        .input("id", sql.Int, id)
+        .input("institucionId", sql.Int, req.auth.institucionId)
+        .input("usuarioId", sql.Int, req.auth?.userId || null)
+        .input("fechaEvento", sql.Date, getCostaRicaIsoDate())
+        .query(`
+          UPDATE dbo.EstudianteInactivacion
+          SET Activo = 0, FechaReactivacion = @fechaEvento, UsuarioReactivaId = @usuarioId,
+              UpdatedAt = SYSDATETIME()
+          WHERE InstitucionId = @institucionId AND EstudianteId = @id AND Activo = 1;
+        `);
+      await transaction.commit();
+
       return ok(res, {
         message: "Estudiante reactivado correctamente",
         estudiante: result.recordset[0]
       });
     } catch (error) {
+      try { await transaction.rollback(); } catch {}
       console.error("Error al reactivar estudiante:", error);
       return res.status(500).json({
         ok: false,
@@ -3421,5 +3701,38 @@ router.patch(
   }
 );
 
-export default router;
+const catalogoMatriculaRefs: Record<string, { tabla: string; columna: string }> = {
+  TIPO_IDENTIFICACION: { tabla: "dbo.Estudiante", columna: "TipoIdentificacion" },
+  NACIONALIDAD: { tabla: "dbo.Estudiante", columna: "Nacionalidad" },
+  TIPO_ENCARGADO: { tabla: "dbo.Encargado", columna: "TipoEncargado" }
+};
+router.get("/catalogos-matricula/:tipo", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+  const tipo = String(req.params.tipo || "").toUpperCase();
+  if (!catalogoMatriculaRefs[tipo]) return badRequest(res, "Tipo de catálogo no válido");
+  try {
+    const pool = await getPool();
+    const ref = catalogoMatriculaRefs[tipo];
+    const result = await pool.request().input("tipo", sql.NVarChar(40), tipo).query(`
+      SELECT c.CatalogoMatriculaId, c.Tipo, c.Descripcion, c.Activo,
+        (SELECT COUNT_BIG(1) FROM ${ref.tabla} x WHERE LTRIM(RTRIM(x.${ref.columna}))=c.Descripcion) AS RegistrosAsociados
+      FROM dbo.CatalogoMatricula c WHERE c.Tipo=@tipo ORDER BY c.Descripcion`);
+    return ok(res, result.recordset);
+  } catch (error) { console.error("Error consultando catálogo de matrícula", error); return res.status(500).json({ok:false,message:"No se pudo consultar el catálogo"}); }
+});
+router.post("/catalogos-matricula/:tipo", requireRoles("SUPER_ADMIN"), async (req,res)=>{
+  const tipo=String(req.params.tipo||"").toUpperCase(), descripcion=String(req.body?.descripcion||"").trim();
+  if(!catalogoMatriculaRefs[tipo]||!descripcion) return badRequest(res,"Tipo y descripción son obligatorios");
+  try { const pool=await getPool(); const r=await pool.request().input("tipo",sql.NVarChar(40),tipo).input("descripcion",sql.NVarChar(120),descripcion).query(`INSERT INTO dbo.CatalogoMatricula(Tipo,Descripcion,Activo) OUTPUT INSERTED.* VALUES(@tipo,@descripcion,1)`); return created(res,r.recordset[0],"Opción agregada"); }
+  catch(error){ console.error("Error agregando catálogo",error); return res.status(500).json({ok:false,message:"No se pudo agregar la opción"}); }
+});
+router.put("/catalogos-matricula/:tipo/:id", requireRoles("SUPER_ADMIN"), async(req,res)=>{
+  const tipo=String(req.params.tipo||"").toUpperCase(), descripcion=String(req.body?.descripcion||"").trim(), activo=!!req.body?.activo, id=Number(req.params.id);
+  if(!catalogoMatriculaRefs[tipo]||!Number.isInteger(id)||id<1||!descripcion) return badRequest(res,"Datos de catálogo inválidos");
+  try { const pool=await getPool(), ref=catalogoMatriculaRefs[tipo]; const old=await pool.request().input("id",sql.Int,id).input("tipo",sql.NVarChar(40),tipo).query("SELECT Descripcion FROM dbo.CatalogoMatricula WHERE CatalogoMatriculaId=@id AND Tipo=@tipo"); if(!old.recordset.length)return res.status(404).json({ok:false,message:"Opción no encontrada"}); const tx=new sql.Transaction(pool); await tx.begin(); try { const previous=old.recordset[0].Descripcion; await tx.request().input("id",sql.Int,id).input("tipo",sql.NVarChar(40),tipo).input("descripcion",sql.NVarChar(120),descripcion).input("activo",sql.Bit,activo).query("UPDATE dbo.CatalogoMatricula SET Descripcion=@descripcion,Activo=@activo,FechaActualizacion=SYSDATETIME() WHERE CatalogoMatriculaId=@id AND Tipo=@tipo"); if(previous!==descripcion) await tx.request().input("old",sql.NVarChar(120),previous).input("next",sql.NVarChar(120),descripcion).query(`UPDATE ${ref.tabla} SET ${ref.columna}=@next WHERE ${ref.columna}=@old`); await tx.commit(); return ok(res,{CatalogoMatriculaId:id,Descripcion:descripcion,Activo:activo}); } catch(e){await tx.rollback();throw e;} } catch(error){ console.error("Error actualizando catálogo",error); return res.status(500).json({ok:false,message:"No se pudo actualizar la opción"}); }
+});
+router.delete("/catalogos-matricula/:tipo/:id", requireRoles("SUPER_ADMIN"), async(req,res)=>{
+  const tipo=String(req.params.tipo||"").toUpperCase(),id=Number(req.params.id); if(!catalogoMatriculaRefs[tipo]||!Number.isInteger(id)||id<1)return badRequest(res,"Datos de catálogo inválidos");
+  try{const pool=await getPool(),ref=catalogoMatriculaRefs[tipo];const result=await pool.request().input("id",sql.Int,id).input("tipo",sql.NVarChar(40),tipo).query(`DELETE c FROM dbo.CatalogoMatricula c WHERE c.CatalogoMatriculaId=@id AND c.Tipo=@tipo AND NOT EXISTS(SELECT 1 FROM ${ref.tabla} x WHERE LTRIM(RTRIM(x.${ref.columna}))=c.Descripcion); SELECT @@ROWCOUNT AS Eliminados`); if(!result.recordset[0]?.Eliminados)return res.status(409).json({ok:false,message:"La opción tiene registros asociados; debe inactivarse"}); return ok(res,{eliminado:true});}catch(error){console.error("Error eliminando catálogo",error);return res.status(500).json({ok:false,message:"No se pudo eliminar la opción"});}
+});
 
+export default router;

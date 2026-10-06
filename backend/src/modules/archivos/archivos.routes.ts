@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import streamifier from "streamifier";
-import { requireAuth } from "../../middlewares/auth.middleware";
+import { applyInstitutionScope, requireAuth } from "../../middlewares/auth.middleware";
 import { created, badRequest } from "../../utils/http";
 import { cloudinary, cloudinaryEnabled } from "../../config/cloudinary";
 import { env } from "../../config/env";
@@ -9,6 +9,7 @@ import { env } from "../../config/env";
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 router.use(requireAuth);
+router.use(applyInstitutionScope());
 
 router.post("/subir", upload.single("archivo"), async (req, res) => {
   if (!req.file) return badRequest(res, "No se recibió archivo");

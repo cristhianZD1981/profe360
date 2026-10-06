@@ -135,6 +135,12 @@
 .em-page .em-results-toggle { font-size:11px; }
 .em-page .em-student-heading { padding:10px 14px; margin:0; border:1px solid var(--em-line); border-radius:10px; background:white; gap:10px; }
 .em-page .em-student-heading h3 { font-size:16px; }
+.em-page .em-student-title { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.em-page .em-student-title h3 { margin:0; }
+.em-page .em-student-status { display:inline-flex; align-items:center; border-radius:999px; padding:3px 9px; font-size:11px; line-height:1.35; font-weight:700; white-space:nowrap; }
+.em-page .em-student-status-active { background:#dcfce7; color:#166534; }
+.em-page .em-student-status-inactive { background:#fef3c7; color:#92400e; }
+.em-page .em-student-status-suspended { background:#fee2e2; color:#b91c1c; }
 .em-page .em-avatar { width:42px; height:46px; font-size:18px; border-radius:8px; }
 .em-page .em-workspace { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1.05fr); gap:12px; align-items:start; }
 .em-page .em-student-fields { display:contents; }
@@ -224,3 +230,496 @@
 .em-page h2, .em-page .em-student-heading h3 { font-size:19px; }
 .em-page .em-guardian h3, .em-page .em-contact-name { font-size:15px; color:#111827; }
 .em-page button, .em-page .em-button { font-size:14px; }
+
+/* La ficha combinada se presenta como un solo flujo vertical. */
+.em-page .em-workspace { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; }
+.em-page .em-student-fields { display:contents; }
+.em-page .em-student-fields > .em-panel, .em-page .em-contacts, .em-page .em-enrollment { width:100%; grid-column:1; }
+.em-page .em-secondary-tools { display:grid; grid-template-columns:minmax(0,1fr); }
+
+
+/* Vista compacta de matrícula, inspirada en el formato de referencia. */
+.em-page {
+  --em-green:#176b2b;
+  --em-ink:#17324d;
+  --em-muted:#46596b;
+  gap:8px;
+  padding:8px 10px 82px;
+  background:#f3f6f8;
+}
+.em-page .em-workspace { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; align-items:start; }
+.em-page .em-student-fields { display:contents; }
+.em-page .em-panel { padding:12px; border:1px solid #cdd8df; border-radius:5px; box-shadow:0 1px 3px #142b3a12; }
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts),
+.em-page .em-contacts, .em-page .em-enrollment { width:100%; grid-column:1; }
+.em-page .em-workspace .em-section-title {
+  margin:-12px -12px 10px;
+  padding:5px 10px;
+  min-height:29px;
+  background:#176b2b;
+  color:#fff;
+  border-radius:4px 4px 0 0;
+}
+.em-page .em-workspace .em-section-title h2,
+.em-page .em-workspace .em-section-title p { color:#fff; }
+.em-page .em-workspace .em-section-title p { display:none; }
+.em-page .em-step { width:23px; height:23px; background:#e8f3ea; color:#176b2b; border-radius:3px; }
+.em-page .em-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px 10px; }
+.em-page .em-workspace .em-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.em-page .em-two { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.em-page .em-field { gap:3px; font-size:12px; }
+.em-page input:not([type=checkbox]), .em-page select, .em-page textarea { min-height:30px; padding:4px 7px; border-radius:3px; font-size:13px; }
+.em-page textarea { min-height:38px; }
+.em-page .em-checks { margin:7px 0; gap:7px 14px; }
+.em-page .em-check { font-size:12px; }
+.em-page .em-details, .em-page .em-supports { margin-top:8px; padding-top:7px; border-top:1px solid #d5dfe5; }
+.em-page .em-guardian { margin-top:8px; padding:8px; background:#f8fafb; border-radius:4px; }
+.em-page .em-guardian h3 { margin-bottom:7px; padding-bottom:4px; border-bottom:1px solid #d8e1e6; font-size:13px; }
+.em-page .em-year-row { padding:7px; margin-bottom:8px; border-radius:4px; }
+.em-page .em-savebar { position:sticky; bottom:0; z-index:5; display:flex; gap:8px; justify-content:space-between; padding:8px 12px; border:1px solid #b7c8be; border-top:3px solid #176b2b; border-radius:4px; background:#fff; box-shadow:0 -3px 14px #142b3a20; }
+.em-page .em-savebar .em-panel-footer { margin:0; padding:0; border:0; }
+.em-page .em-button-tooltip { display:inline-flex; }
+.em-page .em-button-tooltip.is-disabled > button { pointer-events:none; }
+.em-teacher-view .em-student-fields[disabled] > .em-panel,
+.em-teacher-view .em-enrollment fieldset[disabled] { cursor:not-allowed; }
+.em-teacher-view .em-teacher-consent { border-color:#a7d8cf; background:#f2fbf8; }
+.em-page .em-secondary-tools { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+.em-page .em-shortcuts { padding:4px 2px; }
+.em-page .em-shortcuts a { color:#176b2b; }
+.em-page .em-primary { background:#176b2b; border-color:#176b2b; }
+.em-page .em-primary:hover:not(:disabled) { background:#105322; border-color:#105322; }
+@media(max-width:1000px) {
+  .em-page .em-grid, .em-page .em-workspace .em-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media(max-width:700px) {
+  .em-page { padding:6px 6px 12px; }
+  .em-page .em-grid, .em-page .em-workspace .em-grid, .em-page .em-two { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .em-page .em-savebar { position:static; display:grid; }
+  .em-page .em-panel { padding:10px; }
+  .em-page .em-workspace .em-section-title { margin:-10px -10px 9px; }
+}
+@media(max-width:440px) {
+  .em-page .em-grid, .em-page .em-workspace .em-grid, .em-page .em-two { grid-template-columns:minmax(0,1fr); }
+  .em-page .em-wide { grid-column:1; }
+}
+
+/* Reducir el ancho sobrante de los controles y ganar filas en la vista de escritorio. */
+@media(min-width:1200px) {
+  .em-page .em-grid, .em-page .em-workspace .em-grid { grid-template-columns:repeat(5,minmax(0,1fr)); }
+  .em-page .em-workspace .em-grid.em-two { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .em-page .em-guardian .em-grid.em-two { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .em-page .em-field input, .em-page .em-field select { max-width:100%; }
+}
+@media(min-width:1500px) {
+  .em-page .em-grid, .em-page .em-workspace .em-grid { grid-template-columns:repeat(6,minmax(0,1fr)); }
+  .em-page .em-workspace .em-grid.em-two, .em-page .em-guardian .em-grid.em-two { grid-template-columns:repeat(4,minmax(0,1fr)); }
+}
+
+/* Filas solicitadas para la ficha en escritorio. */
+@media(min-width:1400px) {
+  .em-page .em-student-identity { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
+  .em-page .em-student-contact > .em-grid { grid-template-columns:repeat(7,minmax(0,1fr)) !important; }
+  .em-page .em-guardian-data { grid-template-columns:repeat(8,minmax(0,1fr)) !important; }
+  .em-page .em-enrollment-row { grid-template-columns:repeat(7,minmax(0,1fr)) !important; }
+  .em-page .em-support-row { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
+}
+@media(min-width:1100px) and (max-width:1399px) {
+  .em-page .em-student-identity { grid-template-columns:repeat(6,minmax(0,1fr)) !important; }
+  .em-page .em-student-contact > .em-grid { grid-template-columns:repeat(7,minmax(0,1fr)) !important; }
+  .em-page .em-guardian-data { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
+  .em-page .em-enrollment-row { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
+  .em-page .em-support-row { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
+}
+.em-page .em-enrollment-row > .em-wide { grid-column:span 2; }
+.em-page .em-student-heading.em-new-student { display:none; }
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title {
+  min-height:25px; padding:2px 9px; margin:-12px -12px 7px; border-radius:4px 4px 0 0;
+}
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title .em-step { width:20px; height:20px; }
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title h2 { font-size:14px; }
+.em-page .em-supports .em-section-title { margin:6px 0 3px; padding:3px 8px; min-height:22px; background:#eaf2ec; border-left:3px solid #176b2b; }
+.em-page .em-supports .em-section-title h3 { font-size:12px; }
+.em-page .em-support-row { margin:2px 0; gap:6px 9px; }
+.em-page .em-guardian { display:grid; grid-template-columns:minmax(0,1fr); gap:4px; }
+.em-page .em-guardian-data { gap:5px 8px; }
+.em-page .em-guardian-data .em-field textarea { min-height:30px; }
+.em-page .em-guardian .em-checks { margin:4px 0 0; padding-top:5px; border-top:1px solid #d8e1e6; }
+.em-page .em-enrollment .em-section-title { min-height:25px; padding:2px 9px; margin:-12px -12px 7px; }
+.em-page .em-enrollment .em-section-title h2 { font-size:14px; }
+.em-page .em-enrollment-row { gap:5px 8px; }
+.em-page .em-enrollment-row .em-field { font-size:11px; }
+.em-page .em-enrollment-row input, .em-page .em-enrollment-row select { padding:3px 5px; min-height:28px; font-size:12px; }
+.em-page .em-savebar { padding:5px 9px; }
+
+/* Compactar las tres franjas superiores sin reducir la legibilidad del texto. */
+.em-page > .em-shortcuts {
+  min-height:30px;
+  padding:1px 2px;
+  gap:6px 16px;
+  line-height:1.2;
+}
+.em-page > .em-shortcuts a { font-size:12px; line-height:1.2; }
+.em-page > .em-shortcuts button {
+  min-height:28px;
+  padding:3px 10px;
+  font-size:12px;
+  border-radius:6px;
+}
+.em-page > .em-search {
+  min-height:46px;
+  padding:7px 10px;
+  gap:6px 12px;
+  border-radius:6px;
+}
+.em-page > .em-search .em-section-title { margin:0; }
+.em-page > .em-search .em-section-title h2 { font-size:15px; line-height:1.2; }
+.em-page > .em-search .em-search-form { gap:7px 10px; }
+.em-page > .em-search .em-search-form .em-field { min-width:140px; }
+.em-page > .em-search input:not([type=checkbox]),
+.em-page > .em-search select { min-height:29px; padding:3px 7px; font-size:13px; }
+.em-page > .em-search .em-check { font-size:12px; gap:5px; }
+.em-page > .em-search input[type=checkbox] { width:15px; height:15px; }
+.em-page > .em-search button { min-height:29px; padding:4px 10px; font-size:12px; border-radius:6px; }
+.em-page > .em-student-heading {
+  min-height:48px;
+  padding:5px 10px;
+  margin:0;
+  gap:9px;
+  border-radius:6px;
+}
+.em-page > .em-student-heading .em-avatar { width:36px; height:38px; border-radius:6px; font-size:15px; }
+.em-page > .em-student-heading h3 { font-size:15px; line-height:1.15; }
+.em-page > .em-student-heading p { margin-top:2px; font-size:11px; line-height:1.2; }
+.em-page > .em-student-heading .em-actions { gap:6px; }
+.em-page > .em-student-heading .em-actions button,
+.em-page > .em-student-heading .em-actions .em-button { min-height:28px; padding:3px 9px; font-size:12px; border-radius:6px; }
+@media(max-width:700px) {
+  .em-page > .em-search { min-height:0; padding:7px; }
+  .em-page > .em-student-heading { min-height:0; padding:6px 8px; }
+}
+
+@media(min-width:1400px) {
+  .em-page .em-student-identity { grid-template-columns:repeat(8,minmax(0,1fr)) !important; }
+  .em-page .em-student-contact > .em-grid { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
+}
+.em-page .em-student-contact > .em-grid > .em-student-flags { display:flex; grid-column:1/-1; margin:4px 0 1px; padding-top:5px; border-top:1px solid #d6e0e5; }
+.em-page .em-student-flags > .em-check { white-space:nowrap; }
+
+/* Distribuye todos los datos personales en una fila y el resto del estudiante en la siguiente. */
+.em-page .em-student-rest-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:center; gap:4px 8px; margin-top:4px; padding-top:4px; border-top:1px solid #d6e0e5; }
+@media(min-width:1100px) {
+  .em-page .em-student-identity { grid-template-columns:repeat(9,minmax(0,1fr)) !important; }
+  .em-page .em-student-rest-row {
+    grid-template-columns:minmax(78px,1fr) minmax(90px,1.1fr) minmax(100px,1.25fr) minmax(130px,1.5fr) repeat(4,max-content) minmax(260px,3fr);
+    gap:4px 7px;
+  }
+}
+.em-page .em-student-rest-row > .em-field { min-width:0; gap:2px; font-size:10px; line-height:1.1; }
+.em-page .em-student-rest-row > .em-field input:not([type=checkbox]),
+.em-page .em-student-rest-row > .em-field select { min-width:0; min-height:24px; padding:2px 4px; font-size:10px; }
+.em-page .em-student-rest-row > .em-check { justify-self:start; align-self:center; min-width:0; margin:0; gap:3px; font-size:10px; line-height:1.1; white-space:nowrap; }
+.em-page .em-student-rest-row > .em-check input[type=checkbox] { width:13px; height:13px; }
+.em-page .em-student-rest-row > .em-supports { min-width:0; margin:0; padding:0; border:0; }
+.em-page .em-student-rest-row .em-supports > .em-section-title { display:flex; flex-wrap:wrap; width:100%; min-height:0; margin:0 0 2px; padding:0; gap:3px 6px; }
+.em-page .em-student-rest-row .em-support-toggles { flex-wrap:wrap; gap:2px 5px; margin:0; }
+.em-page .em-student-rest-row .em-support-toggles .em-check { font-size:9px; gap:2px; }
+.em-page .em-student-rest-row .em-support-row { display:flex; flex-wrap:wrap; gap:2px 5px; }
+.em-page .em-student-rest-row .em-support-row > .em-field { flex:1 1 100px; min-width:0; gap:1px; font-size:9px; }
+.em-page .em-student-rest-row .em-support-row input:not([type=checkbox]),
+.em-page .em-student-rest-row .em-support-row select,
+.em-page .em-student-rest-row .em-support-row textarea { min-width:0; min-height:22px; padding:1px 3px; font-size:9px; }
+
+.em-page .em-photo-actions { display:flex; align-items:center; gap:6px; min-width:0; }
+.em-page .em-photo-actions input[type=file] { flex:1 1 auto; min-width:0; width:100%; padding:2px 4px; font-size:11px; }
+.em-page .em-photo-actions button { flex:0 0 auto; min-height:28px; padding:3px 7px; white-space:nowrap; font-size:11px; }
+
+@media(min-width:1400px) {
+  .em-page .em-student-contact > .em-grid { grid-template-columns:repeat(8,minmax(0,1fr)) !important; }
+}
+.em-page .em-student-contact > .em-grid > .em-check { align-self:center; min-width:0; font-size:11px; line-height:1.25; }
+
+/* Compactación vertical exclusiva de las filas de datos del estudiante. */
+.em-page .em-student-identity,
+.em-page .em-student-contact > .em-grid {
+  row-gap:3px;
+}
+.em-page .em-student-identity .em-field,
+.em-page .em-student-contact > .em-grid > .em-field {
+  gap:2px;
+  line-height:1.2;
+}
+.em-page .em-student-identity input:not([type=checkbox]),
+.em-page .em-student-identity select,
+.em-page .em-student-contact > .em-grid input:not([type=checkbox]),
+.em-page .em-student-contact > .em-grid select {
+  min-height:25px;
+  padding-top:2px;
+  padding-bottom:2px;
+}
+.em-page .em-student-contact { margin-top:4px; padding-top:4px; }
+.em-page .em-student-contact > .em-grid > .em-check { line-height:1.15; }
+
+/* Mantener los datos de cada encargado en una sola fila en escritorio. */
+@media(min-width:900px) {
+  .em-page .em-guardian { min-width:0; overflow-x:auto; }
+  .em-page .em-guardian-data {
+    display:grid;
+    grid-template-columns:repeat(8,minmax(115px,1fr)) !important;
+    grid-auto-flow:row;
+    min-width:980px;
+    gap:5px 8px;
+  }
+  .em-page .em-guardian-data > .em-field { min-width:0; }
+}
+
+.em-page .em-guardian > .em-checks {
+  order:0;
+  margin:0 0 5px;
+  padding:0 0 5px;
+  border-top:0;
+  border-bottom:1px solid #d8e1e6;
+}
+.em-page .em-guardian > .em-guardian-data { order:1; }
+
+/* Los datos y las autorizaciones de cada encargado comparten una sola fila. */
+@media(min-width:760px) {
+  .em-page .em-guardian {
+    display:grid;
+    grid-template-columns:repeat(12,minmax(100px,1fr));
+    gap:6px 7px;
+    overflow-x:auto;
+  }
+  .em-page .em-guardian > h3 { grid-column:1/-1; margin:0; }
+  .em-page .em-guardian-data,
+  .em-page .em-guardian > .em-checks { display:contents; }
+  .em-page .em-guardian > .em-checks { border:0; padding:0; margin:0; }
+  .em-page .em-guardian > .em-guardian-data > .em-field,
+  .em-page .em-guardian > .em-checks > .em-check { min-width:0; align-self:center; }
+  .em-page .em-guardian > .em-checks > .em-check { font-size:11px; line-height:1.2; }
+}
+
+/* Encabezados de sección más pequeños y ajustados al texto. */
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title,
+.em-page .em-contacts > .em-section-title,
+.em-page .em-enrollment > .em-section-title {
+  display:inline-flex;
+  width:fit-content;
+  max-width:100%;
+  min-height:21px;
+  margin:0 0 6px;
+  padding:2px 7px;
+  gap:6px;
+  border-radius:3px;
+  background:#176b2b;
+}
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title h2,
+.em-page .em-contacts > .em-section-title h2,
+.em-page .em-enrollment > .em-section-title h2 {
+  color:#fff;
+  font-size:12px;
+  line-height:1.15;
+  letter-spacing:0;
+}
+.em-page .em-contacts > .em-section-title .em-step,
+.em-page .em-enrollment > .em-section-title .em-step,
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title .em-step {
+  width:17px;
+  height:17px;
+  border-radius:3px;
+  font-size:9px;
+}
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title .em-badge,
+.em-page .em-enrollment > .em-section-title .em-badge {
+  padding:1px 6px;
+  font-size:10px;
+  line-height:1.3;
+}
+.em-page .em-contacts > .em-section-title,
+.em-page .em-enrollment > .em-section-title { justify-content:flex-start; }
+
+/* Recortar el espacio blanco alrededor de los encabezados de cada sección. */
+.em-page .em-panel.em-contacts,
+.em-page .em-panel.em-enrollment {
+  padding:5px;
+}
+.em-page .em-contacts > .em-section-title,
+.em-page .em-enrollment > .em-section-title {
+  margin:0 0 3px;
+}
+.em-page .em-contacts > .em-guardian { margin-top:3px; padding:5px; }
+@media(max-width:700px) {
+  .em-page .em-panel.em-contacts,
+  .em-page .em-panel.em-enrollment { padding:5px; }
+}
+
+.em-page .em-supports > .em-section-title {
+  display:flex;
+  width:100%;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.em-page .em-support-toggles { display:flex; align-items:center; gap:12px 20px; flex-wrap:wrap; }
+.em-page .em-support-toggles .em-check { margin:0; color:#17324d; font-size:11px; white-space:nowrap; }
+@media(max-width:560px) {
+  .em-page .em-supports > .em-section-title { align-items:flex-start; flex-direction:column; }
+  .em-page .em-support-toggles { gap:6px 12px; }
+}
+
+.em-page .em-supports > .em-section-title { justify-content:flex-start; }
+.em-page .em-supports > .em-section-title h3 { flex:0 0 auto; }
+.em-page .em-support-toggles { margin-left:10px; }
+
+/* Hacer más delgadas las franjas de apoyos y encargados. */
+.em-page .em-supports .em-section-title {
+  min-height:18px;
+  margin:3px 0 2px;
+  padding:1px 6px;
+  gap:7px;
+}
+.em-page .em-supports .em-section-title h3 { font-size:11px; line-height:1.1; }
+.em-page .em-support-toggles { gap:8px 14px; }
+.em-page .em-support-toggles .em-check { font-size:10px; line-height:1.1; }
+.em-page .em-support-toggles input[type=checkbox] { width:14px; height:14px; }
+.em-page .em-contacts > .em-section-title {
+  min-height:18px;
+  margin:0 0 2px;
+  padding:1px 5px;
+  gap:5px;
+}
+.em-page .em-contacts > .em-section-title h2 { font-size:11px; line-height:1.1; }
+.em-page .em-contacts > .em-section-title .em-step { width:15px; height:15px; font-size:8px; }
+
+.em-page .em-guardian { border-left:3px solid #176b2b; }
+.em-page .em-guardian-2 { border-left-color:#28739a; }
+.em-page .em-guardian-1 .em-guardian-data > .em-field:first-child .em-field-label { color:#176b2b; }
+.em-page .em-guardian-2 .em-guardian-data > .em-field:first-child .em-field-label { color:#1e6385; }
+.em-page .em-guardian-1 .em-guardian-data > .em-field:first-child > span { color:#176b2b; }
+.em-page .em-guardian-2 .em-guardian-data > .em-field:first-child > span { color:#1e6385; }
+
+/* Reducir altura de los renglones de encargados sin quitar campos. */
+.em-page .em-guardian {
+  padding:3px 5px;
+  margin-top:2px;
+  gap:3px 6px;
+  border-radius:3px;
+}
+.em-page .em-guardian-data { gap:2px 5px; }
+.em-page .em-guardian-data .em-field { gap:1px; font-size:10px; line-height:1.1; }
+.em-page .em-guardian-data input:not([type=checkbox]),
+.em-page .em-guardian-data select,
+.em-page .em-guardian-data textarea {
+  min-height:22px;
+  padding:1px 4px;
+  font-size:11px;
+  line-height:1.1;
+}
+.em-page .em-guardian-data textarea { height:22px; min-height:22px; resize:none; }
+.em-page .em-guardian > .em-checks { gap:3px 8px; }
+.em-page .em-guardian > .em-checks > .em-check { gap:4px; font-size:10px; line-height:1.1; }
+.em-page .em-guardian > .em-checks input[type=checkbox] { width:13px; height:13px; }
+@media(min-width:1400px) { .em-page .em-enrollment-row > .em-wide { grid-column:span 1 !important; } }
+
+/* Administración del expediente: franja y contenedor compactos. */
+.em-page .em-secondary-tools > .em-panel {
+  padding:5px;
+  border-radius:4px;
+}
+.em-page .em-secondary-tools > .em-panel > .em-section-title {
+  display:flex;
+  width:fit-content;
+  max-width:100%;
+  min-height:19px;
+  margin:0;
+  padding:1px 6px;
+  gap:8px;
+  border-radius:3px;
+  background:#176b2b;
+}
+.em-page .em-secondary-tools > .em-panel > .em-section-title h2 {
+  color:#fff;
+  font-size:11px;
+  line-height:1.1;
+}
+.em-page .em-secondary-tools > .em-panel > .em-section-title p { display:none; }
+.em-page .em-secondary-tools > .em-panel > .em-section-title .em-actions { gap:4px; }
+.em-page .em-secondary-tools > .em-panel > .em-section-title button {
+  min-height:23px;
+  padding:2px 7px;
+  font-size:10px;
+  border-radius:3px;
+}
+.em-page .em-secondary-tools > .em-panel > form { margin-top:5px; }
+.em-page .em-savebar { justify-content:flex-start; }
+.em-page .em-savebar > .em-panel-footer { width:100%; }
+.em-page .em-savebar .em-actions { width:100%; justify-content:space-between; }
+
+/* Mantener guardar e imprimir juntos y distinguir secciones con tonos pastel. */
+.em-page .em-savebar .em-actions { justify-content:flex-start; gap:7px; }
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) {
+  background:#f3f8fc;
+  border-color:#d7e4ed;
+}
+.em-page .em-contacts {
+  background:#f3f8f1;
+  border-color:#d8e4d4;
+}
+.em-page .em-enrollment {
+  background:#fcf8ef;
+  border-color:#e8dfc9;
+}
+
+/* Mantener la tipografía de los datos del estudiante al nivel de encargados. */
+.em-page .em-student-identity .em-field,
+.em-page .em-student-rest-row > .em-field,
+.em-page .em-student-rest-row .em-support-row > .em-field {
+  font-size:10px;
+  line-height:1.1;
+  font-weight:550;
+}
+.em-page .em-student-identity input:not([type=checkbox]),
+.em-page .em-student-identity select,
+.em-page .em-student-rest-row > .em-field input:not([type=checkbox]),
+.em-page .em-student-rest-row > .em-field select,
+.em-page .em-student-rest-row .em-support-row input:not([type=checkbox]),
+.em-page .em-student-rest-row .em-support-row select,
+.em-page .em-student-rest-row .em-support-row textarea {
+  font-size:11px;
+}
+.em-page .em-student-rest-row > .em-check,
+.em-page .em-student-rest-row .em-support-toggles .em-check { font-size:10px; line-height:1.1; }
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title {
+  background:#e1edf5;
+}
+.em-page .em-workspace > .em-student-fields > .em-panel:not(.em-contacts) > .em-section-title h2 { color:#234257; }
+.em-page .em-contacts > .em-section-title {
+  background:#e4efe1;
+}
+.em-page .em-contacts > .em-section-title h2 { color:#31513b; }
+.em-page .em-enrollment > .em-section-title {
+  background:#f2ead4;
+}
+.em-page .em-enrollment > .em-section-title h2 { color:#5c4c24; }
+.em-page .em-contacts .em-guardian { background:#f8fbf6; border-color:#d8e4d4; }
+.em-page .em-enrollment .em-year-row { background:#f7f2e5; border-color:#e8dfc9; }
+
+/* Mejorar el contraste de la pantalla inicial para todos los perfiles. */
+.em-page .em-welcome {
+  color:#334155;
+  background:#fff;
+  border-color:#94a3b8;
+}
+.em-page .em-welcome h2 { color:#0f172a; }
+.em-page .em-welcome p { color:#334155; }
+.em-page .em-welcome-mark { color:#176b2b; }
+.em-page .em-flow span {
+  color:#334155;
+  background:#f8fafc;
+  border-color:#94a3b8;
+}
+.em-teacher-view .em-search button:disabled {
+  opacity:1;
+  color:#475569;
+  background:#e2e8f0;
+  border-color:#cbd5e1;
+}

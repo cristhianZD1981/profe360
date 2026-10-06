@@ -226,7 +226,9 @@ function HorarioGrid({
 export default function HorariosPage() {
   const { user } = useAuth();
 
-  const [tab, setTab] = useState<TabKey>("miHorario");
+  const [tab, setTab] = useState<TabKey>(() =>
+    new URLSearchParams(window.location.search).has("estudianteId") ? "consulta" : "miHorario"
+  );
 
   const [anios, setAnios] = useState<AnioLectivo[]>([]);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
@@ -433,6 +435,28 @@ export default function HorariosPage() {
 
   useEffect(() => {
     loadCatalogos();
+  }, []);
+
+  useEffect(() => {
+    const estudianteId = Number(new URLSearchParams(window.location.search).get("estudianteId"));
+    if (!Number.isInteger(estudianteId) || estudianteId <= 0) return;
+
+    setTab("consulta");
+    setLoading(true);
+    clearMessages();
+    api.get(`/horarios/estudiante/${estudianteId}`)
+      .then((response) => {
+        setConsultaHorarioSeccion(null);
+        setConsultaHorarioDocente(null);
+        setResultadosAlumnos([]);
+        setResultadosProfesores([]);
+        setConsultaHorarioEstudiante(response.data?.data || null);
+        setMessage("Horario del estudiante cargado correctamente");
+      })
+      .catch((error: any) => {
+        setErrorMessage(error?.response?.data?.message || "No se pudo cargar el horario del estudiante");
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {

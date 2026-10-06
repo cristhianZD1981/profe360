@@ -756,6 +756,7 @@ export type HorarioBloque = {
 };
 
 export type HorarioEntrada = {
+  GrupoClaseId?: number | null;
   HorarioGrupoId: number;
   BloqueHorarioId: number;
   DiaSemana: number;

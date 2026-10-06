@@ -12,6 +12,14 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
 
+  const institutionScope = sessionStorage.getItem("profe360_institution_scope");
+  const route = window.location.pathname;
+  const requiresInstitutionScope = /^\/(estudiantes(?:-matricula)?|matricula|boletas)(\/|$)/.test(route);
+  if (institutionScope && requiresInstitutionScope) {
+    config.headers = config.headers || {};
+    config.headers["x-institucion-id"] = institutionScope;
+  }
+
   return config;
 });
 

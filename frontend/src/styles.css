@@ -44,6 +44,11 @@ textarea {
   font: inherit;
 }
 
+.conduct-fault-actions button,
+.conduct-fault-actions button:disabled {
+  color: #0f172a;
+}
+
 input,
 select,
 textarea {

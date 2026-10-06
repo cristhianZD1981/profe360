@@ -44,6 +44,9 @@ type Student = {
   TieneAdecuacion?: boolean | null;
   ObservacionMedica: string | null;
   Activo?: boolean;
+  EstadoEstudiante?: "Activo" | "Suspendido" | "Inactivo";
+  MotivoInactivacion?: string | null;
+  ObservacionInactivacion?: string | null;
   SuspensionId?: number | null;
   Suspendido?: boolean | number | null;
   MotivoSuspension?: string | null;
@@ -471,6 +474,9 @@ export default function EstudiantesPage() {
   const [suspensionItem, setSuspensionItem] = useState<Student | null>(null);
   const [suspensionForm, setSuspensionForm] = useState(initialSuspensionForm);
   const [savingSuspension, setSavingSuspension] = useState(false);
+  const [inactivacionItem, setInactivacionItem] = useState<Student | null>(null);
+  const [inactivacionForm, setInactivacionForm] = useState({ motivo: "Abandono", observacion: "" });
+  const [savingInactivacion, setSavingInactivacion] = useState(false);
 
   const roles = user?.roles || [];
   const canManageStudents =
@@ -665,7 +671,7 @@ export default function EstudiantesPage() {
     clearMessages();
     setSuspensionItem(item);
     setSuspensionForm({
-      motivo: item.MotivoSuspension === "Acción Correctiva" ? "Acción Correctiva" : "Medida Precautoria",
+      motivo: item.MotivoSuspension || "Medida Precautoria",
       fechaInicio: formatDate(item.FechaInicioSuspension) || getCostaRicaIsoDate(),
       fechaFin: formatDate(item.FechaFinSuspension) || "",
       observacion: item.ObservacionSuspension || ""
@@ -1111,34 +1117,38 @@ export default function EstudiantesPage() {
       return;
     }
 
-    const confirmado = window.confirm("¿Deseás eliminar este estudiante? El registro quedará inactivo y podrés reactivarlo si lo necesités.");
-    if (!confirmado) return;
+    const item = items.find((row) => Number(row.EstudianteId) === Number(id));
+    if (!item) { setErrorMessage("No se encontró el estudiante seleccionado."); return; }
+    setInactivacionItem(item);
+    setInactivacionForm({ motivo: "Abandono", observacion: "" });
+  }
 
+  async function handleEditInactivation(item: Student) {
+    setInactivacionItem(item);
+    setInactivacionForm({ motivo: item.MotivoInactivacion || "Abandono", observacion: item.ObservacionInactivacion || "" });
+  }
+
+  async function saveInactivation() {
+    if (!inactivacionItem) return;
     clearMessages();
-    setReactivableId(null);
-
+    setSavingInactivacion(true);
     try {
-      await api.delete(`/estudiantes/${id}`);
-      setMessage("Estudiante eliminado correctamente");
-
-      if (editingId === id) {
-        resetAllForms();
-        setIsFormExpanded(false);
+      if (!window.confirm(`¿${inactivacionItem.Activo ? "Inactivar" : "Actualizar la causa de inactivación de"} ${getStudentFullName(inactivacionItem)} como ${inactivacionForm.motivo}?`)) return;
+      if (inactivacionItem.Activo) {
+        await api.delete(`/estudiantes/${inactivacionItem.EstudianteId}`, { data: inactivacionForm });
+      } else {
+        await api.put(`/estudiantes/${inactivacionItem.EstudianteId}/inactivacion`, inactivacionForm);
       }
-
-      if (detalleVisibleId === id) {
-        setDetalleVisibleId(null);
-        setDetalleEstudiante(null);
-        setDetalleEncargados([]);
-      }
-
+      const id = inactivacionItem.EstudianteId;
+      setInactivacionItem(null);
+      setMessage(inactivacionItem.Activo ? `Estudiante inactivado por ${inactivacionForm.motivo}.` : "Causa de inactivación actualizada.");
+      if (editingId === id) { resetAllForms(); setIsFormExpanded(false); }
       await loadDashboard();
       await load(search, incluirInactivos);
     } catch (error: any) {
-      console.error("Error desactivando estudiante:", error);
-      setErrorMessage(
-        error?.response?.data?.message || "No se pudo eliminar el estudiante"
-      );
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la causa de inactivación");
+    } finally {
+      setSavingInactivacion(false);
     }
   }
 
@@ -2365,12 +2375,10 @@ export default function EstudiantesPage() {
                     <td>{item.RutaTransporteDescripcion ?? item.RutaTransporteHabitual ?? ""}</td>
                     <td>{item.AutorizaWhatsAppEncargado ? "Sí" : "No"}</td>
                     <td>
-                      {item.Activo ? "Activo" : "Inactivo"}
-                      {suspendido ? (
-                        <div style={{ marginTop: "4px", color: "#be123c", fontWeight: 800 }}>
-                          Suspendido
-                        </div>
-                      ) : null}
+                      <strong>{item.Activo ? (suspendido ? "Suspendido" : "Activo") : "Inactivo"}</strong>
+                      {!item.Activo && item.MotivoInactivacion && <div style={{ marginTop: "4px" }}>{item.MotivoInactivacion}</div>}
+                      {!item.Activo && item.ObservacionInactivacion && <small>{item.ObservacionInactivacion}</small>}
+                      {suspendido && <div style={{ marginTop: "4px" }}>{item.MotivoSuspension} · hasta {formatDate(item.FechaFinSuspension)}</div>}
                     </td>
                     <td>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -2512,11 +2520,13 @@ export default function EstudiantesPage() {
                               cursor: "pointer"
                             }}
                           >
-                            Eliminar
+                            Inactivar
                           </button>
                         )}
 
                         {canManageStudents && !item.Activo && (
+                          <>
+                          <button type="button" onClick={() => void handleEditInactivation(item)}>Editar causa</button>
                           <button
                             type="button"
                             onClick={() => handleReactivate(item.EstudianteId)}
@@ -2531,6 +2541,7 @@ export default function EstudiantesPage() {
                           >
                             Reactivar
                           </button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -2718,6 +2729,7 @@ export default function EstudiantesPage() {
                   >
                     <option value="Medida Precautoria">Medida Precautoria</option>
                     <option value="Acción Correctiva">Acción Correctiva</option>
+                    <option value="Situación Médica">Situación Médica</option>
                   </select>
                 </label>
                 <label>Fecha de inicio suspensión
@@ -2767,6 +2779,28 @@ export default function EstudiantesPage() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {inactivacionItem && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 56, display: "grid", placeItems: "center", padding: "18px" }}>
+            <form onSubmit={(event) => { event.preventDefault(); void saveInactivation(); }} style={{ width: "min(560px, 100%)", background: "#fff", borderRadius: "16px", border: "1px solid #fecaca", padding: "18px", display: "grid", gap: "12px" }}>
+              <h3 style={{ margin: 0 }}>{inactivacionItem.Activo ? "Inactivar estudiante" : "Editar causa de inactivación"}</h3>
+              <strong>{getStudentFullName(inactivacionItem)}</strong>
+              <label>Causa
+                <select required value={inactivacionForm.motivo} onChange={event => setInactivacionForm(prev => ({ ...prev, motivo: event.target.value }))}>
+                  <option value="Traslado">Traslado</option>
+                  <option value="Abandono">Abandono</option>
+                </select>
+              </label>
+              <label>Observaciones
+                <textarea rows={3} maxLength={1000} value={inactivacionForm.observacion} onChange={event => setInactivacionForm(prev => ({ ...prev, observacion: event.target.value }))} />
+              </label>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button type="button" disabled={savingInactivacion} onClick={() => setInactivacionItem(null)}>Cancelar</button>
+                <button type="submit" className="primary-btn" disabled={savingInactivacion}>{savingInactivacion ? "Guardando…" : "Guardar"}</button>
+              </div>
+            </form>
           </div>
         )}
 

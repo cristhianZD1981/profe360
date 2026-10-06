@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { requireAuth, requireRoles } from "../../middlewares/auth.middleware";
+import { applyInstitutionScope, requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
 import {
@@ -16,6 +16,7 @@ import { ensureSustitucionProfesorTables, procesarSustitucionesProfesor } from "
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 router.use(requireAuth);
+router.use(applyInstitutionScope());
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"));
 
 function getInstitutionId(req: any, res: any) {

@@ -395,6 +395,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
   const [motivoTramite, setMotivoTramite] = useState("IMAS");
   const [otroColegioDestino, setOtroColegioDestino] = useState("");
   const [fechaEmision, setFechaEmision] = useState(() => getCostaRicaIsoDate());
+  const [consecutivoConstancia, setConsecutivoConstancia] = useState("");
   const [motivoBusquedaCert, setMotivoBusquedaCert] = useState("");
   const [grupoIdBusquedaCert, setGrupoIdBusquedaCert] = useState<string>("");
   const [estudianteIdBusquedaCert, setEstudianteIdBusquedaCert] = useState<string>("");
@@ -805,6 +806,10 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
       window.alert("Seleccioná un alumno para generar la constancia.");
       return;
     }
+    if (!/^\d+$/.test(consecutivoConstancia.trim()) || Number(consecutivoConstancia) < 1) {
+      window.alert("Ingresá el número consecutivo de la certificación.");
+      return;
+    }
     if (motivoTramite === "TRASLADO" && !otroColegioDestino.trim()) {
       window.alert("Indica el nombre del otro colegio para el trámite de traslado.");
       return;
@@ -827,6 +832,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
         grupoId: grupoIdConstancia ? Number(grupoIdConstancia) : null,
         tipoEducacion,
         motivoTramite,
+        consecutivo: Number(consecutivoConstancia),
         otroColegioDestino: motivoTramite === "TRASLADO" ? otroColegioDestino.trim() : "",
         fechaEmision
       });
@@ -841,6 +847,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
         } catch {}
       }, 250);
       await buscarCertificaciones();
+      setConsecutivoConstancia("");
       window.alert(`Constancia generada: ${codigo}`);
     } catch (error: any) {
       try { win.close(); } catch {}
@@ -2282,6 +2289,17 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
             ) : null}
             <label>{"Fecha de emisión"}
               <input type="date" value={fechaEmision} onChange={(e) => setFechaEmision(e.target.value)} />
+            </label>
+            <label>Número de certificación
+              <input
+                type="number"
+                min={1}
+                step={1}
+                required
+                value={consecutivoConstancia}
+                onChange={(e) => setConsecutivoConstancia(e.target.value)}
+                placeholder="Ejemplo: 249"
+              />
             </label>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
