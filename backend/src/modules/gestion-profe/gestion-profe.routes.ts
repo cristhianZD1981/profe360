@@ -6464,6 +6464,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
               e.Telefono AS TelefonoEstudiante,
               e.Correo,
               e.AutorizaWhatsAppEncargado,
+              e.AceptaWhatsAppEstudiante,
               enc.Telefonos AS EncargadosTelefonos
             FROM dbo.Estudiante e
             OUTER APPLY (
@@ -6474,6 +6475,7 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
                   INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
                   WHERE ee2.EstudianteId = e.EstudianteId
                     AND ISNULL(ee2.Activo, 1) = 1
+                    AND ISNULL(ee2.EsPrincipal, 0) = 1
                     AND ISNULL(en2.Activo, 1) = 1
                     AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
                     AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
@@ -6532,7 +6534,8 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
               .split("|")
               .map((item) => String(item || "").trim())
               .filter((item) => item.length > 0),
-            autorizaWhatsAppEncargado: !!estudiante.AutorizaWhatsAppEncargado
+            autorizaWhatsAppEncargado: !!estudiante.AutorizaWhatsAppEncargado,
+            aceptaWhatsAppEstudiante: estudiante.AceptaWhatsAppEstudiante
           });
           for (const telefono of telefonos) {
             const whatsapp = await sendWhatsAppNotification({

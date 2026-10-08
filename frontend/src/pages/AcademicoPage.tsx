@@ -201,13 +201,11 @@ type AdecuacionItem = {
 type RutaTransporte = {
   RutaTransporteId: number;
   InstitucionId?: number;
+  NumeroRuta: string | null;
+  Nombre: string;
   Descripcion: string;
   Responsable: string | null;
-  LugarInicio: string | null;
-  LugarFin: string | null;
-  CapacidadEstudiantes: number | null;
-  HoraInicio: string | null;
-  HoraFin: string | null;
+  Telefono: string | null;
   Activo: boolean;
 };
 
@@ -568,13 +566,11 @@ const initialAdecuacionForm = {
 };
 
 const initialRutaTransporteForm = {
+  numeroRuta: "",
+  nombre: "",
   descripcion: "",
   responsable: "",
-  lugarInicio: "",
-  lugarFin: "",
-  capacidadEstudiantes: "",
-  horaInicio: "",
-  horaFin: ""
+  telefono: ""
 };
 
 const initialAsignacionForm = {
@@ -2637,13 +2633,11 @@ function resetMatriculaForm() {
 
     try {
       const payload = {
+        numeroRuta: rutaTransporteForm.numeroRuta || null,
+        nombre: rutaTransporteForm.nombre,
         descripcion: rutaTransporteForm.descripcion,
         responsable: rutaTransporteForm.responsable || null,
-        lugarInicio: rutaTransporteForm.lugarInicio || null,
-        lugarFin: rutaTransporteForm.lugarFin || null,
-        capacidadEstudiantes: rutaTransporteForm.capacidadEstudiantes ? Number(rutaTransporteForm.capacidadEstudiantes) : null,
-        horaInicio: rutaTransporteForm.horaInicio || null,
-        horaFin: rutaTransporteForm.horaFin || null
+        telefono: rutaTransporteForm.telefono || null
       };
 
       if (editingRutaTransporteId !== null) {
@@ -3201,13 +3195,11 @@ function resetMatriculaForm() {
     clearMessages();
     setEditingRutaTransporteId(item.RutaTransporteId);
     setRutaTransporteForm({
+      numeroRuta: item.NumeroRuta || "",
+      nombre: item.Nombre || "",
       descripcion: item.Descripcion || "",
       responsable: item.Responsable || "",
-      lugarInicio: item.LugarInicio || "",
-      lugarFin: item.LugarFin || "",
-      capacidadEstudiantes: item.CapacidadEstudiantes !== null && item.CapacidadEstudiantes !== undefined ? String(item.CapacidadEstudiantes) : "",
-      horaInicio: formatTime(item.HoraInicio),
-      horaFin: formatTime(item.HoraFin)
+      telefono: item.Telefono || ""
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -5982,32 +5974,24 @@ function resetMatriculaForm() {
                   <h3>{editingRutaTransporteId !== null ? "Editar ruta" : "Crear ruta"}</h3>
                   <form className="form" onSubmit={handleRutaTransporteSubmit}>
                     <label>
+                      Número de ruta
+                      <input value={rutaTransporteForm.numeroRuta} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, numeroRuta: e.target.value })} maxLength={50} placeholder="Ejemplo: 01" />
+                    </label>
+                    <label>
+                      Nombre
+                      <input value={rutaTransporteForm.nombre} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, nombre: e.target.value })} maxLength={200} placeholder="Nombre que aparecerá en Estudiante + Matrícula" required />
+                    </label>
+                    <label>
                       Descripción
-                      <input value={rutaTransporteForm.descripcion} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, descripcion: e.target.value })} placeholder="Ejemplo: Ruta Norte" required />
+                      <textarea value={rutaTransporteForm.descripcion} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, descripcion: e.target.value })} rows={5} placeholder="Localidades y comunidades que cubre esta ruta" style={{ minHeight: 120, resize: "vertical" }} />
                     </label>
                     <label>
                       Responsable
                       <input value={rutaTransporteForm.responsable} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, responsable: e.target.value })} placeholder="Nombre del responsable" />
                     </label>
                     <label>
-                      Lugar de inicio
-                      <input value={rutaTransporteForm.lugarInicio} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, lugarInicio: e.target.value })} />
-                    </label>
-                    <label>
-                      Lugar de fin
-                      <input value={rutaTransporteForm.lugarFin} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, lugarFin: e.target.value })} />
-                    </label>
-                    <label>
-                      Capacidad de estudiantes
-                      <input type="number" min="0" value={rutaTransporteForm.capacidadEstudiantes} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, capacidadEstudiantes: e.target.value })} />
-                    </label>
-                    <label>
-                      Hora de inicio
-                      <input type="time" value={rutaTransporteForm.horaInicio} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, horaInicio: e.target.value })} />
-                    </label>
-                    <label>
-                      Hora de fin
-                      <input type="time" value={rutaTransporteForm.horaFin} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, horaFin: e.target.value })} />
+                      Teléfono
+                      <input type="tel" value={rutaTransporteForm.telefono} onChange={(e) => setRutaTransporteForm({ ...rutaTransporteForm, telefono: e.target.value })} maxLength={40} placeholder="Teléfono de contacto" />
                     </label>
                     <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                       <button className="primary-btn" disabled={loadingRutaTransporte}>
@@ -6034,7 +6018,7 @@ function resetMatriculaForm() {
             <section className="card" style={{ marginBottom: 0 }}>
               <h3>Listado de rutas</h3>
               <form onSubmit={handleRutaTransporteSearch} style={{ display: "flex", gap: "10px", marginBottom: "12px", flexWrap: "wrap" }}>
-                <input placeholder="Buscar por descripción, responsable o lugares" value={rutaTransporteSearch} onChange={(e) => setRutaTransporteSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
+                <input placeholder="Buscar por número, nombre, descripción, responsable o teléfono" value={rutaTransporteSearch} onChange={(e) => setRutaTransporteSearch(e.target.value)} style={{ flex: 1, minWidth: "240px" }} />
                 <button className="primary-btn" type="submit">Buscar</button>
                 <button type="button" onClick={() => { setRutaTransporteSearch(""); loadRutasTransporte("", incluirRutasTransporteInactivas); }} style={{ border: "1px solid #d1d5db", borderRadius: "10px", padding: "10px 14px", background: "#fff", cursor: "pointer" }}>
                   Limpiar
@@ -6047,18 +6031,16 @@ function resetMatriculaForm() {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>ID</th><th>Descripción</th><th>Responsable</th><th>Inicio</th><th>Fin</th><th>Capacidad</th><th>Horario</th><th>Estado</th><th>Acciones</th></tr>
+                    <tr><th>Número de ruta</th><th>Nombre</th><th>Descripción</th><th>Responsable</th><th>Teléfono</th><th>Estado</th><th>Acciones</th></tr>
                   </thead>
                   <tbody>
                     {rutasTransporte.map((item) => (
                       <tr key={item.RutaTransporteId}>
-                        <td>{item.RutaTransporteId}</td>
-                        <td>{item.Descripcion}</td>
+                        <td>{item.NumeroRuta || ""}</td>
+                        <td>{item.Nombre}</td>
+                        <td style={{ maxWidth: 360, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{item.Descripcion || ""}</td>
                         <td>{item.Responsable || ""}</td>
-                        <td>{item.LugarInicio || ""}</td>
-                        <td>{item.LugarFin || ""}</td>
-                        <td>{item.CapacidadEstudiantes ?? ""}</td>
-                        <td>{[formatTime(item.HoraInicio), formatTime(item.HoraFin)].filter(Boolean).join(" - ")}</td>
+                        <td>{item.Telefono || ""}</td>
                         <td>{item.Activo ? "Activo" : "Inactivo"}</td>
                         <td>
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -6072,7 +6054,7 @@ function resetMatriculaForm() {
                         </td>
                       </tr>
                     ))}
-                    {!rutasTransporte.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: "16px" }}>No hay rutas registradas</td></tr>}
+                    {!rutasTransporte.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: "16px" }}>No hay rutas registradas</td></tr>}
                   </tbody>
                 </table>
               </div>

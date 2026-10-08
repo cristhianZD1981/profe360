@@ -4410,11 +4410,7 @@ router.get("/certificaciones/constancia-estudio/registros", async (req, res) => 
           OR LOWER(ISNULL(cer.EstudianteNombre, '')) LIKE '%' + @q + '%'
           OR LOWER(ISNULL(cer.Identificacion, '')) LIKE '%' + @q + '%'
         )
-      ORDER BY
-        ISNULL(e.PrimerApellido, N''),
-        ISNULL(e.SegundoApellido, N''),
-        ISNULL(e.Nombre, cer.EstudianteNombre),
-        cer.CertificacionEstudioId ASC
+      ORDER BY cer.CreatedAt DESC, cer.CertificacionEstudioId DESC
     `);
 
   return ok(res, result.recordset);

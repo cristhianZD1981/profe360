@@ -25,15 +25,16 @@ function Field({ label, children, wide = false }: { label: string; children: Rea
 function Check({ label, checked, onChange, disabled = false, help }: { label: string; checked: boolean; onChange?: (value: boolean) => void; disabled?: boolean; help?: string }) {
   return <label className="em-check" title={help}><input type="checkbox" checked={checked} disabled={disabled} onChange={e => onChange?.(e.target.checked)} />{label}</label>;
 }
-function CatalogSelect({ value, onChange, rows, idKey, textKey = "Descripcion", placeholder = "Seleccione", currentLabel, legacyLabel, required = false }: {
-  value: string; onChange: (value: string) => void; rows: RecordData[]; idKey: string; textKey?: string; placeholder?: string; currentLabel?: string; legacyLabel?: string; required?: boolean;
+function CatalogSelect({ value, onChange, rows, idKey, textKey = "Descripcion", optionTitleKey, placeholder = "Seleccione", currentLabel, legacyLabel, required = false }: {
+  value: string; onChange: (value: string) => void; rows: RecordData[]; idKey: string; textKey?: string; optionTitleKey?: string; placeholder?: string; currentLabel?: string; legacyLabel?: string; required?: boolean;
 }) {
   const selectable = rows.filter(row => asFlag(row.Activo) || asText(row[idKey]) === value);
-  return <select value={value || (legacyLabel ? "__legacy__" : "")} required={required} onChange={e => { if (e.target.value !== "__legacy__") onChange(e.target.value); }}>
+  const selectedTitle = optionTitleKey ? asText(rows.find(row => asText(row[idKey]) === value)?.[optionTitleKey]) : "";
+  return <select value={value || (legacyLabel ? "__legacy__" : "")} title={selectedTitle || undefined} required={required} onChange={e => { if (e.target.value !== "__legacy__") onChange(e.target.value); }}>
     <option value="">{placeholder}</option>
     {!value && legacyLabel && <option value="__legacy__">{legacyLabel} (valor registrado)</option>}
     {value && !selectable.some(row => asText(row[idKey]) === value) && <option value={value}>{currentLabel || value} (valor registrado)</option>}
-    {selectable.map(row => <option key={row[idKey]} value={row[idKey]} disabled={!asFlag(row.Activo)}>{row[textKey]}{!asFlag(row.Activo) ? " (inactivo)" : ""}{row.PermiteMultiplesPorSeccion ? " · varias especialidades por sección" : ""}</option>)}
+    {selectable.map(row => <option key={row[idKey]} value={row[idKey]} title={optionTitleKey ? asText(row[optionTitleKey]) : undefined} disabled={!asFlag(row.Activo)}>{row[textKey]}{!asFlag(row.Activo) ? " (inactivo)" : ""}{row.PermiteMultiplesPorSeccion ? " · varias especialidades por sección" : ""}</option>)}
   </select>;
 }
 
@@ -92,8 +93,17 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
   const studentFieldsRef = useRef<HTMLFieldSetElement>(null);
   const enrollmentFieldsRef = useRef<HTMLFieldSetElement>(null);
   const enrollmentSectionRef = useRef<HTMLElement>(null);
+  const conductSectionRef = useRef<HTMLElement>(null);
   const feedbackRef = useRef<HTMLDivElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!conductOpen) return;
+    const frame = requestAnimationFrame(() => {
+      conductSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [conductOpen]);
 
   const esMayor = esMayorParaWhatsApp(form.fechaNacimiento, getCostaRicaIsoDate());
   const principalGuardianIndex = Math.max(guardians.findIndex(guardian => guardian.esPrincipal), 0);
@@ -125,6 +135,16 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
   const derivedEnrollment = automaticEnrollment(enrollment, form, guardians, catalogs.groups, catalogs.routes);
   const destinatariosBoletaCorreo = guardians.filter(guardian => guardian.aceptaCorreo && isValidEmail(guardian.correo));
   const puedeEnviarBoletaCorreo = !!editingId && !studentDirty && destinatariosBoletaCorreo.length > 0;
+  const bienvenidaCorreoDisponible = !!principalGuardian?.esPrincipal && principalGuardian.aceptaCorreo && isValidEmail(principalGuardian.correo);
+  const bienvenidaWhatsAppDisponible = !!principalGuardian?.esPrincipal && principalGuardian.aceptaWhatsApp && !!phonePayload(principalGuardian.telefono);
+  const puedeEnviarBienvenida = !!editingId && !studentDirty && (bienvenidaCorreoDisponible || bienvenidaWhatsAppDisponible);
+  const motivoEnvioBienvenida = !editingId
+    ? "Guardá primero la matrícula para enviar el mensaje de bienvenida."
+    : studentDirty
+      ? "Guardá los cambios del estudiante y del encargado principal antes de enviar."
+      : !bienvenidaCorreoDisponible && !bienvenidaWhatsAppDisponible
+        ? "El encargado principal debe tener un correo o teléfono válido y aceptar recibir mensajes por ese canal."
+        : `Se enviará por ${bienvenidaCorreoDisponible && bienvenidaWhatsAppDisponible ? "correo y WhatsApp" : bienvenidaCorreoDisponible ? "correo" : "WhatsApp"} según los checks activos del encargado principal.`;
   const motivoEnvioBoletaCorreo = !editingId
     ? "Guardá primero la matrícula para enviar la boleta."
     : studentDirty
@@ -233,7 +253,7 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
         identificationTypes: personal.tipoIdentificacion ? [{ Descripcion: personal.tipoIdentificacion, Activo: true }] : [],
         nationalities: personal.nacionalidad ? [{ Descripcion: personal.nacionalidad, Activo: true }] : [],
         types: personal.tipoEstudianteId ? [{ TipoEstudianteId: personal.tipoEstudianteId, Descripcion: asText(record.TipoEstudianteDescripcion), Activo: true }] : [],
-        routes: personal.rutaTransporteId ? [{ RutaTransporteId: personal.rutaTransporteId, Descripcion: asText(record.RutaTransporteDescripcion || personal.rutaTransporteHabitual), Activo: true }] : [],
+        routes: personal.rutaTransporteId ? [{ RutaTransporteId: personal.rutaTransporteId, Nombre: asText(record.RutaTransporteDescripcion || personal.rutaTransporteHabitual), Descripcion: asText(record.RutaTransporteDetalle), Activo: true }] : [],
         supports: personal.adecuacion ? [{ TipoAdecuacionId: 0, Descripcion: personal.adecuacion, Activo: true }] : [],
         guardianTypes: contacts.filter(contact => contact.tipoEncargado).map(contact => ({ Descripcion: contact.tipoEncargado, Activo: true })),
         domain: ""
@@ -405,6 +425,13 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
       setMessage(response.data?.message || "Boleta enviada por correo correctamente.");
     });
   }
+  async function sendWelcomeMessage() {
+    if (!editingId || !puedeEnviarBienvenida) return;
+    await run("Enviando mensaje de bienvenida…", async () => {
+      const response = await api.post(`/boletas/matricula/${editingId}/enviar-bienvenida`);
+      setMessage(response.data?.message || "Mensaje de Bienvenida procesado.");
+    });
+  }
 
   async function changeStudentStatus() {
     if (!selected || !discardChanges()) return;
@@ -547,24 +574,32 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
   }
   async function createConduct(event: FormEvent) {
     event.preventDefault(); if (!selected) return;
+    const previewWindow = window.open("about:blank", "_blank");
+    if (previewWindow) previewWindow.opener = null;
     const customDetail = conduct.faltaConductaId === "normativa-interna";
     const chosenFault = conductFaltas.find(item => String(item.FaltaConductaId) === conduct.faltaConductaId);
     const detailText = customDetail ? conduct.detalleNormativa.trim() : chosenFault?.Falta || "";
     await run("Generando boleta…", async () => {
-      const response = await api.post("/boletas/conducta", {
-        estudianteId: selected.EstudianteId,
-        faltaConductaId: chosenFault?.FaltaConductaId || null,
-        segunNormativaInterna: customDetail,
-        detalleHechos: detailText,
-        lugarAcontecimiento: conduct.lugarAcontecimiento
-      });
-      const id = Number(response.data?.data?.boletaConductaId);
-      if (!id) throw new Error("No se recibió la boleta generada.");
-      const consecutivo = Number(response.data?.data?.consecutivo);
-      const numeroBoleta = String(response.data?.data?.codigoBoleta || (consecutivo ? String(consecutivo).padStart(3, "0") : id));
-      setConductContext(null);
-      setMessage(`Boleta de conducta generada correctamente.`);
-      setConductRows(prev => [{ boletaConductaId: id, numeroBoleta, fecha: getCostaRicaIsoDate(), detalleHechos: detailText, lugarAcontecimiento: conduct.lugarAcontecimiento, envioCorreo: false, envioWhatsApp: false }, ...prev]);
+      try {
+        const response = await api.post("/boletas/conducta", {
+          estudianteId: selected.EstudianteId,
+          faltaConductaId: chosenFault?.FaltaConductaId || null,
+          segunNormativaInterna: customDetail,
+          detalleHechos: detailText,
+          lugarAcontecimiento: conduct.lugarAcontecimiento
+        });
+        const id = Number(response.data?.data?.boletaConductaId);
+        if (!id) throw new Error("No se recibió la boleta generada.");
+        const consecutivo = Number(response.data?.data?.consecutivo);
+        const numeroBoleta = String(response.data?.data?.codigoBoleta || (consecutivo ? String(consecutivo).padStart(3, "0") : id));
+        setConductContext(null);
+        setMessage(previewWindow ? "Boleta de conducta generada correctamente y abierta en una nueva ventana." : "Boleta guardada. El navegador bloqueó la nueva ventana; abrila desde el enlace Ver boleta de la lista.");
+        setConductRows(prev => [{ boletaConductaId: id, numeroBoleta, fecha: getCostaRicaIsoDate(), detalleHechos: detailText, lugarAcontecimiento: conduct.lugarAcontecimiento, envioCorreo: false, envioWhatsApp: false }, ...prev]);
+        if (previewWindow && !previewWindow.closed) previewWindow.location.replace(new URL(`/boletas/conducta/${id}`, window.location.origin).toString());
+      } catch (error) {
+        previewWindow?.close();
+        throw error;
+      }
     });
   }
 
@@ -608,10 +643,10 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
           </div>
           <div className="em-student-contact em-student-rest-row">
             {textInput("telefono", "Teléfono", "tel")}
-            <Field label="Ruta de transporte"><CatalogSelect value={form.rutaTransporteId} rows={catalogs.routes} idKey="RutaTransporteId" currentLabel={selected?.RutaTransporteDescripcion || form.rutaTransporteHabitual} legacyLabel={!form.rutaTransporteId ? form.rutaTransporteHabitual : undefined} placeholder="Sin ruta" onChange={id => { const route = catalogs.routes.find(r => asText(r.RutaTransporteId) === id); setForm(prev => ({ ...prev, rutaTransporteId: id, rutaTransporteHabitual: asText(route?.Descripcion) })); }} /></Field>
+            <Field label="Ruta de transporte"><CatalogSelect value={form.rutaTransporteId} rows={catalogs.routes} idKey="RutaTransporteId" textKey="Nombre" optionTitleKey="Descripcion" currentLabel={selected?.RutaTransporteDescripcion || form.rutaTransporteHabitual} legacyLabel={!form.rutaTransporteId ? form.rutaTransporteHabitual : undefined} placeholder="Sin ruta" onChange={id => { const route = catalogs.routes.find(r => asText(r.RutaTransporteId) === id); setForm(prev => ({ ...prev, rutaTransporteId: id, rutaTransporteHabitual: asText(route?.Nombre) })); }} /></Field>
             <Field label="Correo"><input type="email" value={form.correo} placeholder={form.identificacion ? `${form.identificacion}${catalogs.domain}` : "Se genera al guardar"} onChange={e => changeStudent("correo", e.target.value)} /></Field>
             <Field label="Fotografía"><div className="em-photo-actions"><input type="file" ref={photoRef} accept="image/*" onChange={e => void uploadPhoto(e.target.files?.[0])} />{form.fotoUrl && <button type="button" onClick={() => changeStudent("fotoUrl", "")}>Quitar foto</button>}</div></Field>
-            <Check label="Acepta WhatsApp" help="Hereda la autorización del encargado. Solo puede modificarse desde los 18 años. Si se desactiva, no se envían mensajes sobre este estudiante ni a sus encargados." checked={aceptaWhatsAppAlumno(form.aceptaWhatsAppEstudiante, permisoEncargados, contactosRegistrados)} disabled={!esMayor} onChange={value => changeStudent("aceptaWhatsAppEstudiante", value)} />
+            <Check label="Acepta WhatsApp" help="Desde los 18 años, el estudiante decide si desea recibir mensajes. La autorización del encargado se controla por separado." checked={esMayor && aceptaWhatsAppAlumno(form.aceptaWhatsAppEstudiante)} disabled={!esMayor} onChange={value => changeStudent("aceptaWhatsAppEstudiante", value)} />
             <Check label="Repitente" checked={form.repitente} onChange={v => changeStudent("repitente", v)} />
             <Check label="Refugiado" checked={form.refugiado} onChange={v => changeStudent("refugiado", v)} />
             <Check label="Beca de Transporte" checked={form.becaTransporte} onChange={v => changeStudent("becaTransporte", v)} />
@@ -651,8 +686,8 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
       {teacherView && selected && <section className="em-panel em-teacher-consent" aria-label="Autorización de WhatsApp">
         <div className="em-section-title em-spread"><div><h2>Autorización de WhatsApp</h2><p>Podés actualizar únicamente las autorizaciones para WhatsApp.</p></div></div>
         <div className="em-checks">
-          <Check label="Encargado principal acepta WhatsApp" checked={!!currentTeacherConsent.encargado} disabled={!!busy || inactive} onChange={changeTeacherGuardianConsent} />
-          {esMayor && <Check label="Estudiante mayor de edad acepta WhatsApp" checked={form.aceptaWhatsAppEstudiante === true} disabled={!!busy || inactive} onChange={value => changeStudent("aceptaWhatsAppEstudiante", value)} />}
+          <Check label="Encargado principal acepta WhatsApp" checked={!!currentTeacherConsent.encargado} disabled={!!busy || inactive || !phonePayload(principalGuardian?.telefono)} help={!phonePayload(principalGuardian?.telefono) ? "Se requiere el teléfono del encargado principal para habilitar WhatsApp." : undefined} onChange={changeTeacherGuardianConsent} />
+          {esMayor && <Check label="Estudiante mayor de edad acepta WhatsApp" checked={form.aceptaWhatsAppEstudiante === true} disabled={!!busy || inactive || !phonePayload(form.telefono)} help={!phonePayload(form.telefono) ? "Se requiere el teléfono del estudiante para habilitar WhatsApp." : undefined} onChange={value => changeStudent("aceptaWhatsAppEstudiante", value)} />}
         </div>
         {teacherConsentDirty && <div className="em-actions"><button type="button" className="em-primary" disabled={!!busy || inactive} onClick={() => void saveTeacherWhatsAppConsent()}>Guardar cambios de WhatsApp</button></div>}
       </section>}
@@ -680,7 +715,7 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
 
       </section>
       </div>
-      {teacherView ? <div className="em-savebar"><div className="em-panel-footer"><div className="em-actions"><button type="button" className="em-primary" disabled={!teacherConsentDirty || !!busy || inactive} onClick={() => void saveTeacherWhatsAppConsent()}>Guardar autorización WhatsApp</button><button type="button" className="em-button" disabled={!teacherAuthorizationMatriculaId || !teacherConsentAccepted || !!busy} onClick={() => void printTeacherWhatsAppAuthorization()} title={!teacherAuthorizationMatriculaId ? "El estudiante debe tener una matrícula registrada." : !teacherConsentAccepted ? "Marcá una autorización de WhatsApp para habilitar la impresión." : teacherConsentDirty ? "Al imprimir se guardarán primero los cambios de WhatsApp. Se mostrará únicamente esta autorización." : "Imprimir únicamente la autorización de WhatsApp."}>Imprimir autorización de WhatsApp</button></div></div></div> : <div className="em-savebar"><div className="em-panel-footer"><div className="em-actions"><button title={enrollmentDirty ? "Se guardarán los datos del estudiante y los cambios de matrícula." : "Se guardarán los datos del estudiante. Para matricular o actualizar la matrícula, modificá sus datos académicos."} className="em-primary" disabled={!!busy || inactive} onClick={() => void save(enrollmentDirty)}>{partialSave ? "Reintentar matrícula" : isTransfer ? "Guardar y trasladar" : enrollmentDirty ? "Guardar estudiante y matrícula" : "Guardar datos del estudiante"}</button>{editingId && <><a className="em-button" href={`/boletas/matricula/${editingId}`} target="_blank" rel="noopener noreferrer">Imprimir Boletas</a><span className={`em-button-tooltip ${!puedeEnviarBoletaCorreo || !!busy ? "is-disabled" : ""}`} title={motivoEnvioBoletaCorreo}><button type="button" className="em-button" disabled={!puedeEnviarBoletaCorreo || !!busy} title={motivoEnvioBoletaCorreo} onClick={() => void sendBoletaMatriculaEmail()}>{busy.includes("Enviando boleta") ? "Enviando…" : "Enviar por correo Boletas"}</button></span></>}</div></div></div>}
+      {teacherView ? <div className="em-savebar"><div className="em-panel-footer"><div className="em-actions"><button type="button" className="em-primary" disabled={!teacherConsentDirty || !!busy || inactive} onClick={() => void saveTeacherWhatsAppConsent()}>Guardar autorización WhatsApp</button><button type="button" className="em-button" disabled={!teacherAuthorizationMatriculaId || !teacherConsentAccepted || !!busy} onClick={() => void printTeacherWhatsAppAuthorization()} title={!teacherAuthorizationMatriculaId ? "El estudiante debe tener una matrícula registrada." : !teacherConsentAccepted ? "Marcá una autorización de WhatsApp para habilitar la impresión." : teacherConsentDirty ? "Al imprimir se guardarán primero los cambios de WhatsApp. Se mostrará únicamente esta autorización." : "Imprimir únicamente la autorización de WhatsApp."}>Imprimir autorización de WhatsApp</button><span className="em-button-tooltip is-disabled" title="El envío del mensaje de bienvenida debe realizarlo un usuario con rol administrativo."><button type="button" className="em-button" disabled title="El envío del mensaje de bienvenida debe realizarlo un usuario con rol administrativo.">Enviar Mjs WA y Correo</button></span></div></div></div> : <div className="em-savebar"><div className="em-panel-footer"><div className="em-actions"><button title={enrollmentDirty ? "Se guardarán los datos del estudiante y los cambios de matrícula." : "Se guardarán los datos del estudiante. Para matricular o actualizar la matrícula, modificá sus datos académicos."} className="em-primary" disabled={!!busy || inactive} onClick={() => void save(enrollmentDirty)}>{partialSave ? "Reintentar matrícula" : isTransfer ? "Guardar y trasladar" : enrollmentDirty ? "Guardar estudiante y matrícula" : "Guardar datos del estudiante"}</button>{editingId && <><a className="em-button" href={`/boletas/matricula/${editingId}`} target="_blank" rel="noopener noreferrer">Imprimir Boletas</a><span className={`em-button-tooltip ${!puedeEnviarBoletaCorreo || !!busy ? "is-disabled" : ""}`} title={motivoEnvioBoletaCorreo}><button type="button" className="em-button" disabled={!puedeEnviarBoletaCorreo || !!busy} title={motivoEnvioBoletaCorreo} onClick={() => void sendBoletaMatriculaEmail()}>{busy.includes("Enviando boleta") ? "Enviando…" : "Enviar por correo Boletas"}</button></span><span className={`em-button-tooltip ${!puedeEnviarBienvenida || !!busy ? "is-disabled" : ""}`} title={motivoEnvioBienvenida}><button type="button" className="em-button" disabled={!puedeEnviarBienvenida || !!busy} title={motivoEnvioBienvenida} onClick={() => void sendWelcomeMessage()}>{busy.includes("mensaje de bienvenida") ? "Enviando…" : "Enviar Mjs WA y Correo"}</button></span></>}</div></div></div>}
       <div className="em-secondary-tools">
       <details className="em-history"><summary>Historial completo de matrícula</summary><div className="em-section-title em-spread"><div><h2>Historial de matrícula</h2><p>Consultá cada año sin duplicar el expediente.</p></div><div className="em-actions"><Check label="Mostrar inactivas" checked={showInactiveHistory} onChange={setShowInactiveHistory} /><button disabled={!!busy || !selected} onClick={() => void refreshHistory()}>Actualizar historial</button></div></div>
         <div className="em-table-wrap"><table><thead><tr><th>Año</th><th>Grupo / sección</th><th>Tipo y especialidad</th><th>Fecha</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{history.filter(row => showInactiveHistory || isActiveEnrollment(row)).map(row => <tr key={row.MatriculaId}><td>{row.AnioNombre}</td><td>{row.GrupoNombre}</td><td>{row.TipoMatricula || "—"}<small>{row.EspecialidadDescripcion || row.Especialidad}</small></td><td>{asDate(row.FechaMatricula) || "—"}</td><td><span className="em-badge">{row.Estado}</span></td><td><div className="em-actions">{teacherView ? <button disabled={!!busy} onClick={() => { editEnrollment(row); document.querySelector(".em-enrollment")?.scrollIntoView({behavior:"smooth"}); }}>Ver registro</button> : <><button disabled={!!busy} onClick={() => { if (editEnrollment(row)) document.querySelector(".em-enrollment")?.scrollIntoView({behavior:"smooth"}); }}>{isActiveEnrollment(row) ? "Editar / trasladar" : "Ver registro"}</button><a href={`/boletas/matricula/${row.MatriculaId}`} target="_blank" rel="noopener noreferrer">Boleta ↗</a><button disabled={!!busy || inactive} onClick={() => void changeEnrollmentStatus(row)}>{isActiveEnrollment(row) ? "Inactivar" : "Reactivar"}</button></>}</div></td></tr>)}</tbody></table>{!history.filter(row => showInactiveHistory || isActiveEnrollment(row)).length && <p className="em-empty">{historyReady ? "No hay matrículas para mostrar con este filtro." : "Historial pendiente de consulta."}</p>}</div>
@@ -695,7 +730,7 @@ function StudentEnrollmentWorkspace({ teacherView = false }: { teacherView?: boo
           <table><thead><tr><th>Causa</th><th>Fecha</th><th>Estado</th><th>Observación</th><th>Registró</th><th>Reactivación</th></tr></thead><tbody>{statusHistory.inactivaciones.map(row => <tr key={row.EstudianteInactivacionId}><td>{row.Motivo}</td><td>{asDate(row.FechaInactivacion)}</td><td>{asFlag(row.Activo) ? "Vigente" : "Revertida"}</td><td>{row.Observacion || "—"}</td><td>{row.UsuarioInactiva || "—"}</td><td>{row.FechaReactivacion ? `${asDate(row.FechaReactivacion)}${row.UsuarioReactiva ? ` · ${row.UsuarioReactiva}` : ""}` : "—"}</td></tr>)}</tbody></table>{!statusHistory.inactivaciones.length && <p className="em-empty">No hay inactivaciones registradas.</p>}
         </div>}
       </section>}
-      {conductOpen && <section className="em-panel"><div className="em-section-title em-spread"><h2>Boletas de conducta</h2><div className="em-actions"><button disabled={!!busy || inactive} onClick={() => void prepareConduct()}>Generar boleta</button><button disabled={!!busy} onClick={() => setConductOpen(false)}>Cerrar</button></div></div>
+      {conductOpen && <section ref={conductSectionRef} className="em-panel"><div className="em-section-title em-spread"><h2>Boletas de conducta</h2><div className="em-actions"><button disabled={!!busy || inactive} onClick={() => void prepareConduct()}>Generar boleta</button><button disabled={!!busy} onClick={() => setConductOpen(false)}>Cerrar</button></div></div>
         {conductContext && <form onSubmit={createConduct}><fieldset disabled={!!busy}><div className="em-notice">{conductContext.estudianteNombre} · Sección {conductContext.seccion} · {conductContext.funcionarioNombre} · {asDate(conductContext.fecha)}</div><div className="em-grid em-two"><Field label="Detalle de los hechos"><select required value={conduct.faltaConductaId} onChange={e => setConduct(prev => ({ ...prev, faltaConductaId: e.target.value, detalleNormativa: "" }))}><option value="">Seleccione una falta</option>{conductFaltas.map(item => <option key={item.FaltaConductaId} value={item.FaltaConductaId} title={`Artículo: ${item.Articulo} · Tipo de falta: ${item.TipoFalta}`}>{item.Falta}</option>)}<option value="normativa-interna" title="Detalle escrito por el docente según la normativa interna">Según la normativa interna</option></select></Field><Field label="Lugar del acontecimiento"><input required value={conduct.lugarAcontecimiento} onChange={e => setConduct(prev => ({ ...prev, lugarAcontecimiento: e.target.value }))} /></Field>{conduct.faltaConductaId === "normativa-interna" ? <Field label="Detalle según la normativa interna" wide><textarea required rows={3} value={conduct.detalleNormativa} onChange={e => setConduct(prev => ({ ...prev, detalleNormativa: e.target.value }))} /></Field> : null}{conductFaltas.find(item => String(item.FaltaConductaId) === conduct.faltaConductaId) ? <div className="em-notice" role="status">Artículo: {conductFaltas.find(item => String(item.FaltaConductaId) === conduct.faltaConductaId)?.Articulo} · Tipo de falta: {conductFaltas.find(item => String(item.FaltaConductaId) === conduct.faltaConductaId)?.TipoFalta}</div> : null}</div><div className="em-actions"><button className="em-primary" disabled={!conduct.faltaConductaId || (conduct.faltaConductaId === "normativa-interna" && !conduct.detalleNormativa.trim())}>Guardar boleta</button><button type="button" onClick={() => setConductContext(null)}>Cancelar</button></div></fieldset></form>}
         <div className="em-table-wrap"><table><thead><tr><th>Número</th><th>Fecha</th><th>Detalle</th><th>Correo / WhatsApp</th><th>Documento</th></tr></thead><tbody>{conductRows.map(row => <tr key={row.boletaConductaId}><td>{row.numeroBoleta || "—"}</td><td>{row.fecha || "—"}</td><td>{row.detalleHechos || "—"}<small>{row.lugarAcontecimiento || ""}</small></td><td>{row.envioCorreo ? "Enviado" : "Pendiente"} / {row.envioWhatsApp ? "Enviado" : "Pendiente"}</td><td><a href={`/boletas/conducta/${row.boletaConductaId}`} target="_blank" rel="noopener noreferrer">Ver boleta ↗</a></td></tr>)}</tbody></table>{!conductRows.length && <p className="em-empty">Sin boletas de conducta registradas.</p>}</div>
       </section>}

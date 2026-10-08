@@ -29,17 +29,22 @@ export function destinosWhatsAppComunicado(params: {
 }) {
   const edad = edadComunicado(params.fechaNacimiento, params.hoy);
   const adulto = edad !== null && edad >= 18;
-  const permisoAlumno = params.estudiante.AceptaWhatsApp ?? (acepta(params.autorizaEncargados) || params.encargados.some(c => acepta(c.AceptaWhatsApp)));
-  const contactos = edad === null || adulto ? [{ ...params.estudiante, AceptaWhatsApp: permisoAlumno }] : params.encargados;
-  const elegidos: Contacto[] = contactos.length ? contactos : [{ EncargadoId: null, Nombre: "Encargado no registrado" }];
+  const principal = params.encargados[0];
+  const permisoEncargado = acepta(params.autorizaEncargados) && acepta(principal?.AceptaWhatsApp);
+  const permisoAlumno = adulto && acepta(params.estudiante.AceptaWhatsApp);
+  const contactos: Contacto[] = [];
+  if (permisoEncargado && principal) contactos.push(principal);
+  if (permisoAlumno) contactos.push(params.estudiante);
+  const elegidos: Contacto[] = contactos.length ? contactos : [{ EncargadoId: null, Nombre: adulto ? "Sin destinatario autorizado" : "Encargado no autorizado" }];
   return elegidos.map(contacto => {
     const telefono = normalizeWhatsAppPhone(contacto.Telefono);
     const destino = /^\+\d{7,15}$/.test(telefono) ? telefono : "";
+    const esEstudiante = contacto.EncargadoId == null && contacto === params.estudiante;
     const motivo = edad === null ? "Fecha de nacimiento ausente o inválida; no se puede determinar el destinatario"
-      : !adulto && !params.encargados.length ? "Sin encargados habilitados para recibir notificaciones"
-      : !adulto && !acepta(params.autorizaEncargados) ? "WhatsApp al encargado no autorizado"
-      : !acepta(contacto.AceptaWhatsApp) ? `${adulto ? "El estudiante" : "El encargado"} no acepta mensajes de WhatsApp`
-      : !destino ? `Sin teléfono válido del ${adulto ? "estudiante" : "encargado"}` : "";
+      : esEstudiante && !adulto ? "Solo estudiantes mayores de edad pueden autorizar su propio WhatsApp"
+      : !contactos.length && !params.encargados.length ? "Sin encargado principal registrado"
+      : !contactos.length ? "No hay destinatarios con autorización de WhatsApp activa"
+      : !destino ? `Sin teléfono válido del ${esEstudiante ? "estudiante" : "encargado principal"}` : "";
     return { encargado: contacto, canal: "WHATSAPP", destino, motivo, habilitado: !motivo };
   });
 }

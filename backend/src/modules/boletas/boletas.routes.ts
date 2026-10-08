@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { autorizarReporteGuia } from "../reportes/profe-guia-access";
 import { applyInstitutionScope, requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
@@ -43,6 +44,17 @@ function formatDate(value?: any) {
     return d.toISOString().slice(0, 10);
   }
   return String(value).slice(0, 10);
+}
+
+function formatDateDayMonthYear(value?: any) {
+  const iso = formatDate(value);
+  const parts = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return parts ? `${parts[3]}-${parts[2]}-${parts[1]}` : iso;
+}
+
+function formatGuardianType(value?: any) {
+  const type = String(value || "Encargado").trim().toLocaleLowerCase("es");
+  return type.replace(/(^|\s)\p{L}/gu, letter => letter.toLocaleUpperCase("es"));
 }
 
 function buildConsecutivoCodigo(prefijo?: string | null, siguienteNumero?: number | null, anioLectivo?: string | null) {
@@ -262,7 +274,7 @@ async function cargarBoletaMatricula(pool: any, matriculaId: number, institucion
         md.MatriculaDetalleId, md.TipoMatricula, md.NivelAcademico, md.Especialidad, md.SeccionTexto, md.RutaTransporte,
         md.EsRepitente, md.PermiteExcepcionProgresion, md.JustificacionExcepcion, md.CorreoEnvioBoleta,
         md.Observaciones AS ObservacionesDetalle,
-        e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido, e.FechaNacimiento,
+        e.TipoIdentificacion, e.Identificacion, e.Nombre, e.PrimerApellido, e.SegundoApellido, e.FechaNacimiento,
         e.AceptaWhatsAppEstudiante, e.BecaTransporte, e.Sexo, e.Correo, e.Telefono, e.FotoUrl, e.CodigoCarnet,
         e.QrContenido, e.Nacionalidad, e.Adecuacion, e.Discapacidad, e.Enfermedad, e.RutaTransporteHabitual, e.ObservacionMedica,
         i.Nombre AS InstitucionNombre, i.NombreComercial AS InstitucionNombreComercial, i.LogoUrl, i.MembreteUrl,
@@ -290,8 +302,7 @@ async function cargarBoletaMatricula(pool: any, matriculaId: number, institucion
       FROM dbo.EstudianteEncargado ee
       INNER JOIN dbo.Encargado e ON e.EncargadoId = ee.EncargadoId
       WHERE ee.EstudianteId = @estudianteId AND ee.Activo = 1
-      ORDER BY CASE e.TipoEncargado WHEN 'MADRE' THEN 1 WHEN 'PADRE' THEN 2 ELSE 3 END,
-        ee.EstudianteEncargadoId DESC
+      ORDER BY ee.EstudianteEncargadoId ASC
     `);
 
   const institucion = {
@@ -300,7 +311,7 @@ async function cargarBoletaMatricula(pool: any, matriculaId: number, institucion
     RegionalEducativa: row.RegionalEducativa, CircuitoEducativo: row.CircuitoEducativo
   };
   const estudiante = {
-    EstudianteId: row.EstudianteId, Identificacion: row.Identificacion, Nombre: row.Nombre,
+    EstudianteId: row.EstudianteId, TipoIdentificacion: row.TipoIdentificacion, Identificacion: row.Identificacion, Nombre: row.Nombre,
     PrimerApellido: row.PrimerApellido, SegundoApellido: row.SegundoApellido, FechaNacimiento: row.FechaNacimiento,
     AceptaWhatsAppEstudiante: row.AceptaWhatsAppEstudiante, BecaTransporte: !!row.BecaTransporte,
     Sexo: row.Sexo, Correo: row.Correo, Telefono: row.Telefono, FotoUrl: row.FotoUrl,
@@ -663,12 +674,8 @@ function buildBoletaHtml(params: {
 }) {
   const { institucion, matricula, estudiante, encargados } = params;
 
-  const madre = encargados.find((x) => x.tipo === "MADRE") || null;
-  const padre = encargados.find((x) => x.tipo === "PADRE") || null;
-  const encargado = encargados.find((x) => x.tipo === "ENCARGADO") || null;
-
-  const bloqueMadreOEncargada = madre || encargado;
-  const bloquePadreOEncargado = padre || (madre ? encargado : null);
+  const bloqueMadreOEncargada = encargados[0] || null;
+  const bloquePadreOEncargado = encargados[1] || null;
 
   const anioBoleta =
     String(matricula?.AnioNombre || "").match(/\d{4}/)?.[0] ||
@@ -693,7 +700,7 @@ function buildBoletaHtml(params: {
   const nombreFirmante = encargadoPrincipal?.nombre || "";
   const cedulaFirmante = encargadoPrincipal?.identificacion || "";
   const telefonoAutorizado = estudianteMayorEdad
-    ? (autorizacionEstudiante ? (estudiante?.Telefono || "") : "")
+    ? [autorizacionEncargado ? encargadoPrincipal?.telefono : "", autorizacionEstudiante ? estudiante?.Telefono : ""].filter(Boolean).join(" / ")
     : (autorizacionEncargado ? (encargadoPrincipal?.telefono || "") : "");
   const fechaAutorizacion = formatDateCR(new Date(`${getCostaRicaIsoDate()}T12:00:00`));
   const checkbox = (checked: boolean) => checked ? "&#9745;" : "&#9744;";
@@ -710,7 +717,7 @@ function buildBoletaHtml(params: {
       <div class="identity-checks"><span>${checkbox(autorizacionEncargado)} Encargado(a) legal del estudiante</span><span>${checkbox(autorizacionEstudiante)} Estudiante mayor de edad</span></div>
       <p>Autorizo a la institución educativa a utilizar el siguiente número telefónico para el envío de comunicados oficiales mediante WhatsApp:</p>
       <table class="student-data"><tr><td><strong>Número telefónico autorizado</strong><br/>${escapeHtml(telefonoAutorizado)}</td><td><strong>Teléfono del encargado principal</strong><br/>${escapeHtml(encargadoPrincipal?.telefono || "")}</td></tr><tr><td><strong>Nombre de la persona estudiante</strong><br/>${escapeHtml(nombreEstudiante)}</td><td><strong>Sección / nivel</strong><br/>${escapeHtml(matricula?.SeccionTexto || matricula?.GrupoNombre || "")}</td></tr></table>
-      ${estudianteMayorEdad ? `<p><strong>Consentimiento de persona mayor de edad:</strong> la aceptación del encargado no habilita el envío de mensajes al encargado; el envío se dirige únicamente a la persona estudiante si marcó su autorización.</p>` : ""}
+      ${estudianteMayorEdad ? `<p><strong>Consentimiento de persona mayor de edad:</strong> los mensajes se envían únicamente a los destinatarios que marcaron su aceptación: la persona estudiante, el encargado principal o ambos.</p>` : ""}
       <p>En la siguiente página se detallan las condiciones de esta autorización y los datos del encargado principal.</p>
     </section>
     <section class="page authorization-page">
@@ -1105,13 +1112,13 @@ function buildBoletaHtml(params: {
           <td><div class="label">PRIMER APELLIDO:</div><div class="value">${escapeHtml(estudiante?.PrimerApellido || "")}</div></td>
           <td><div class="label">SEGUNDO APELLIDO:</div><div class="value">${escapeHtml(estudiante?.SegundoApellido || "")}</div></td>
           <td><div class="label">NOMBRE:</div><div class="value">${escapeHtml(estudiante?.Nombre || "")}</div></td>
-          <td><div class="label">N° CÉDULA:</div><div class="value">${escapeHtml(estudiante?.Identificacion || "")}</div></td>
-          <td><div class="label">IDENTIFICACIÓN:</div><div class="value">${escapeHtml(estudiante?.Identificacion || "")}</div></td>
+          <td><div class="label">TIPO DE IDENTIFICACIÓN:</div><div class="value">${escapeHtml(estudiante?.TipoIdentificacion || "")}</div></td>
+          <td><div class="label">NÚMERO DE IDENTIFICACIÓN:</div><div class="value">${escapeHtml(estudiante?.Identificacion || "")}</div></td>
         </tr>
         <tr>
           <td><div class="label">NACIONALIDAD:</div><div class="value">${escapeHtml(estudiante?.Nacionalidad || "")}</div></td>
           <td><div class="label">ADECUACIÓN:</div><div class="value">${escapeHtml(estudiante?.Adecuacion || "")}</div></td>
-          <td><div class="label">FECHA NACIMIENTO:</div><div class="value">${escapeHtml(formatDate(estudiante?.FechaNacimiento))}</div></td>
+          <td><div class="label">FECHA NACIMIENTO:</div><div class="value">${escapeHtml(formatDateDayMonthYear(estudiante?.FechaNacimiento))}</div></td>
           <td><div class="label">¿ES REPITENTE?</div><div class="value">${matricula?.EsRepitente ? "Sí" : "No"}</div></td>
           <td><div class="label">RUTA DE TRANSPORTE:</div><div class="value">${escapeHtml(matricula?.RutaTransporte || estudiante?.RutaTransporteHabitual || "")}</div></td>
         </tr>
@@ -1126,7 +1133,7 @@ function buildBoletaHtml(params: {
     </div>
 
     <div class="box">
-      <div class="box-title">DATOS DE LA MADRE O ENCARGADA</div>
+      <div class="box-title">DATOS DEL ENCARGADO 1</div>
       <table class="form-table">
         <tr>
           <td style="width: 55%;"><div class="label">NOMBRE:</div><div class="value">${escapeHtml(bloqueMadreOEncargada?.nombre || "")}</div></td>
@@ -1135,14 +1142,14 @@ function buildBoletaHtml(params: {
         </tr>
         <tr>
           <td><div class="label">DIRECCIÓN EXACTA:</div><div class="value">${escapeHtml(bloqueMadreOEncargada?.direccion || "")}</div></td>
-          <td><div class="label">PARENTESCO:</div><div class="value">${escapeHtml(bloqueMadreOEncargada?.parentesco || "")}</div></td>
+          <td><div class="label">ENCARGADO 1:</div><div class="value">${escapeHtml(formatGuardianType(bloqueMadreOEncargada?.tipo))}</div></td>
           <td><div class="label">VIVE CON ESTUDIANTE:</div><div class="value">${bloqueMadreOEncargada?.viveConEstudiante ? "Sí" : "No"}</div></td>
         </tr>
       </table>
     </div>
 
     <div class="box">
-      <div class="box-title">DATOS DEL PADRE O ENCARGADO</div>
+      <div class="box-title">DATOS DEL ENCARGADO 2</div>
       <table class="form-table">
         <tr>
           <td style="width: 55%;"><div class="label">NOMBRE:</div><div class="value">${escapeHtml(bloquePadreOEncargado?.nombre || "")}</div></td>
@@ -1151,7 +1158,7 @@ function buildBoletaHtml(params: {
         </tr>
         <tr>
           <td><div class="label">DIRECCIÓN:</div><div class="value">${escapeHtml(bloquePadreOEncargado?.direccion || "")}</div></td>
-          <td><div class="label">PARENTESCO:</div><div class="value">${escapeHtml(bloquePadreOEncargado?.parentesco || "")}</div></td>
+          <td><div class="label">ENCARGADO 2:</div><div class="value">${escapeHtml(formatGuardianType(bloquePadreOEncargado?.tipo))}</div></td>
           <td><div class="label">VIVE CON ESTUDIANTE:</div><div class="value">${bloquePadreOEncargado?.viveConEstudiante ? "Sí" : "No"}</div></td>
         </tr>
       </table>
@@ -1245,6 +1252,7 @@ router.get("/matricula/:matriculaId", async (req, res) => {
           md.JustificacionExcepcion,
           md.CorreoEnvioBoleta,
           md.Observaciones AS ObservacionesDetalle,
+          e.TipoIdentificacion,
           e.Identificacion,
           e.Nombre,
           e.PrimerApellido,
@@ -1326,13 +1334,7 @@ router.get("/matricula/:matriculaId", async (req, res) => {
           ON e.EncargadoId = ee.EncargadoId
         WHERE ee.EstudianteId = @estudianteId
           AND ee.Activo = 1
-        ORDER BY
-          CASE e.TipoEncargado
-            WHEN 'MADRE' THEN 1
-            WHEN 'PADRE' THEN 2
-            ELSE 3
-          END,
-          ee.EstudianteEncargadoId DESC
+        ORDER BY ee.EstudianteEncargadoId ASC
       `);
 
     const institucion = {
@@ -1347,6 +1349,7 @@ router.get("/matricula/:matriculaId", async (req, res) => {
 
     const estudiante = {
       EstudianteId: row.EstudianteId,
+      TipoIdentificacion: row.TipoIdentificacion,
       Identificacion: row.Identificacion,
       Nombre: row.Nombre,
       PrimerApellido: row.PrimerApellido,
@@ -1457,6 +1460,108 @@ router.post("/matricula/:matriculaId/enviar-correo", requireRoles("SUPER_ADMIN",
   } catch (error) {
     console.error("Error enviando boleta de matrícula por correo:", error);
     return res.status(500).json({ ok: false, message: "No se pudo enviar la boleta de matrícula por correo" });
+  }
+});
+
+router.post("/matricula/:matriculaId/enviar-bienvenida", requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"), async (req, res) => {
+  try {
+    const institucionId = getInstitutionId(req, res);
+    if (institucionId === null) return;
+    const matriculaId = Number(req.params.matriculaId);
+    if (!Number.isInteger(matriculaId) || matriculaId <= 0) return badRequest(res, "Matrícula inválida");
+
+    const pool = await getPool();
+    const boleta = await cargarBoletaMatricula(pool, matriculaId, institucionId);
+    if (!boleta) return res.status(404).json({ ok: false, message: "No se encontró la matrícula indicada" });
+    const encargado = boleta.encargados.find((item: any) => item.principal);
+    if (!encargado) return res.status(403).json({ ok: false, message: "El estudiante no tiene un encargado principal registrado" });
+
+    const correo = String(encargado.correo || "").trim().toLowerCase();
+    const telefono = normalizeWhatsAppPhone(encargado.telefono);
+    const enviarCorreo = Boolean(encargado.aceptaCorreo && /^\S+@\S+\.\S+$/.test(correo));
+    const enviarWhatsApp = Boolean(encargado.aceptaWhatsApp && telefono);
+    if (!enviarCorreo && !enviarWhatsApp) {
+      return res.status(403).json({ ok: false, message: "El encargado principal debe tener correo o teléfono válido y aceptar recibir mensajes por ese canal." });
+    }
+
+    const nombreColegio = String(boleta.institucion.NombreOficialBoleta || boleta.institucion.NombreComercial || boleta.institucion.Nombre || "el colegio").trim();
+    const estudianteNombre = fullName(boleta.estudiante);
+    const bienvenida = `Bienvenido a la plataforma digital del colegio ${nombreColegio}, a través de la plataforma de Profe360.`;
+    const seccion = String(boleta.matricula.SeccionTexto || boleta.matricula.GrupoNombre || "").trim();
+    const fecha = getCostaRicaIsoDate();
+    const templateParams = ["Bienvenida", estudianteNombre, seccion, "Plataforma Profe360", fecha, bienvenida, "Colegio", nombreColegio];
+
+    const resultados: { correo?: any; whatsapp?: any } = {};
+    if (enviarCorreo) {
+      try {
+        resultados.correo = await sendEmail({
+          to: correo,
+          subject: `Bienvenida a ${nombreColegio} · Profe360`,
+          text: `Hola ${encargado.nombre || ""},\n\n${bienvenida}\n\nEstudiante: ${estudianteNombre}\nSección: ${seccion}\n\nEste mensaje fue enviado desde Profe360.`,
+          html: `<div style="font-family:Arial,Helvetica,sans-serif;color:#172b3a;line-height:1.6"><p>Hola ${escapeHtml(encargado.nombre || "")},</p><p>${escapeHtml(bienvenida)}</p><p><strong>Estudiante:</strong> ${escapeHtml(estudianteNombre)}<br><strong>Sección:</strong> ${escapeHtml(seccion)}</p><p>Este mensaje fue enviado desde Profe360.</p></div>`,
+          idempotencyKey: `bienvenida-${matriculaId}-${randomUUID()}`
+        });
+      } catch (error: any) {
+        resultados.correo = { enviado: false, motivo: String(error?.message || "No se pudo enviar el correo") };
+      }
+    }
+    if (enviarWhatsApp) {
+      try {
+        resultados.whatsapp = await sendWhatsAppNotification({
+          institucionId,
+          estudianteId: Number(boleta.estudiante.EstudianteId),
+          solicitadoPorUsuarioId: getAuthUserId(req),
+          tipoMensaje: "BIENVENIDA",
+          plantillaTipoMensaje: "COMUNICADO",
+          telefono,
+          mensaje: bienvenida,
+          templateParams
+        });
+      } catch (error: any) {
+        resultados.whatsapp = { enviado: false, motivo: String(error?.message || "No se pudo enviar WhatsApp") };
+      }
+    }
+
+    const correoEnviado = Boolean(resultados.correo?.enviado);
+    const whatsappEnviado = Boolean(resultados.whatsapp?.enviado);
+    await pool.request()
+      .input("modulo", sql.NVarChar(40), "MENSAJE_BIENVENIDA")
+      .input("registroClave", sql.NVarChar(200), `${matriculaId}:${randomUUID()}`)
+      .input("institucionId", sql.Int, institucionId)
+      .input("estudianteId", sql.Int, Number(boleta.estudiante.EstudianteId))
+      .input("fecha", sql.Date, fecha)
+      .input("correoEnviado", sql.Bit, correoEnviado)
+      .input("waEnviado", sql.Bit, whatsappEnviado)
+      .query(`
+        IF OBJECT_ID('dbo.ReporteEnvioBitacora', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.ReporteEnvioBitacora (
+            ReporteEnvioBitacoraId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            Modulo NVARCHAR(40) NOT NULL, RegistroClave NVARCHAR(200) NOT NULL,
+            GrupoId INT NULL, MateriaId INT NULL, PeriodoId INT NULL, AnioLectivoId INT NULL,
+            EstudianteId INT NULL, Fecha DATE NULL,
+            CorreoEnviado BIT NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_Correo DEFAULT(0),
+            WaEnviado BIT NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_Wa DEFAULT(0),
+            UltimoEnvioAt DATETIME2 NULL,
+            UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_UpdatedAt DEFAULT(SYSDATETIME()),
+            CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_ReporteEnvioBitacora_CreatedAt DEFAULT(SYSDATETIME())
+          );
+          CREATE UNIQUE INDEX UX_ReporteEnvioBitacora_ModuloClave ON dbo.ReporteEnvioBitacora(Modulo, RegistroClave);
+          CREATE INDEX IX_ReporteEnvioBitacora_Filtros ON dbo.ReporteEnvioBitacora(GrupoId, MateriaId, PeriodoId, AnioLectivoId, EstudianteId, Fecha);
+        END;
+        INSERT INTO dbo.ReporteEnvioBitacora (Modulo, RegistroClave, EstudianteId, Fecha, CorreoEnviado, WaEnviado, UltimoEnvioAt)
+        VALUES (@modulo, @registroClave, @estudianteId, @fecha, @correoEnviado, @waEnviado,
+          CASE WHEN @correoEnviado=1 OR @waEnviado=1 THEN SYSDATETIME() ELSE NULL END);
+      `);
+
+    if (!correoEnviado && !whatsappEnviado) {
+      const motivos = [resultados.correo?.motivo, resultados.whatsapp?.motivo].filter(Boolean).join("; ");
+      return res.status(503).json({ ok: false, data: { resultados }, message: motivos || "No se pudo confirmar el envío de bienvenida." });
+    }
+    return ok(res, { resultados, correoEnviado, whatsappEnviado }, "Mensaje de Bienvenida procesado");
+  } catch (error) {
+    console.error("Error enviando mensaje de bienvenida:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo procesar el mensaje de bienvenida" });
   }
 });
 
@@ -1934,6 +2039,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
           e.FechaNacimiento,
           e.Telefono AS TelefonoEstudiante,
           e.AutorizaWhatsAppEncargado,
+          e.AceptaWhatsAppEstudiante,
           u.Correo AS ProfesorCorreo,
           guia.ProfesorGuiaCorreo,
           enc.Telefonos AS EncargadosTelefonos,
@@ -1970,6 +2076,7 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
               INNER JOIN dbo.Encargado en2 ON en2.EncargadoId = ee2.EncargadoId
               WHERE ee2.EstudianteId = e.EstudianteId
                 AND ISNULL(ee2.Activo, 1) = 1
+                AND ISNULL(ee2.EsPrincipal, 0) = 1
                 AND ISNULL(en2.Activo, 1) = 1
                 AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
                 AND LTRIM(RTRIM(ISNULL(en2.Telefono, ''))) <> ''
@@ -2058,7 +2165,8 @@ router.post("/conducta/:boletaConductaId/enviar-correo", async (req, res) => {
         .split("|")
         .map((item: string) => String(item || "").trim())
         .filter((item: string) => item.length > 0),
-      autorizaWhatsAppEncargado: !!row.AutorizaWhatsAppEncargado
+      autorizaWhatsAppEncargado: !!row.AutorizaWhatsAppEncargado,
+      aceptaWhatsAppEstudiante: row.AceptaWhatsAppEstudiante
     });
     const erroresWhatsApp: string[] = [];
     for (const telefono of telefonosWhatsApp) {

@@ -15,6 +15,7 @@ import { ensureSustitucionProfesorTables, procesarSustitucionesProfesor } from "
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+let rutasTransporteSchemaReady: Promise<unknown> | null = null;
 router.use(requireAuth);
 router.use(applyInstitutionScope());
 router.use(requireRoles("SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"));
@@ -28,6 +29,20 @@ function getInstitutionId(req: any, res: any) {
   }
 
   return Number(institucionId);
+}
+
+async function ensureRutaTransporteFields(pool: any) {
+  if (!rutasTransporteSchemaReady) {
+    rutasTransporteSchemaReady = pool.request().query(`
+      IF COL_LENGTH('dbo.RutaTransporte', 'NumeroRuta') IS NULL
+        ALTER TABLE dbo.RutaTransporte ADD NumeroRuta NVARCHAR(50) NULL;
+      IF COL_LENGTH('dbo.RutaTransporte', 'Detalle') IS NULL
+        ALTER TABLE dbo.RutaTransporte ADD Detalle NVARCHAR(MAX) NULL;
+      IF COL_LENGTH('dbo.RutaTransporte', 'Telefono') IS NULL
+        ALTER TABLE dbo.RutaTransporte ADD Telefono NVARCHAR(40) NULL;
+    `).catch((error: unknown) => { rutasTransporteSchemaReady = null; throw error; });
+  }
+  await rutasTransporteSchemaReady;
 }
 
 function invalidDateRange(fechaInicio?: string | null, fechaFin?: string | null) {
@@ -1034,6 +1049,7 @@ router.get("/catalogos", async (req, res) => {
     if (institucionId === null) return;
 
     const pool = await getPool();
+    await ensureRutaTransporteFields(pool);
     const hasEsMateriaEspecial = await hasMateriaEspecialColumn(pool);
 
     const [anios, estudiantes, grupos, periodos, materias, especialidades, tiposAdecuacion, tiposEstudiante, rutasTransporte, docentes, bloques, feriados, diasLectivos, configCorreo] = await Promise.all([
@@ -1207,8 +1223,11 @@ router.get("/catalogos", async (req, res) => {
           SELECT
             RutaTransporteId,
             InstitucionId,
-            Descripcion,
+            NumeroRuta,
+            Descripcion AS Nombre,
+            Detalle AS Descripcion,
             Responsable,
+            Telefono,
             LugarInicio,
             LugarFin,
             CapacidadEstudiantes,
@@ -2939,6 +2958,7 @@ router.get("/rutas-transporte", async (req, res) => {
     const incluirInactivas = String(req.query.incluirInactivas || "false") === "true";
 
     const pool = await getPool();
+    await ensureRutaTransporteFields(pool);
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
       .input("q", sql.NVarChar, `%${q}%`)
@@ -2947,8 +2967,11 @@ router.get("/rutas-transporte", async (req, res) => {
         SELECT
           RutaTransporteId,
           InstitucionId,
-          Descripcion,
+          NumeroRuta,
+          Descripcion AS Nombre,
+          Detalle AS Descripcion,
           Responsable,
+          Telefono,
           LugarInicio,
           LugarFin,
           CapacidadEstudiantes,
@@ -2962,12 +2985,15 @@ router.get("/rutas-transporte", async (req, res) => {
           AND (@incluirInactivas = 1 OR Activo = 1)
           AND (
             @q = '%%'
+            OR NumeroRuta LIKE @q
             OR Descripcion LIKE @q
+            OR Detalle LIKE @q
             OR Responsable LIKE @q
+            OR Telefono LIKE @q
             OR LugarInicio LIKE @q
             OR LugarFin LIKE @q
           )
-        ORDER BY Descripcion
+        ORDER BY TRY_CONVERT(INT, NumeroRuta), NumeroRuta, Descripcion
       `);
 
     return ok(res, result.recordset);
@@ -2982,46 +3008,51 @@ router.post("/rutas-transporte", async (req, res) => {
     const institucionId = getInstitutionId(req, res);
     if (institucionId === null) return;
 
-    const descripcion = String(req.body?.descripcion || "").trim();
+    const numeroRuta = String(req.body?.numeroRuta || "").trim();
+    const nombre = String(req.body?.nombre || "").trim();
+    const detalle = String(req.body?.descripcion || "").trim();
     const responsable = String(req.body?.responsable || "").trim();
-    const lugarInicio = String(req.body?.lugarInicio || "").trim();
-    const lugarFin = String(req.body?.lugarFin || "").trim();
-    const capacidadEstudiantes = req.body?.capacidadEstudiantes ? Number(req.body.capacidadEstudiantes) : null;
-    const horaInicio = req.body?.horaInicio || null;
-    const horaFin = req.body?.horaFin || null;
+    const telefono = String(req.body?.telefono || "").trim();
 
-    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
+    if (!nombre) return badRequest(res, "El nombre de la ruta es obligatorio");
+    if (nombre.length > 200) return badRequest(res, "El nombre de la ruta no puede superar 200 caracteres");
+    if (numeroRuta.length > 50) return badRequest(res, "El número de ruta no puede superar 50 caracteres");
+    if (telefono.length > 40) return badRequest(res, "El teléfono no puede superar 40 caracteres");
 
     const pool = await getPool();
+    await ensureRutaTransporteFields(pool);
     const duplicada = await pool.request()
       .input("institucionId", sql.Int, institucionId)
-      .input("descripcion", sql.NVarChar, descripcion)
+      .input("nombre", sql.NVarChar(200), nombre)
+      .input("numeroRuta", sql.NVarChar(50), numeroRuta || null)
       .query(`
         SELECT TOP 1 RutaTransporteId
         FROM dbo.RutaTransporte
         WHERE InstitucionId = @institucionId
-          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+          AND (UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@nombre)))
+            OR (@numeroRuta IS NOT NULL AND UPPER(LTRIM(RTRIM(NumeroRuta))) = UPPER(LTRIM(RTRIM(@numeroRuta)))) )
       `);
 
     if (duplicada.recordset.length) {
-      return res.status(409).json({ ok: false, message: "Ya existe una ruta con esa descripción" });
+      return res.status(409).json({ ok: false, message: "Ya existe una ruta con ese nombre o número" });
     }
 
     const result = await pool.request()
       .input("institucionId", sql.Int, institucionId)
-      .input("descripcion", sql.NVarChar, descripcion)
+      .input("numeroRuta", sql.NVarChar(50), numeroRuta || null)
+      .input("nombre", sql.NVarChar(200), nombre)
+      .input("detalle", sql.NVarChar(sql.MAX), detalle || null)
       .input("responsable", sql.NVarChar, responsable || null)
-      .input("lugarInicio", sql.NVarChar, lugarInicio || null)
-      .input("lugarFin", sql.NVarChar, lugarFin || null)
-      .input("capacidadEstudiantes", sql.Int, capacidadEstudiantes)
-      .input("horaInicio", sql.NVarChar, horaInicio)
-      .input("horaFin", sql.NVarChar, horaFin)
+      .input("telefono", sql.NVarChar(40), telefono || null)
       .query(`
         INSERT INTO dbo.RutaTransporte
         (
           InstitucionId,
+          NumeroRuta,
           Descripcion,
+          Detalle,
           Responsable,
+          Telefono,
           LugarInicio,
           LugarFin,
           CapacidadEstudiantes,
@@ -3034,13 +3065,16 @@ router.post("/rutas-transporte", async (req, res) => {
         VALUES
         (
           @institucionId,
-          @descripcion,
+          @numeroRuta,
+          @nombre,
+          @detalle,
           @responsable,
-          @lugarInicio,
-          @lugarFin,
-          @capacidadEstudiantes,
-          @horaInicio,
-          @horaFin,
+          @telefono,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          NULL,
           1,
           SYSDATETIME()
         )
@@ -3059,54 +3093,54 @@ router.put("/rutas-transporte/:id", async (req, res) => {
     if (institucionId === null) return;
 
     const id = Number(req.params.id);
-    const descripcion = String(req.body?.descripcion || "").trim();
+    const numeroRuta = String(req.body?.numeroRuta || "").trim();
+    const nombre = String(req.body?.nombre || "").trim();
+    const detalle = String(req.body?.descripcion || "").trim();
     const responsable = String(req.body?.responsable || "").trim();
-    const lugarInicio = String(req.body?.lugarInicio || "").trim();
-    const lugarFin = String(req.body?.lugarFin || "").trim();
-    const capacidadEstudiantes = req.body?.capacidadEstudiantes ? Number(req.body.capacidadEstudiantes) : null;
-    const horaInicio = req.body?.horaInicio || null;
-    const horaFin = req.body?.horaFin || null;
+    const telefono = String(req.body?.telefono || "").trim();
 
     if (!isValidNonNegativeId(id)) return badRequest(res, "Id inválido");
-    if (!descripcion) return badRequest(res, "La descripción es obligatoria");
+    if (!nombre) return badRequest(res, "El nombre de la ruta es obligatorio");
+    if (nombre.length > 200) return badRequest(res, "El nombre de la ruta no puede superar 200 caracteres");
+    if (numeroRuta.length > 50) return badRequest(res, "El número de ruta no puede superar 50 caracteres");
+    if (telefono.length > 40) return badRequest(res, "El teléfono no puede superar 40 caracteres");
 
     const pool = await getPool();
+    await ensureRutaTransporteFields(pool);
     const duplicada = await pool.request()
       .input("id", sql.Int, id)
       .input("institucionId", sql.Int, institucionId)
-      .input("descripcion", sql.NVarChar, descripcion)
+      .input("nombre", sql.NVarChar(200), nombre)
+      .input("numeroRuta", sql.NVarChar(50), numeroRuta || null)
       .query(`
         SELECT TOP 1 RutaTransporteId
         FROM dbo.RutaTransporte
         WHERE InstitucionId = @institucionId
           AND RutaTransporteId <> @id
-          AND UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@descripcion)))
+          AND (UPPER(LTRIM(RTRIM(Descripcion))) = UPPER(LTRIM(RTRIM(@nombre)))
+            OR (@numeroRuta IS NOT NULL AND UPPER(LTRIM(RTRIM(NumeroRuta))) = UPPER(LTRIM(RTRIM(@numeroRuta)))) )
       `);
 
     if (duplicada.recordset.length) {
-      return res.status(409).json({ ok: false, message: "Ya existe otra ruta con esa descripción" });
+      return res.status(409).json({ ok: false, message: "Ya existe otra ruta con ese nombre o número" });
     }
 
     const result = await pool.request()
       .input("id", sql.Int, id)
       .input("institucionId", sql.Int, institucionId)
-      .input("descripcion", sql.NVarChar, descripcion)
+      .input("numeroRuta", sql.NVarChar(50), numeroRuta || null)
+      .input("nombre", sql.NVarChar(200), nombre)
+      .input("detalle", sql.NVarChar(sql.MAX), detalle || null)
       .input("responsable", sql.NVarChar, responsable || null)
-      .input("lugarInicio", sql.NVarChar, lugarInicio || null)
-      .input("lugarFin", sql.NVarChar, lugarFin || null)
-      .input("capacidadEstudiantes", sql.Int, capacidadEstudiantes)
-      .input("horaInicio", sql.NVarChar, horaInicio)
-      .input("horaFin", sql.NVarChar, horaFin)
+      .input("telefono", sql.NVarChar(40), telefono || null)
       .query(`
         UPDATE dbo.RutaTransporte
         SET
-          Descripcion = @descripcion,
+          NumeroRuta = @numeroRuta,
+          Descripcion = @nombre,
+          Detalle = @detalle,
           Responsable = @responsable,
-          LugarInicio = @lugarInicio,
-          LugarFin = @lugarFin,
-          CapacidadEstudiantes = @capacidadEstudiantes,
-          HoraInicio = @horaInicio,
-          HoraFin = @horaFin,
+          Telefono = @telefono,
           UpdatedAt = SYSDATETIME()
         OUTPUT INSERTED.*
         WHERE RutaTransporteId = @id

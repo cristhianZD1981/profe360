@@ -11,6 +11,7 @@ type WhatsAppNotificationInput = {
   profesorUsuarioId?: number | null;
   solicitadoPorUsuarioId?: number | null;
   tipoMensaje: string;
+  plantillaTipoMensaje?: string;
   telefono?: string | null;
   mensaje: string;
   templateParams?: string[];
@@ -25,19 +26,6 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
   if (!telefono) return result(input, { enviado: false, modo: "omitido", motivo: "Sin teléfono válido" });
 
   const pool = await getPool();
-  // Una negativa explícita del alumno bloquea cualquier WhatsApp relacionado
-  // con él, aunque otro flujo intente dirigirlo a su encargado.
-  if (input.estudianteId && input.institucionId) {
-    const consentimiento = await pool.request()
-      .input("estudianteId", sql.Int, input.estudianteId)
-      .input("institucionId", sql.Int, input.institucionId)
-      .query(`SELECT AceptaWhatsAppEstudiante FROM dbo.Estudiante
-        WHERE EstudianteId = @estudianteId AND InstitucionId = @institucionId`);
-    const permiso = consentimiento.recordset[0]?.AceptaWhatsAppEstudiante;
-    if (permiso === false || permiso === 0) {
-      return result(input, { enviado: false, modo: "omitido", motivo: "El estudiante desactivó la recepción de WhatsApp; tampoco se envía al encargado" });
-    }
-  }
   const channelResult = await pool.request()
     .input("institucionId", sql.Int, input.institucionId || null)
     .query(`
@@ -136,7 +124,10 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
   };
 
   try {
-  if (String(input.tipoMensaje).toUpperCase() === "COMUNICADO" && String(channel.TipoCanal).toUpperCase() !== "WABA") {
+  const tipoMensaje = String(input.tipoMensaje || "GENERAL").toUpperCase();
+  const tipoPlantilla = String(input.plantillaTipoMensaje || input.tipoMensaje || "GENERAL").toUpperCase();
+  const usaPlantillaComunicado = tipoPlantilla === "COMUNICADO";
+  if (usaPlantillaComunicado && String(channel.TipoCanal).toUpperCase() !== "WABA") {
     await updateLog({ estado: "FALLIDO", motivo: "COMUNICADO requiere un canal WABA y la plantilla notificacion_academica_general" });
     return result(input, { enviado: false, motivo: "El canal configurado no es WABA", whatsappEnvioId: envioId });
   }
@@ -152,7 +143,7 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
     return result(input, { enviado: false, modo: "webhook", motivo: "El canal no tiene API Key configurada", whatsappEnvioId: envioId });
   }
 
-  const admiteContacto = ["ASISTENCIA", "BOLETA", "TAREA", "PROYECTO", "COTIDIANO", "EXAMENES", "COMUNICADO"].includes(input.tipoMensaje.toUpperCase());
+  const admiteContacto = ["ASISTENCIA", "BOLETA", "TAREA", "PROYECTO", "COTIDIANO", "EXAMENES", "COMUNICADO", "BIENVENIDA"].includes(tipoMensaje);
   const consultarContacto = async () => {
     const contacto = await pool.request()
       .input("institucionId", sql.Int, input.institucionId || null)
@@ -184,7 +175,7 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
 
   const templateResult = await pool.request()
     .input("whatsappCanalId", sql.Int, channel.WhatsAppCanalId)
-    .input("tipoMensaje", sql.NVarChar(40), String(input.tipoMensaje || "GENERAL").toUpperCase())
+    .input("tipoMensaje", sql.NVarChar(40), tipoPlantilla)
     .query(`
       SELECT TOP 1 *
       FROM dbo.WhatsAppPlantilla
@@ -199,7 +190,7 @@ export async function sendWhatsAppNotification(input: WhatsAppNotificationInput)
     await updateLog({ estado: "FALLIDO", motivo: "No hay una plantilla APPROVED para este tipo de mensaje" });
     return result(input, { enviado: false, modo: "webhook", motivo: "No hay una plantilla APPROVED para este tipo de mensaje", whatsappEnvioId: envioId });
   }
-  if (input.tipoMensaje.toUpperCase() === "COMUNICADO" && (template.Nombre !== "notificacion_academica_general" || ![8, 10].includes(Number(template.CantidadParametrosBody)))) {
+  if (usaPlantillaComunicado && (template.Nombre !== "notificacion_academica_general" || ![8, 10].includes(Number(template.CantidadParametrosBody)))) {
     await updateLog({ estado: "FALLIDO", motivo: "COMUNICADO requiere la plantilla notificacion_academica_general con 8 o 10 parámetros" });
     return result(input, { enviado: false, motivo: "Configuración WABA de COMUNICADO inválida", whatsappEnvioId: envioId });
   }

@@ -6,10 +6,11 @@ export function esMayorParaWhatsApp(nacimiento: string, hoy: string) {
   return Number(hoy.slice(0, 4)) - Number(fecha.slice(0, 4)) - (hoy.slice(5) < fecha.slice(5) ? 1 : 0) >= 18;
 }
 
-export function aceptaWhatsAppAlumno(decision: boolean | null, permisoEncargado: boolean, encargados: { aceptaWhatsApp: boolean }[]) {
-  return decision ?? (permisoEncargado || encargados.some(e => e.aceptaWhatsApp));
+export function aceptaWhatsAppAlumno(decision: boolean | null) {
+  return decision === true;
 }
 
 export function permisoEncargadosEnFicha(esMayor: boolean, permisoActual: boolean, encargados: { aceptaWhatsApp: boolean }[]) {
-  return esMayor ? encargados.some(e => e.aceptaWhatsApp) : permisoActual;
+  void esMayor;
+  return encargados.length ? encargados.some(e => e.aceptaWhatsApp) : permisoActual;
 }

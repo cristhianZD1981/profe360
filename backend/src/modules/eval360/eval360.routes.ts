@@ -18218,6 +18218,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
       telefonoEstudiante?: string | null;
 
+      aceptaWhatsAppEstudiante?: boolean | number | null;
+
       correoEstudiante?: string | null;
 
       telefonosEncargados?: string[];
@@ -18587,6 +18589,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
               e.AutorizaWhatsAppEncargado,
 
+              e.AceptaWhatsAppEstudiante,
+
               enc.Telefonos AS EncargadosTelefonos
 
             FROM dbo.Estudiante e
@@ -18606,6 +18610,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
                   WHERE ee2.EstudianteId = e.EstudianteId
 
                     AND ISNULL(ee2.Activo, 1) = 1
+
+                    AND ISNULL(ee2.EsPrincipal, 0) = 1
 
                     AND ISNULL(en2.Activo, 1) = 1
 
@@ -18638,6 +18644,8 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
             fechaNacimiento: estudiante.FechaNacimiento || null,
 
             telefonoEstudiante: estudiante.TelefonoEstudiante || null,
+
+            aceptaWhatsAppEstudiante: estudiante.AceptaWhatsAppEstudiante,
 
             correoEstudiante: estudiante.Correo,
 
@@ -18812,7 +18820,9 @@ router.post("/seguimiento/guardar-indicador", async (req, res) => {
 
           telefonosEncargados: aviso.telefonosEncargados,
 
-          autorizaWhatsAppEncargado: aviso.autorizaWhatsApp
+          autorizaWhatsAppEncargado: aviso.autorizaWhatsApp,
+
+          aceptaWhatsAppEstudiante: aviso.aceptaWhatsAppEstudiante
 
         });
 
@@ -19173,6 +19183,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
       telefonoEstudiante?: string | null;
 
+      aceptaWhatsAppEstudiante?: boolean | number | null;
+
       correoEstudiante?: string | null;
 
       telefonosEncargados?: string[];
@@ -19430,6 +19442,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
               e.AutorizaWhatsAppEncargado,
 
+              e.AceptaWhatsAppEstudiante,
+
               enc.Telefonos AS EncargadosTelefonos,
 
               encCorreo.Correo AS EncargadoPrincipalCorreo
@@ -19470,6 +19484,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
                     AND ISNULL(ee2.Activo, 1) = 1
 
+                    AND ISNULL(ee2.EsPrincipal, 0) = 1
+
                     AND ISNULL(en2.Activo, 1) = 1
 
                     AND ISNULL(ee2.RecibeNotificaciones, 1) = 1
@@ -19499,6 +19515,8 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
             fechaNacimiento: estudiante.FechaNacimiento || null,
 
             telefonoEstudiante: estudiante.TelefonoEstudiante || null,
+
+            aceptaWhatsAppEstudiante: estudiante.AceptaWhatsAppEstudiante,
 
             correoEstudiante: estudiante.Correo || estudiante.EncargadoPrincipalCorreo,
 
@@ -19717,7 +19735,9 @@ router.post("/seguimiento/guardar-actividad", async (req, res) => {
 
           telefonosEncargados: aviso.telefonosEncargados,
 
-          autorizaWhatsAppEncargado: aviso.autorizaWhatsApp
+          autorizaWhatsAppEncargado: aviso.autorizaWhatsApp,
+
+          aceptaWhatsAppEstudiante: aviso.aceptaWhatsAppEstudiante
 
         });
 

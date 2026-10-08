@@ -106,7 +106,7 @@ export function enrollmentPayload(form: EnrollmentForm, studentId: number) {
 
 export function transportDescription(student: StudentForm, routes: RecordData[]) {
   const route = routes.find(r => asText(r.RutaTransporteId) === student.rutaTransporteId);
-  return route ? asText(route.Descripcion) : student.rutaTransporteHabitual;
+  return route ? asText(route.Nombre || route.Descripcion) : student.rutaTransporteHabitual;
 }
 
 export function groupLevel(group: RecordData | undefined) {

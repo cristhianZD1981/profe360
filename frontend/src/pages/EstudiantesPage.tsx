@@ -129,8 +129,11 @@ type TipoAdecuacion = {
 
 type RutaTransporte = {
   RutaTransporteId: number;
+  NumeroRuta?: string | null;
+  Nombre: string;
   Descripcion: string;
   Responsable?: string | null;
+  Telefono?: string | null;
   LugarInicio?: string | null;
   LugarFin?: string | null;
   CapacidadEstudiantes?: number | null;
@@ -1830,20 +1833,21 @@ export default function EstudiantesPage() {
               Ruta
               <select
                 value={form.rutaTransporteId}
+                title={rutasTransporte.find((item) => String(item.RutaTransporteId) === String(form.rutaTransporteId))?.Descripcion || undefined}
                 onChange={(e) => {
                   const rutaId = e.target.value;
                   const ruta = rutasTransporte.find((item) => String(item.RutaTransporteId) === String(rutaId));
                   setForm({
                     ...form,
                     rutaTransporteId: rutaId,
-                    rutaTransporteHabitual: ruta?.Descripcion || ""
+                    rutaTransporteHabitual: ruta?.Nombre || ""
                   });
                 }}
               >
                 <option value="">Seleccione</option>
                 {rutasTransporte.filter((item) => item.Activo).map((item) => (
-                  <option key={item.RutaTransporteId} value={item.RutaTransporteId}>
-                    {item.Descripcion}
+                  <option key={item.RutaTransporteId} value={item.RutaTransporteId} title={item.Descripcion}>
+                    {item.Nombre}
                   </option>
                 ))}
               </select>
@@ -1858,18 +1862,18 @@ export default function EstudiantesPage() {
               <span>
                 Padre, madre o encargado autoriza recibir información por WhatsApp
                 <small style={{ display: "block", opacity: 0.75 }}>
-                  Marcar Sí cuando exista visto bueno para enviar información institucional por WhatsApp.
+                  Esta autorización controla únicamente los mensajes enviados al encargado principal.
                 </small>
               </span>
             </label>
 
             <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
               <input type="checkbox"
-                checked={aceptaWhatsAppAlumno(form.aceptaWhatsAppEstudiante, !!form.autorizaWhatsAppEncargado, buildEncargadosPayload())}
+                checked={esMayorParaWhatsApp(form.fechaNacimiento, getCostaRicaIsoDate()) && aceptaWhatsAppAlumno(form.aceptaWhatsAppEstudiante)}
                 disabled={!esMayorParaWhatsApp(form.fechaNacimiento, getCostaRicaIsoDate())}
                 onChange={e => setForm({ ...form, aceptaWhatsAppEstudiante: e.target.checked })} />
               <span>El estudiante acepta WhatsApp
-                <small style={{ display: "block", opacity: 0.75 }}>Hereda la autorización del encargado. Solo puede modificarse desde los 18 años. Al desactivarlo, no se envían WhatsApp sobre este alumno a él ni a sus encargados.</small>
+                <small style={{ display: "block", opacity: 0.75 }}>Desde los 18 años, el estudiante decide por separado si recibe mensajes. El encargado conserva su propia autorización.</small>
               </span>
             </label>
 
