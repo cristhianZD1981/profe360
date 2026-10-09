@@ -2164,8 +2164,7 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
       ORDER BY gf.GrupoNombre, NombreCompleto
     `));
 
-    const adecuacionesResult = ready
-      ? await timedQuery("gestion.apoyos.bootstrap.adecuaciones", () => request.query(`
+    const adecuacionesResult = await timedQuery("gestion.apoyos.bootstrap.adecuaciones", () => request.query(`
           SELECT
             a.AdecuacionCatalogoId,
             a.TipoAdecuacionId,
@@ -2177,13 +2176,11 @@ router.get("/apoyos-educativos/bootstrap", async (req, res) => {
           INNER JOIN dbo.TipoAdecuacion ta
             ON ta.TipoAdecuacionId = a.TipoAdecuacionId
           WHERE a.Activo = 1
-            AND ta.Activo = 1
             AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) IN (N'SIGNIFICATIVA', N'NO SIGNIFICATIVA', N'TODAS')
             AND UPPER(LTRIM(RTRIM(ISNULL(ta.Descripcion, N'')))) NOT IN (N'REGULAR', N'SIN ADECUACION', N'SIN ADECUACIÓN', N'SELECCIONE', N'NO')
             ${!isSuperAdmin(req) ? "AND a.InstitucionId = @institucionId" : ""}
           ORDER BY ta.Descripcion, a.Tipo, a.Descripcion
-        `))
-      : { recordset: [] as any[] };
+        `));
 
     const informesResult = ready
       ? await timedQuery("gestion.apoyos.bootstrap.informes", () => request.query(`
@@ -2385,7 +2382,6 @@ router.post("/apoyos-educativos/generar", uploadApoyoEducativo.single("plantilla
       INNER JOIN dbo.TipoAdecuacion ta ON ta.TipoAdecuacionId = a.TipoAdecuacionId
       WHERE a.InstitucionId = @institucionId
         AND a.Activo = 1
-        AND ta.Activo = 1
         AND a.AdecuacionCatalogoId IN (
           SELECT DISTINCT TRY_CAST(value AS INT)
           FROM STRING_SPLIT(@adecuacionIds, ',')
