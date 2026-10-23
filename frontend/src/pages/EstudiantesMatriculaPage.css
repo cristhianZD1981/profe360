@@ -723,3 +723,85 @@
   background:#e2e8f0;
   border-color:#cbd5e1;
 }
+
+/* Realce de las acciones principales de la ficha y la matrícula. */
+.em-page button,
+.em-page .em-button {
+  border-width:1.5px;
+  box-shadow:0 2px 0 #16344918, 0 3px 7px #16344912;
+  transition:transform .14s ease, box-shadow .14s ease, background .14s ease, border-color .14s ease;
+}
+.em-page button:hover:not(:disabled),
+.em-page .em-button:hover {
+  transform:translateY(-1px);
+  box-shadow:0 3px 0 #1634491b, 0 6px 12px #16344920;
+}
+.em-page button:active:not(:disabled),
+.em-page .em-button:active {
+  transform:translateY(1px);
+  box-shadow:0 1px 2px #16344918;
+}
+.em-page button:disabled {
+  box-shadow:0 1px 2px #1634490d;
+}
+.em-page .em-savebar .em-actions > .em-primary {
+  min-height:42px;
+  padding:9px 17px;
+  border-bottom:3px solid #0d451c;
+  box-shadow:0 3px 0 #0d451c30, 0 5px 10px #0d451c24;
+  font-weight:750;
+}
+.em-page .em-savebar .em-actions > .em-button,
+.em-page .em-savebar .em-actions > .em-button-tooltip > button {
+  min-height:40px;
+  padding:8px 14px;
+  border-color:#90a9b8;
+  border-bottom:3px solid #6f8998;
+  background:#f7fbff;
+  color:#173d56;
+  font-weight:700;
+}
+.em-page .em-secondary-tools > .em-panel > .em-section-title .em-actions button {
+  min-height:36px;
+  padding:6px 12px;
+  font-size:12px;
+  font-weight:700;
+  border-radius:6px;
+}
+.em-page .em-secondary-tools > .em-panel > .em-section-title .em-actions .em-danger {
+  color:#fff;
+  background:#a52d43;
+  border-color:#8e2035;
+  border-bottom:3px solid #75172a;
+  box-shadow:0 3px 0 #75172a30, 0 5px 10px #75172a20;
+}
+.em-page .em-secondary-tools > .em-panel > .em-section-title .em-actions .em-danger:hover:not(:disabled) {
+  color:#fff;
+  background:#842338;
+  border-color:#75172a;
+}
+.em-page .em-student-heading .em-actions button,
+.em-page .em-student-heading .em-actions .em-button {
+  min-height:38px;
+  padding:6px 12px;
+  border-radius:7px;
+  border-color:#9bb8c9;
+  border-bottom:3px solid #7799ad;
+  background:#f3f9fd;
+  color:#183f58;
+  font-weight:700;
+}
+.em-page .em-student-heading .em-actions button:hover:not(:disabled),
+.em-page .em-student-heading .em-actions .em-button:hover {
+  background:#e3f1f8;
+  border-color:#5e91ad;
+}
+@media(max-width:700px) {
+  .em-page .em-savebar .em-actions > .em-primary,
+  .em-page .em-savebar .em-actions > .em-button,
+  .em-page .em-savebar .em-actions > .em-button-tooltip > button { min-height:44px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .em-page button,
+  .em-page .em-button { transition:none; }
+}
