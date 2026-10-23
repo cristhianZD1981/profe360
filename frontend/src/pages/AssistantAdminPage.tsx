@@ -87,6 +87,15 @@ type AssistantFaq = {
   steps: string[];
 };
 
+type AssistantFeedbackSummary = {
+  route: string;
+  role: string;
+  total: number;
+  useful: number;
+  needsImprovement: number;
+  lastFeedbackAt: string;
+};
+
 type KnowledgePayload = {
   modules: ModuleGuide[];
   details: DetailGuide[];
@@ -251,6 +260,8 @@ export default function AssistantAdminPage() {
   const [subflowForm, setSubflowForm] = useState(EMPTY_SUBFLOW_FORM);
   const [faqForm, setFaqForm] = useState(EMPTY_FAQ_FORM);
   const [savingBase, setSavingBase] = useState(false);
+  const [feedbackSummary, setFeedbackSummary] = useState<AssistantFeedbackSummary[]>([]);
+  const [feedbackSummaryError, setFeedbackSummaryError] = useState("");
 
   const sortedItems = useMemo(
     () => [...items].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title)),
@@ -307,6 +318,15 @@ export default function AssistantAdminPage() {
       const [instructionItems, knowledgePayload] = await Promise.all([loadInstructions(), loadKnowledge()]);
       setItems(instructionItems);
       setKnowledge(knowledgePayload);
+      try {
+        const feedbackResponse = await api.get("/assistant/admin/feedback-summary");
+        const feedbackData = feedbackResponse.data?.data || feedbackResponse.data;
+        setFeedbackSummary(Array.isArray(feedbackData?.items) ? feedbackData.items : []);
+        setFeedbackSummaryError("");
+      } catch (feedbackErr: any) {
+        setFeedbackSummary([]);
+        setFeedbackSummaryError(feedbackErr?.response?.data?.message || "No se pudieron cargar las valoraciones de Margarita.");
+      }
     } catch (err: any) {
       setError(err?.response?.data?.message || "No se pudo cargar el centro de mantenimiento de Margarita.");
     } finally {
@@ -579,7 +599,7 @@ export default function AssistantAdminPage() {
         aliases: moduleForm.aliasesText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
         steps: moduleForm.stepsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       });
-      setMessage("Módulo base actualizado correctamente.");
+      setMessage("Módulo base guardado correctamente.");
       resetModuleForm();
       setKnowledge(await loadKnowledge());
     } catch (err: any) {
@@ -901,7 +921,7 @@ export default function AssistantAdminPage() {
   function renderModulesTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aquí ves la base de módulos de Margarita. Si querés ajustar algo, usá el botón de cada bloque para crear una indicación de refuerzo.")}
+        {renderInfoBanner("Aquí ves los módulos que Margarita conoce. Edita la base para corregir una guía o dar de alta una nueva; los cambios se guardan en el conocimiento principal.")}
         {moduleForm.key ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del módulo</strong>
@@ -934,7 +954,7 @@ export default function AssistantAdminPage() {
   function renderDetailsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aquí ves paneles y pestañas que ya conoce Margarita. Desde cada bloque podés crear un refuerzo directo.")}
+        {renderInfoBanner("Aquí ves los paneles y pestañas que conoce Margarita. Puedes actualizar una guía existente o crear la base de un panel nuevo.")}
         {detailForm.detailKey ? (
           <div style={{ display: "grid", gap: "12px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <div style={{ display: "grid", gap: "6px" }}>
@@ -1077,7 +1097,7 @@ export default function AssistantAdminPage() {
   function renderScreenContextsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aquí ves lo que Margarita entiende cuando la persona pregunta por la pantalla actual.")}
+        {renderInfoBanner("Aquí ves cómo Margarita interpreta cada pantalla. Puedes actualizar un contexto existente o registrar uno nuevo.")}
         {screenForm.routePrefix ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del contexto</strong>
@@ -1111,7 +1131,7 @@ export default function AssistantAdminPage() {
   function renderFormsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner("Aquí ves el orden sugerido de campos cuando Margarita ayuda a llenar formularios.")}
+        {renderInfoBanner("Aquí ves los formularios que Margarita explica campo por campo. Puedes actualizar una guía o registrar otro formulario.")}
         {formGuideForm.formKey ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del formulario</strong>
@@ -1148,7 +1168,7 @@ export default function AssistantAdminPage() {
   function renderSubflowsTab() {
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        {renderInfoBanner('Aquí ves los subflujos activos que Margarita usa cuando alguien pregunta "qué hago acá" o "ahora qué sigue".')}
+        {renderInfoBanner('Aquí ves los subflujos que Margarita usa cuando alguien pregunta "qué hago acá" o "ahora qué sigue". Puedes actualizar uno o registrar otro.')}
         {subflowForm.subflowKey ? (
           <div style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: cardBorder, background: "#eff6ff" }}>
             <strong style={{ color: "#0f172a", fontSize: "18px" }}>Editar base del subflujo</strong>
@@ -1271,6 +1291,29 @@ export default function AssistantAdminPage() {
           </button>
         </div>
       </div>
+
+      <section style={{ display: "grid", gap: "10px", padding: "16px", borderRadius: "16px", border: "1px solid #cbd5e1", background: "#f8fafc" }}>
+        <div>
+          <strong style={{ color: "#0f172a" }}>Mejora continua · últimos 90 días</strong>
+          <p style={{ margin: "4px 0 0", color: "#475569" }}>Las valoraciones no guardan el texto de la conversación; se agrupan por módulo y rol para mostrar dónde conviene actualizar la guía.</p>
+        </div>
+        {feedbackSummary.length ? (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a" }}>
+              <thead><tr>{["Pantalla", "Rol", "Valoraciones", "Útiles", "Mejorar"].map((label) => <th key={label} style={{ textAlign: "left", padding: "8px", borderBottom: "1px solid #cbd5e1" }}>{label}</th>)}</tr></thead>
+              <tbody>{feedbackSummary.map((item) => <tr key={`${item.route}-${item.role}`}>
+                <td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.route}</td>
+                <td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.role || "Sin rol"}</td>
+                <td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.total}</td>
+                <td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.useful}</td>
+                <td style={{ padding: "8px", borderBottom: "1px solid #e2e8f0" }}>{item.needsImprovement}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        ) : feedbackSummaryError ? (
+          <span role="alert" style={{ color: "#991b1b" }}>{feedbackSummaryError}</span>
+        ) : <span style={{ color: "#64748b" }}>Aún no hay valoraciones registradas.</span>}
+      </section>
 
       {message ? (
         <div style={{ padding: "12px 14px", borderRadius: "12px", background: "#ecfdf3", color: "#166534", border: "1px solid #86efac", fontWeight: 700 }}>

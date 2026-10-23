@@ -8,6 +8,8 @@ type Message = {
   role: "assistant" | "user";
   text: string;
   actions?: Array<{ label: string; type: "navigate" | "ask"; target: string }>;
+  feedback?: "useful" | "needs-improvement";
+  feedbackError?: string;
 };
 
 type ScreenSnapshot = {
@@ -15,23 +17,34 @@ type ScreenSnapshot = {
   documentTitle: string;
   headings: string[];
   buttons: string[];
+  fields: string[];
   labels: string[];
   alerts: string[];
-  selectedOptions: string[];
-  checkedOptions: string[];
-  fieldValues: string[];
-  activeElement: string;
   tableHeaders: string[];
   rowCount: number;
 };
 
 function getRouteLabel(pathname: string) {
+  if (pathname.startsWith("/estudiantes/") && pathname.includes("/carnet")) return "Carnet / QR";
+  if (pathname.startsWith("/horario-estudiante/")) return "Horario del estudiante";
+  if (pathname.startsWith("/boletas/matricula/")) return "Boleta de matrícula";
+  if (pathname.startsWith("/boletas/conducta/")) return "Boleta de conducta";
   if (pathname.startsWith("/gestion-profe")) return "Gestión del Profe";
   if (pathname.startsWith("/administrativo")) return "Administrativo";
+  if (pathname.startsWith("/estudiantes-matricula")) return "Estudiantes + Matrícula";
   if (pathname.startsWith("/matricula")) return "Matrícula";
-  if (pathname.startsWith("/reportes")) return "Reportes";
+  if (pathname.startsWith("/estudiantes")) return "Estudiantes";
+  if (pathname === "/estudiante" || pathname.startsWith("/estudiante/")) return "Estudiante";
+  if (pathname.startsWith("/usuarios")) return "Usuarios";
+  if (pathname.startsWith("/instituciones")) return "Instituciones";
+  if (pathname.startsWith("/grupos-clase")) return "Grupos de clase";
+  if (pathname.startsWith("/assistant-admin")) return "Margarita";
+  if (pathname.startsWith("/reportes/certificaciones")) return "Certificaciones";
+  if (pathname.startsWith("/reportes")) return "Reporte y Certificaciones";
   if (pathname.startsWith("/asistencia")) return "Asistencia";
   if (pathname.startsWith("/horarios")) return "Horarios";
+  if (pathname.startsWith("/seguimiento-notas")) return "Seguimiento de Notas";
+  if (pathname.startsWith("/planeamiento-ia")) return "Planeamiento con IA";
   if (pathname.startsWith("/parametrizaciones")) return "Parametrizaciones";
   return "PROFE360";
 }
@@ -45,11 +58,30 @@ function looksLikeGreeting(text: string) {
   return ["HOLA", "BUENAS", "BUEN DIA", "BUENAS TARDES", "BUENAS NOCHES", "HEY", "HOLI"].includes(key);
 }
 
+function getIntroducedName(text: string) {
+  const match = String(text || "").trim().match(/^(?:soy|me llamo|mi nombre es)\s+([\p{L}'’-]+(?:\s+[\p{L}'’-]+){0,3})[.!?]?$/iu);
+  if (!match) return "";
+  const candidate = match[1].trim();
+  const key = candidate.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (/\b(COMO|DONDE|QUE|QUIERO|NECESITO|BUSCAR|VER|HORARIO|ESTUDIANTE|ALUMNO|PROFESOR|ADMINISTRADOR|AYUDA|HACER|GENERAR|CREAR|REVISAR)\b/.test(key)) return "";
+  return candidate;
+}
+
 function getAssistantRoleLabel(roles: string[]) {
-  if (roles.includes("PROFESOR") || roles.includes("PROFESOR_GUIA")) return "Profe";
   if (roles.includes("SUPER_ADMIN")) return "Super Admin";
   if (roles.includes("ADMIN_INSTITUCIONAL") || roles.includes("ADMINISTRATIVO")) return "Admin";
+  if (roles.includes("PROFESOR") || roles.includes("PROFESOR_GUIA")) return "Profe";
   return "";
+}
+
+function getRoleStarterQuestions(roles: string[]) {
+  if (roles.some((role) => ["SUPER_ADMIN", "ADMIN_INSTITUCIONAL", "ADMINISTRATIVO"].includes(role))) {
+    return ["¿Cómo matriculo a un estudiante?", "¿Cómo creo un usuario?", "¿Qué puedo hacer en esta pantalla?"];
+  }
+  if (roles.includes("PROFESOR") || roles.includes("PROFESOR_GUIA")) {
+    return ["¿Cómo registro asistencia?", "¿Cómo reviso las notas?", "¿Qué puedo hacer en esta pantalla?"];
+  }
+  return ["¿Qué módulos puedo usar?", "¿Qué puedo hacer en esta pantalla?"];
 }
 
 function buildDisplayName(name: string, roles: string[]) {
@@ -57,6 +89,14 @@ function buildDisplayName(name: string, roles: string[]) {
   const firstName = cleanName.split(/\s+/).filter(Boolean)[0] || cleanName;
   const roleLabel = getAssistantRoleLabel(Array.isArray(roles) ? roles : []);
   return roleLabel && firstName ? `${roleLabel} ${firstName}` : firstName || "";
+}
+
+function renderAssistantText(text: string) {
+  return String(text || "").split(/(\*\*[^*\n]+\*\*)/g).map((part, index) =>
+    part.startsWith("**") && part.endsWith("**")
+      ? <strong key={`bold-${index}`}>{part.slice(2, -2)}</strong>
+      : part
+  );
 }
 
 function buildWelcomeMessage(displayName: string) {
@@ -74,12 +114,9 @@ function collectScreenSnapshot(routeLabel: string): ScreenSnapshot {
       documentTitle: "",
       headings: [],
       buttons: [],
+      fields: [],
       labels: [],
       alerts: [],
-      selectedOptions: [],
-      checkedOptions: [],
-      fieldValues: [],
-      activeElement: "",
       tableHeaders: [],
       rowCount: 0
     };
@@ -93,95 +130,50 @@ function collectScreenSnapshot(routeLabel: string): ScreenSnapshot {
 
   const readTexts = (selector: string, limit: number) =>
     Array.from(document.querySelectorAll(selector))
+      .filter((node) => isVisible(node))
       .map((node) => cleanText((node as HTMLElement).innerText || (node as HTMLInputElement).value || ""))
       .filter(Boolean)
       .filter((value, index, array) => array.indexOf(value) === index)
       .slice(0, limit);
 
-  const getFieldLabel = (field: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement) => {
-    const labelledBy = field.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      const labelText = labelledBy
-        .split(/\s+/)
-        .map((id) => cleanText(document.getElementById(id)?.innerText))
-        .filter(Boolean)
-        .join(" ");
-      if (labelText) return labelText;
-    }
-
-    const aria = cleanText(field.getAttribute("aria-label"));
-    if (aria) return aria;
-
-    if (field.id) {
-      const explicit = document.querySelector(`label[for="${CSS.escape(field.id)}"]`);
-      const explicitText = cleanText((explicit as HTMLElement | null)?.innerText);
-      if (explicitText) return explicitText;
-    }
-
-    const wrappingLabel = field.closest("label");
-    const wrappingText = cleanText((wrappingLabel as HTMLElement | null)?.innerText, 80);
-    if (wrappingText) return wrappingText;
-
-    const placeholder = field instanceof HTMLSelectElement ? "" : field.placeholder;
-    return cleanText(field.name || placeholder || field.title || "Campo", 60);
+  const isVisible = (node: Element) => {
+    const element = node as HTMLElement;
+    if (!element.getClientRects().length) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse";
   };
 
-  const fieldNodes = Array.from(document.querySelectorAll("input, select, textarea"))
-    .filter((node) => {
-      const field = node as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-      const type = String((field as HTMLInputElement).type || "").toLowerCase();
-      if (["password", "hidden", "file"].includes(type)) return false;
-      const style = window.getComputedStyle(field);
-      return style.display !== "none" && style.visibility !== "hidden";
-    });
-
-  const selectedOptions = fieldNodes
-    .filter((node) => node instanceof HTMLSelectElement)
-    .map((node) => {
-      const select = node as HTMLSelectElement;
-      const label = getFieldLabel(select);
-      const selected = Array.from(select.selectedOptions).map((option) => cleanText(option.text || option.value)).filter(Boolean).join(", ");
-      return selected ? `${label}: ${selected}` : "";
-    })
-    .filter(Boolean)
-    .slice(0, 12);
-
-  const checkedOptions = fieldNodes
-    .filter((node) => node instanceof HTMLInputElement && ["checkbox", "radio"].includes(String((node as HTMLInputElement).type || "").toLowerCase()) && (node as HTMLInputElement).checked)
-    .map((node) => getFieldLabel(node as HTMLInputElement))
+  const controls = Array.from(document.querySelectorAll("button, [role='button'], [role='tab'], a[href^='/']"))
+    .filter((node) => isVisible(node))
+    .filter((node) => !node.closest("table tbody"))
+    .map((node) => cleanText(node.textContent || node.getAttribute("aria-label") || node.getAttribute("title") || node.querySelector("img")?.getAttribute("alt") || ""))
     .filter(Boolean)
     .filter((value, index, array) => array.indexOf(value) === index)
-    .slice(0, 18);
+    .slice(0, 20);
 
-  const fieldValues = fieldNodes
-    .filter((node) => {
-      if (node instanceof HTMLSelectElement) return false;
-      const input = node as HTMLInputElement | HTMLTextAreaElement;
-      const type = String((input as HTMLInputElement).type || "").toLowerCase();
-      return !["checkbox", "radio"].includes(type) && cleanText(input.value).length > 0;
+  const fields = Array.from(document.querySelectorAll("input:not([type='hidden']), select, textarea"))
+    .filter((node) => isVisible(node))
+    .map((node) => {
+      const field = node as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      const associatedLabel = Array.from(field.labels || []).map((label) => cleanText(label.textContent)).find(Boolean);
+      const name = cleanText(field.getAttribute("aria-label") || associatedLabel || field.getAttribute("placeholder") || "").replace(/\s*\*$/, "");
+      const required = field.required || field.getAttribute("aria-required") === "true" || /\*$/.test(associatedLabel || "");
+      return name ? `${name}${required ? " *" : ""}` : "";
     })
-    .map((node) => `${getFieldLabel(node as HTMLInputElement | HTMLTextAreaElement)}: ${cleanText((node as HTMLInputElement | HTMLTextAreaElement).value, 100)}`)
     .filter(Boolean)
-    .slice(0, 14);
-
-  const active = document.activeElement as HTMLElement | null;
-  const activeElement = active && active !== document.body
-    ? cleanText(active.innerText || (active as HTMLInputElement).value || active.getAttribute("aria-label") || active.getAttribute("title") || active.tagName, 120)
-    : "";
+    .filter((value, index, array) => array.indexOf(value) === index)
+    .slice(0, 16);
 
   return {
     routeLabel,
     documentTitle: String(document.title || "").trim(),
     headings: readTexts("h1, h2, h3, [data-assistant-heading='true']", 8),
-    buttons: readTexts("button", 12),
+    buttons: controls,
+    fields,
     labels: readTexts("label, th, .card strong", 14),
     alerts: readTexts("[role='alert'], .alert, .error, .error-message, .success-message, .message, .toast", 8),
-    selectedOptions,
-    checkedOptions,
-    fieldValues,
-    activeElement,
     tableHeaders: readTexts("table th", 16),
-    rowCount: document.querySelectorAll("tbody tr").length
+    rowCount: Array.from(document.querySelectorAll("tbody tr")).filter((row) => isVisible(row)).length
   };
 }
 
@@ -192,10 +184,13 @@ export default function FloatingAssistant() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [savingFeedbackFor, setSavingFeedbackFor] = useState("");
+  const [feedbackErrorFor, setFeedbackErrorFor] = useState("");
   const loggedUserName = useMemo(() => String(user?.nombre || "").trim(), [user?.nombre]);
   const userRoles = useMemo(() => (Array.isArray(user?.roles) ? user.roles : []), [user?.roles]);
   const displayName = useMemo(() => buildDisplayName(loggedUserName, userRoles), [loggedUserName, userRoles]);
   const userRoleLabel = useMemo(() => getAssistantRoleLabel(userRoles), [userRoles]);
+  const roleStarterQuestions = useMemo(() => getRoleStarterQuestions(userRoles), [userRoles]);
   const [userName, setUserName] = useState(loggedUserName);
   const [messages, setMessages] = useState<Message[]>(() => [
     {
@@ -237,10 +232,8 @@ export default function FloatingAssistant() {
     let nextUserName = userName;
 
     if (!loggedUserName && !userName) {
-      const maybeName = question
-        .replace(/^(soy|me llamo|mi nombre es)\s+/i, "")
-        .trim();
-      if (maybeName && !looksLikeGreeting(maybeName) && maybeName.split(/\s+/).length <= 4 && maybeName.length <= 40 && !/\d/.test(maybeName)) {
+      const maybeName = getIntroducedName(question);
+      if (maybeName && !looksLikeGreeting(maybeName) && maybeName.length <= 40) {
         setUserName(maybeName);
         nextUserName = maybeName;
       }
@@ -264,8 +257,7 @@ export default function FloatingAssistant() {
         currentPath: location.pathname,
         screenSnapshot,
         userName: nextUserName || undefined,
-        userDisplayName: displayName || nextUserName || undefined,
-        userRoleLabel: userRoleLabel || undefined,
+        userDisplayName: loggedUserName || nextUserName || undefined,
         history: nextHistory.map((item) => ({ role: item.role, text: item.text }))
       });
       const data = response.data?.data || response.data || {};
@@ -303,6 +295,22 @@ export default function FloatingAssistant() {
       return;
     }
     await sendQuestion(action.target);
+  }
+
+  async function rateAnswer(messageId: string, rating: "useful" | "needs-improvement") {
+    if (savingFeedbackFor) return;
+    setSavingFeedbackFor(messageId);
+    setFeedbackErrorFor("");
+    try {
+      await api.post("/assistant/feedback", { responseId: messageId, rating, currentPath: location.pathname });
+      setMessages((prev) => prev.map((item) => item.id === messageId ? { ...item, feedback: rating } : item));
+    } catch (error: any) {
+      setFeedbackErrorFor(messageId);
+      const message = String(error?.response?.data?.message || "").trim();
+      if (message) setMessages((prev) => prev.map((item) => item.id === messageId ? { ...item, feedbackError: message } : item));
+    } finally {
+      setSavingFeedbackFor("");
+    }
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -381,7 +389,7 @@ export default function FloatingAssistant() {
                 />
                 <strong style={{ fontSize: "16px" }}>Margarita</strong>
               </div>
-              <span style={{ fontSize: "12px", opacity: 0.9 }}>Conectado a {routeLabel}</span>
+              <span style={{ fontSize: "12px", opacity: 0.9 }}>{userRoleLabel ? `${userRoleLabel} · ` : ""}{routeLabel}</span>
             </div>
             <button
               type="button"
@@ -426,7 +434,7 @@ export default function FloatingAssistant() {
                   lineHeight: 1.45
                 }}
               >
-                <div>{message.text}</div>
+                <div>{message.role === "assistant" ? renderAssistantText(message.text) : message.text}</div>
                 {message.role === "assistant" && Array.isArray(message.actions) && message.actions.length ? (
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px" }}>
                     {message.actions.map((action, index) => (
@@ -450,8 +458,49 @@ export default function FloatingAssistant() {
                     ))}
                   </div>
                 ) : null}
+                {message.role === "assistant" && message.id.startsWith("a-") ? (
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", marginTop: "9px", color: "#64748b", fontSize: "11px" }}>
+                    {message.feedback ? (
+                      <span>Gracias por ayudarme a mejorar.</span>
+                    ) : (
+                      <>
+                        <span>¿Te sirvió?</span>
+                        <button type="button" onClick={() => void rateAnswer(message.id, "useful")} disabled={Boolean(savingFeedbackFor)} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", background: "#fff", color: "#334155", padding: "4px 8px", cursor: "pointer", fontSize: "11px" }}>
+                          Sí
+                        </button>
+                        <button type="button" onClick={() => void rateAnswer(message.id, "needs-improvement")} disabled={Boolean(savingFeedbackFor)} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", background: "#fff", color: "#334155", padding: "4px 8px", cursor: "pointer", fontSize: "11px" }}>
+                          Hay que mejorarla
+                        </button>
+                      </>
+                    )}
+                    {feedbackErrorFor === message.id ? <span role="alert">{message.feedbackError || "No se guardó la valoración. Inténtalo otra vez."}</span> : null}
+                  </div>
+                ) : null}
               </div>
             ))}
+            {messages.length === 1 && !loading ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "2px" }}>
+                {roleStarterQuestions.map((question) => (
+                  <button
+                    key={question}
+                    type="button"
+                    onClick={() => void sendQuestion(question)}
+                    style={{
+                      border: "1px solid #bfdbfe",
+                      background: "#eff6ff",
+                      color: "#1e3a8a",
+                      borderRadius: "999px",
+                      padding: "7px 10px",
+                      cursor: "pointer",
+                      fontWeight: 700,
+                      fontSize: "12px"
+                    }}
+                  >
+                    {question}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {loading ? (
               <div
                 style={{

@@ -805,3 +805,134 @@
   .em-page button,
   .em-page .em-button { transition:none; }
 }
+
+/* Enfoque guiado para crear una boleta de conducta. */
+.em-page .em-conduct-panel {
+  scroll-margin-top:24px;
+  padding:18px;
+  border:2px solid #0e7490;
+  border-left:7px solid #0e7490;
+  background:linear-gradient(135deg,#f0fdff 0%,#fff 72%);
+  box-shadow:0 0 0 4px #06b6d41c,0 12px 30px #0e749026;
+}
+.em-page .em-conduct-header {
+  padding:12px 14px;
+  margin:-2px -2px 16px;
+  border-radius:9px;
+  background:#dff7fb;
+  border:1px solid #a5e4ee;
+}
+.em-page .em-conduct-header h2 { color:#07566b; font-size:18px; }
+.em-page .em-conduct-header p { display:block; color:#145568; font-size:13px; font-weight:650; }
+.em-page .em-conduct-generate,
+.em-page .em-conduct-save {
+  min-height:44px;
+  padding:9px 16px;
+  color:#fff;
+  background:#087e8b;
+  border:2px solid #075f69;
+  border-bottom:4px solid #064d55;
+  border-radius:9px;
+  box-shadow:0 4px 0 #064d5526,0 7px 14px #064d5524;
+  font-weight:800;
+}
+.em-page .em-conduct-generate:hover:not(:disabled),
+.em-page .em-conduct-save:hover:not(:disabled) { color:#fff; background:#066874; }
+.em-page .em-conduct-close,
+.em-page .em-conduct-cancel {
+  min-height:42px;
+  padding:8px 15px;
+  color:#7f1d1d;
+  background:#fff5f5;
+  border:1.5px solid #e6a4a4;
+  border-bottom:3px solid #c97979;
+  border-radius:9px;
+  font-weight:750;
+}
+.em-page .em-conduct-form {
+  padding:15px;
+  border:2px solid #45a6b5;
+  border-radius:12px;
+  background:#f3fcfd;
+  box-shadow:inset 0 0 0 3px #dff7fb;
+}
+.em-page .em-conduct-fields { min-width:0; margin:0; padding:0; border:0; }
+.em-page .em-conduct-student { margin:0 0 12px !important; background:#fff; border-color:#9ccfd6; color:#164e63; font-weight:700; }
+.em-page .em-conduct-instructions {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:0 0 14px;
+  padding:11px 13px;
+  border-left:4px solid #0e7490;
+  border-radius:7px;
+  background:#e2f7fa;
+  color:#164e63;
+  font-size:14px;
+  font-weight:700;
+}
+.em-page .em-conduct-step {
+  display:grid;
+  flex:0 0 28px;
+  width:28px;
+  height:28px;
+  place-items:center;
+  border-radius:50%;
+  background:#087e8b;
+  color:#fff;
+  font-weight:800;
+}
+.em-page .em-conduct-grid { align-items:start; gap:14px; }
+.em-page .em-conduct-required {
+  gap:7px;
+  padding:12px;
+  border:1.5px solid #85bbc5;
+  border-radius:9px;
+  background:#fff;
+  color:#123f50;
+  font-size:14px;
+  font-weight:800;
+}
+.em-page .em-conduct-required > span { color:#07566b; }
+.em-page .em-conduct-required select,
+.em-page .em-conduct-required input,
+.em-page .em-conduct-required textarea {
+  width:100%;
+  min-height:50px;
+  padding:11px 12px;
+  border:2px solid #5b9eaa;
+  border-radius:8px;
+  background:#fff;
+  color:#142f3a;
+  font-size:16px;
+  font-weight:600;
+}
+.em-page .em-conduct-required select:focus,
+.em-page .em-conduct-required input:focus,
+.em-page .em-conduct-required textarea:focus {
+  outline:3px solid #22a6b833;
+  border-color:#087e8b;
+  box-shadow:0 0 0 2px #087e8b;
+}
+.em-page .em-conduct-normativa { grid-column:1/-1; }
+.em-page .em-conduct-normativa textarea { min-height:96px; }
+.em-page .em-conduct-article { grid-column:1/-1; margin:0 !important; }
+.em-page .em-conduct-form-actions {
+  justify-content:flex-start;
+  margin-top:14px;
+  padding-top:12px;
+  border-top:1px solid #c4e2e7;
+}
+.em-page .em-conduct-save:disabled { opacity:.55; cursor:not-allowed; }
+@media(max-width:560px) {
+  .em-page .em-conduct-panel { padding:12px; }
+  .em-page .em-conduct-header { align-items:flex-start; flex-direction:column; margin:0 0 12px; }
+  .em-page .em-conduct-header .em-actions { width:100%; }
+  .em-page .em-conduct-header .em-actions button { flex:1; min-height:44px; }
+  .em-page .em-conduct-form { padding:10px; }
+  .em-page .em-conduct-required { padding:10px; }
+  .em-page .em-conduct-grid { grid-template-columns:1fr; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .em-page .em-conduct-panel { scroll-behavior:auto; }
+}
