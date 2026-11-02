@@ -36,6 +36,7 @@ import { crearExcelAsistenciaDia } from "./asistencia-dia-excel";
 import { autorizarReporteGuia, cargarFiltrosGuia } from "./profe-guia-access";
 import { registrarReporteComunicadosGuia } from "./comunicados-guia.routes";
 import { crearExcelWhatsApp } from "./whatsapp-excel";
+import { ensureSituacionesParticularesTable } from "../estudiantes/situaciones-particulares.utils";
 
 const router = Router();
 router.use(requireAuth);
@@ -2446,6 +2447,47 @@ router.get("/boletas-conducta", async (req, res) => {
     ORDER BY b.Fecha DESC, b.Consecutivo DESC, b.BoletaConductaId DESC
   `);
   return ok(res, result.recordset);
+});
+
+router.get("/situaciones-particulares", async (req, res) => {
+  try {
+    const pool = await getPool();
+    await ensureSituacionesParticularesTable(pool);
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const vista = String(req.query.vistaPor || "SECCION").toUpperCase();
+    const grupoId = req.query.grupoId ? Number(req.query.grupoId) : null;
+    const estudianteId = req.query.estudianteId ? Number(req.query.estudianteId) : null;
+    const profesorId = req.query.profesorId ? Number(req.query.profesorId) : null;
+    const desde = String(req.query.desde || "").trim() || null;
+    const hasta = String(req.query.hasta || "").trim() || null;
+    if (!["ALUMNO", "SECCION", "PROFESOR"].includes(vista)) return badRequest(res, "Vista de situaciones especiales inválida");
+    if (vista === "ALUMNO" && !estudianteId) return badRequest(res, "Seleccioná un alumno para este reporte");
+    if (vista === "SECCION" && !grupoId) return badRequest(res, "Seleccioná una sección para este reporte");
+    if (vista === "PROFESOR" && !(profesorId || (!isAdminReportUser(req) && getUserId(req)))) return badRequest(res, "Seleccioná el profesor a consultar");
+    const profesorFiltro = isAdminReportUser(req) ? profesorId : getUserId(req);
+    const result = await pool.request()
+      .input("institucionId", sql.Int, institucionId).input("grupoId", sql.Int, grupoId)
+      .input("estudianteId", sql.Int, estudianteId).input("profesorId", sql.Int, vista === "PROFESOR" ? profesorFiltro : null)
+      .input("desde", sql.Date, desde).input("hasta", sql.Date, hasta)
+      .query(`SELECT sp.SituacionParticularId, sp.EstudianteId, sp.GrupoId,
+        LTRIM(RTRIM(CONCAT(ISNULL(e.PrimerApellido,N''), CASE WHEN NULLIF(e.SegundoApellido,N'') IS NULL THEN N'' ELSE N' '+e.SegundoApellido END, CASE WHEN NULLIF(e.Nombre,N'') IS NULL THEN N'' ELSE N' '+e.Nombre END))) AS nombre,
+        e.Identificacion AS cedula, COALESCE(g.Nombre, N'Sin sección') AS seccion,
+        sp.Situacion AS situacion, sp.UsuarioId AS profesorId, sp.NombreUsuario AS profesor,
+        sp.CorreoUsuario AS correoProfesor, sp.Fecha AS fecha, CONVERT(varchar(10),sp.Fecha,103) AS fechaTexto
+        FROM dbo.SituacionParticular sp
+        INNER JOIN dbo.Estudiante e ON e.EstudianteId=sp.EstudianteId
+        LEFT JOIN dbo.Grupo g ON g.GrupoId=sp.GrupoId
+        WHERE sp.InstitucionId=@institucionId AND (@grupoId IS NULL OR sp.GrupoId=@grupoId)
+          AND (@estudianteId IS NULL OR sp.EstudianteId=@estudianteId)
+          AND (@profesorId IS NULL OR sp.UsuarioId=@profesorId)
+          AND (@desde IS NULL OR CONVERT(date,sp.Fecha)>=@desde)
+          AND (@hasta IS NULL OR CONVERT(date,sp.Fecha)<=@hasta)
+        ORDER BY sp.Fecha DESC, sp.SituacionParticularId DESC`);
+    return ok(res, { rows: result.recordset || [] });
+  } catch (error) {
+    console.error("Error consultando situaciones particulares:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo consultar el reporte de situaciones especiales" });
+  }
 });
 
 router.get("/gestion-filtros", async (req, res) => {

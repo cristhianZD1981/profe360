@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { autorizarReporteGuia } from "../reportes/profe-guia-access";
 import { applyInstitutionScope, requireAuth, requireRoles } from "../../middlewares/auth.middleware";
 import { getPool, sql } from "../../config/database";
@@ -13,6 +15,7 @@ import { getGuardianEmailCopiesByStudent, mergeEmailCopies } from "../../utils/g
 
 const router = Router();
 const MAIL_FROM_NOTIFICACIONES = "info@profe360cr.com";
+const FORMULARIO_TRANSPORTE_2027_DATA_URI = `data:image/png;base64,${readFileSync(resolve(__dirname, "../../../assets/FormularioTE01-2027.png")).toString("base64")}`;
 
 router.use(requireAuth);
 router.use(applyInstitutionScope());
@@ -50,6 +53,12 @@ function formatDateDayMonthYear(value?: any) {
   const iso = formatDate(value);
   const parts = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return parts ? `${parts[3]}-${parts[2]}-${parts[1]}` : iso;
+}
+
+function formatDateSlash(value?: any) {
+  const iso = formatDate(value);
+  const parts = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return parts ? `${parts[3]}/${parts[2]}/${parts[1]}` : iso;
 }
 
 function formatGuardianType(value?: any) {
@@ -252,6 +261,9 @@ function mapEncargado(encargado: any) {
   return {
     tipo: encargado?.TipoEncargado || "",
     nombre: fullName(encargado),
+    nombres: encargado?.Nombre || "",
+    primerApellido: encargado?.PrimerApellido || "",
+    segundoApellido: encargado?.SegundoApellido || "",
     identificacion: encargado?.Identificacion || "",
     correo: encargado?.Correo || "",
     telefono: encargado?.Telefono || "",
@@ -743,11 +755,55 @@ function buildBoletaHtml(params: {
         <p><strong>Fecha de autorización:</strong> ${escapeHtml(fechaAutorizacion)}</p>
       </div>
     </section>` : "";
+  const formularioTransporteField = (value: any, rect: [number, number, number, number]) => {
+    const texto = String(value ?? "").trim();
+    if (!texto) return "";
+    const [x1, y1, x2, y2] = rect;
+    const left = (x1 / 612) * 100;
+    const top = ((792 - y2) / 792) * 100;
+    const width = ((x2 - x1) / 612) * 100;
+    const height = ((y2 - y1) / 792) * 100;
+    return `<div class="transport-data-field" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%">${escapeHtml(texto)}</div>`;
+  };
+  const formularioTransporteCheck = (checked: boolean, rect: [number, number, number, number]) => {
+    if (!checked) return "";
+    const [x1, y1, x2, y2] = rect;
+    const left = (x1 / 612) * 100;
+    const top = ((792 - y2) / 792) * 100;
+    const width = ((x2 - x1) / 612) * 100;
+    const height = ((y2 - y1) / 792) * 100;
+    return `<div class="transport-data-check" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%">X</div>`;
+  };
+  const sexoEstudiante = String(estudiante?.Sexo || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase();
+  const esMasculino = ["M", "MASCULINO", "HOMBRE"].includes(sexoEstudiante);
+  const esFemenino = ["F", "FEMENINO", "MUJER"].includes(sexoEstudiante);
+  const especialidadTransporte = String(matricula?.Especialidad || matricula?.GrupoEspecialidad || "").trim();
+  const encargadoSolicitud = encargados.find((item) => item.principal) || encargados[0] || null;
+  const gradoSolicitud = matricula?.NivelAcademico || matricula?.GrupoNivel || matricula?.GrupoNivelAcademico || "";
+  const formularioTransporteContenido = [
+    formularioTransporteField(formatDateSlash(getCostaRicaIsoDate()), [32, 689, 124, 705]),
+    formularioTransporteField(estudiante?.PrimerApellido, [42, 635, 177.2, 651]),
+    formularioTransporteField(estudiante?.SegundoApellido, [184.2, 635, 319.4, 651]),
+    formularioTransporteField(estudiante?.Nombre, [326.4, 635, 495.4, 651]),
+    formularioTransporteField(gradoSolicitud, [502.4, 635, 570, 651]),
+    formularioTransporteField(estudiante?.Identificacion, [42, 611, 163.68, 627]),
+    formularioTransporteField(estudiante?.Nacionalidad, [170.68, 611, 272.08, 627]),
+    formularioTransporteField(formatDateSlash(estudiante?.FechaNacimiento), [279.08, 611, 380.48, 627]),
+    formularioTransporteCheck(esMasculino, [393.48, 614, 403.48, 624]),
+    formularioTransporteCheck(esFemenino, [461.48, 614, 471.48, 624]),
+    formularioTransporteField(encargadoSolicitud?.primerApellido, [42, 560, 160.9898, 576]),
+    formularioTransporteField(encargadoSolicitud?.segundoApellido, [167.9898, 560, 286.9796, 576]),
+    formularioTransporteField(encargadoSolicitud?.nombres, [293.9796, 560, 459.5306, 576]),
+    formularioTransporteField(encargadoSolicitud?.telefono, [466.5306, 560, 570, 576]),
+    formularioTransporteField(encargadoSolicitud?.identificacion, [42, 536, 153.54, 552]),
+    formularioTransporteField(encargadoSolicitud?.correo, [408.8, 536, 563, 552]),
+    formularioTransporteCheck(!!especialidadTransporte, [232, 370, 242, 380]),
+    formularioTransporteField(especialidadTransporte, [332, 367, 570, 383])
+  ].join("");
   const becaTransporteHtml = estudiante?.BecaTransporte ? `
-    <section class="page transport-scholarship-page">
-      ${authorizationLogo}
-      <h1>BECA DE TRANSPORTE</h1>
-      <div class="school-name">${escapeHtml(nombreInstitucionCabecera)}</div>
+    <section class="page transport-scholarship-page" aria-label="Formulario de solicitud de transporte estudiantil">
+      <img class="transport-form-background" src="${FORMULARIO_TRANSPORTE_2027_DATA_URI}" alt="Formulario TE-01-2027: solicitud de beneficio de transporte estudiantil" />
+      <div class="transport-form-overlays">${formularioTransporteContenido}</div>
     </section>` : "";
 
   return `
@@ -986,6 +1042,35 @@ function buildBoletaHtml(params: {
     .authorization-page .signature-area { margin-top:30px; font-size:11.5px; }
     .authorization-page .signature-line { width:55%; border-bottom:1px solid #333; height:34px; margin:20px 0 4px; }
     .transport-scholarship-page h1 { margin:170px 80px 0; font-size:20px; }
+    .transport-scholarship-page {
+      position: relative;
+      width: 900px;
+      height: 1165px;
+      min-height: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    .transport-form-background, .transport-form-overlays {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .transport-form-background { object-fit: fill; }
+    .transport-form-overlays { pointer-events: none; }
+    .transport-data-field, .transport-data-check {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      color: #17202a;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 7pt;
+      line-height: 1;
+      overflow: hidden;
+    }
+    .transport-data-field { padding: 0 2px; white-space: nowrap; }
+    .transport-data-check { justify-content: center; font-size: 8pt; font-weight: 700; }
 
     .footer {
       margin-top: 6px;
@@ -1027,6 +1112,11 @@ function buildBoletaHtml(params: {
         border:0; box-shadow:none; break-before:page; page-break-before:always;
       }
       .transport-scholarship-page h1 { margin-top:1.7in; }
+      .transport-scholarship-page {
+        width:7.94in; height:10.27in; min-height:0; margin:0; padding:0;
+        border:0; box-shadow:none; overflow:hidden; break-before:page; page-break-before:always;
+      }
+      .transport-data-field { font-size:7pt; }
       body {
         background: #fff;
       }

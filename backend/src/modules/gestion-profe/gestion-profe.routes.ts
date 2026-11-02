@@ -6186,15 +6186,6 @@ router.post("/mis-grupos/:grupoId/materias/:materiaId/asistencia", async (req, r
     if (!asignacion) return forbidden(res, "No tenés permisos para registrar asistencia en este grupo y materia");
 
     const pool = await getPool();
-    if (await responderSiCursoCerrado(res, pool, {
-      institucionId: Number(asignacion.InstitucionId),
-      grupoId,
-      materiaId,
-      anioLectivoId,
-      periodoId,
-      grupoClaseId
-    })) return;
-
     await ensureReporteEnvioBitacoraTable(pool);
     const filtroEstudiantesGrupo = grupoClaseId
       ? `

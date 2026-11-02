@@ -1335,6 +1335,14 @@ async function validateIndicadoresRemovidosConCalificacion(executor: any, activi
 
     FROM dbo.Eval360_SeguimientoIndicador si
 
+    INNER JOIN dbo.Eval360_ActividadIndicador ai
+
+      ON ai.ActividadId = si.ActividadId
+
+     AND ai.IndicadorGrupoId = si.IndicadorGrupoId
+
+     AND ISNULL(ai.Activo, 1) = 1
+
     WHERE si.ActividadId = @actividadId
 
       ${indicadorIds.length ? `AND si.IndicadorGrupoId NOT IN (${placeholders})` : ""}
@@ -15398,6 +15406,30 @@ async function ensureNotaEdicionAuditoriaTable(pool: any) {
 
 }
 
+async function ensureActividadIndicadorCorreccionAuditoriaTable(pool: any) {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.Eval360_ActividadIndicadorCorreccionAuditoria', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.Eval360_ActividadIndicadorCorreccionAuditoria (
+        CorreccionId BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        EstructuraGrupoId INT NOT NULL,
+        EstructuraGrupoDetalleId INT NOT NULL,
+        IndicadorGrupoId INT NOT NULL,
+        ActividadId INT NOT NULL,
+        ActivoAnterior BIT NOT NULL,
+        ActivoNuevo BIT NOT NULL,
+        EstudiantesCalificados INT NOT NULL,
+        Justificacion NVARCHAR(1000) NOT NULL,
+        UsuarioId INT NULL,
+        EsSuperAdmin BIT NOT NULL,
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_Eval360_ActividadIndicadorCorreccion_CreatedAt DEFAULT(SYSDATETIME())
+      );
+      CREATE INDEX IX_Eval360_ActividadIndicadorCorreccion_Filtro
+        ON dbo.Eval360_ActividadIndicadorCorreccionAuditoria(EstructuraGrupoId, EstructuraGrupoDetalleId, CreatedAt DESC);
+    END
+  `);
+}
+
 
 
 async function ensureComponenteAjusteManualTables(pool: any) {
@@ -17422,6 +17454,120 @@ router.get("/seguimiento/contexto", async (req, res) => {
 
 
 
+router.post("/seguimiento/corregir-asignacion-indicadores", async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  try {
+    if (!assertCanAccess(req, res)) return;
+    const estructuraGrupoId = Number(req.body.estructuraGrupoId || 0);
+    const estructuraGrupoDetalleId = Number(req.body.estructuraGrupoDetalleId || 0);
+    const tipoUso = String(req.body.tipoUso || "").trim().toUpperCase();
+    const justificacion = String(req.body.justificacion || "").trim();
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!estructuraGrupoId || !estructuraGrupoDetalleId || !["COTIDIANO", "TAREAS"].includes(tipoUso)) {
+      return badRequest(res, "Datos incompletos o rubro no permitido");
+    }
+    if (!req.body.confirmarImpacto || justificacion.length < 8) {
+      return badRequest(res, "Confirmá el impacto y agregá una justificación de al menos 8 caracteres");
+    }
+    if (!items.length || items.length > 250) return badRequest(res, "No hay indicadores válidos para corregir");
+    const estructura = isSuperAdmin(req)
+      ? (await pool.request().input("estructuraGrupoId", sql.Int, estructuraGrupoId).query(`SELECT TOP 1 * FROM dbo.Eval360_EstructuraGrupo WHERE EstructuraGrupoId=@estructuraGrupoId`)).recordset[0]
+      : await getEstructuraPermitidaPorId(req, res, pool, estructuraGrupoId);
+    if (!estructura) return;
+    if (isProfesor(req) && !isSuperAdmin(req) && await responderSiEstructuraCursoCerrado(res, pool, estructura)) return;
+    const detalle = await pool.request()
+      .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+      .input("detalleId", sql.Int, estructuraGrupoDetalleId)
+      .query(`SELECT TOP 1 EstructuraGrupoDetalleId FROM dbo.Eval360_EstructuraGrupoDetalle WHERE EstructuraGrupoId=@estructuraGrupoId AND EstructuraGrupoDetalleId=@detalleId`);
+    if (!detalle.recordset.length) return badRequest(res, "El componente no pertenece al grupo seleccionado");
+    await ensureActividadIndicadorCorreccionAuditoriaTable(pool);
+    await transaction.begin();
+    let cambios = 0;
+    let calificacionesAfectadas = 0;
+    for (const item of items) {
+      const indicadorId = Number(item?.indicadorGrupoId || 0);
+      const mantenerActividadId = item?.actividadIdMantener == null || item?.actividadIdMantener === "" ? null : Number(item.actividadIdMantener);
+      if (!indicadorId || (mantenerActividadId !== null && !Number.isFinite(mantenerActividadId))) throw new Error("Indicador o actividad inválidos");
+      const indicador = await transaction.request()
+        .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+        .input("detalleId", sql.Int, estructuraGrupoDetalleId)
+        .input("indicadorId", sql.Int, indicadorId)
+        .input("tipoUso", sql.NVarChar(30), tipoUso)
+        .query(`SELECT TOP 1 IndicadorGrupoId FROM dbo.Eval360_IndicadorGrupo WHERE EstructuraGrupoId=@estructuraGrupoId AND IndicadorGrupoId=@indicadorId AND UPPER(TipoUso)=@tipoUso AND ISNULL(Activo,1)=1`);
+      if (!indicador.recordset.length) throw new Error("Un indicador no pertenece al rubro y componente seleccionados");
+      if (mantenerActividadId !== null) {
+        const target = await transaction.request()
+          .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+          .input("detalleId", sql.Int, estructuraGrupoDetalleId)
+          .input("actividadId", sql.Int, mantenerActividadId)
+          .query(`SELECT TOP 1 ActividadId FROM dbo.Eval360_Actividad WHERE ActividadId=@actividadId AND EstructuraGrupoId=@estructuraGrupoId AND EstructuraGrupoDetalleId=@detalleId AND ISNULL(Activo,1)=1`);
+        if (!target.recordset.length) throw new Error("La actividad seleccionada no pertenece al componente");
+      }
+      const asignaciones = await transaction.request()
+        .input("indicadorId", sql.Int, indicadorId)
+        .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+        .input("detalleId", sql.Int, estructuraGrupoDetalleId)
+        .query(`SELECT ai.ActividadId, ai.Activo, (SELECT COUNT(DISTINCT si.EstudianteId) FROM dbo.Eval360_SeguimientoIndicador si WHERE si.ActividadId=ai.ActividadId AND si.IndicadorGrupoId=ai.IndicadorGrupoId) AS EstudiantesCalificados FROM dbo.Eval360_ActividadIndicador ai INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId=ai.ActividadId WHERE ai.IndicadorGrupoId=@indicadorId AND a.EstructuraGrupoId=@estructuraGrupoId AND a.EstructuraGrupoDetalleId=@detalleId`);
+      const existentes = asignaciones.recordset || [];
+      if (!isSuperAdmin(req)) {
+        const activas = existentes.filter((a: any) => a.Activo !== false && a.Activo !== 0);
+        if (activas.length < 2 || mantenerActividadId === null || !activas.some((a: any) => Number(a.ActividadId) === mantenerActividadId)) {
+          throw new Error("El perfil docente solo puede consolidar duplicados detectados y conservar una de sus actividades actuales");
+        }
+      }
+      if (mantenerActividadId !== null && !existentes.some((a: any) => Number(a.ActividadId) === mantenerActividadId)) {
+        await transaction.request().input("actividadId", sql.Int, mantenerActividadId).input("indicadorId", sql.Int, indicadorId)
+          .query(`IF COL_LENGTH('dbo.Eval360_ActividadIndicador','NumeroLecciones') IS NOT NULL AND COL_LENGTH('dbo.Eval360_ActividadIndicador','Puntos') IS NOT NULL AND COL_LENGTH('dbo.Eval360_ActividadIndicador','DetalleItemsJson') IS NOT NULL
+            INSERT INTO dbo.Eval360_ActividadIndicador (ActividadId,IndicadorGrupoId,Activo,NumeroLecciones,Puntos,DetalleItemsJson) VALUES (@actividadId,@indicadorId,1,0,0,N'{}')
+          ELSE INSERT INTO dbo.Eval360_ActividadIndicador (ActividadId,IndicadorGrupoId,Activo) VALUES (@actividadId,@indicadorId,1)`);
+      }
+      const allActivityIds = new Set<number>(existentes.map((a: any) => Number(a.ActividadId)));
+      if (mantenerActividadId !== null) allActivityIds.add(mantenerActividadId);
+      for (const actividadId of allActivityIds) {
+        const anterior = existentes.find((a: any) => Number(a.ActividadId) === actividadId);
+        const activoAnterior = Boolean(anterior && anterior.Activo !== false && anterior.Activo !== 0);
+        const activoNuevo = mantenerActividadId !== null && actividadId === mantenerActividadId;
+        if (activoAnterior === activoNuevo) continue;
+        const conteo = Number(anterior?.EstudiantesCalificados || 0);
+        calificacionesAfectadas += activoAnterior && !activoNuevo ? conteo : 0;
+        const update = await transaction.request()
+          .input("actividadId", sql.Int, actividadId)
+          .input("indicadorId", sql.Int, indicadorId)
+          .input("activoNuevo", sql.Bit, activoNuevo)
+          .query(`UPDATE dbo.Eval360_ActividadIndicador SET Activo=@activoNuevo WHERE ActividadId=@actividadId AND IndicadorGrupoId=@indicadorId`);
+        if (!Number(update.rowsAffected?.[0] || 0) && activoNuevo) {
+            await transaction.request().input("actividadId", sql.Int, actividadId).input("indicadorId", sql.Int, indicadorId)
+            .query(`IF COL_LENGTH('dbo.Eval360_ActividadIndicador','NumeroLecciones') IS NOT NULL AND COL_LENGTH('dbo.Eval360_ActividadIndicador','Puntos') IS NOT NULL AND COL_LENGTH('dbo.Eval360_ActividadIndicador','DetalleItemsJson') IS NOT NULL
+              INSERT INTO dbo.Eval360_ActividadIndicador (ActividadId,IndicadorGrupoId,Activo,NumeroLecciones,Puntos,DetalleItemsJson) VALUES (@actividadId,@indicadorId,1,0,0,N'{}')
+            ELSE INSERT INTO dbo.Eval360_ActividadIndicador (ActividadId,IndicadorGrupoId,Activo) VALUES (@actividadId,@indicadorId,1)`);
+        }
+        await transaction.request()
+          .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+          .input("detalleId", sql.Int, estructuraGrupoDetalleId)
+          .input("indicadorId", sql.Int, indicadorId)
+          .input("actividadId", sql.Int, actividadId)
+          .input("activoAnterior", sql.Bit, activoAnterior)
+          .input("activoNuevo", sql.Bit, activoNuevo)
+          .input("calificados", sql.Int, conteo)
+          .input("justificacion", sql.NVarChar(1000), justificacion)
+          .input("usuarioId", sql.Int, getUserId(req) || null)
+          .input("esSuperAdmin", sql.Bit, isSuperAdmin(req))
+          .query(`INSERT INTO dbo.Eval360_ActividadIndicadorCorreccionAuditoria (EstructuraGrupoId,EstructuraGrupoDetalleId,IndicadorGrupoId,ActividadId,ActivoAnterior,ActivoNuevo,EstudiantesCalificados,Justificacion,UsuarioId,EsSuperAdmin) VALUES (@estructuraGrupoId,@detalleId,@indicadorId,@actividadId,@activoAnterior,@activoNuevo,@calificados,@justificacion,@usuarioId,@esSuperAdmin)`);
+        cambios++;
+      }
+    }
+    await transaction.commit();
+    clearContextCacheByParts({ institucionId:Number((estructura as any).InstitucionId||0), grupoId:Number((estructura as any).GrupoId||0), materiaId:Number((estructura as any).MateriaId||0), anioLectivoId:Number((estructura as any).AnioLectivoId||0), periodoId:Number((estructura as any).PeriodoId||0), grupoClaseId:Number((estructura as any).GrupoClaseId||0) });
+    return ok(res, { cambios, calificacionesAfectadas }, "Asignaciones corregidas; las calificaciones históricas se conservaron");
+  } catch (error: any) {
+    if (transaction._aborted !== true) { try { await transaction.rollback(); } catch {} }
+    if (String(error?.message || "").includes("indicador") || String(error?.message || "").includes("actividad") || String(error?.message || "").includes("docente")) return badRequest(res, error.message);
+    console.error("Error corrigiendo asignaciones de indicadores:", error);
+    return res.status(500).json({ ok: false, message: "No se pudieron corregir las asignaciones" });
+  }
+});
+
 router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
   const pool = await getPool();
@@ -17556,7 +17702,39 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
       if (!permitirMultiplesActividades) {
 
-        const indicadoresAsignadosOtraActividad = await requestIndicadores.query(`
+        const asignacionesActuales = await pool.request()
+
+          .input("actividadId", sql.Int, actividadId)
+
+          .query(`
+
+            SELECT DISTINCT IndicadorGrupoId
+
+            FROM dbo.Eval360_ActividadIndicador
+
+            WHERE ActividadId = @actividadId
+
+              AND ISNULL(Activo, 1) = 1
+
+          `);
+
+        const idsActuales = new Set((asignacionesActuales.recordset || []).map((item: any) => Number(item.IndicadorGrupoId)));
+
+        const indicadoresNuevos = indicadorIds.filter((id: number) => !idsActuales.has(Number(id)));
+
+        if (indicadoresNuevos.length) {
+
+          const nuevosPlaceholders = indicadoresNuevos.map((_, index) => `@nuevoIndicadorId${index}`).join(", ");
+
+          const requestNuevos = pool.request()
+
+            .input("estructuraGrupoId", sql.Int, estructuraGrupoId)
+
+            .input("actividadId", sql.Int, actividadId);
+
+          indicadoresNuevos.forEach((id: number, index: number) => requestNuevos.input(`nuevoIndicadorId${index}`, sql.Int, id));
+
+          const indicadoresAsignadosOtraActividad = await requestNuevos.query(`
 
           SELECT DISTINCT ai.IndicadorGrupoId
 
@@ -17566,7 +17744,7 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
           WHERE a.EstructuraGrupoId = @estructuraGrupoId
 
-            AND ai.IndicadorGrupoId IN (${placeholders})
+            AND ai.IndicadorGrupoId IN (${nuevosPlaceholders})
 
             AND ai.ActividadId <> @actividadId
 
@@ -17574,33 +17752,43 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
 
         `);
 
-        if ((indicadoresAsignadosOtraActividad.recordset || []).length > 0) {
+          if ((indicadoresAsignadosOtraActividad.recordset || []).length > 0) {
 
-          return badRequest(res, "Uno o más indicadores ya están asignados a otra actividad");
+            return badRequest(res, "Uno o más indicadores ya están asignados a otra actividad");
 
-        }
+          }
 
 
 
-        const indicadoresCalificadosOtraActividad = await requestIndicadores.query(`
+          const indicadoresCalificadosOtraActividad = await requestNuevos.query(`
 
           SELECT DISTINCT si.IndicadorGrupoId
 
           FROM dbo.Eval360_SeguimientoIndicador si
 
+          INNER JOIN dbo.Eval360_ActividadIndicador ai
+
+            ON ai.ActividadId = si.ActividadId
+
+           AND ai.IndicadorGrupoId = si.IndicadorGrupoId
+
+           AND ISNULL(ai.Activo, 1) = 1
+
           INNER JOIN dbo.Eval360_Actividad a ON a.ActividadId = si.ActividadId
 
           WHERE a.EstructuraGrupoId = @estructuraGrupoId
 
-            AND si.IndicadorGrupoId IN (${placeholders})
+            AND si.IndicadorGrupoId IN (${nuevosPlaceholders})
 
             AND si.ActividadId <> @actividadId
 
         `);
 
-        if ((indicadoresCalificadosOtraActividad.recordset || []).length > 0) {
+          if ((indicadoresCalificadosOtraActividad.recordset || []).length > 0) {
 
-          return badRequest(res, "Uno o más indicadores ya tienen calificaciones en otra actividad");
+            return badRequest(res, "Uno o más indicadores ya tienen calificaciones en otra actividad");
+
+          }
 
         }
 
@@ -17615,6 +17803,14 @@ router.post("/seguimiento/asignar-indicadores-actividad", async (req, res) => {
       SELECT DISTINCT si.IndicadorGrupoId
 
       FROM dbo.Eval360_SeguimientoIndicador si
+
+      INNER JOIN dbo.Eval360_ActividadIndicador ai
+
+        ON ai.ActividadId = si.ActividadId
+
+       AND ai.IndicadorGrupoId = si.IndicadorGrupoId
+
+       AND ISNULL(ai.Activo, 1) = 1
 
       WHERE si.ActividadId = @actividadId
 

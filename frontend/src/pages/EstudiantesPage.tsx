@@ -902,6 +902,18 @@ export default function EstudiantesPage() {
     }
   }
 
+  async function handleSituacionParticular(item: Student) {
+    const situacion = window.prompt(`Describí la situación particular de ${[item.Nombre, item.PrimerApellido, item.SegundoApellido].filter(Boolean).join(" ")}:`);
+    if (!situacion?.trim()) return;
+    clearMessages();
+    try {
+      const response = await api.post(`/estudiantes/${item.EstudianteId}/situaciones-particulares`, { situacion: situacion.trim() });
+      setMessage(response.data?.message || "Situación particular guardada.");
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo guardar la situación particular");
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
 
@@ -2440,22 +2452,29 @@ export default function EstudiantesPage() {
                         )}
 
                         {isProfesorRole && (
+                          <>
                           <button
                             type="button"
                             disabled={profesorBloqueado}
                             onClick={() => handleVerBoletasConducta(item)}
                             title={profesorBloqueado ? suspensionTooltip : undefined}
                             style={{
-                              border: "1px solid #bae6fd",
-                              background: profesorBloqueado ? "#e5e7eb" : "#f0f9ff",
-                              color: profesorBloqueado ? "#64748b" : "#0369a1",
+                              border: profesorBloqueado ? "1px solid #cbd5e1" : "1px solid #b91c1c",
+                              background: profesorBloqueado ? "#e5e7eb" : "#7f1d1d",
+                              color: profesorBloqueado ? "#64748b" : "#ffffff",
                               borderRadius: "8px",
                               padding: "6px 10px",
+                              fontWeight: 800,
                               cursor: profesorBloqueado ? "not-allowed" : "pointer"
                             }}
                           >
                             {boletasVisibleItem?.EstudianteId === item.EstudianteId ? "Ocultar boletas" : "Ver boletas"}
                           </button>
+                          <button type="button" disabled={profesorBloqueado} onClick={() => void handleSituacionParticular(item)} title={profesorBloqueado ? suspensionTooltip : undefined} style={{ border: "1px solid #cbd5e1", background: profesorBloqueado ? "#e5e7eb" : "#fff", color: profesorBloqueado ? "#64748b" : "#0f172a", borderRadius: "8px", padding: "6px 10px", cursor: profesorBloqueado ? "not-allowed" : "pointer" }}>Situaciones Particulares</button>
+                          </>
+                        )}
+                        {canManageStudents && !isProfesorRole && (
+                          <button type="button" onClick={() => void handleSituacionParticular(item)} style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}>Situaciones Particulares</button>
                         )}
 
                         {canManageStudents && item.Activo && (

@@ -8,6 +8,8 @@ import { getPool, sql } from "../../config/database";
 import { ok, created, badRequest } from "../../utils/http";
 import { hashPassword } from "../../utils/password";
 import { getCostaRicaIsoDate } from "../../utils/date.utils";
+import { sendEmail } from "../../services/email.service";
+import { ensureSituacionesParticularesTable } from "./situaciones-particulares.utils";
 import {
   MOTIVOS_SUSPENSION_ESTUDIANTE,
   getSuspensionVigenteApplySql,
@@ -2734,6 +2736,63 @@ router.get("/:id/boletas-conducta", async (req, res) => {
   } catch (error) {
     console.error("Error consultando boletas del estudiante:", error);
     return res.status(500).json({ ok: false, message: "No se pudieron cargar las boletas del estudiante" });
+  }
+});
+
+router.post("/:id/situaciones-particulares", async (req, res) => {
+  try {
+    const estudianteId = Number(req.params.id);
+    const institucionId = Number(req.auth?.institucionId || 0);
+    const usuarioId = Number(req.auth?.userId || 0);
+    const situacion = String(req.body?.situacion || "").trim();
+    if (!Number.isInteger(estudianteId) || estudianteId < 1 || !institucionId || !usuarioId) return badRequest(res, "Datos de estudiante o usuario inválidos");
+    if (!situacion || situacion.length > 12000) return badRequest(res, "Escribí la situación (máximo 12 000 caracteres)");
+    const pool = await getPool();
+    await ensureSituacionesParticularesTable(pool);
+    const userResult = await pool.request().input("usuarioId", sql.Int, usuarioId).input("institucionId", sql.Int, institucionId).query(`
+      SELECT TOP 1 UsuarioId, Correo, LTRIM(RTRIM(CONCAT(ISNULL(Nombre,N''), N' ', ISNULL(PrimerApellido,N''), N' ', ISNULL(SegundoApellido,N'')))) AS Nombre
+      FROM dbo.Usuario WHERE UsuarioId=@usuarioId AND InstitucionId=@institucionId AND Activo=1
+    `);
+    const usuario = userResult.recordset[0];
+    if (!usuario) return res.status(403).json({ ok: false, message: "No se encontró el usuario activo de esta institución" });
+    const alumnoResult = await pool.request().input("estudianteId", sql.Int, estudianteId).input("institucionId", sql.Int, institucionId).query(`
+      SELECT TOP 1 e.Nombre, e.PrimerApellido, e.SegundoApellido, g.GrupoId, g.Nombre AS GrupoNombre
+      FROM dbo.Estudiante e LEFT JOIN dbo.Matricula m ON m.EstudianteId=e.EstudianteId AND m.Estado='ACTIVA'
+      LEFT JOIN dbo.Grupo g ON g.GrupoId=m.GrupoId
+      WHERE e.EstudianteId=@estudianteId AND e.InstitucionId=@institucionId
+      ORDER BY m.MatriculaId DESC
+    `);
+    const alumno = alumnoResult.recordset[0];
+    if (!alumno) return res.status(404).json({ ok: false, message: "Estudiante no encontrado" });
+    const insert = await pool.request()
+      .input("institucionId", sql.Int, institucionId).input("estudianteId", sql.Int, estudianteId)
+      .input("grupoId", sql.Int, alumno.GrupoId || null).input("situacion", sql.NVarChar(sql.MAX), situacion)
+      .input("usuarioId", sql.Int, usuarioId).input("nombreUsuario", sql.NVarChar(300), String(usuario.Nombre || usuario.Correo || "Usuario").trim())
+      .input("correo", sql.NVarChar(320), usuario.Correo || null)
+      .query(`INSERT dbo.SituacionParticular(InstitucionId,EstudianteId,GrupoId,Situacion,UsuarioId,NombreUsuario,CorreoUsuario)
+        OUTPUT INSERTED.SituacionParticularId, INSERTED.Fecha
+        VALUES(@institucionId,@estudianteId,@grupoId,@situacion,@usuarioId,@nombreUsuario,@correo)`);
+    const nombreAlumno = [alumno.PrimerApellido, alumno.SegundoApellido, alumno.Nombre].filter(Boolean).join(" ");
+    const fecha = insert.recordset[0]?.Fecha;
+    let correoEnviado = false;
+    let errorCorreo = false;
+    if (usuario.Correo) {
+      try {
+        const safe = (text: string) => text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
+        const result = await sendEmail({ to: usuario.Correo, subject: `Respaldo de situación particular: ${nombreAlumno}`, text: `Situación particular registrada\nEstudiante: ${nombreAlumno}\nSección: ${alumno.GrupoNombre || "Sin sección"}\nFecha: ${new Date(fecha).toLocaleString("es-CR")}\nReportó: ${usuario.Nombre}\n\n${situacion}`, html: `<h2>Situación particular registrada</h2><p><b>Estudiante:</b> ${safe(nombreAlumno)}</p><p><b>Sección:</b> ${safe(alumno.GrupoNombre || "Sin sección")}</p><p><b>Fecha:</b> ${safe(new Date(fecha).toLocaleString("es-CR"))}</p><p><b>Reportó:</b> ${safe(usuario.Nombre)}</p><p>${safe(situacion).replace(/\n/g, "<br>")}</p>` });
+        correoEnviado = result.enviado;
+      } catch (emailError) {
+        errorCorreo = true;
+        console.error("No se pudo enviar respaldo de situación particular:", emailError);
+      }
+    } else {
+      errorCorreo = true;
+    }
+    const message = correoEnviado ? "Situación guardada y respaldo enviado por correo" : errorCorreo ? "Situación guardada, pero no se pudo enviar el respaldo por correo" : "Situación guardada; el correo está en modo simulado por configuración";
+    return created(res, { situacionParticularId: insert.recordset[0]?.SituacionParticularId, correoEnviado }, message);
+  } catch (error: any) {
+    console.error("Error registrando situación particular:", error);
+    return res.status(500).json({ ok: false, message: "No se pudo registrar la situación particular" });
   }
 });
 

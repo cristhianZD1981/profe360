@@ -17,6 +17,7 @@ import {
 type TipoReporte =
   | "ASISTENCIA"
   | "BOLETAS"
+  | "SITUACIONES_ESPECIALES"
   | "SECCIONES"
   | "ESTUDIANTES"
   | "PROMEDIOS_ACADEMICOS"
@@ -77,6 +78,7 @@ type BoletaReporteRow = {
   envioCorreo: string;
   envioWhatsApp: string;
 };
+type SituacionReporteRow = { SituacionParticularId: number; nombre: string; cedula: string; seccion: string; situacion: string; profesor: string; fechaTexto: string };
 
 type CertificacionRow = {
   CertificacionEstudioId: number;
@@ -377,6 +379,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
   const [filas, setFilas] = useState<any[]>([]);
   const [asistenciaRows, setAsistenciaRows] = useState<AsistenciaResumen[]>([]);
   const [boletasRows, setBoletasRows] = useState<BoletaReporteRow[]>([]);
+  const [situacionesRows, setSituacionesRows] = useState<SituacionReporteRow[]>([]);
   const [promediosResumen, setPromediosResumen] = useState<PromediosResumen | null>(null);
   const [cierreCursosRows, setCierreCursosRows] = useState<CierreCursoReporteRow[]>([]);
   const [horarioReporte, setHorarioReporte] = useState<HorarioReporteData | null>(null);
@@ -509,6 +512,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
     setFilas([]);
     setAsistenciaRows([]);
     setBoletasRows([]);
+    setSituacionesRows([]);
     setCierreCursosRows([]);
     setHorarioReporte(null);
     setPromediosResumen(null);
@@ -548,7 +552,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
       window.alert("Seleccioná el profesor a consultar.");
       return;
     }
-    if (tipo === "BOLETAS" && vistaAsistencia === "ALUMNO") {
+    if ((tipo === "BOLETAS" || tipo === "SITUACIONES_ESPECIALES") && vistaAsistencia === "ALUMNO") {
       const textoBusqueda = busquedaAlumno.trim();
       if (textoBusqueda && !alumnosFiltrados.length) {
         window.alert("El alumno indicado no existe.");
@@ -559,11 +563,11 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
         return;
       }
     }
-    if (tipo === "BOLETAS" && vistaAsistencia === "SECCION" && !grupoId) {
+    if ((tipo === "BOLETAS" || tipo === "SITUACIONES_ESPECIALES") && vistaAsistencia === "SECCION" && !grupoId) {
       window.alert("Seleccioná una sección para consultar el reporte.");
       return;
     }
-    if (tipo === "BOLETAS" && vistaAsistencia === "PROFESOR" && !profesorIdReporte) {
+    if ((tipo === "BOLETAS" || tipo === "SITUACIONES_ESPECIALES") && vistaAsistencia === "PROFESOR" && !profesorIdReporte) {
       window.alert("Seleccioná el profesor a consultar.");
       return;
     }
@@ -671,6 +675,16 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
         setFilas([]);
         setCierreCursosRows([]);
         setHorarioReporte(null);
+        return;
+      }
+
+      if (tipo === "SITUACIONES_ESPECIALES") {
+        const response = await api.get("/reportes/situaciones-particulares", { params: {
+          vistaPor: vistaAsistencia, grupoId: grupoId || undefined, estudianteId: estudianteId || undefined,
+          profesorId: profesorIdReporte || undefined, desde: desde || undefined, hasta: hasta || undefined
+        } });
+        setSituacionesRows(Array.isArray(response.data?.data?.rows) ? response.data.data.rows : []);
+        setAsistenciaRows([]); setBoletasRows([]); setFilas([]); setCierreCursosRows([]); setHorarioReporte(null);
         return;
       }
 
@@ -1125,6 +1139,15 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
       return;
     }
 
+    if (tipo === "SITUACIONES_ESPECIALES") {
+      const headers = ["Fecha", "Alumno", "Identificación", "Sección", "Profesor que reporta", "Situación"];
+      const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
+      const tbody = situacionesRows.map((item) => `<tr>${[item.fechaTexto, item.nombre, item.cedula, item.seccion, item.profesor, item.situacion].map((c) => `<td style="border:1px solid #cbd5e1;padding:8px;white-space:pre-wrap">${escapeHtml(c)}</td>`).join("")}</tr>`).join("");
+      const blob = new Blob([`\ufeff<!doctype html><html><head><meta charset="utf-8" /></head><body><h3>Situaciones especiales</h3><table style="border-collapse:collapse">${thead}${tbody}</table></body></html>`], { type: "application/vnd.ms-excel;charset=utf-8;" });
+      descargarBlob(blob, `situaciones-especiales-${vistaAsistencia.toLowerCase()}.xls`);
+      return;
+    }
+
     const headers = getReporteVisibleKeys(filas[0]);
     const thead = `<tr>${headers.map((h) => `<th style="border:1px solid #cbd5e1;padding:8px;background:#f1f5f9">${escapeHtml(h)}</th>`).join("")}</tr>`;
     const tbody = filas.map((f, idx) => {
@@ -1433,6 +1456,8 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
     ? asistenciaRows.length > 0
     : tipo === "BOLETAS"
       ? boletasRows.length > 0
+      : tipo === "SITUACIONES_ESPECIALES"
+        ? situacionesRows.length > 0
       : tipo === "CIERRE_CURSOS"
         ? cierreCursosRows.length > 0
         : tipo === "HORARIO_PROFESOR"
@@ -1505,6 +1530,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
                   setFilas([]);
                   setAsistenciaRows([]);
                   setBoletasRows([]);
+                  setSituacionesRows([]);
                   setCierreCursosRows([]);
                   setHorarioReporte(null);
                   setPromediosResumen(null);
@@ -1523,6 +1549,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
               >
                 <option value="ASISTENCIA">Reporte de Asistencia</option>
                 <option value="BOLETAS">Reporte de Boletas</option>
+                <option value="SITUACIONES_ESPECIALES">Situaciones especiales</option>
                 <option value="SECCIONES">Secciones</option>
                 <option value="ESTUDIANTES">Estudiante</option>
                 <option value="PROMEDIOS_ACADEMICOS">Promedios Académicos</option>
@@ -1550,7 +1577,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
                   {secciones.map((s) => <option key={s.GrupoId} value={s.GrupoId}>{s.GrupoNombre}</option>)}
                 </select>
               </label>
-            ) : tipo === "ASISTENCIA" || tipo === "BOLETAS" ? (
+            ) : tipo === "ASISTENCIA" || tipo === "BOLETAS" || tipo === "SITUACIONES_ESPECIALES" ? (
               <>
                 <label>Ver reporte por
                   <select
@@ -1559,6 +1586,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
                       const nextVista = e.target.value as VistaAsistencia;
                       setVistaAsistencia(nextVista);
                       setAsistenciaRows([]);
+                      setSituacionesRows([]);
                       setExpandedRows({});
                       setGrupoId(guia ? String(guia.grupoId) : "");
                       setEstudianteId("");
@@ -1768,7 +1796,7 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
                 </label>
               </>
             )}
-            {tipo === "ASISTENCIA" || tipo === "BOLETAS" || tipo === "TRASLADOS_SECCIONES" ? (
+            {tipo === "ASISTENCIA" || tipo === "BOLETAS" || tipo === "SITUACIONES_ESPECIALES" || tipo === "TRASLADOS_SECCIONES" ? (
               <>
                 <label>Desde<input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
                 <label>Hasta<input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
@@ -1979,6 +2007,10 @@ export default function ReportesPage({ guia, tipoInicial = "ASISTENCIA" }: { gui
                 </tbody>
               </table>
             </div>
+          ) : tipo === "SITUACIONES_ESPECIALES" ? (
+            <div className="table-wrap"><table className="adecuacion-zebra-list"><thead><tr><th>Fecha</th><th>Alumno</th><th>Identificación</th><th>Sección</th><th>Profesor que reporta</th><th>Situación</th></tr></thead><tbody>
+              {!situacionesRows.length ? <tr><td colSpan={6} style={{ textAlign: "center", padding: 12 }}>No hay situaciones para mostrar con esos filtros.</td></tr> : situacionesRows.map((fila) => <tr key={fila.SituacionParticularId}><td>{fila.fechaTexto}</td><td>{fila.nombre}</td><td>{fila.cedula}</td><td>{fila.seccion}</td><td>{fila.profesor}</td><td style={{ whiteSpace: "pre-wrap", minWidth: 280 }}>{fila.situacion}</td></tr>)}
+            </tbody></table></div>
           ) : tipo === "SECCIONES" ? (
             <div className="table-wrap">
               <div style={{ padding: "10px 12px", background: "#102738", borderBottom: "1px solid #24465d", color: "#f8fafc", fontWeight: 800 }}>

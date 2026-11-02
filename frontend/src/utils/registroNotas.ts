@@ -1,4 +1,4 @@
-import { type SeguimientoEvaluacionContexto, type SeguimientoEvaluacionDetalle, type EstudianteGrupo, normalizarSeguimientoKey, getTipoSeguimientoFromDetalle, formatPercent, getFullName, isTipoExamenSeguimiento } from '../pages/GestionProfePage.helpers';
+import { type SeguimientoEvaluacionContexto, type SeguimientoEvaluacionDetalle, type EstudianteGrupo, normalizarSeguimientoKey, normalizarIndicadorBaseSeguimiento, obtenerNombreIndicadorBaseSeguimiento, getTipoSeguimientoFromDetalle, formatPercent, getFullName, isTipoExamenSeguimiento } from '../pages/GestionProfePage.helpers';
 export const dedupeActividadesLogicas = (items: any[]) => {
     const map = new Map<string, any>();
     for (const actividad of items || []) {
@@ -29,7 +29,7 @@ export const dedupeSeguimientosActividadIndicadorLogico = (items: any[], indicad
         Number(item?.ActividadId || 0),
         Number(item?.EstudianteId || 0),
         normalizarSeguimientoKey(String(indicador?.TipoUso || "")),
-        normalizarSeguimientoKey(String(indicador?.IndicadorBase || "")),
+        normalizarIndicadorBaseSeguimiento(indicador?.IndicadorBase),
       ].join("|");
       const actual = map.get(key);
       if (!actual || Number(item?.SeguimientoIndicadorId || 0) > Number(actual?.SeguimientoIndicadorId || 0)) {
@@ -49,11 +49,12 @@ export const agruparIndicadoresLogicos = (ids: Iterable<number>, indicadoresCata
       const id = Number(rawId || 0);
       if (id <= 0) continue;
       const indicador = indicadorPorId.get(id);
-      const nombre = String(indicador?.IndicadorBase || `Indicador ${id}`);
+      const nombreOriginal = String(indicador?.IndicadorBase || `Indicador ${id}`);
+      const nombre = obtenerNombreIndicadorBaseSeguimiento(nombreOriginal);
       const key = indicador
         ? [
             tipo,
-            normalizarSeguimientoKey(nombre),
+            normalizarIndicadorBaseSeguimiento(nombre),
           ].join("|")
         : `ID|${id}`;
       const actual = columnasMap.get(key);
@@ -196,15 +197,34 @@ const asistenciaDraftKey = (estudianteId: number, horarioGrupoId: number) => est
             : tipoIndicador.includes("TAREA");
         });
         const seguimientosEstudiante = seguimientos.filter((item) => Number(item.EstudianteId) === Number(estudiante.EstudianteId));
+        const indicadorIds = new Set(indicadoresTipo.map((indicador) => Number(indicador.IndicadorGrupoId)));
         const actividadesDetalle = dedupeActividadesLogicas(
           actividades.filter((actividad) => Number(actividad.EstructuraGrupoDetalleId) === detalleId)
-        );
-        const indicadorIds = new Set(indicadoresTipo.map((indicador) => Number(indicador.IndicadorGrupoId)));
+        ).filter((actividad) => {
+          const actividadId = Number(actividad.ActividadId);
+          const asignacionesActividad = actividadIndicadores.filter((item) =>
+            Number(item.ActividadId) === actividadId && indicadorIds.has(Number(item.IndicadorGrupoId))
+          );
+          return !asignacionesActividad.length || asignacionesActividad.some((item) => item.Activo !== false && item.Activo !== 0);
+        });
         const actividadesResumen = actividadesDetalle.map((actividad) => {
+          const actividadId = Number(actividad.ActividadId);
+          const asignacionesActividad = actividadIndicadores.filter((item) =>
+            Number(item.ActividadId) === actividadId && indicadorIds.has(Number(item.IndicadorGrupoId))
+          );
+          const tieneAsignacionesConfiguradas = asignacionesActividad.length > 0;
+          const indicadorIdsAsignadosActividad = new Set(
+            asignacionesActividad
+              .filter((item) => item.Activo !== false && item.Activo !== 0)
+              .map((item) => Number(item.IndicadorGrupoId))
+          );
+          const indicadorIdsEvaluables = tieneAsignacionesConfiguradas
+            ? indicadorIdsAsignadosActividad
+            : indicadorIds;
           const registrosActividad = dedupeSeguimientosActividadIndicadorLogico(
             seguimientosEstudiante.filter((item) =>
-              Number(item.ActividadId) === Number(actividad.ActividadId)
-              && indicadorIds.has(Number(item.IndicadorGrupoId))
+              Number(item.ActividadId) === actividadId
+              && indicadorIdsEvaluables.has(Number(item.IndicadorGrupoId))
             ),
             indicadoresTipo
           );
@@ -212,27 +232,24 @@ const asistenciaDraftKey = (estudianteId: number, horarioGrupoId: number) => est
             Number((n as any).ActividadId) === Number(actividad.ActividadId)
             && Number((n as any).EstudianteId) === Number(estudiante.EstudianteId)
           );
-          const indicadoresAsignados = actividadIndicadores
-            .filter((item) =>
-              Number(item.ActividadId) === Number(actividad.ActividadId)
-              && indicadorIds.has(Number(item.IndicadorGrupoId))
-              && item.Activo !== false
-              && item.Activo !== 0
-            )
+          const indicadoresAsignados = asignacionesActividad
+            .filter((item) => item.Activo !== false && item.Activo !== 0)
             .map((item) => {
               const indicador = indicadoresTipo.find((indicador) => Number(indicador.IndicadorGrupoId) === Number(item.IndicadorGrupoId));
               return [
                 normalizarSeguimientoKey(String(indicador?.TipoUso || "")),
-                normalizarSeguimientoKey(String(indicador?.IndicadorBase || "")),
+                normalizarIndicadorBaseSeguimiento(indicador?.IndicadorBase),
               ].join("|");
             });
-          const totalAsignados = new Set(indicadoresAsignados.filter(Boolean)).size || indicadoresTipo.length;
+          const totalAsignados = tieneAsignacionesConfiguradas
+            ? new Set(indicadoresAsignados.filter(Boolean)).size
+            : indicadoresTipo.length;
           const puntos = registrosActividad.reduce((acc, item) => acc + Number(item.ValorSeleccionado || 0), 0);
           const indicadoresEvaluados = new Set(registrosActividad.map((item) => {
             const indicador = indicadoresTipo.find((entry) => Number(entry.IndicadorGrupoId) === Number(item.IndicadorGrupoId));
             return [
               normalizarSeguimientoKey(String(indicador?.TipoUso || "")),
-              normalizarSeguimientoKey(String(indicador?.IndicadorBase || "")),
+              normalizarIndicadorBaseSeguimiento(indicador?.IndicadorBase),
             ].join("|");
           })).size;
           const maximo = totalAsignados * 3;

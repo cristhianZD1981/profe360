@@ -391,6 +391,7 @@ export default function GestionProfePage() {
   const [eval360IndicadoresMinimizados, setEval360IndicadoresMinimizados] = useState<Record<number, boolean>>({});
   const [generatingEval360PlaneamientoId, setGeneratingEval360PlaneamientoId] = useState<number | null>(null);
   const [activePanel, setActivePanel] = useState<ActivePanel>("");
+  const [pasarListaEnCursoCerrado, setPasarListaEnCursoCerrado] = useState(false);
   const [nivelesDesempeno, setNivelesDesempeno] = useState<NivelDesempeno[]>([]);
   const [planeamientos, setPlaneamientos] = useState<Planeamiento[]>([]);
   const [planeamientoIndicadores, setPlaneamientoIndicadores] = useState<PlaneamientoIndicador[]>([]);
@@ -513,6 +514,11 @@ export default function GestionProfePage() {
   const [seguimientoActividadId, setSeguimientoActividadId] = useState<string>("");
   const [seguimientoActividadIndicadoresDraft, setSeguimientoActividadIndicadoresDraft] = useState<Record<number, number[]>>({});
   const [seguimientoMatrizAsignacionMinimizada, setSeguimientoMatrizAsignacionMinimizada] = useState(true);
+  const [corregirAsignacionesOpen, setCorregirAsignacionesOpen] = useState(false);
+  const [corregirAsignacionesDraft, setCorregirAsignacionesDraft] = useState<Record<number, string>>({});
+  const [corregirAsignacionesJustificacion, setCorregirAsignacionesJustificacion] = useState("");
+  const [corregirImpactoConfirmado, setCorregirImpactoConfirmado] = useState(false);
+  const [savingCorregirAsignaciones, setSavingCorregirAsignaciones] = useState(false);
   const [tablaActividadIdsSeleccionadas, setTablaActividadIdsSeleccionadas] = useState<string[]>([]);
   const [tablaPruebasConfirmadas, setTablaPruebasConfirmadas] = useState(false);
   const [tablaPlaneamientoIds, setTablaPlaneamientoIds] = useState<string[]>([]);
@@ -636,7 +642,8 @@ export default function GestionProfePage() {
     []
   );
   const panelBloqueadoPorCierre = (panel: ActivePanel) =>
-    cursoGestionCerrado && panelesBloqueadosPorCierre.includes(panel);
+    cursoGestionCerrado && panelesBloqueadosPorCierre.includes(panel)
+    && !(panel === "seguimiento" && pasarListaEnCursoCerrado);
   const getGestionPanelButtonStyleCierre = (panel: ActivePanel): React.CSSProperties => {
     const base = getGestionPanelButtonStyle(panel);
     if (!panelBloqueadoPorCierre(panel)) return base;
@@ -653,8 +660,15 @@ export default function GestionProfePage() {
 
   useEffect(() => {
     if (!cursoGestionCerrado || !panelesBloqueadosPorCierre.includes(activePanel)) return;
+    if (activePanel === "seguimiento" && pasarListaEnCursoCerrado) return;
     setActivePanel("");
-  }, [activePanel, cursoGestionCerrado, panelesBloqueadosPorCierre]);
+  }, [activePanel, cursoGestionCerrado, panelesBloqueadosPorCierre, pasarListaEnCursoCerrado]);
+
+  useEffect(() => {
+    if (pasarListaEnCursoCerrado && (activePanel !== "seguimiento" || !cursoGestionCerrado)) {
+      setPasarListaEnCursoCerrado(false);
+    }
+  }, [activePanel, cursoGestionCerrado, pasarListaEnCursoCerrado]);
 
   useEffect(() => {
     return () => {
@@ -1081,6 +1095,36 @@ export default function GestionProfePage() {
       return true;
     });
   }, [seguimientoComponenteTieneActividadesPlaneamiento, seguimientoTipo, seguimientoContexto?.indicadores, seguimientoPlaneamientoId]);
+
+  const correccionAsignacionesRows = useMemo(() => {
+    const tipoUso = normalizarSeguimientoKey(seguimientoTipo).includes("TAREA") ? "TAREAS" : "COTIDIANO";
+    if (!isTipoIndicadorSeguimiento(seguimientoTipo) || !["TAREAS", "COTIDIANO"].includes(tipoUso)) return [];
+    const actividades = seguimientoActividadesPlaneamiento.filter((a) => a.Activo !== false && a.Activo !== 0);
+    const detalleId = Number(seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId || 0);
+    const actividadesDetalle = detalleId ? actividades.filter((a) => Number(a.EstructuraGrupoDetalleId) === detalleId) : actividades;
+    return seguimientoIndicadoresAsignablesPorActividad.map((indicador) => {
+      const indicadorId = Number(indicador.IndicadorGrupoId);
+      const asignaciones = (seguimientoContexto?.actividadIndicadores || []).filter((a) => Number(a.IndicadorGrupoId) === indicadorId);
+      const actividadIdsAsignadas = new Set(asignaciones.map((a) => Number(a.ActividadId)));
+      const opciones = actividadesDetalle.filter((a) => actividadIdsAsignadas.has(Number(a.ActividadId))
+        || (isSuperAdminRole && Number(a.EstructuraGrupoDetalleId) === detalleId));
+      const activas = opciones.filter((a) => asignaciones.some((ai) => Number(ai.ActividadId) === Number(a.ActividadId) && ai.Activo !== false && ai.Activo !== 0));
+      const conteoPorActividad = new Map(opciones.map((a) => [Number(a.ActividadId), new Set(
+        (seguimientoContexto?.seguimientos || []).filter((s) => Number(s.IndicadorGrupoId) === indicadorId && Number(s.ActividadId) === Number(a.ActividadId)).map((s) => Number(s.EstudianteId))
+      ).size]));
+      const recomendado = [...activas].sort((a, b) => (Number(conteoPorActividad.get(Number(b.ActividadId)) || 0) - Number(conteoPorActividad.get(Number(a.ActividadId)) || 0)) || Number(a.ActividadId) - Number(b.ActividadId))[0];
+      return { indicador, indicadorId, opciones, activas, conteoPorActividad, recomendado, duplicate: activas.length > 1 };
+    }).filter((row) => isSuperAdminRole ? row.opciones.length > 0 : row.duplicate);
+  }, [seguimientoTipo, seguimientoActividadesPlaneamiento, seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId, seguimientoIndicadoresAsignablesPorActividad, seguimientoContexto?.actividadIndicadores, seguimientoContexto?.seguimientos, isSuperAdminRole]);
+
+  const hayDuplicadosAsignacion = correccionAsignacionesRows.some((row) => row.duplicate);
+  const correccionAsignacionesImpacto = correccionAsignacionesRows.reduce((total, row) => {
+    const selection = corregirAsignacionesDraft[row.indicadorId];
+    if (!selection) return total;
+    return total + row.activas.reduce((subtotal, actividad) => Number(actividad.ActividadId) === Number(selection)
+      ? subtotal
+      : subtotal + Number(row.conteoPorActividad.get(Number(actividad.ActividadId)) || 0), 0);
+  }, 0);
 
   const tablaComponentesExamen = useMemo(() => {
     try {
@@ -4736,7 +4780,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
   }
 
 
-  async function loadSeguimientoEvaluacion(item = selected, options: { incluirAsistencia?: boolean; incluirEnvios?: boolean; sincronizar?: boolean } = {}) {
+  async function loadSeguimientoEvaluacion(item = selected, options: { incluirAsistencia?: boolean; incluirEnvios?: boolean; sincronizar?: boolean; pasarListaCursoCerrado?: boolean } = {}) {
     if (!item) return;
     setLoadingSeguimiento(true);
     setErrorMessage("");
@@ -4757,6 +4801,11 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       });
       const dataRaw = unwrapApiData(response) || null;
       const data = prepararContextoNotas(dataRaw, item.GrupoClaseId && detalle?.estudiantes?.length ? new Set(detalle.estudiantes.map((e: any) => Number(e.EstudianteId))) : null);
+      if (options.pasarListaCursoCerrado) {
+        const rubroAsistencia = (data?.detalles || []).find((detalleItem: any) => isTipoAsistenciaSeguimiento(getTipoSeguimientoFromDetalle(detalleItem)));
+        setSeguimientoTipo(rubroAsistencia ? getTipoSeguimientoFromDetalle(rubroAsistencia) : "ASISTENCIA");
+        setSeguimientoIndicadorId("");
+      }
       setSeguimientoContexto(data);
       setEval360Plantillas(Array.isArray(data?.plantillas) ? data.plantillas : []);
       setEval360Estructura(data?.estructura ? { estructura: data.estructura, detalles: data.detalles || [], niveles: [] } : null);
@@ -4774,6 +4823,41 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       setErrorMessage(error?.response?.data?.message || "No se pudo cargar el seguimiento de notas");
     } finally {
       setLoadingSeguimiento(false);
+    }
+  }
+
+  async function guardarCorreccionAsignaciones() {
+    if (!selected || !seguimientoContexto?.estructura?.EstructuraGrupoId || !seguimientoDetalleSeleccionado?.EstructuraGrupoDetalleId) return;
+    if (!corregirImpactoConfirmado || corregirAsignacionesJustificacion.trim().length < 8) {
+      setErrorMessage("Confirmá el impacto y escribí una justificación de al menos 8 caracteres.");
+      return;
+    }
+    const items = correccionAsignacionesRows.map((row) => ({
+      indicadorGrupoId: row.indicadorId,
+      actividadIdMantener: corregirAsignacionesDraft[row.indicadorId] && corregirAsignacionesDraft[row.indicadorId] !== "NONE"
+        ? Number(corregirAsignacionesDraft[row.indicadorId])
+        : null
+    }));
+    setSavingCorregirAsignaciones(true);
+    setErrorMessage("");
+    try {
+      const response = await api.post("/eval360/seguimiento/corregir-asignacion-indicadores", {
+        estructuraGrupoId: Number(seguimientoContexto.estructura.EstructuraGrupoId),
+        estructuraGrupoDetalleId: Number(seguimientoDetalleSeleccionado.EstructuraGrupoDetalleId),
+        tipoUso: normalizarSeguimientoKey(seguimientoTipo).includes("TAREA") ? "TAREAS" : "COTIDIANO",
+        justificacion: corregirAsignacionesJustificacion.trim(),
+        confirmarImpacto: corregirImpactoConfirmado,
+        items
+      });
+      await loadSeguimientoEvaluacion(selected);
+      setMessage(response?.data?.message || "Asignación corregida; las calificaciones históricas se conservaron.");
+      setCorregirAsignacionesOpen(false);
+      setCorregirAsignacionesJustificacion("");
+      setCorregirAsignacionesDraft({});
+    } catch (error: any) {
+      setErrorMessage(error?.response?.data?.message || "No se pudo corregir la asignación de indicadores");
+    } finally {
+      setSavingCorregirAsignaciones(false);
     }
   }
 
@@ -7834,8 +7918,8 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
     const incompletos = Number(cierreCursoPreview?.resumen?.totalIncompletos || 0);
     const mensajeBase = incompletos > 0
       ? `El curso tiene ${incompletos} estudiante(s) con advertencias. Se cerrara como Incompleto. Deseas continuar?`
-      : "Deseas cerrar este curso? Al cerrarlo se bloquean nuevas notas, asistencia y bitacora hasta que Direccion lo reabra.";
-    const mensaje = `${mensajeBase}\n\nRecuerda que al cerrar el curso, ya no podrás incluir registros. En caso de necesitar reabrirlo, se debe tramitar ante la Dirección del Colegio.`;
+      : "Deseas cerrar este curso? Al cerrarlo se bloquean nuevas notas y bitacora hasta que Direccion lo reabra. Podras seguir registrando asistencia.";
+    const mensaje = `${mensajeBase}\n\nAl cerrar el curso, las notas y la bitácora quedarán bloqueadas. La asistencia seguirá habilitada. Para reabrir el curso, solicitá la gestión ante la Dirección del Colegio.`;
     if (!window.confirm(mensaje)) return false;
 
     setSavingCierreCurso(true);
@@ -7933,10 +8017,6 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
 
   async function handleSaveAsistencia() {
     if (!selected || !detalle) return;
-    if (cursoGestionCerrado) {
-      setErrorMessage("El curso esta cerrado. Solicita a Direccion la reapertura para guardar asistencia.");
-      return;
-    }
 
     const leccionesUsar = asistenciaLecciones.length ? asistenciaLecciones : getAsistenciaLeccionesFallback();
     const estudiantesGestionables = detalle.estudiantes.filter((estudiante) => !isEstudianteSuspendido(estudiante));
@@ -8331,7 +8411,10 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
       stopSeguimientoSaving(true, "asignacion");
     } catch (error: any) {
       console.error("Error asignando indicadores:", error);
-      setErrorMessage(error?.response?.data?.message || "No se pudieron asignar los indicadores");
+      const mensajeError = error?.response?.data?.message || "No se pudieron asignar los indicadores";
+      setSeguimientoActividadIndicadoresDraft({});
+      await loadSeguimientoEvaluacion(selected);
+      setErrorMessage(mensajeError);
       stopSeguimientoSaving(false, "asignacion");
     } finally {
       setSavingSeguimiento(false);
@@ -9730,13 +9813,24 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
               </button> : null}
               <button
                 type="button"
-                className={activePanel === "seguimiento" && !panelBloqueadoPorCierre("seguimiento") ? "primary-btn" : undefined}
-                style={activePanel === "seguimiento" && !panelBloqueadoPorCierre("seguimiento") ? undefined : getGestionPanelButtonStyleCierre("seguimiento")}
-                onClick={() => { setActivePanel("seguimiento"); loadSeguimientoEvaluacion(selected); }}
-                disabled={panelBloqueadoPorCierre("seguimiento")}
-                title={panelBloqueadoPorCierre("seguimiento") ? "Curso cerrado. Solicita a Dirección la reapertura." : undefined}
+                className={activePanel === "seguimiento" && (!cursoGestionCerrado || pasarListaEnCursoCerrado) ? "primary-btn" : undefined}
+                style={activePanel === "seguimiento" && (!cursoGestionCerrado || pasarListaEnCursoCerrado) ? undefined : (cursoGestionCerrado ? getGestionPanelButtonStyle("seguimiento") : getGestionPanelButtonStyleCierre("seguimiento"))}
+                onClick={() => {
+                  if (cursoGestionCerrado) {
+                    setPasarListaEnCursoCerrado(true);
+                    setActivePanel("seguimiento");
+                    void loadSeguimientoEvaluacion(selected, { incluirAsistencia: true, pasarListaCursoCerrado: true });
+                    void loadAsistencia(selected);
+                    return;
+                  }
+                  setPasarListaEnCursoCerrado(false);
+                  setActivePanel("seguimiento");
+                  loadSeguimientoEvaluacion(selected);
+                }}
+                disabled={!cursoGestionCerrado && panelBloqueadoPorCierre("seguimiento")}
+                title={cursoGestionCerrado ? "Pasar lista con el mismo flujo de asistencia del curso" : undefined}
               >
-                Evaluaciones
+                {cursoGestionCerrado ? "Pasar lista" : "Evaluaciones"}
               </button>
               <button type="button" className={activePanel === "bitacora" ? "primary-btn" : undefined} style={activePanel === "bitacora" ? undefined : getGestionPanelButtonStyle("bitacora")} onClick={() => { setActivePanel("bitacora"); loadBitacora(selected); }}>Bitácora</button>
               {!esGrupoGuia(selected) ? <button type="button" className={activePanel === "reportes" ? "primary-btn" : undefined} style={activePanel === "reportes" ? undefined : getGestionPanelButtonStyle("reportes")} onClick={() => { setActivePanel("reportes"); loadAsistencia(selected); loadSeguimientoEvaluacion(selected, { incluirAsistencia: true, incluirEnvios: true }); cargarAuditoriaEnvios(selected); cargarBoletasConductaReporte(); loadBitacora(selected); }}>Reportes</button> : null}
@@ -10669,9 +10763,9 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           fontWeight: 800,
                           boxShadow: "0 0 0 3px rgba(249, 115, 22, 0.14)",
                           minHeight: "48px"
-                        }} value={seguimientoTipo} onChange={(event) => { setSeguimientoTipo(event.target.value); setSeguimientoIndicadorId(""); }}>
+                        }} value={seguimientoTipo} disabled={pasarListaEnCursoCerrado} onChange={(event) => { setSeguimientoTipo(event.target.value); setSeguimientoIndicadorId(""); }}>
                           <option value="">Seleccionar</option>
-                          {seguimientoComponentes.map((item) => (
+                          {seguimientoComponentes.filter((item) => !pasarListaEnCursoCerrado || isTipoAsistenciaSeguimiento(item.tipo)).map((item) => (
                             <option key={item.tipo} value={item.tipo}>{item.tipo} - {Number(item.detalle.Porcentaje || 0).toFixed(2)}%</option>
                           ))}
                         </select>
@@ -10820,7 +10914,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                                   aria-label={estadoAsistenciaLabel(estado)}
                                                   name={`asis-${estudiante.EstudianteId}-${leccion.HorarioGrupoId}`}
                                                   checked={draft.estado === estado}
-                                                  disabled={cursoGestionCerrado || suspendido}
+                                                  disabled={suspendido}
                                                   onClick={() => {
                                                     if (draft.estado === estado) registrarPrimeraSeleccionAsistencia(estudiante.EstudianteId);
                                                   }}
@@ -10830,7 +10924,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               </td>
                                             ))}
                                           <td style={{ padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
-                                            <input type="number" min="0" title={suspensionTooltip || "Minutos de tardía"} aria-label="Minutos de tardía" value={draft.minutosTardia} disabled={cursoGestionCerrado || suspendido} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "minutosTardia", e.target.value)} style={{ width: "110px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px", background: suspendido ? "#f1f5f9" : "#ffffff" }} />
+                                            <input type="number" min="0" title={suspensionTooltip || "Minutos de tardía"} aria-label="Minutos de tardía" value={draft.minutosTardia} disabled={suspendido} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "minutosTardia", e.target.value)} style={{ width: "110px", color: "#0f172a", border: "1px solid #94a3b8", borderRadius: "8px", padding: "7px", background: suspendido ? "#f1f5f9" : "#ffffff" }} />
                                           </td>
                                           <td style={{ textAlign: "center", padding: "10px", borderBottom: "1px solid #e2e8f0" }}>
                                             <input
@@ -10844,7 +10938,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                               })}
                                               aria-label="Informar al encargado"
                                               checked={Boolean(draft.notificarEncargado)}
-                                              disabled={cursoGestionCerrado || suspendido}
+                                              disabled={suspendido}
                                               onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, leccion.HorarioGrupoId, "notificarEncargado", e.target.checked)}
                                               style={{ accentColor: "#2563eb", width: "18px", height: "18px" }}
                                             />
@@ -10871,7 +10965,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                 type="button"
                                 className="primary-btn"
                                 onClick={handleSaveAsistencia}
-                                disabled={savingAsistencia || loadingAsistencia || !detalle?.estudiantes?.length || cursoGestionCerrado}
+                                disabled={savingAsistencia || loadingAsistencia || !detalle?.estudiantes?.length}
                                 style={savedAsistencia ? { background: "#16a34a", borderColor: "#15803d", color: "#ffffff" } : undefined}
                               >
                                 {savingAsistencia ? "Guardando..." : (savedAsistencia ? "Guardado" : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia"))}
@@ -11131,6 +11225,21 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                           <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
                             <strong style={{ color: "#0f172a" }}>Asignar indicadores a actividades</strong>
                             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                              {(isSuperAdminRole || hayDuplicadosAsignacion) ? (
+                                <button type="button" style={{ ...secondaryButtonStyle, background: "#fee2e2", borderColor: "#f87171", color: "#991b1b", fontWeight: 800 }} onClick={() => {
+                                  const draft: Record<number, string> = {};
+                                  for (const row of correccionAsignacionesRows) {
+                                    const active = row.activas.find((a) => Number(a.ActividadId) === Number(row.recomendado?.ActividadId)) || row.activas[0];
+                                    draft[row.indicadorId] = active ? String(active.ActividadId) : "";
+                                  }
+                                  setCorregirAsignacionesDraft(draft);
+                                  setCorregirAsignacionesJustificacion("");
+                                  setCorregirImpactoConfirmado(false);
+                                  setCorregirAsignacionesOpen(true);
+                                }}>
+                                  Corregir asignación{!isSuperAdminRole && hayDuplicadosAsignacion ? ` (${correccionAsignacionesRows.filter((row) => row.duplicate).length})` : ""}
+                                </button>
+                              ) : null}
                               <button type="button" style={{ ...secondaryButtonStyle, background: "#fef3c7", borderColor: "#f59e0b", color: "#92400e", fontWeight: 800 }} onClick={() => setSeguimientoMatrizAsignacionMinimizada(true)}>
                                 Minimizar
                               </button>
@@ -11139,6 +11248,39 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                               </button>
                             </div>
                           </div>
+                          {corregirAsignacionesOpen ? (
+                            <div role="dialog" aria-modal="true" aria-label="Corregir asignación de indicadores" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(15, 23, 42, 0.62)", display: "grid", placeItems: "center", padding: "16px" }}>
+                              <div style={{ width: "min(980px, 100%)", maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: "14px", padding: "20px", boxShadow: "0 20px 60px rgba(0,0,0,.3)", display: "grid", gap: "14px" }}>
+                                <div>
+                                  <h2 style={{ margin: 0, color: "#0f172a" }}>Corregir asignación de {normalizarSeguimientoKey(seguimientoTipo).includes("TAREA") ? "Tareas" : "Cotidiano"}</h2>
+                                  <p style={{ margin: "6px 0 0", color: "#475569" }}>{isSuperAdminRole ? "Revisá cualquier indicador de este rubro para esta materia." : "Se detectaron indicadores asignados a más de una actividad. Elegí cuál conservar."} Las calificaciones existentes se mantienen como historial.</p>
+                                </div>
+                                <div style={{ overflowX: "auto", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
+                                  <table style={{ width: "100%", borderCollapse: "collapse", color: "#0f172a", fontSize: "13px" }}>
+                                    <thead><tr style={{ background: "#e2e8f0" }}><th style={{ padding: "9px", textAlign: "left" }}>Indicador</th><th style={{ padding: "9px", textAlign: "left", minWidth: "300px" }}>Actividad que queda asignada</th></tr></thead>
+                                    <tbody>{correccionAsignacionesRows.map((row) => (
+                                      <tr key={`fix-${row.indicadorId}`} style={{ borderTop: "1px solid #e2e8f0" }}>
+                                        <td style={{ padding: "9px", minWidth: "300px" }}>{row.indicador.IndicadorBase || row.indicador.IndicadorAvanzado || `Indicador ${row.indicadorId}`}{row.duplicate ? <div style={{ color: "#b91c1c", fontWeight: 700 }}>Duplicado detectado</div> : null}</td>
+                                        <td style={{ padding: "9px" }}><select style={{ width: "100%", padding: "9px", borderRadius: "7px", border: "1px solid #94a3b8" }} value={corregirAsignacionesDraft[row.indicadorId] ?? ""} onChange={(event) => setCorregirAsignacionesDraft((prev) => ({ ...prev, [row.indicadorId]: event.target.value }))}>
+                                          {isSuperAdminRole ? <option value="NONE">Sin asignar</option> : null}
+                                          {row.opciones.map((actividad) => <option key={actividad.ActividadId} value={actividad.ActividadId}>{getSeguimientoActividadLabel(actividad)} — {Number(row.conteoPorActividad.get(Number(actividad.ActividadId)) || 0)} estudiantes calificados</option>)}
+                                        </select></td>
+                                      </tr>
+                                    ))}</tbody>
+                                  </table>
+                                </div>
+                                <div style={{ padding: "11px", borderRadius: "8px", background: correccionAsignacionesImpacto ? "#fff7ed" : "#f0fdf4", color: correccionAsignacionesImpacto ? "#9a3412" : "#166534" }}>
+                                  {correccionAsignacionesImpacto ? `La asignación dejará de contar ${correccionAsignacionesImpacto} calificaciones en el cálculo actual. Los registros se conservarán en el historial.` : "Con esta selección no se excluirán calificaciones del cálculo actual."}
+                                </div>
+                                <label style={{ display: "grid", gap: "6px", fontWeight: 700 }}>Justificación del cambio<textarea value={corregirAsignacionesJustificacion} onChange={(event) => setCorregirAsignacionesJustificacion(event.target.value)} rows={3} maxLength={1000} placeholder="Describí por qué se corrige esta asignación" style={{ padding: "9px", borderRadius: "7px", border: "1px solid #94a3b8" }} /></label>
+                                <label style={{ display: "flex", gap: "8px", alignItems: "center", color: "#334155" }}><input type="checkbox" checked={corregirImpactoConfirmado} onChange={(event) => setCorregirImpactoConfirmado(event.target.checked)} /> Confirmo el impacto y guardaré la justificación para auditoría.</label>
+                                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+                                  <button type="button" style={secondaryButtonStyle} disabled={savingCorregirAsignaciones} onClick={() => setCorregirAsignacionesOpen(false)}>Cancelar</button>
+                                  <button type="button" style={{ ...primaryButtonStyle, opacity: savingCorregirAsignaciones || !corregirImpactoConfirmado || corregirAsignacionesJustificacion.trim().length < 8 ? 0.6 : 1 }} disabled={savingCorregirAsignaciones || !corregirImpactoConfirmado || corregirAsignacionesJustificacion.trim().length < 8} onClick={() => void guardarCorreccionAsignaciones()}>{savingCorregirAsignaciones ? "Guardando…" : "Confirmar corrección"}</button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                           <small style={{ color: "#475569" }}>
                             Solo se pueden calificar indicadores que están asignados a la actividad seleccionada.
                           </small>
@@ -11658,7 +11800,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                         }}
                       />
                     </label>
-                    <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia || !asistenciaLecciones.length || !detalle.estudiantes.length || cursoGestionCerrado}>
+                    <button type="button" className="primary-btn" onClick={handleSaveAsistencia} disabled={savingAsistencia || loadingAsistencia || !asistenciaLecciones.length || !detalle.estudiantes.length}>
                       {savingAsistencia ? "Guardando asistencia..." : (asistenciaYaCalificada ? "Asistencia calificada" : "Guardar asistencia")}
                     </button>
                   </div>
@@ -11728,7 +11870,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                               </td>
                               <td>{estudiante.Identificacion}</td>
                               <td>
-                                <select value={draft.estado} disabled={cursoGestionCerrado || suspendido} title={suspensionTooltip || undefined} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { aplicarReglaPrimeraSeleccion: true })}>
+                                <select value={draft.estado} disabled={suspendido} title={suspensionTooltip || undefined} onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "estado", e.target.value, { aplicarReglaPrimeraSeleccion: true })}>
                                   <option value="PRESENTE">Presente</option>
                                   <option value="AUSENTE_JUSTIFICADA">Ausente justificada</option>
                                   <option value="AUSENTE_INJUSTIFICADA">Ausente injustificada</option>
@@ -11741,7 +11883,7 @@ function registrarPrimeraSeleccionAsistencia(estudianteId: number) {
                                   type="number"
                                   min="0"
                                   value={draft.minutosTardia}
-                                  disabled={cursoGestionCerrado || suspendido}
+                                  disabled={suspendido}
                                   title={suspensionTooltip || undefined}
                                   onChange={(e) => updateAsistenciaDraft(estudiante.EstudianteId, primeraLeccion.HorarioGrupoId, "minutosTardia", e.target.value)}
                                   placeholder="0"

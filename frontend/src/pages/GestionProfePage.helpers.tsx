@@ -976,6 +976,19 @@ export function normalizarSeguimientoKey(value: any) {
     .toUpperCase();
 }
 
+export function normalizarIndicadorBaseSeguimiento(value: any) {
+  return normalizarSeguimientoKey(value)
+    .replace(/^\s*(?:COTIDIANO|TAREAS?)\s*[-:–—]\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function obtenerNombreIndicadorBaseSeguimiento(value: any) {
+  return String(value ?? "")
+    .replace(/^\s*(?:Cotidiano|Tareas?)\s*[-:–—]\s*/i, "")
+    .trim();
+}
+
 export function getTipoSeguimientoFromDetalle(item?: Partial<SeguimientoEvaluacionDetalle> | null) {
   const raw = `${item?.TipoSeguimiento || ""} ${item?.TipoIndicadorPlaneamiento || ""} ${item?.Nombre || ""} ${item?.ComponenteCatalogoNombre || ""}`;
   const key = normalizarSeguimientoKey(raw);
