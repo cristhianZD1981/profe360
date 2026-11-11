@@ -102,6 +102,26 @@ function hasAccess(item: MenuItem, roles: string[]) {
   return allowedRoles.some((role) => normalizedRoles.includes(role));
 }
 
+function getMenuIcon(path: string) {
+  const icons: Record<string, string> = {
+    "/": "▦",
+    "/instituciones": "▤",
+    "/administrativo": "▣",
+    "/usuarios": "♙",
+    "/estudiantes": "♧",
+    "/estudiantes-matricula": "♧",
+    "/matricula": "▣",
+    "/gestion-profe": "✎",
+    "/estudiante": "♟",
+    "/grupos-clase": "▦",
+    "/parametrizaciones": "⚙",
+    "/super-admin/whatsapp": "☎",
+    "/reportes": "▥"
+  };
+
+  return icons[path] || "•";
+}
+
 export default function Layout() {
   const { user, logout, setUser } = useAuth();
   const location = useLocation();
@@ -116,6 +136,29 @@ export default function Layout() {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sidebarPinned, setSidebarPinned] = useState(() => {
+    try {
+      return window.localStorage.getItem("profe360-sidebar-pinned") !== "false";
+    } catch {
+      return true;
+    }
+  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem("profe360-sidebar-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("profe360-sidebar-pinned", String(sidebarPinned));
+      window.localStorage.setItem("profe360-sidebar-collapsed", String(sidebarCollapsed));
+    } catch {
+      // Keep the controls usable for the current session when storage is unavailable.
+    }
+  }, [sidebarPinned, sidebarCollapsed]);
 
   const institucionNombre =
     user?.institucionNombreComercial ||
@@ -163,8 +206,17 @@ export default function Layout() {
 
     return (
       <div key={item.path} className="menu-item-block">
-        <NavLink to={item.path} className={linkClassName} end={item.path === "/"}>
-          {item.label}
+        <NavLink
+          to={item.path}
+          className={linkClassName}
+          end={item.path === "/"}
+          aria-label={item.label}
+          title={item.label}
+        >
+          <span className="menu-link-icon" aria-hidden="true">
+            {getMenuIcon(item.path)}
+          </span>
+          <span className="menu-link-label">{item.label}</span>
         </NavLink>
       </div>
     );
@@ -261,20 +313,45 @@ export default function Layout() {
   };
 
   return (
-    <div className="shell">
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <img src="/logo.png" alt="Profe360" />
-          <div>
+          <div className="brand-copy">
             <h1>Profe360</h1>
             <p>Menos carga, más enseñanza</p>
           </div>
+          <button
+            className={`sidebar-pin${sidebarPinned ? " is-pinned" : ""}`}
+            type="button"
+            aria-label={sidebarPinned ? "Desbloquear menú lateral" : "Fijar menú lateral"}
+            aria-pressed={sidebarPinned}
+            title={sidebarPinned ? "Menú fijo: abre el candado para minimizar" : "Menú libre: puede minimizarse"}
+            onClick={() => {
+              if (!sidebarPinned && sidebarCollapsed) setSidebarCollapsed(false);
+              setSidebarPinned((pinned) => !pinned);
+            }}
+          >
+            {sidebarPinned ? "🔒" : "🔓"}
+          </button>
         </div>
 
         <nav className="menu">
           {items.map((item) => renderMenuItem(item))}
         </nav>
       </aside>
+
+      <button
+        className="sidebar-collapse-toggle"
+        type="button"
+        aria-label={sidebarCollapsed ? "Maximizar menú lateral" : "Minimizar menú lateral"}
+        aria-expanded={!sidebarCollapsed}
+        title={sidebarCollapsed ? "Maximizar menú lateral" : sidebarPinned ? "Desbloquea el candado para minimizar" : "Minimizar menú lateral"}
+        disabled={sidebarPinned && !sidebarCollapsed}
+        onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+      >
+        {sidebarCollapsed ? "▶" : "◀"}
+      </button>
 
       <main className="content">
         <header className="topbar">
@@ -572,6 +649,4 @@ export default function Layout() {
     </div>
   );
 }
-
-
 
