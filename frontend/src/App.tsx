@@ -1,37 +1,39 @@
+import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/auth";
 import ProtectedRoute from "./components/ProtectedRoute";
-import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
-import DashboardPage from "./pages/DashboardPage";
-import InstitucionesPage from "./pages/InstitucionesPage";
-import UsuariosPage from "./pages/UsuariosPage";
-import EstudiantesPage from "./pages/EstudiantesPage";
-import EstudiantesMatriculaPage from "./pages/EstudiantesMatriculaPage";
-import CarnetEstudiantePage from "./pages/CarnetEstudiantePage";
-import AcademicoPage from "./pages/AcademicoPage";
-import AsistenciaPage from "./pages/AsistenciaPage";
-import ReportesPage from "./pages/ReportesPage";
-import HorariosPage from "./pages/HorariosPage";
-import HorarioEstudiantePopupPage from "./pages/HorarioEstudiantePopupPage";
-import BoletaMatriculaPage from "./pages/BoletaMatriculaPage";
-import BoletaConductaPage from "./pages/BoletaConductaPage";
-import GestionProfePage from "./pages/GestionProfePage";
-import PlaneamientoIAPage from "./pages/PlaneamientoIAPage";
-import ConfiguracionIAPage from "./pages/ConfiguracionIAPage";
-import SeguimientoNotasPage from "./pages/SeguimientoNotasPage";
-import ParametrizacionesPage from "./pages/ParametrizacionesPage";
-import EvaluacionParametrizacionPage from "./pages/EvaluacionParametrizacionPage";
-import AssistantAdminPage from "./pages/AssistantAdminPage";
-import SuperAdminSeccionesPage from "./pages/SuperAdminSeccionesPage";
-import SuperAdminConsecutivosPage from "./pages/SuperAdminConsecutivosPage";
-import SuperAdminCatalogosMatriculaPage from "./pages/SuperAdminCatalogosMatriculaPage";
-import SuperAdminWhatsAppPage from "./pages/SuperAdminWhatsAppPage";
-import HabilidadesPlaneamientoAcademicoPage from "./pages/HabilidadesPlaneamientoAcademicoPage";
 import ExternalChatWidget from "./components/ExternalChatWidget";
-import GruposClasePage from "./pages/GruposClasePage";
 import SuperAdminInstitutionScope from "./components/SuperAdminInstitutionScope";
+
+const Layout = lazy(() => import("./components/Layout"));
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const InstitucionesPage = lazy(() => import("./pages/InstitucionesPage"));
+const UsuariosPage = lazy(() => import("./pages/UsuariosPage"));
+const EstudiantesPage = lazy(() => import("./pages/EstudiantesPage"));
+const EstudiantesMatriculaPage = lazy(() => import("./pages/EstudiantesMatriculaPage"));
+const CarnetEstudiantePage = lazy(() => import("./pages/CarnetEstudiantePage"));
+const AcademicoPage = lazy(() => import("./pages/AcademicoPage"));
+const AsistenciaPage = lazy(() => import("./pages/AsistenciaPage"));
+const ReportesPage = lazy(() => import("./pages/ReportesPage"));
+const HorariosPage = lazy(() => import("./pages/HorariosPage"));
+const HorarioEstudiantePopupPage = lazy(() => import("./pages/HorarioEstudiantePopupPage"));
+const BoletaMatriculaPage = lazy(() => import("./pages/BoletaMatriculaPage"));
+const BoletaConductaPage = lazy(() => import("./pages/BoletaConductaPage"));
+const GestionProfePage = lazy(() => import("./pages/GestionProfePage"));
+const PlaneamientoIAPage = lazy(() => import("./pages/PlaneamientoIAPage"));
+const ConfiguracionIAPage = lazy(() => import("./pages/ConfiguracionIAPage"));
+const SeguimientoNotasPage = lazy(() => import("./pages/SeguimientoNotasPage"));
+const ParametrizacionesPage = lazy(() => import("./pages/ParametrizacionesPage"));
+const EvaluacionParametrizacionPage = lazy(() => import("./pages/EvaluacionParametrizacionPage"));
+const AssistantAdminPage = lazy(() => import("./pages/AssistantAdminPage"));
+const SuperAdminSeccionesPage = lazy(() => import("./pages/SuperAdminSeccionesPage"));
+const SuperAdminConsecutivosPage = lazy(() => import("./pages/SuperAdminConsecutivosPage"));
+const SuperAdminCatalogosMatriculaPage = lazy(() => import("./pages/SuperAdminCatalogosMatriculaPage"));
+const SuperAdminWhatsAppPage = lazy(() => import("./pages/SuperAdminWhatsAppPage"));
+const HabilidadesPlaneamientoAcademicoPage = lazy(() => import("./pages/HabilidadesPlaneamientoAcademicoPage"));
+const GruposClasePage = lazy(() => import("./pages/GruposClasePage"));
 
 const ADMINISTRATIVO_ROLES = [
   "SUPER_ADMIN",
@@ -60,6 +62,7 @@ export default function App() {
   return (
     <AuthProvider>
       <ExternalChatWidget />
+      <Suspense fallback={<div role="status" style={{ padding: "2rem", textAlign: "center" }}>Cargando módulo…</div>}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/restablecer-clave" element={<ResetPasswordPage />} />
@@ -351,6 +354,7 @@ export default function App() {
           />
         </Route>
       </Routes>
+      </Suspense>
     </AuthProvider>
   );
 }
